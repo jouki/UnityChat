@@ -1,0 +1,1950 @@
+// =============================================================
+// UnityChat - Sjednocený chat z Twitch, YouTube a Kick
+// 7TV emotes + Twitch/Kick/YouTube nativní emoty
+// =============================================================
+
+// Neviditelný marker na konci zpráv odeslaných přes UnityChat.
+// Braille Pattern Blank (U+2800) - vypadá prázdně, platformy ho nestripují.
+// Vkládá se za mezeru, aby neovlivnil trailing emoty.
+const UC_MARKER = '\u2800';
+
+const DEFAULTS = {
+  channel: 'robdiesalot',
+  ytChannel: 'robdiesalot',
+  twitch: true,
+  youtube: true,
+  kick: true,
+  maxMessages: 500,
+  username: ''
+};
+
+// =============================================================
+// EmoteManager - 7TV + BTTV + FFZ + Twitch + Kick + YouTube emotes
+// Segment-based rendering: [{ type:'text'|'emote', value, url? }]
+// =============================================================
+
+class EmoteManager {
+  constructor() {
+    this.global7tv = new Map();   // name -> url
+    this.channel7tv = new Map();  // name -> url
+    this.bttvEmotes = new Map();   // name -> url (BTTV global + channel)
+    this.ffzEmotes = new Map();    // name -> url (FFZ global + channel)
+    this.twitchNative = new Map(); // name -> url (naučené z IRC)
+    this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
+    this._globalLoaded = false;
+  }
+
+  // ---- Loading ----
+
+  async loadGlobal() {
+    if (this._globalLoaded) return;
+    try {
+      const resp = await fetch('https://7tv.io/v3/emote-sets/global');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const emotes = data.emotes || [];
+      for (const emote of emotes) {
+        const url = this._build7tvUrl(emote);
+        if (url) this.global7tv.set(emote.name, url);
+      }
+      this._globalLoaded = true;
+      console.log(`[7TV] ${this.global7tv.size} global emotes loaded`);
+    } catch (err) {
+      console.error('[7TV] Failed to load global emotes:', err);
+    }
+  }
+
+  async loadChannel(platform, userId) {
+    try {
+      const resp = await fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
+      if (!resp.ok) {
+        console.warn(`[7TV] Channel emotes ${platform}/${userId}: HTTP ${resp.status}`);
+        return 0;
+      }
+      const data = await resp.json();
+      const emotes = data.emote_set?.emotes || [];
+      let count = 0;
+      for (const emote of emotes) {
+        const url = this._build7tvUrl(emote);
+        if (url) {
+          this.channel7tv.set(emote.name, url);
+          count++;
+        }
+      }
+      console.log(`[7TV] ${count} channel emotes loaded (${platform}/${userId})`);
+      return count;
+    } catch (err) {
+      console.error(`[7TV] Channel emotes error (${platform}/${userId}):`, err);
+      return 0;
+    }
+  }
+
+  async loadBTTV(twitchUserId) {
+    let count = 0;
+    try {
+      // Globální BTTV emotes
+      const gr = await fetch('https://api.betterttv.net/3/cached/emotes/global');
+      if (gr.ok) {
+        for (const e of await gr.json()) {
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          count++;
+        }
+      }
+    } catch {}
+    try {
+      // Kanálové BTTV emotes
+      const cr = await fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
+      if (cr.ok) {
+        const data = await cr.json();
+        for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          count++;
+        }
+      }
+    } catch {}
+    console.log(`[BTTV] ${count} emotes loaded`);
+    return count;
+  }
+
+  async loadFFZ(twitchUserId) {
+    let count = 0;
+    const parseSet = (sets) => {
+      for (const setId in sets) {
+        for (const e of sets[setId].emoticons || []) {
+          const url = e.urls?.['1'] || e.urls?.['2'];
+          if (url) {
+            this.ffzEmotes.set(e.name, url.startsWith('//') ? `https:${url}` : url);
+            count++;
+          }
+        }
+      }
+    };
+    try {
+      const gr = await fetch('https://api.frankerfacez.com/v1/set/global');
+      if (gr.ok) parseSet((await gr.json()).sets || {});
+    } catch {}
+    try {
+      const cr = await fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
+      if (cr.ok) parseSet((await cr.json()).sets || {});
+    } catch {}
+    console.log(`[FFZ] ${count} emotes loaded`);
+    return count;
+  }
+
+  _build7tvUrl(emote) {
+    const host = emote.data?.host || emote.host;
+    if (!host?.url) return null;
+
+    // Preferovat WebP (animované), fallback na AVIF, pak cokoliv
+    const file =
+      host.files?.find((f) => f.name === '1x.webp') ||
+      host.files?.find((f) => f.name === '2x.webp') ||
+      host.files?.find((f) => f.name === '1x.avif') ||
+      host.files?.find((f) => f.name?.startsWith('1x')) ||
+      host.files?.[0];
+
+    if (!file) return null;
+
+    const baseUrl = host.url.startsWith('//')
+      ? `https:${host.url}`
+      : host.url;
+
+    return `${baseUrl}/${file.name}`;
+  }
+
+  _get7tv(word) {
+    return this.channel7tv.get(word) || this.global7tv.get(word)
+      || this.bttvEmotes.get(word) || this.ffzEmotes.get(word) || null;
+  }
+
+  /** Vrátí URL emotu z jakéhokoliv zdroje (pro autocomplete preview). */
+  getAnyUrl(name) {
+    return this.channel7tv.get(name) || this.global7tv.get(name)
+      || this.bttvEmotes.get(name) || this.ffzEmotes.get(name)
+      || this.twitchNative.get(name) || this.kickNative.get(name)
+      || null;
+  }
+
+  // ---- Učení nativních emotes z příchozích zpráv ----
+
+  learnTwitch(text, emotesTag) {
+    if (!emotesTag) return;
+    for (const part of emotesTag.split('/')) {
+      const ci = part.indexOf(':');
+      if (ci === -1) continue;
+      const id = part.substring(0, ci);
+      const range = part.substring(ci + 1).split(',')[0];
+      const dash = range.indexOf('-');
+      if (dash === -1) continue;
+      const s = parseInt(range.substring(0, dash), 10);
+      const e = parseInt(range.substring(dash + 1), 10);
+      if (isNaN(s) || isNaN(e)) continue;
+      const name = text.substring(s, e + 1);
+      if (name && !this.twitchNative.has(name)) {
+        this.twitchNative.set(name,
+          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+      }
+    }
+  }
+
+  learnKick(content) {
+    if (!content) return;
+    const re = /\[emote:(\d+):([^\]]+)\]/g;
+    let m;
+    while ((m = re.exec(content)) !== null) {
+      if (!this.kickNative.has(m[2])) {
+        this.kickNative.set(m[2], `https://files.kick.com/emotes/${m[1]}/fullsize`);
+      }
+    }
+  }
+
+  /**
+   * Tab autocomplete - hledá ve všech zdrojích emotes (case insensitive).
+   */
+  findCompletions(prefix) {
+    if (!prefix) return [];
+    const lower = prefix.toLowerCase();
+    const results = [];
+    const seen = new Set();
+
+    // Pořadí: 7TV channel → 7TV global → BTTV → FFZ → Twitch → Kick
+    const maps = [this.channel7tv, this.global7tv, this.bttvEmotes, this.ffzEmotes, this.twitchNative, this.kickNative];
+    for (const map of maps) {
+      for (const name of map.keys()) {
+        if (name.toLowerCase().startsWith(lower) && !seen.has(name)) {
+          results.push(name);
+          seen.add(name);
+        }
+      }
+    }
+
+    results.sort((a, b) => {
+      const aExact = a.startsWith(prefix);
+      const bExact = b.startsWith(prefix);
+      if (aExact !== bExact) return aExact ? -1 : 1;
+      return a.localeCompare(b);
+    });
+
+    return results;
+  }
+
+  // ---- Rendering ----
+
+  /**
+   * Převede pole segmentů na finální HTML.
+   * Textové segmenty projdou 7TV matching, emote segmenty se zachovají.
+   */
+  renderSegments(segments) {
+    const out = [];
+    for (const seg of segments) {
+      if (seg.type === 'emote') {
+        out.push(seg);
+        continue;
+      }
+      // Rozdělit text na slova, zachovat mezery
+      const parts = seg.value.split(/(\s+)/);
+      for (const part of parts) {
+        const url = this._get7tv(part);
+        if (url) {
+          out.push({ type: 'emote', value: part, url });
+        } else {
+          out.push({ type: 'text', value: part });
+        }
+      }
+    }
+    return this._toHtml(out);
+  }
+
+  /**
+   * Twitch zpráva - parsuje IRC emotes tag + 7TV.
+   */
+  renderTwitch(text, emotesTag) {
+    const segments = this._splitTwitchEmotes(text, emotesTag);
+    return this.renderSegments(segments);
+  }
+
+  /**
+   * Kick zpráva - parsuje HTML content (zachovává <img> emotes) + 7TV.
+   */
+  renderKick(htmlContent) {
+    const segments = this._parseKickHtml(htmlContent);
+    return this.renderSegments(segments);
+  }
+
+  /**
+   * YouTube zpráva - parsuje runs array + 7TV.
+   */
+  renderYouTube(runs) {
+    const segments = [];
+    for (const run of runs) {
+      if (run.text) {
+        segments.push({ type: 'text', value: run.text });
+      } else if (run.emoji) {
+        const url =
+          run.emoji.image?.thumbnails?.[0]?.url ||
+          run.emoji.image?.thumbnails?.[1]?.url;
+        const name = run.emoji.shortcuts?.[0] || run.emoji.emojiId || '';
+        if (url) {
+          segments.push({ type: 'emote', value: name, url });
+        } else {
+          segments.push({ type: 'text', value: name });
+        }
+      }
+    }
+    return this.renderSegments(segments);
+  }
+
+  /**
+   * Prostý text + 7TV (pro fallback).
+   */
+  renderPlain(text) {
+    return this.renderSegments([{ type: 'text', value: text }]);
+  }
+
+  // ---- Twitch emote parsing ----
+
+  _splitTwitchEmotes(text, tag) {
+    if (!tag) return [{ type: 'text', value: text }];
+
+    const positions = [];
+    for (const part of tag.split('/')) {
+      if (!part) continue;
+      const ci = part.indexOf(':');
+      if (ci === -1) continue;
+      const id = part.substring(0, ci);
+      for (const range of part.substring(ci + 1).split(',')) {
+        const dash = range.indexOf('-');
+        if (dash === -1) continue;
+        const s = parseInt(range.substring(0, dash), 10);
+        const e = parseInt(range.substring(dash + 1), 10);
+        if (!isNaN(s) && !isNaN(e)) {
+          positions.push({ id, start: s, end: e + 1 });
+        }
+      }
+    }
+
+    if (positions.length === 0) return [{ type: 'text', value: text }];
+    positions.sort((a, b) => a.start - b.start);
+
+    const segs = [];
+    let last = 0;
+    for (const p of positions) {
+      if (p.start > last) {
+        segs.push({ type: 'text', value: text.substring(last, p.start) });
+      }
+      const name = text.substring(p.start, p.end);
+      segs.push({
+        type: 'emote',
+        value: name,
+        // OPRAVENÁ URL - správná doména jtvnw.net
+        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/1.0`
+      });
+      last = p.end;
+    }
+    if (last < text.length) {
+      segs.push({ type: 'text', value: text.substring(last) });
+    }
+    return segs;
+  }
+
+  // ---- Kick content parsing ----
+
+  _parseKickHtml(content) {
+    if (!content) return [{ type: 'text', value: '' }];
+
+    // Krok 1: [emote:ID:NAME] → emote segmenty
+    const hasEmoteTags = content.includes('[emote:');
+    const hasHtml = content.includes('<');
+
+    if (!hasEmoteTags && !hasHtml) {
+      return [{ type: 'text', value: content }];
+    }
+
+    // Parsovat [emote:ID:NAME] tagy
+    if (hasEmoteTags) {
+      const segments = [];
+      const re = /\[emote:(\d+):([^\]]+)\]/g;
+      let last = 0;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        if (m.index > last) {
+          const txt = content.substring(last, m.index);
+          segments.push(...this._parseKickHtmlFragment(txt));
+        }
+        segments.push({
+          type: 'emote',
+          value: m[2],
+          url: `https://files.kick.com/emotes/${m[1]}/fullsize`
+        });
+        last = m.index + m[0].length;
+      }
+      if (last < content.length) {
+        segments.push(...this._parseKickHtmlFragment(content.substring(last)));
+      }
+      return segments.length > 0 ? segments : [{ type: 'text', value: content }];
+    }
+
+    // Jen HTML (bez [emote:] tagů)
+    return this._parseKickHtmlFragment(content);
+  }
+
+  _parseKickHtmlFragment(html) {
+    if (!html) return [];
+    if (!html.includes('<')) return [{ type: 'text', value: html }];
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    const segments = [];
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent) segments.push({ type: 'text', value: node.textContent });
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.tagName === 'IMG') {
+          const src = node.getAttribute('src') || '';
+          const alt = node.getAttribute('alt') || '';
+          if (src.startsWith('http')) {
+            segments.push({ type: 'emote', value: alt, url: src });
+          } else {
+            segments.push({ type: 'text', value: alt });
+          }
+        } else {
+          for (const child of node.childNodes) walk(child);
+        }
+      }
+    };
+    walk(div);
+    return segments.length > 0 ? segments : [{ type: 'text', value: div.textContent || '' }];
+  }
+
+  // ---- HTML helpers ----
+
+  _toHtml(segments) {
+    return segments
+      .map((s) => {
+        if (s.type === 'emote') {
+          const alt = this._ea(s.value);
+          return `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+        }
+        return this._eh(s.value);
+      })
+      .join('');
+  }
+
+  _eh(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  _ea(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+}
+
+// =============================================================
+// Twitch IRC Provider
+// =============================================================
+
+class TwitchProvider {
+  constructor() {
+    this.ws = null;
+    this.channel = '';
+    this.connected = false;
+    this.roomId = null;
+    this._rt = null;
+    this.onMessage = null;
+    this.onStatus = null;
+    this.onRoomId = null;
+  }
+
+  connect(channel) {
+    this.channel = channel.toLowerCase().trim();
+    this.disconnect(true);
+    this.onStatus?.('connecting');
+
+    try {
+      this.ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+
+      this.ws.onopen = () => {
+        const n = 'justinfan' + Math.floor(10000 + Math.random() * 90000);
+        this.ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+        this.ws.send('PASS SCHMOOPIIE');
+        this.ws.send('NICK ' + n);
+        this.ws.send('JOIN #' + this.channel);
+        this.connected = true;
+        this.onStatus?.('connected');
+      };
+
+      this.ws.onmessage = (e) => {
+        for (const line of e.data.split('\r\n')) {
+          if (!line) continue;
+          if (line.startsWith('PING')) {
+            this.ws.send('PONG :tmi.twitch.tv');
+          } else if (line.includes('ROOMSTATE') && !this.roomId) {
+            const m = line.match(/room-id=(\d+)/);
+            if (m) {
+              this.roomId = m[1];
+              this.onRoomId?.(this.roomId);
+            }
+          } else if (line.includes('PRIVMSG')) {
+            this._parse(line);
+          } else if (line.includes('USERNOTICE')) {
+            this._parseNotice(line);
+          }
+        }
+      };
+
+      this.ws.onclose = () => {
+        this.connected = false;
+        this.onStatus?.('disconnected');
+        this._reconnect();
+      };
+
+      this.ws.onerror = () => this.onStatus?.('error', 'WebSocket chyba');
+    } catch (err) {
+      this.onStatus?.('error', err.message);
+      this._reconnect();
+    }
+  }
+
+  _parse(raw) {
+    let tags = {};
+    let rest = raw;
+
+    if (raw.startsWith('@')) {
+      const si = raw.indexOf(' ');
+      for (const t of raw.substring(1, si).split(';')) {
+        const eq = t.indexOf('=');
+        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
+      }
+      rest = raw.substring(si + 1);
+    }
+
+    const pi = rest.indexOf('PRIVMSG');
+    if (pi === -1) return;
+    const after = rest.substring(pi + 8);
+    const ci = after.indexOf(':');
+    if (ci === -1) return;
+
+    const message = after.substring(ci + 1);
+    const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
+    const color = tags.color || '#9146ff';
+
+    // Surový badges string pro image rendering (parsuje se v _addMessage)
+    const badgesRaw = tags.badges || '';
+
+    // Reply context z Twitch IRC tagů
+    let replyTo = null;
+    const replyUser = tags['reply-parent-display-name'];
+    if (replyUser) {
+      let body = (tags['reply-parent-msg-body'] || '')
+        .replace(/\\s/g, ' ')
+        .replace(/\\n/g, ' ')
+        .replace(/\\r/g, '')
+        .replace(/\\:/g, ';')
+        .replace(/\\\\/g, '\\');
+      replyTo = { username: replyUser, message: body };
+    }
+
+    // Twitch přidává @username na začátek reply zpráv - odstranit
+    // (reply context už ukazuje komu se odpovídá)
+    let cleanMessage = message;
+    if (replyTo && message.startsWith('@')) {
+      const sp = message.indexOf(' ');
+      if (sp !== -1) cleanMessage = message.substring(sp + 1);
+    }
+
+    this.onMessage?.({
+      platform: 'twitch',
+      username,
+      message: cleanMessage,
+      color,
+      timestamp: Date.now(),
+      id: tags.id || crypto.randomUUID(),
+      badgesRaw,
+      twitchEmotes: tags.emotes || null,
+      replyTo,
+      firstMsg: tags['first-msg'] === '1'
+    });
+  }
+
+  _parseNotice(raw) {
+    let tags = {};
+    if (raw.startsWith('@')) {
+      const si = raw.indexOf(' ');
+      for (const t of raw.substring(1, si).split(';')) {
+        const eq = t.indexOf('=');
+        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
+      }
+    }
+    const msgId = tags['msg-id'];
+    if (msgId === 'raid') {
+      const raider = tags['msg-param-displayName'] || tags['display-name'] || '?';
+      const viewers = tags['msg-param-viewerCount'] || '?';
+      this.onMessage?.({
+        platform: 'twitch',
+        username: raider,
+        message: `raiduje s ${viewers} diváky!`,
+        color: '#ff6b6b',
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        isRaid: true
+      });
+    }
+  }
+
+  _reconnect() {
+    if (this._rt) return;
+    this._rt = setTimeout(() => {
+      this._rt = null;
+      if (!this.connected && this.channel) this.connect(this.channel);
+    }, 5000);
+  }
+
+  disconnect(internal) {
+    this.connected = false;
+    this.roomId = null;
+    if (this._rt) { clearTimeout(this._rt); this._rt = null; }
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
+    if (!internal) this.onStatus?.('disconnected');
+  }
+}
+
+// =============================================================
+// Kick Provider (Pusher WebSocket)
+// =============================================================
+
+class KickProvider {
+  constructor() {
+    this.ws = null;
+    this.channel = '';
+    this.chatroomId = null;
+    this.userId = null;
+    this.connected = false;
+    this._rt = null;
+    this._pt = null;
+    this.onMessage = null;
+    this.onStatus = null;
+    this.onUserId = null;
+  }
+
+  async connect(channel) {
+    this.channel = channel.toLowerCase().trim();
+    this.disconnect(true);
+    this.onStatus?.('connecting');
+
+    try {
+      const resp = await fetch(`https://kick.com/api/v2/channels/${this.channel}`, {
+        headers: { Accept: 'application/json' }
+      });
+      if (!resp.ok) throw new Error(`Kick API: ${resp.status}`);
+
+      const data = await resp.json();
+      this.chatroomId = data?.chatroom?.id;
+      this.userId = data?.user_id || data?.id;
+      if (!this.chatroomId) throw new Error('Chatroom nenalezen');
+      if (this.userId) this.onUserId?.(this.userId);
+
+      this._connectPusher();
+    } catch (err) {
+      console.error('Kick:', err);
+      this.onStatus?.('error', err.message);
+      this._reconnect();
+    }
+  }
+
+  _connectPusher() {
+    const key = '32cbd69e4b950bf97679';
+    this.ws = new WebSocket(
+      `wss://ws-us2.pusher.com/app/${key}?protocol=7&client=js&version=8.3.0&flash=false`
+    );
+
+    this.ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        switch (msg.event) {
+          case 'pusher:connection_established':
+            this.ws.send(JSON.stringify({
+              event: 'pusher:subscribe',
+              data: { channel: `chatrooms.${this.chatroomId}.v2` }
+            }));
+            break;
+          case 'pusher_internal:subscription_succeeded':
+            this.connected = true;
+            this.onStatus?.('connected');
+            this._startPing();
+            break;
+          case 'pusher:ping':
+            this.ws.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
+            break;
+          case 'App\\Events\\ChatMessageEvent':
+            this._parse(msg.data);
+            break;
+        }
+      } catch {}
+    };
+
+    this.ws.onclose = () => {
+      this.connected = false;
+      this._stopPing();
+      this.onStatus?.('disconnected');
+      this._reconnect();
+    };
+
+    this.ws.onerror = () => this.onStatus?.('error', 'Pusher chyba');
+  }
+
+  _parse(raw) {
+    try {
+      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (data.type !== 'message' && data.type !== 'reply') return;
+
+      const username = data.sender?.username || 'Unknown';
+      const color = data.sender?.identity?.color || '#53fc18';
+      const content = data.content || '';
+
+      const badges = [];
+      if (data.sender?.is_broadcaster) badges.push('\uD83C\uDFA4');
+      if (data.sender?.is_moderator) badges.push('\u2694\uFE0F');
+      if (data.sender?.is_subscriber) badges.push('\u2B50');
+
+      this.onMessage?.({
+        platform: 'kick',
+        username,
+        kickContent: content, // surový HTML obsah pro EmoteManager
+        message: this._textOnly(content), // plain text fallback
+        color,
+        badges,
+        timestamp: Date.now(),
+        id: data.id || crypto.randomUUID()
+      });
+    } catch {}
+  }
+
+  _textOnly(html) {
+    if (!html.includes('<')) return html;
+    const d = document.createElement('div');
+    d.innerHTML = html;
+    return d.textContent || '';
+  }
+
+  _startPing() {
+    this._stopPing();
+    this._pt = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN)
+        this.ws.send(JSON.stringify({ event: 'pusher:ping', data: {} }));
+    }, 30000);
+  }
+
+  _stopPing() {
+    if (this._pt) { clearInterval(this._pt); this._pt = null; }
+  }
+
+  _reconnect() {
+    if (this._rt) return;
+    this._rt = setTimeout(() => {
+      this._rt = null;
+      if (!this.connected && this.channel) this.connect(this.channel);
+    }, 5000);
+  }
+
+  disconnect(internal) {
+    this.connected = false;
+    this.userId = null;
+    this._stopPing();
+    if (this._rt) { clearTimeout(this._rt); this._rt = null; }
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
+    if (!internal) this.onStatus?.('disconnected');
+  }
+}
+
+// =============================================================
+// YouTube Live Chat Provider
+// Dual approach: zkusí interní API, při selhání přepne na page refresh
+// =============================================================
+
+class YouTubeProvider {
+  constructor() {
+    this.channel = '';
+    this.polling = false;
+    this._pt = null;
+    this._videoId = null;
+    this._cont = null;
+    this._apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+    this._ctx = null;
+    this._seen = new Set();
+    this._apiFails = 0;       // počet po sobě jdoucích prázdných API odpovědí
+    this._usePageRefresh = false;
+    this.onMessage = null;
+    this.onStatus = null;
+    this.onDebug = null;      // callback pro debug zprávy
+  }
+
+  async connect(channel) {
+    this.channel = channel.trim();
+    this.disconnect(true);
+    this.onStatus?.('connecting');
+
+    try {
+      // Krok 1: najít videoId
+      this._videoId = await this._findLiveVideoId();
+      if (!this._videoId) throw new Error('Streamer není live na YouTube');
+      this.onDebug?.(`YouTube videoId: ${this._videoId}`);
+
+      // Krok 2: načíst live chat stránku
+      const chatHtml = await this._fetchChatPage();
+      const ytData = this._extractJson(chatHtml, 'ytInitialData');
+      if (!ytData) throw new Error('YouTube chat data nenalezena');
+
+      // API key + client version + visitorData
+      const keyM = chatHtml.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
+      if (keyM) this._apiKey = keyM[1];
+      const verM = chatHtml.match(/"clientVersion"\s*:\s*"([^"]+)"/);
+      const visM = chatHtml.match(/"visitorData"\s*:\s*"([^"]+)"/);
+      this._ctx = {
+        client: {
+          clientName: 'WEB',
+          clientVersion: verM?.[1] || '2.20250401.00.00',
+          hl: 'cs',
+          gl: 'CZ',
+          ...(visM ? { visitorData: visM[1] } : {})
+        }
+      };
+
+      // Continuation token - preferovat timedContinuationData (funguje s pollingem)
+      const conts = ytData?.contents?.liveChatRenderer?.continuations;
+      if (conts?.length) {
+        for (const c of conts) {
+          // timedContinuationData funguje nejlépe s HTTP pollingem
+          if (c?.timedContinuationData?.continuation) {
+            this._cont = c.timedContinuationData.continuation;
+            break;
+          }
+        }
+        // Fallback na jiný typ
+        if (!this._cont) {
+          const c = conts[0];
+          this._cont =
+            c?.reloadContinuationData?.continuation ||
+            c?.invalidationContinuationData?.continuation;
+        }
+      }
+
+      // Zpracovat úvodní zprávy (zobrazit posledních několik)
+      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const recentActions = actions.slice(-10); // zobrazit max 10 posledních
+      this._processActions(recentActions);
+      // Označit všechny jako viděné
+      for (const a of actions) {
+        const r =
+          a?.addChatItemAction?.item?.liveChatTextMessageRenderer ||
+          a?.addChatItemAction?.item?.liveChatPaidMessageRenderer;
+        if (r?.id) this._seen.add(r.id);
+      }
+
+      this.polling = true;
+      this._apiFails = 0;
+      this._usePageRefresh = !this._cont; // bez continuation jdeme rovnou na page refresh
+      this.onStatus?.('connected');
+
+      if (this._usePageRefresh) {
+        this.onDebug?.('YouTube: page refresh mód (bez continuation)');
+      } else {
+        this.onDebug?.('YouTube: API polling mód');
+      }
+
+      this._pt = setTimeout(() => this._poll(), 4000);
+    } catch (err) {
+      console.error('YouTube:', err);
+      this.onStatus?.('error', err.message);
+    }
+  }
+
+  async _fetchChatPage() {
+    const resp = await fetch(
+      `https://www.youtube.com/live_chat?v=${this._videoId}`,
+      { credentials: 'include' }
+    );
+    if (!resp.ok) throw new Error(`YouTube chat page: ${resp.status}`);
+    return resp.text();
+  }
+
+  async _findLiveVideoId() {
+    const urls = [
+      `https://www.youtube.com/${this.channel}/live`,
+      `https://www.youtube.com/@${this.channel}/live`
+    ];
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
+        if (!r.ok) continue;
+        const html = await r.text();
+        const isLive =
+          html.includes('"isLive":true') ||
+          html.includes('"isLiveContent":true') ||
+          html.includes('"isLiveNow":true') ||
+          html.includes('"isLiveBroadcast":true');
+        if (!isLive) continue;
+        const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+        if (m) return m[1];
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  _extractJson(html, varName) {
+    const markers = [
+      `var ${varName} = `,
+      `window["${varName}"] = `,
+      `window['${varName}'] = `
+    ];
+    let start = -1;
+    for (const m of markers) {
+      const i = html.indexOf(m);
+      if (i !== -1) { start = i + m.length; break; }
+    }
+    if (start === -1) return null;
+
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < html.length; i++) {
+      const ch = html[i];
+      if (esc) { esc = false; continue; }
+      if (ch === '\\' && inStr) { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(html.substring(start, i + 1)); }
+          catch { return null; }
+        }
+      }
+    }
+    return null;
+  }
+
+  // ---- Polling ----
+
+  async _poll() {
+    if (!this.polling) return;
+
+    if (this._usePageRefresh) {
+      await this._pollPageRefresh();
+    } else {
+      await this._pollApi();
+    }
+  }
+
+  async _pollApi() {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 15000);
+
+      const resp = await fetch(
+        `https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${this._apiKey}&prettyPrint=false`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          signal: ctrl.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Version': this._ctx?.client?.clientVersion || '2.20250401.00.00'
+          },
+          body: JSON.stringify({ context: this._ctx, continuation: this._cont })
+        }
+      );
+      clearTimeout(timeout);
+
+      if (!resp.ok) throw new Error(`API ${resp.status}`);
+
+      const data = await resp.json();
+      const lcc = data?.continuationContents?.liveChatContinuation;
+
+      if (!lcc) {
+        this._apiFails++;
+        if (this._apiFails >= 3) {
+          this.onDebug?.('YouTube API: prázdné odpovědi, přepínám na page refresh');
+          this._usePageRefresh = true;
+        }
+        if (this.polling) this._pt = setTimeout(() => this._poll(), 5000);
+        return;
+      }
+
+      // Aktualizovat continuation - preferovat timedContinuationData
+      let nextMs = 5000;
+      const conts = lcc.continuations;
+      if (conts?.length) {
+        for (const c of conts) {
+          if (c?.timedContinuationData) {
+            this._cont = c.timedContinuationData.continuation;
+            nextMs = c.timedContinuationData.timeoutMs || 5000;
+            break;
+          }
+          if (c?.invalidationContinuationData) {
+            this._cont = c.invalidationContinuationData.continuation;
+            nextMs = c.invalidationContinuationData.timeoutMs || 5000;
+          }
+        }
+      }
+
+      const actions = lcc.actions || [];
+      if (actions.length > 0) {
+        this._apiFails = 0;
+        this._processActions(actions);
+      } else {
+        this._apiFails++;
+        if (this._apiFails >= 5) {
+          this.onDebug?.('YouTube API: žádné zprávy, přepínám na page refresh');
+          this._usePageRefresh = true;
+        }
+      }
+
+      if (this.polling) {
+        this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 2000));
+      }
+    } catch (err) {
+      console.error('YouTube API poll:', err);
+      this._apiFails++;
+      if (this._apiFails >= 3) {
+        this.onDebug?.(`YouTube API selhalo (${err.message}), přepínám na page refresh`);
+        this._usePageRefresh = true;
+      }
+      if (this.polling) this._pt = setTimeout(() => this._poll(), 5000);
+    }
+  }
+
+  async _pollPageRefresh() {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 15000);
+
+      const html = await this._fetchChatPage();
+      clearTimeout(timeout);
+
+      const ytData = this._extractJson(html, 'ytInitialData');
+      if (!ytData) {
+        if (this.polling) this._pt = setTimeout(() => this._poll(), 8000);
+        return;
+      }
+
+      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      this._processActions(actions);
+
+      if (this.polling) {
+        this._pt = setTimeout(() => this._poll(), 6000);
+      }
+    } catch (err) {
+      console.error('YouTube page refresh:', err);
+      if (this.polling) this._pt = setTimeout(() => this._poll(), 10000);
+    }
+  }
+
+  // ---- Message processing ----
+
+  _processActions(actions) {
+    for (const a of actions) {
+      const item = a?.addChatItemAction?.item;
+      if (!item) continue;
+      const renderer = item.liveChatTextMessageRenderer || item.liveChatPaidMessageRenderer;
+      if (!renderer) continue;
+
+      const id = renderer.id;
+      if (!id || this._seen.has(id)) continue;
+      this._seen.add(id);
+      if (this._seen.size > 5000) {
+        const arr = [...this._seen];
+        this._seen = new Set(arr.slice(-2500));
+      }
+
+      const username = renderer.authorName?.simpleText || 'Unknown';
+      const runs = renderer.message?.runs || [];
+      const message = runs.map((r) =>
+        r.text || r.emoji?.shortcuts?.[0] || r.emoji?.emojiId || ''
+      ).join('');
+      const isSuperChat = !!item.liveChatPaidMessageRenderer;
+
+      const badges = [];
+      for (const ab of renderer.authorBadges || []) {
+        const tip = (ab?.liveChatAuthorBadgeRenderer?.tooltip || '').toLowerCase();
+        if (tip.includes('owner')) badges.push('\uD83C\uDFA4');
+        else if (tip.includes('moderator')) badges.push('\u2694\uFE0F');
+        else if (tip.includes('member')) badges.push('\u2B50');
+      }
+
+      this.onMessage?.({
+        platform: 'youtube',
+        username,
+        message,
+        ytRuns: runs,
+        color: isSuperChat ? '#ffd600' : '#ff0000',
+        badges,
+        timestamp: Date.now(),
+        id,
+        superChat: isSuperChat
+      });
+    }
+  }
+
+  disconnect(internal) {
+    this.polling = false;
+    if (this._pt) { clearTimeout(this._pt); this._pt = null; }
+    this._cont = null;
+    this._videoId = null;
+    this._seen.clear();
+    this._apiFails = 0;
+    this._usePageRefresh = false;
+    if (!internal) this.onStatus?.('disconnected');
+  }
+}
+
+// =============================================================
+// UnityChat - Hlavní aplikace
+// =============================================================
+
+class UnityChat {
+  constructor() {
+    this.config = { ...DEFAULTS };
+    this.emotes = new EmoteManager();
+    this.twitch = new TwitchProvider();
+    this.kick = new KickProvider();
+    this.youtube = new YouTubeProvider();
+    this.autoScroll = true;
+    this.msgCount = 0;
+    this.filters = { twitch: true, youtube: true, kick: true };
+    this.activePlatform = null;
+    this._msgCache = [];
+    this._cacheTimer = null;
+    this._twitchBadges = {};
+    this._chatUsers = new Map(); // lowercase → { name, platform, color }
+
+    // Uložit cache okamžitě při zavření/reloadu panelu
+    window.addEventListener('beforeunload', () => {
+      if (this._msgCache.length > 0) {
+        chrome.storage.local.set({ uc_messages: this._msgCache });
+      }
+    });
+
+    this.chatEl = document.getElementById('chat');
+    this.scrollBtn = document.getElementById('btn-scroll');
+    this.msgInput = document.getElementById('msg-input');
+    this.sendBtn = document.getElementById('btn-send');
+    this.platformBadge = document.getElementById('active-badge');
+
+    this._init();
+  }
+
+  async _init() {
+    // Verze v titulku
+    const ver = chrome.runtime.getManifest().version;
+    document.getElementById('header-title').textContent = `\u26A1 UnityChat v${ver}`;
+
+    await this._loadConfig();
+    this._setupUI();
+    this._setupProviders();
+
+    // Auto-detekce username z aktivního tabu PŘED cache renderem
+    if (!this.config.username) {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab) {
+          await this._injectContentScript(tab);
+          const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+          if (resp?.username) {
+            this.config.username = resp.username;
+            document.getElementById('input-username').value = resp.username;
+            this._saveConfig();
+          }
+        }
+      } catch {}
+    }
+
+    // Načíst VŠECHNY emotes + badges před cache
+    await this.emotes.loadGlobal();
+    if (this.config._roomId) {
+      await Promise.all([
+        this.emotes.loadChannel('twitch', this.config._roomId),
+        this.emotes.loadBTTV(this.config._roomId),
+        this.emotes.loadFFZ(this.config._roomId),
+        this._loadTwitchBadges(this.config._roomId)
+      ]);
+    }
+    await this._loadCachedMessages();
+
+    this._connectAll();
+
+    // Detekce aktivní platformy pro odesílání
+    this._detectLoop();
+
+    // Auto-dump debug logů periodicky
+    setInterval(() => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).catch(() => {}), 15000);
+  }
+
+  // ---- Config ----
+
+  async _loadConfig() {
+    try {
+      const s = await chrome.storage.sync.get('uc_config');
+      if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
+    } catch {}
+  }
+
+  async _saveConfig() {
+    try {
+      await chrome.storage.sync.set({ uc_config: this.config });
+    } catch {}
+  }
+
+  // ---- UI ----
+
+  _setupUI() {
+    const $ = (id) => document.getElementById(id);
+
+    $('input-channel').value = this.config.channel;
+    $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
+    $('input-username').value = this.config.username || '';
+    // Auto-resize textarea
+    this.msgInput.addEventListener('input', () => {
+      this.msgInput.style.height = 'auto';
+      const max = 250;
+      const h = Math.min(this.msgInput.scrollHeight, max);
+      this.msgInput.style.height = h + 'px';
+      this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+    });
+
+    // Username se nastaví okamžitě při psaní, uloží při blur
+    $('input-username').addEventListener('input', () => {
+      this.config.username = $('input-username').value.trim();
+    });
+    $('input-username').addEventListener('change', () => {
+      this.config.username = $('input-username').value.trim();
+      this._saveConfig();
+    });
+    $('chk-twitch').checked = this.config.twitch;
+    $('chk-youtube').checked = this.config.youtube;
+    $('chk-kick').checked = this.config.kick;
+
+    $('btn-settings').addEventListener('click', () =>
+      $('settings').classList.toggle('hidden')
+    );
+
+    $('btn-connect').addEventListener('click', () => {
+      this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
+      this.config.ytChannel = $('input-yt-channel').value.trim() || this.config.channel;
+      this.config.username = $('input-username').value.trim();
+      this.config.twitch = $('chk-twitch').checked;
+      this.config.youtube = $('chk-youtube').checked;
+      this.config.kick = $('chk-kick').checked;
+      this._saveConfig();
+      this._disconnectAll();
+      this.emotes.channel7tv.clear();
+      this._connectAll();
+    });
+
+    $('btn-disconnect').addEventListener('click', () => this._disconnectAll());
+    $('btn-clear').addEventListener('click', () => {
+      this.chatEl.innerHTML = '';
+      this.msgCount = 0;
+    });
+
+    // Scroll
+    this.chatEl.addEventListener('scroll', () => {
+      const el = this.chatEl;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+      this.autoScroll = atBottom;
+      this.scrollBtn.classList.toggle('hidden', atBottom);
+    });
+    this.scrollBtn.addEventListener('click', () => {
+      this.chatEl.scrollTop = this.chatEl.scrollHeight;
+      this.autoScroll = true;
+      this.scrollBtn.classList.add('hidden');
+    });
+
+    // Filtry
+    document.querySelectorAll('.fbtn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = btn.dataset.platform;
+        if (p === 'all') {
+          const all = Object.values(this.filters).every(Boolean);
+          this.filters.twitch = !all;
+          this.filters.youtube = !all;
+          this.filters.kick = !all;
+        } else {
+          this.filters[p] = !this.filters[p];
+        }
+        this._applyFilters();
+      });
+    });
+
+    // Odesílání zpráv + Tab autocomplete
+    this._ac = null;
+    this.msgInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        this._acTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === 'Escape') {
+        this._acHide();
+        return;
+      }
+      // Modifier klávesy (Shift, Ctrl, Alt) samy o sobě neruší autocomplete
+      if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+      // Jakákoliv jiná klávesa ruší autocomplete
+      this._ac = null;
+      this._acHide();
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        this._sendMessage();
+      }
+    });
+    this.sendBtn.addEventListener('click', () => this._sendMessage());
+
+    this._updateDisabled();
+  }
+
+  _applyFilters() {
+    document.querySelectorAll('.fbtn').forEach((btn) => {
+      const p = btn.dataset.platform;
+      btn.classList.toggle(
+        'active',
+        p === 'all' ? Object.values(this.filters).every(Boolean) : this.filters[p]
+      );
+    });
+    this.chatEl.querySelectorAll('.msg').forEach((el) => {
+      el.classList.toggle('hide-platform', !this.filters[el.dataset.platform]);
+    });
+  }
+
+  _updateDisabled() {
+    for (const p of ['twitch', 'youtube', 'kick']) {
+      const dot = document.querySelector(`#st-${p} .dot`);
+      if (dot && !this.config[p]) dot.className = 'dot disabled';
+    }
+  }
+
+  // ---- Emote Tab autocomplete (suggest list) ----
+
+  _acTab(dir) {
+    const input = this.msgInput;
+    const text = input.value;
+    const pos = input.selectionStart;
+
+    // Cycling - opakovaný Tab / Shift+Tab
+    if (this._ac && this._ac.end === pos) {
+      const len = this._ac.matches.length;
+      this._ac.index = (this._ac.index + dir + len) % len;
+      this._acApply();
+      return;
+    }
+
+    // Nový autocomplete
+    let ws = pos;
+    while (ws > 0 && text[ws - 1] !== ' ') ws--;
+    const partial = text.substring(ws, pos);
+    if (!partial) return;
+
+    let matches;
+    if (partial.startsWith('@')) {
+      // @username autocomplete (@ samotné = všichni uživatelé)
+      const prefix = partial.substring(1).toLowerCase();
+      matches = [...this._chatUsers.values()]
+        .filter(u => !prefix || u.name.toLowerCase().startsWith(prefix))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(u => '@' + u.name);
+    } else {
+      // Emote autocomplete
+      matches = this.emotes.findCompletions(partial);
+    }
+    if (!matches.length) { this._acHide(); return; }
+
+    this._ac = { start: ws, end: pos, index: 0, matches };
+    this._acApply();
+  }
+
+  _acApply() {
+    const ac = this._ac;
+    if (!ac) return;
+    const match = ac.matches[ac.index];
+    const input = this.msgInput;
+    const text = input.value;
+    const before = text.substring(0, ac.start);
+    const after = text.substring(ac.end);
+    input.value = before + match + ' ' + after;
+    ac.end = ac.start + match.length + 1;
+    input.setSelectionRange(ac.end, ac.end);
+    this._acRender();
+  }
+
+  /** Zjistí zdroj emotu pro zobrazení tagu. */
+  _acSource(name) {
+    if (name.startsWith('@')) {
+      const u = this._chatUsers.get(name.substring(1).toLowerCase());
+      return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
+    }
+    if (this.emotes.channel7tv.has(name)) return '7TV';
+    if (this.emotes.global7tv.has(name)) return '7TV';
+    if (this.emotes.bttvEmotes.has(name)) return 'BTTV';
+    if (this.emotes.ffzEmotes.has(name)) return 'FFZ';
+    if (this.emotes.twitchNative.has(name)) return 'Twitch';
+    if (this.emotes.kickNative.has(name)) return 'Kick';
+    return '';
+  }
+
+  _acRender() {
+    const ac = this._ac;
+    if (!ac) return;
+
+    let el = document.getElementById('emote-suggest');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'emote-suggest';
+      document.getElementById('input-area').appendChild(el);
+    }
+
+    const VISIBLE = 4;
+    const total = ac.matches.length;
+    const idx = ac.index;
+
+    // Okno kolem vybraného (posun aby vybraný byl vidět)
+    let winStart = ac._winStart || 0;
+    if (idx < winStart) winStart = idx;
+    if (idx >= winStart + VISIBLE) winStart = idx - VISIBLE + 1;
+    winStart = Math.max(0, Math.min(winStart, total - VISIBLE));
+    ac._winStart = winStart;
+
+    const winEnd = Math.min(winStart + VISIBLE, total);
+
+    let html = '';
+    for (let i = winStart; i < winEnd; i++) {
+      const name = ac.matches[i];
+      const sel = i === idx ? ' selected' : '';
+      html += `<div class="es-item${sel}" data-idx="${i}">`;
+
+      if (name.startsWith('@')) {
+        // Username: barevná tečka
+        const u = this._chatUsers.get(name.substring(1).toLowerCase());
+        const col = u?.color || '#ccc';
+        html += `<span class="es-dot" style="background:${col}"></span>`;
+      } else {
+        // Emote: obrázek
+        const url = this.emotes.getAnyUrl(name);
+        if (url) html += `<img src="${this.emotes._ea(url)}" alt="${this.emotes._ea(name)}">`;
+      }
+
+      const src = this._acSource(name);
+      html += `<span class="es-name">${this.emotes._eh(name)}</span>`;
+      if (src) html += `<span class="es-src">${src}</span>`;
+      html += '</div>';
+    }
+
+    // Počítadlo pokud je víc než VISIBLE
+    if (total > VISIBLE) {
+      html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
+    }
+
+    el.innerHTML = html;
+    el.classList.remove('hidden');
+
+    // Klik na položku
+    el.querySelectorAll('.es-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        const i = parseInt(item.dataset.idx, 10);
+        this._ac.index = i;
+        this._acApply();
+        this.msgInput.focus();
+      });
+    });
+  }
+
+  _acHide() {
+    this._ac = null;
+    const el = document.getElementById('emote-suggest');
+    if (el) el.classList.add('hidden');
+  }
+
+  // ---- Odesílání zpráv ----
+
+  async _detectLoop() {
+    await this._detectActivePlatform();
+    setInterval(() => this._detectActivePlatform(), 3000);
+  }
+
+  async _detectActivePlatform() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) { this._setActivePlatform(null); return; }
+
+      let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+
+      // Pokud content script neodpovídá, zkusit ho injektovat on-demand
+      if (!resp) {
+        await this._injectContentScript(tab);
+        resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+      }
+
+      this._setActivePlatform(resp?.platform || null);
+
+      // Auto-detekce username z platformy
+      if (resp?.username && !this.config.username) {
+        this.config.username = resp.username;
+        const el = document.getElementById('input-username');
+        if (el) el.value = resp.username;
+        this._saveConfig();
+      }
+    } catch {
+      this._setActivePlatform(null);
+    }
+  }
+
+  async _injectContentScript(tab) {
+    const url = tab.url || '';
+    let file, allFrames = false;
+    if (url.includes('twitch.tv')) file = 'content/twitch.js';
+    else if (url.includes('youtube.com')) { file = 'content/youtube.js'; allFrames = true; }
+    else if (url.includes('kick.com')) file = 'content/kick.js';
+    if (!file) return;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames },
+        files: [file]
+      });
+    } catch {}
+  }
+
+  _setActivePlatform(platform) {
+    this.activePlatform = platform;
+    if (!this.platformBadge) return;
+
+    if (platform === 'twitch') {
+      this.platformBadge.textContent = 'TW';
+      this.platformBadge.className = 'badge tw';
+    } else if (platform === 'youtube') {
+      this.platformBadge.textContent = 'YT';
+      this.platformBadge.className = 'badge yt';
+    } else if (platform === 'kick') {
+      this.platformBadge.textContent = 'KI';
+      this.platformBadge.className = 'badge ki';
+    } else {
+      this.platformBadge.textContent = '--';
+      this.platformBadge.className = 'badge';
+    }
+
+    this.msgInput.disabled = !platform;
+    this.sendBtn.disabled = !platform;
+    this.msgInput.placeholder = platform
+      ? `Zpráva do ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`
+      : 'Otevři stream pro odesílání...';
+  }
+
+  // ---- Twitch Badges ----
+
+  async _loadTwitchBadges(roomId) {
+    try {
+      const badges = await chrome.runtime.sendMessage({
+        type: 'LOAD_BADGES',
+        channel: this.config.channel,
+        roomId
+      });
+      if (badges && typeof badges === 'object') {
+        Object.assign(this._twitchBadges, badges);
+        console.log(`[Badges] Loaded: ${Object.keys(this._twitchBadges).length}`);
+      }
+    } catch (e) {
+      console.error('[Badges] Load error:', e);
+    }
+  }
+
+  // ---- User Card ----
+
+  async _openUserCard(platform, username) {
+    // Debounce - max 1 klik za 2s
+    if (this._ucDebounce) return;
+    this._ucDebounce = true;
+    setTimeout(() => { this._ucDebounce = false; }, 2000);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+
+      chrome.runtime.sendMessage({
+        type: 'OPEN_USER_CARD',
+        tabId: tab.id,
+        username,
+        platform,
+        channel: this.config.channel,
+        broadcasterId: this.config._roomId || null
+      });
+    } catch (e) {
+      console.error('[UserCard] Error:', e);
+    }
+  }
+
+  // ---- Odpovědi na zprávy ----
+
+  _setReply(platform, username, messageId) {
+    this._reply = { platform, username, messageId };
+
+    let el = document.getElementById('reply-indicator');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'reply-indicator';
+      document.getElementById('input-area').prepend(el);
+    }
+
+    const pClass = { twitch: 'tw', youtube: 'yt', kick: 'ki' }[platform] || '';
+    el.innerHTML =
+      `<span class="ri-label">Odpověď pro</span> ` +
+      `<span class="badge ${pClass}">${pClass.toUpperCase()}</span> ` +
+      `<span class="ri-user">${this.emotes._eh(username)}</span>` +
+      `<button class="ri-close" title="Zrušit">&times;</button>`;
+    el.classList.remove('hidden');
+
+    el.querySelector('.ri-close').addEventListener('click', () => this._clearReply());
+
+    this.msgInput.focus();
+  }
+
+  _clearReply() {
+    this._reply = null;
+    const el = document.getElementById('reply-indicator');
+    if (el) el.classList.add('hidden');
+  }
+
+  async _sendMessage() {
+    const text = this.msgInput.value.trim();
+    if (!text || !this.activePlatform) return;
+
+    const isCmd = text.startsWith('!') || text.startsWith('/');
+    const markedText = isCmd ? text : text + ' ' + UC_MARKER;
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab) return;
+
+      let resp;
+
+      // Native reply pokud odpovídáme na stejné platformě
+      if (this._reply?.messageId && this._reply.platform === this.activePlatform) {
+        resp = await chrome.tabs.sendMessage(tab.id, {
+          type: 'REPLY_CHAT',
+          text: markedText,
+          parentMsgId: this._reply.messageId,
+          username: this._reply.username,
+          broadcasterId: this.config._roomId || null
+        });
+      } else {
+        // Cross-platform reply → @mention prefix
+        let sendText = markedText;
+        if (this._reply) {
+          const at = `@${this._reply.username}`;
+          if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
+        }
+        resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
+      }
+
+      if (resp?.ok) {
+        this._lastSentText = text; // originální text bez markeru
+        this.msgInput.value = '';
+        this._clearReply();
+      } else {
+        this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
+      }
+    } catch (err) {
+      this._sys(`Nelze odeslat: ${err.message}`);
+    }
+  }
+
+  // ---- Providers ----
+
+  _setupProviders() {
+    this.twitch.onMessage = (m) => this._addMessage(m);
+    this.twitch.onStatus = (s, d) => this._status('twitch', s, d);
+    this.twitch.onRoomId = (id) => {
+      this.config._roomId = id;
+      this._saveConfig();
+      this.emotes.loadChannel('twitch', id);
+      this.emotes.loadBTTV(id);
+      this.emotes.loadFFZ(id);
+      this._loadTwitchBadges(id);
+    };
+
+    this.kick.onMessage = (m) => this._addMessage(m);
+    this.kick.onStatus = (s, d) => this._status('kick', s, d);
+    this.kick.onUserId = (id) => {
+      if (this.emotes.channel7tv.size === 0) {
+        this.emotes.loadChannel('kick', id);
+      }
+    };
+
+    this.youtube.onMessage = (m) => this._addMessage(m);
+    this.youtube.onStatus = (s, d) => this._status('youtube', s, d);
+    this.youtube.onDebug = null; // tiché debug
+  }
+
+  _connectAll() {
+    this._updateDisabled();
+    const connecting = [];
+    if (this.config.twitch) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
+    if (this.config.kick) { this.kick.connect(this.config.channel); connecting.push('Kick'); }
+    if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
+    if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
+  }
+
+  _disconnectAll() {
+    this.twitch.disconnect();
+    this.kick.disconnect();
+    this.youtube.disconnect();
+  }
+
+  // ---- Status ----
+
+  _status(platform, status, detail) {
+    const dot = document.querySelector(`#st-${platform} .dot`);
+    if (!dot) return;
+    dot.className = 'dot';
+    if (status === 'connected') {
+      dot.classList.add('connected');
+      // Jen tiché připojení - indikátor stačí
+    } else if (status === 'connecting') {
+      dot.classList.add('connecting');
+    } else if (status === 'error') {
+      dot.classList.add('error');
+      this._sys(`${platform.toUpperCase()}: ${detail || 'chyba připojení'}`);
+    }
+  }
+
+  // ---- Messages ----
+
+  _sys(text) {
+    const el = document.createElement('div');
+    el.className = 'sys';
+    el.textContent = text;
+    this.chatEl.appendChild(el);
+    this._scroll();
+  }
+
+  _addMessage(msg) {
+    this.msgCount++;
+
+    // Sbírat usernames pro @mention autocomplete
+    if (msg.username) {
+      this._chatUsers.set(msg.username.toLowerCase(), {
+        name: msg.username,
+        platform: msg.platform,
+        color: msg.color
+      });
+    }
+
+    // Učení nativních emotes z příchozích zpráv
+    if (msg.platform === 'twitch' && msg.twitchEmotes) {
+      // Pro učení emotes potřebujeme originální pozice - u reply zpráv
+      // je @username stripnutý, ale emote tag má originální pozice.
+      // learnTwitch extrahuje jen name→url mapování, takže OK i s offsetem.
+      this.emotes.learnTwitch(msg.message, msg.twitchEmotes);
+    } else if (msg.platform === 'kick' && msg.kickContent) {
+      this.emotes.learnKick(msg.kickContent);
+    }
+
+    // Detekce UnityChat markeru → oranžový platform badge
+    // Flag _uc se cachuje aby přežil reload
+    let isUC = !!msg._uc;
+    if (!isUC && msg.message?.includes(UC_MARKER)) {
+      isUC = true;
+      msg.message = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+      if (msg.kickContent) {
+        msg.kickContent = msg.kickContent.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+      }
+      msg._uc = true; // zachovat pro cache
+
+      // Auto-detekce username (msg.message může mít stripnutý @prefix u reply)
+      if (this._lastSentText && (msg.message === this._lastSentText || msg.message?.includes(this._lastSentText))) {
+        this._lastSentText = null;
+        if (msg.username && this.config.username !== msg.username) {
+          this.config.username = msg.username;
+          const el = document.getElementById('input-username');
+          if (el) el.value = msg.username;
+          this._saveConfig();
+        }
+      }
+    }
+
+    // @mention zvýraznění - kontroluje text zprávy i reply-parent
+    const myName = this.config.username?.toLowerCase();
+    const isMentioned = myName && (
+      msg.message?.toLowerCase().includes(`@${myName}`) ||
+      msg.replyTo?.username?.toLowerCase() === myName
+    );
+
+    const el = document.createElement('div');
+    el.className = 'msg';
+    el.dataset.platform = msg.platform;
+    if (msg.superChat) el.classList.add('superchat');
+    if (isMentioned) el.classList.add('mentioned');
+    if (msg.firstMsg) el.classList.add('first-msg');
+    if (msg.isRaid) el.classList.add('raid');
+    if (!this.filters[msg.platform]) el.classList.add('hide-platform');
+
+    // First-time chatter label
+    if (msg.firstMsg) {
+      const fl = document.createElement('div');
+      fl.className = 'first-label';
+      fl.textContent = 'První zpráva';
+      el.appendChild(fl);
+    }
+
+    // Raid label
+    if (msg.isRaid) {
+      const rl = document.createElement('div');
+      rl.className = 'raid-label';
+      rl.textContent = 'RAID';
+      el.appendChild(rl);
+    }
+
+    // Reply context (Twitch reply-parent tagy)
+    if (msg.replyTo) {
+      const ctx = document.createElement('div');
+      ctx.className = 'reply-ctx';
+      ctx.innerHTML =
+        `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username)}</span> ` +
+        `<span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>`;
+      el.appendChild(ctx);
+    }
+
+    // Platform badge
+    const pClass = { twitch: 'tw', youtube: 'yt', kick: 'ki' }[msg.platform];
+    const pi = document.createElement('span');
+    pi.className = `pi ${pClass}${isUC ? ' uc' : ''}`;
+    pi.textContent = pClass.toUpperCase();
+    if (isUC) pi.title = 'UnityChat';
+    el.appendChild(pi);
+
+    // Čas
+    const ts = document.createElement('span');
+    ts.className = 'ts';
+    const d = new Date(msg.timestamp);
+    ts.textContent = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    el.appendChild(ts);
+
+    // Badges
+    if (msg.badgesRaw) {
+      const bdg = document.createElement('span');
+      bdg.className = 'bdg';
+      const badgeCount = Object.keys(this._twitchBadges).length;
+      for (const badge of msg.badgesRaw.split(',')) {
+        if (!badge) continue;
+        const url = this._twitchBadges[badge];
+        if (!url && badgeCount > 0) {
+          console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
+        }
+        if (url) {
+          const img = document.createElement('img');
+          img.className = 'bdg-img';
+          img.src = url;
+          img.alt = badge.split('/')[0];
+          img.title = badge.split('/')[0];
+          bdg.appendChild(img);
+        }
+      }
+      if (bdg.children.length) el.appendChild(bdg);
+    }
+
+    // Username (klik → otevře user card na platformě)
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.style.color = msg.color;
+    un.textContent = msg.username;
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    el.appendChild(un);
+    el.appendChild(document.createTextNode(' '));
+
+    // Zpráva s emoty - platform-specifický rendering
+    const tx = document.createElement('span');
+    tx.className = 'tx';
+
+    if (msg.platform === 'twitch') {
+      // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
+      // → pro reply použít jen 7TV/BTTV matching (bez position-based Twitch emotes)
+      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, emotesTag);
+    } else if (msg.platform === 'kick') {
+      tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message);
+    } else if (msg.platform === 'youtube' && msg.ytRuns?.length) {
+      tx.innerHTML = this.emotes.renderYouTube(msg.ytRuns);
+    } else {
+      tx.innerHTML = this.emotes.renderPlain(msg.message);
+    }
+
+    el.appendChild(tx);
+
+    // Hover reply tlačítko
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    const replyBtn = document.createElement('button');
+    replyBtn.className = 'msg-action-btn';
+    replyBtn.title = 'Odpovědět';
+    replyBtn.innerHTML = '&#8617;'; // ↩
+    replyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._setReply(msg.platform, msg.username, msg.id);
+    });
+    actions.appendChild(replyBtn);
+    el.appendChild(actions);
+
+    this.chatEl.appendChild(el);
+
+    if (this.msgCount > this.config.maxMessages) this._trim();
+    this._scroll();
+
+    // Cache zprávy (serializovatelná data, bez DOM)
+    this._cacheMsg(msg);
+  }
+
+  // ---- Message cache (přežije reload) ----
+
+  _cacheMsg(msg) {
+    this._msgCache.push(msg);
+    if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
+    if (!this._cacheTimer) {
+      this._cacheTimer = setTimeout(() => {
+        this._cacheTimer = null;
+        chrome.storage.local.set({ uc_messages: this._msgCache }).catch(() => {});
+      }, 500);
+    }
+  }
+
+  async _loadCachedMessages() {
+    try {
+      const { uc_messages } = await chrome.storage.local.get('uc_messages');
+      if (!uc_messages?.length) return;
+      for (const msg of uc_messages) {
+        this._addMessage(msg);
+      }
+    } catch {}
+  }
+
+  _trim() {
+    const c = this.chatEl.children;
+    const n = Math.max(0, c.length - this.config.maxMessages);
+    for (let i = 0; i < n; i++) c[0].remove();
+  }
+
+  _scroll() {
+    if (this.autoScroll) {
+      requestAnimationFrame(() => {
+        this.chatEl.scrollTop = this.chatEl.scrollHeight;
+      });
+    }
+  }
+}
+
+// ---- Start ----
+document.addEventListener('DOMContentLoaded', () => new UnityChat());

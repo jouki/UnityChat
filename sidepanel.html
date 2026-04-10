@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UnityChat</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- Header -->
+  <div id="header">
+    <div id="header-title">&#9889; UnityChat</div>
+    <button id="btn-settings" title="Nastavení">&#9881;</button>
+  </div>
+
+  <!-- Settings Panel -->
+  <div id="settings" class="hidden">
+    <div class="setting-row">
+      <label for="input-channel">Kanál (Twitch / Kick)</label>
+      <input type="text" id="input-channel" value="robdiesalot" spellcheck="false">
+    </div>
+    <div class="setting-row">
+      <label for="input-yt-channel">YouTube kanál (URL cesta)</label>
+      <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="robdiesalot nebo @robdiesalot" spellcheck="false">
+    </div>
+    <div class="setting-row">
+      <label for="input-username">Tvoje username (pro zvýraznění @mention)</label>
+      <input type="text" id="input-username" placeholder="Jouki728" spellcheck="false">
+    </div>
+    <div class="setting-row platforms">
+      <label class="platform-check">
+        <input type="checkbox" id="chk-twitch" checked>
+        <span class="badge tw">TW</span> Twitch
+      </label>
+      <label class="platform-check">
+        <input type="checkbox" id="chk-youtube" checked>
+        <span class="badge yt">YT</span> YouTube
+      </label>
+      <label class="platform-check">
+        <input type="checkbox" id="chk-kick" checked>
+        <span class="badge ki">KI</span> Kick
+      </label>
+    </div>
+    <div class="setting-row actions">
+      <button id="btn-connect" class="btn-primary">Připojit</button>
+      <button id="btn-disconnect">Odpojit</button>
+      <button id="btn-clear">Vyčistit chat</button>
+    </div>
+  </div>
+
+  <!-- Status + Filter Bar -->
+  <div id="bar">
+    <div id="statuses">
+      <span class="st" id="st-twitch" title="Twitch"><span class="dot"></span>TW</span>
+      <span class="st" id="st-youtube" title="YouTube"><span class="dot"></span>YT</span>
+      <span class="st" id="st-kick" title="Kick"><span class="dot"></span>KI</span>
+    </div>
+    <div id="filters">
+      <button class="fbtn active" data-platform="all">Vše</button>
+      <button class="fbtn active" data-platform="twitch">TW</button>
+      <button class="fbtn active" data-platform="youtube">YT</button>
+      <button class="fbtn active" data-platform="kick">KI</button>
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div id="chat-wrapper">
+    <div id="chat"></div>
+    <button id="btn-scroll" class="hidden">&darr; Nové zprávy</button>
+  </div>
+
+  <!-- Input pro odesílání zpráv -->
+  <div id="input-area">
+    <span id="active-badge" class="badge">--</span>
+    <textarea id="msg-input" rows="1" placeholder="Otevři stream pro odesílání..." autocomplete="off" spellcheck="false" disabled></textarea>
+    <button id="btn-send" disabled>&#10148;</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
