@@ -5,3 +5,4 @@ dist
 
 # Infra runbook with credentials — local only
 SERVER.md
+.claude/

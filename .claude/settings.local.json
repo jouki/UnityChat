@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(mkdir -p \"D:/_BACKUP_2.0/Code Projects/UnityChat/landing/unitychat/assets/emotes\")",
-      "Bash(cp \"C:/Users/mjouk/.claude/image-cache/a3178adb-a7f6-4298-88cb-d1e1fb1fc1cd/126.png\" \"D:/_BACKUP_2.0/Code Projects/UnityChat/landing/unitychat/assets/chrome-extension-card.png\")"
-    ]
-  }
-}
