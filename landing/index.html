@@ -275,6 +275,10 @@
       display: grid;
       place-items: center;
       position: relative;
+      /* Reserve wordmark-equivalent height so TERMINATING swap doesn't
+         shift the terminal below. Matches .wordmark's font clamp *1.5
+         (1em line-height + 0.25em top/bottom padding). */
+      min-height: calc(clamp(4.5rem, 14vw, 15rem) * 1.5);
     }
     .stack > * {
       grid-column: 1;
