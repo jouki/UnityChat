@@ -98,25 +98,30 @@
       transition: background 0.15s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
-    /* Scanning violet beam — behind content, deep violet, diffuse */
+    /* Scanning violet beam — thin bright laser with layered immediate glow */
     .scan-line {
       position: fixed;
       left: 0;
       right: 0;
       top: 0;
-      height: 4px;
+      height: 1px;
       pointer-events: none;
       z-index: 3;
       background: linear-gradient(90deg,
         transparent 0%,
-        rgba(38, 12, 84, 0.45) 15%,
-        rgba(62, 22, 138, 0.78) 50%,
-        rgba(38, 12, 84, 0.45) 85%,
+        rgba(145, 70, 255, 0.35) 12%,
+        rgba(192, 132, 252, 0.95) 42%,
+        #e0c6ff 50%,
+        rgba(192, 132, 252, 0.95) 58%,
+        rgba(145, 70, 255, 0.35) 88%,
         transparent 100%);
       box-shadow:
-        0 0 34px rgba(52, 18, 120, 0.65),
-        0 0 70px rgba(38, 14, 92, 0.4),
-        0 0 130px rgba(28, 10, 70, 0.25);
+        0 0 2px rgba(224, 198, 255, 1),
+        0 0 5px rgba(192, 132, 252, 0.95),
+        0 0 12px rgba(145, 70, 255, 0.75),
+        0 0 28px rgba(145, 70, 255, 0.5),
+        0 0 60px rgba(145, 70, 255, 0.3),
+        0 0 110px rgba(90, 30, 160, 0.18);
       opacity: 0;
       animation: scan-pass 16s ease-in-out infinite;
       will-change: transform, opacity;
