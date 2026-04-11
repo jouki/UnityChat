@@ -8,7 +8,7 @@
   <meta name="robots" content="noindex">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-0: #08080a;
@@ -20,6 +20,9 @@
       --accent: #ff8c00;
       --accent-glow: #ffc800;
       --accent-deep: #a85a00;
+      --violet: #9146ff;
+      --violet-glow: #c084fc;
+      --violet-deep: #5a1fa3;
       --line: rgba(255, 140, 0, 0.14);
     }
 
@@ -35,15 +38,15 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Ambient light wash — warm orange bloom from upper-left */
+    /* Ambient light wash — orange bloom upper-left, violet lower-right */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
       pointer-events: none;
       background:
-        radial-gradient(ellipse 90% 65% at 22% 18%, rgba(255, 180, 40, 0.08), transparent 55%),
-        radial-gradient(ellipse 70% 50% at 78% 82%, rgba(255, 110, 20, 0.06), transparent 60%),
+        radial-gradient(ellipse 90% 65% at 18% 22%, rgba(255, 180, 40, 0.10), transparent 55%),
+        radial-gradient(ellipse 80% 60% at 82% 78%, rgba(145, 70, 255, 0.10), transparent 60%),
         linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.4) 100%);
       z-index: 1;
     }
@@ -103,9 +106,9 @@
       min-height: 100vh;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      padding: 2.75rem 3rem 2.25rem 6rem;
+      padding: 2.75rem 4rem 2.25rem 6rem;
       gap: 2rem;
-      max-width: 1400px;
+      width: 100%;
     }
 
     /* -------- TOP METADATA BAR -------- */
@@ -166,27 +169,51 @@
       50%        { opacity: 0.35; transform: scale(0.65); }
     }
 
+    /* Wordmark: layered duotone — violet echo behind, orange on top */
     .wordmark {
+      position: relative;
       font-family: 'Orbitron', 'JetBrains Mono', sans-serif;
       font-weight: 800;
-      font-size: clamp(4rem, 14vw, 13rem);
-      line-height: 0.95;
-      letter-spacing: 0.01em;
+      font-size: clamp(4.5rem, 17vw, 26rem);
+      line-height: 0.92;
+      letter-spacing: 0.005em;
       text-transform: uppercase;
-      color: var(--text-0);
-      background: linear-gradient(118deg,
-        #fff7e3 0%,
-        #ffe29a 20%,
-        var(--accent-glow) 46%,
-        var(--accent) 72%,
-        #d16a00 100%);
+      margin-bottom: 0.5em;
+      user-select: none;
+      display: inline-block;
+      isolation: isolate;
+    }
+    .wordmark .layer {
+      display: block;
+      position: relative;
       background-clip: text;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      filter: drop-shadow(0 0 40px rgba(255, 140, 0, 0.22));
-      margin-bottom: 0.4em;
-      user-select: none;
+    }
+    .wordmark .back {
+      position: absolute;
+      inset: 0;
+      transform: translate(0.08em, 0.06em);
+      background: linear-gradient(180deg,
+        var(--violet-glow) 0%,
+        #a56bff 35%,
+        var(--violet) 68%,
+        var(--violet-deep) 100%);
+      filter: blur(0.5px) drop-shadow(0 0 30px rgba(145, 70, 255, 0.55))
+                          drop-shadow(0 0 60px rgba(145, 70, 255, 0.28));
+      opacity: 0.95;
+      z-index: 1;
+    }
+    .wordmark .front {
       position: relative;
+      background: linear-gradient(180deg,
+        #ffeaa3 0%,
+        var(--accent-glow) 28%,
+        var(--accent) 58%,
+        var(--accent-deep) 100%);
+      filter: drop-shadow(0 0 22px rgba(255, 160, 20, 0.55))
+              drop-shadow(0 0 48px rgba(255, 120, 0, 0.22));
+      z-index: 2;
     }
 
     .lede {
@@ -196,7 +223,7 @@
       line-height: 1.65;
       color: var(--text-1);
       max-width: 60ch;
-      margin-top: 1.5rem;
+      margin-top: 2rem;
       letter-spacing: 0.005em;
     }
     .lede em {
@@ -209,6 +236,12 @@
       font-weight: 500;
       color: var(--accent-glow);
       text-shadow: 0 0 14px rgba(255, 180, 30, 0.45);
+    }
+    .lede .vi {
+      font-style: normal;
+      font-weight: 500;
+      color: var(--violet-glow);
+      text-shadow: 0 0 14px rgba(145, 70, 255, 0.5);
     }
 
     /* -------- BOTTOM LEDGER -------- */
@@ -278,6 +311,23 @@
     .progress .pct .now { color: var(--accent-glow); }
 
     /* ---------- Responsive ---------- */
+    /* Wide screens: spread content, scale metadata up */
+    @media (min-width: 1800px) {
+      .frame { padding: 4rem 6rem 3rem 8rem; gap: 3rem; }
+      .rail  { left: 4rem; }
+      .meta  { font-size: 13px; }
+      .ledger { font-size: 13px; gap: 4rem; }
+      .lede  { font-size: 1.35rem; max-width: 70ch; }
+    }
+
+    @media (min-width: 2800px) {
+      .frame { padding: 6rem 8rem 4rem 12rem; }
+      .rail  { left: 6rem; }
+      .meta  { font-size: 15px; }
+      .ledger { font-size: 15px; gap: 6rem; }
+      .lede  { font-size: 1.65rem; max-width: 75ch; }
+    }
+
     @media (max-width: 820px) {
       .frame { padding: 2rem 1.5rem 1.5rem 3.25rem; }
       .rail  { left: 1.25rem; }
@@ -319,12 +369,15 @@
         SYSTEM STATUS &nbsp;·&nbsp; UNDER CONSTRUCTION
       </div>
 
-      <h1 class="wordmark">jouki</h1>
+      <h1 class="wordmark" aria-label="JOUKI">
+        <span class="layer back" aria-hidden="true">JOUKI</span>
+        <span class="layer front">JOUKI</span>
+      </h1>
 
       <p class="lede">
         A quiet corner of the internet currently being <em>assembled</em> in the dark.
-        Something more considered is on its way — until then, the <span class="ac">glow</span>
-        of the work itself will have to do.
+        Something more considered is on its way — until then, the <span class="ac">orange</span>
+        and <span class="vi">violet</span> of the work itself will have to do.
       </p>
     </main>
 
