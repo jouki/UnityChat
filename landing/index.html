@@ -71,10 +71,10 @@
       pointer-events: none;
       z-index: 2;
       background-image:
-        linear-gradient(to right, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
-        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(to right, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
       background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px;
       mask-image: radial-gradient(ellipse 78% 85% at 50% 50%, #000 42%, transparent 100%);
       -webkit-mask-image: radial-gradient(ellipse 78% 85% at 50% 50%, #000 42%, transparent 100%);
@@ -481,10 +481,9 @@
       align-items: center;
       justify-content: center;
       pointer-events: none;
-      overflow: hidden;
       text-align: center;
       gap: 0.4rem;
-      padding: 1.5rem 2rem;
+      padding: 1rem 1rem;
       position: relative;
       width: fit-content;
       max-width: 96vw;
@@ -492,33 +491,9 @@
     .terminated.active {
       display: flex;
     }
-    .terminated::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background: repeating-linear-gradient(
-        0deg,
-        rgba(0, 0, 0, 0) 0px,
-        rgba(0, 0, 0, 0) 2px,
-        rgba(0, 0, 0, 0.38) 3px,
-        rgba(0, 0, 0, 0) 4px
-      );
-      mix-blend-mode: multiply;
-      animation: crt-scroll 1.8s linear infinite;
-    }
-    .terminated::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background: radial-gradient(ellipse 80% 90% at 50% 50%,
-        transparent 40%,
-        rgba(0, 0, 0, 0.55) 100%);
-    }
     @keyframes crt-scroll {
-      from { transform: translateY(0); }
-      to   { transform: translateY(4px); }
+      from { background-position-y: 0; }
+      to   { background-position-y: 6px; }
     }
 
     .err-tag {
@@ -547,15 +522,28 @@
       font-weight: 900;
       letter-spacing: 0.08em;
       line-height: 1;
-      color: #ff2a2a;
       white-space: nowrap;
+      /* CRT scanlines BAKED INTO the text via background-clip */
+      background-image: repeating-linear-gradient(
+        0deg,
+        #ff3434 0px,
+        #ff3434 3px,
+        rgba(80, 0, 0, 0.85) 4px,
+        rgba(80, 0, 0, 0.85) 5px,
+        #ff3434 6px
+      );
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
       text-shadow:
         0 0 22px rgba(255, 20, 20, 0.9),
         0 0 44px rgba(255, 60, 60, 0.6),
-        3px 0 0 rgba(255, 120, 120, 0.65),
-        -3px 0 0 rgba(140, 0, 0, 0.85);
+        3px 0 0 rgba(255, 120, 120, 0.55),
+        -3px 0 0 rgba(140, 0, 0, 0.75);
       animation: crt-flicker 0.14s ease-in-out infinite,
-                 crt-shift 3.2s ease-in-out infinite;
+                 crt-shift 3.2s ease-in-out infinite,
+                 crt-scroll 1.2s linear infinite;
       position: relative;
       z-index: 1;
     }
@@ -602,7 +590,8 @@
     .terminated.active .err-msg   { animation: term-in 0.5s ease-out 0.15s backwards; }
     .terminated.active .err-state { animation: term-boot 0.55s cubic-bezier(0.2, 1.4, 0.5, 1) 0.35s backwards,
                                                crt-flicker 0.14s ease-in-out infinite 1s,
-                                               crt-shift 3.2s ease-in-out infinite 1s; }
+                                               crt-shift 3.2s ease-in-out infinite 1s,
+                                               crt-scroll 1.2s linear infinite 0.8s; }
     @keyframes term-in {
       0%   { opacity: 0; transform: translateY(8px); }
       100% { opacity: 1; transform: translateY(0); }
