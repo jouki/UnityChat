@@ -37,6 +37,13 @@
       min-height: 100vh;
       overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .grain, .spotlight, .scan-line, .corner,
+    .status-pill, .dot, .wordmark {
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     /* ---------- AMBIENT LAYERS ---------- */
@@ -63,29 +70,29 @@
       pointer-events: none;
       z-index: 2;
       background-image:
-        linear-gradient(to right, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+        linear-gradient(to right, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.07) 1px, transparent 1px);
       background-size: 72px 72px;
-      mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
-      -webkit-mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
+      mask-image: radial-gradient(ellipse 75% 82% at 50% 50%, #000 38%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 75% 82% at 50% 50%, #000 38%, transparent 100%);
       transform: translate3d(var(--px, 0), var(--py, 0), 0);
       transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.2, 1);
       will-change: transform;
     }
 
-    /* Mouse spotlight — violet-dominant radial glow following cursor */
+    /* Mouse spotlight — color shifts orange→violet based on cursor position */
     .spotlight {
       position: fixed;
       inset: 0;
       pointer-events: none;
       z-index: 1;
       background:
-        radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%),
-          rgba(255, 180, 30, 0.05), transparent 65%),
-        radial-gradient(720px circle at var(--mx, 50%) var(--my, 50%),
-          rgba(145, 70, 255, 0.09), transparent 70%);
+        radial-gradient(240px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(255, 185, 35, var(--spot-o, 0.05)), transparent 65%),
+        radial-gradient(780px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(145, 70, 255, var(--spot-v, 0.09)), transparent 72%);
       mix-blend-mode: screen;
-      transition: background 0.12s cubic-bezier(0.2, 0.7, 0.2, 1);
+      transition: background 0.15s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     /* Scanning violet beam — behind content, deep violet, diffuse */
@@ -306,22 +313,163 @@
       50%     { opacity: 0.35; transform: scale(0.65); }
     }
 
-    /* SVG WORDMARK — subtle orange halo only, no bloom */
+    /* WORDMARK — HTML + per-letter spans for individual animation */
     .wordmark {
-      width: min(1200px, 82%);
-      height: auto;
-      display: block;
+      font-family: 'Orbitron', 'JetBrains Mono', sans-serif;
+      font-weight: 800;
+      font-size: clamp(4.5rem, 14vw, 15rem);
+      line-height: 1;
+      letter-spacing: 0.035em;
+      display: flex;
+      justify-content: center;
+      gap: 0.01em;
+      margin: 0;
       cursor: pointer;
+      text-transform: uppercase;
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
               drop-shadow(0 0 24px rgba(255, 140, 0, 0.22));
       opacity: 0;
       animation: opacity-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s forwards;
-      transition: filter 0.35s ease, transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+      transition: filter 0.35s ease;
+      position: relative;
     }
     .wordmark:hover {
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
               drop-shadow(0 0 28px rgba(255, 140, 0, 0.35))
-              drop-shadow(0 0 60px rgba(145, 70, 255, 0.28));
+              drop-shadow(0 0 60px rgba(145, 70, 255, 0.26));
+    }
+
+    .wordmark .ltr {
+      display: inline-block;
+      background: linear-gradient(180deg,
+        #fff3cc 0%,
+        #ffe29a 14%,
+        #ffc800 34%,
+        #ff8c00 62%,
+        #d16200 88%,
+        #a85a00 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+      transform-origin: 50% 85%;
+      transition: text-shadow 0.18s ease;
+      will-change: transform, text-shadow;
+    }
+
+    /* ---- HIT 1: mild tremor + subtle chromatic ---- */
+    .wordmark[data-hits="1"] .ltr {
+      animation: shake-1 0.38s ease-out;
+      text-shadow:
+        6px 0 0 rgba(145, 70, 255, 0.92),
+       -6px 0 0 rgba(255, 140, 0, 0.92);
+    }
+    @keyframes shake-1 {
+      0%, 100% { transform: translate(0, 0); }
+      30% { transform: translate(-3px, 1px); }
+      70% { transform: translate(3px, -1px); }
+    }
+
+    /* ---- HIT 2: bigger tremor + stronger aberration ---- */
+    .wordmark[data-hits="2"] .ltr {
+      animation: shake-2 0.48s ease-out;
+      text-shadow:
+        10px 0 0 rgba(145, 70, 255, 0.95),
+       -10px 0 0 rgba(255, 140, 0, 0.95),
+        0 0 22px rgba(255, 140, 0, 0.25);
+    }
+    @keyframes shake-2 {
+      0%, 100% { transform: translate(0, 0) rotate(0); }
+      15% { transform: translate(-5px, 2px) rotate(-0.4deg); }
+      40% { transform: translate(4px, -2px) rotate(0.3deg); }
+      65% { transform: translate(-3px, 1px) rotate(-0.2deg); }
+      85% { transform: translate(2px, 0) rotate(0.1deg); }
+    }
+
+    /* ---- HIT 3: crack, displaced letters, heavy aberration ---- */
+    .wordmark[data-hits="3"] .ltr {
+      animation: shake-3 0.58s ease-out;
+      text-shadow:
+        14px 0 0 rgba(145, 70, 255, 0.98),
+       -14px 0 0 rgba(255, 140, 0, 0.98),
+        0 4px 0 rgba(192, 132, 252, 0.7),
+        0 0 30px rgba(255, 140, 0, 0.35);
+    }
+    .wordmark[data-hits="3"] .ltr.j { transform: translate(-4px, -2px) rotate(-1.2deg); }
+    .wordmark[data-hits="3"] .ltr.o { transform: translate(2px, 3px) rotate(0.8deg); }
+    .wordmark[data-hits="3"] .ltr.u { transform: translate(-2px, -1px) rotate(-0.5deg); }
+    .wordmark[data-hits="3"] .ltr.k { transform: translate(3px, 2px) rotate(1deg); }
+    .wordmark[data-hits="3"] .ltr.i { transform: translate(5px, -3px) rotate(-1.5deg); }
+    @keyframes shake-3 {
+      0%   { transform: translate(0, 0) rotate(0); }
+      10%  { transform: translate(-8px, 3px) rotate(-1deg); }
+      25%  { transform: translate(7px, -3px) rotate(0.8deg); }
+      40%  { transform: translate(-5px, 4px) rotate(-0.6deg); }
+      60%  { transform: translate(4px, -2px) rotate(0.5deg); }
+      80%  { transform: translate(-2px, 1px) rotate(-0.2deg); }
+      100% { transform: translate(0, 0) rotate(0); }
+    }
+
+    /* ---- HIT 4: critical damage — letters barely holding together ---- */
+    .wordmark[data-hits="4"] .ltr {
+      animation: shake-4 0.7s ease-out;
+      text-shadow:
+        18px 0 0 rgba(145, 70, 255, 1),
+       -18px 0 0 rgba(255, 140, 0, 1),
+        0 6px 0 rgba(192, 132, 252, 0.85),
+        0 -4px 0 rgba(255, 180, 30, 0.6),
+        0 0 44px rgba(255, 140, 0, 0.45);
+    }
+    .wordmark[data-hits="4"] .ltr.j { transform: translate(-8px, 4px) rotate(-3deg); }
+    .wordmark[data-hits="4"] .ltr.o { transform: translate(4px, -5px) rotate(2.5deg); }
+    .wordmark[data-hits="4"] .ltr.u { transform: translate(-5px, 3px) rotate(-2deg); }
+    .wordmark[data-hits="4"] .ltr.k { transform: translate(6px, -3px) rotate(3deg); }
+    .wordmark[data-hits="4"] .ltr.i { transform: translate(9px, 5px) rotate(-3.5deg); }
+    @keyframes shake-4 {
+      0%   { filter: none; }
+      8%   { transform: translate(-14px, 5px) rotate(-2deg); }
+      20%  { transform: translate(12px, -6px) rotate(1.8deg); }
+      32%  { transform: translate(-10px, 7px) rotate(-1.5deg); }
+      44%  { transform: translate(9px, -4px) rotate(1.2deg); }
+      58%  { transform: translate(-6px, 3px) rotate(-1deg); }
+      72%  { transform: translate(4px, -2px) rotate(0.8deg); }
+      100% { }
+    }
+
+    /* ---- HIT 5: BREAK — letters fall with gravity ---- */
+    .wordmark[data-hits="5"] {
+      pointer-events: none;
+    }
+    .wordmark[data-hits="5"] .ltr.j { animation: fall-j 1.9s cubic-bezier(0.55, 0, 0.85, 0.6) forwards; }
+    .wordmark[data-hits="5"] .ltr.o { animation: fall-o 2.1s cubic-bezier(0.55, 0, 0.85, 0.6) 0.04s forwards; }
+    .wordmark[data-hits="5"] .ltr.u { animation: fall-u 1.85s cubic-bezier(0.55, 0, 0.85, 0.6) 0.02s forwards; }
+    .wordmark[data-hits="5"] .ltr.k { animation: fall-k 2.05s cubic-bezier(0.55, 0, 0.85, 0.6) 0.08s forwards; }
+    .wordmark[data-hits="5"] .ltr.i { animation: fall-i 2.2s cubic-bezier(0.55, 0, 0.85, 0.6) 0.11s forwards; }
+
+    @keyframes fall-j {
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      12%  { transform: translate(-4px, 8px) rotate(-10deg); text-shadow: 14px 0 0 rgba(145,70,255,0.8), -14px 0 0 rgba(255,140,0,0.8); }
+      100% { transform: translate(-80px, 800px) rotate(-140deg); opacity: 0; text-shadow: none; }
+    }
+    @keyframes fall-o {
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      12%  { transform: translate(-1px, 10px) rotate(6deg); }
+      100% { transform: translate(-10px, 820px) rotate(70deg); opacity: 0; text-shadow: none; }
+    }
+    @keyframes fall-u {
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      12%  { transform: translate(2px, 7px) rotate(-3deg); }
+      100% { transform: translate(20px, 780px) rotate(-40deg); opacity: 0; text-shadow: none; }
+    }
+    @keyframes fall-k {
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      12%  { transform: translate(3px, 9px) rotate(5deg); }
+      100% { transform: translate(45px, 810px) rotate(95deg); opacity: 0; text-shadow: none; }
+    }
+    @keyframes fall-i {
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      12%  { transform: translate(5px, 11px) rotate(-8deg); }
+      100% { transform: translate(95px, 830px) rotate(-160deg); opacity: 0; text-shadow: none; }
     }
 
     @keyframes opacity-in {
@@ -641,23 +789,9 @@
       </div>
 
       <div class="tilt wm">
-        <svg class="wordmark" viewBox="0 0 1100 280" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JOUKI">
-          <defs>
-            <linearGradient id="gradOrange" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%"   stop-color="#fff3cc"/>
-              <stop offset="14%"  stop-color="#ffe29a"/>
-              <stop offset="34%"  stop-color="#ffc800"/>
-              <stop offset="62%"  stop-color="#ff8c00"/>
-              <stop offset="88%"  stop-color="#d16200"/>
-              <stop offset="100%" stop-color="#a85a00"/>
-            </linearGradient>
-          </defs>
-
-          <text x="550" y="202" text-anchor="middle"
-                font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
-                letter-spacing="4"
-                fill="url(#gradOrange)">JOUKI</text>
-        </svg>
+        <h1 class="wordmark" role="img" aria-label="JOUKI">
+          <span class="ltr j">J</span><span class="ltr o">O</span><span class="ltr u">U</span><span class="ltr k">K</span><span class="ltr i">I</span>
+        </h1>
       </div>
 
       <div class="tilt term">
@@ -703,19 +837,27 @@
   </div>
 
   <script>
-    // Mouse tracking: spotlight + grid parallax + 3D tilt (rAF throttled)
+    // Mouse tracking: spotlight + color bias + grid parallax + 3D tilt
     (function () {
       var root = document.documentElement;
       var mx = innerWidth / 2, my = innerHeight / 2, queued = false;
       function update() {
         root.style.setProperty('--mx', mx + 'px');
         root.style.setProperty('--my', my + 'px');
-        var nx = mx / innerWidth - 0.5;   // -0.5 .. 0.5
+        var nx = mx / innerWidth - 0.5;     // -0.5 .. 0.5
         var ny = my / innerHeight - 0.5;
         root.style.setProperty('--px', (nx * 22) + 'px');
         root.style.setProperty('--py', (ny * 22) + 'px');
         root.style.setProperty('--tx', (-ny * 4) + 'deg');
         root.style.setProperty('--ty', (nx * 5) + 'deg');
+        // Spotlight color bias — orange in upper-left, violet in lower-right
+        var rx = mx / innerWidth;            // 0 .. 1
+        var ry = my / innerHeight;
+        var diag = (rx + ry) / 2;            // 0 (UL) .. 1 (LR)
+        var oStr = Math.max(0, Math.min(1, 1.35 - diag * 1.75));
+        var vStr = Math.max(0, Math.min(1, diag * 1.75 - 0.35));
+        root.style.setProperty('--spot-o', (0.11 * oStr).toFixed(3));
+        root.style.setProperty('--spot-v', (0.15 * vStr).toFixed(3));
         queued = false;
       }
       update();
