@@ -11,219 +11,236 @@
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-0: #08080a;
-      --bg-1: #0e0e12;
-      --text-0: #f4f3ef;
-      --text-1: #9d9a91;
-      --text-2: #5b5852;
-      --text-3: #3a3832;
-      --accent: #ff8c00;
-      --accent-glow: #ffc800;
-      --accent-deep: #a85a00;
-      --violet: #9146ff;
-      --violet-glow: #c084fc;
-      --violet-deep: #5a1fa3;
-      --line: rgba(255, 140, 0, 0.14);
+      --bg:            #07070a;
+      --bg-soft:       #0e0d14;
+      --text-0:        #f4f3ef;
+      --text-1:        #a39f94;
+      --text-2:        #5f5b52;
+      --text-3:        #3a3832;
+      --orange:        #ff8c00;
+      --orange-hi:     #ffc800;
+      --orange-lo:     #a85a00;
+      --violet:        #9146ff;
+      --violet-hi:     #c084fc;
+      --violet-lo:     #5a1fa3;
+      --line-orange:   rgba(255, 140, 0, 0.22);
+      --line-violet:   rgba(145, 70, 255, 0.22);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     html, body {
-      background: var(--bg-0);
+      background: var(--bg);
       color: var(--text-0);
       font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
-      font-size: 12px;
+      font-size: 13px;
       min-height: 100vh;
       overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Ambient light wash — orange bloom upper-left, violet lower-right */
+    /* ---------- AMBIENT LAYERS ---------- */
+
+    /* Dual-color light wash */
     body::before {
       content: '';
       position: fixed;
       inset: 0;
       pointer-events: none;
-      background:
-        radial-gradient(ellipse 90% 65% at 18% 22%, rgba(255, 180, 40, 0.10), transparent 55%),
-        radial-gradient(ellipse 80% 60% at 82% 78%, rgba(145, 70, 255, 0.10), transparent 60%),
-        linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.4) 100%);
       z-index: 1;
+      background:
+        radial-gradient(ellipse 65% 55% at 18% 22%, rgba(255, 150, 20, 0.14), transparent 60%),
+        radial-gradient(ellipse 60% 50% at 82% 76%, rgba(145, 70, 255, 0.14), transparent 60%),
+        radial-gradient(ellipse 40% 30% at 50% 50%, rgba(255, 200, 0, 0.04), transparent 70%),
+        linear-gradient(180deg, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
     }
 
-    /* SVG noise / film grain overlay */
+    /* Technical grid — HUD vibe, masked to center */
     body::after {
       content: '';
       position: fixed;
       inset: 0;
       pointer-events: none;
       z-index: 2;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.09 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-      opacity: 0.45;
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
+      -webkit-mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
+    }
+
+    /* Film grain overlay */
+    .grain {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+      opacity: 0.42;
       mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.09 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
       animation: grain 7s steps(6) infinite;
     }
-
     @keyframes grain {
-      0%,   100% { transform: translate(0, 0); }
-      16% { transform: translate(-2%, 1%); }
-      33% { transform: translate(1%, -2%); }
-      50% { transform: translate(-1%, 2%); }
-      66% { transform: translate(2%, 1%); }
-      83% { transform: translate(-2%, -1%); }
+      0%, 100% { transform: translate(0, 0); }
+      16%      { transform: translate(-2%, 1%); }
+      33%      { transform: translate(1%, -2%); }
+      50%      { transform: translate(-1%, 2%); }
+      66%      { transform: translate(2%, 1%); }
+      83%      { transform: translate(-2%, -1%); }
     }
 
-    /* Vertical accent rule on left edge — like a printing registration mark */
-    .rail {
-      position: fixed;
-      top: 0;
-      left: 2.5rem;
-      bottom: 0;
-      width: 1px;
-      background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        var(--text-3) 8%,
-        var(--text-3) 92%,
-        transparent 100%
-      );
-      z-index: 3;
-    }
-    .rail::before {
-      content: '';
-      position: absolute;
-      top: 34%;
-      left: -3px;
-      width: 7px;
-      height: 14%;
-      background: linear-gradient(180deg, var(--accent-glow), var(--accent), var(--accent-deep));
-      box-shadow: 0 0 18px rgba(255, 140, 0, 0.5), 0 0 36px rgba(255, 140, 0, 0.2);
-    }
+    /* ---------- APP FRAME ---------- */
 
-    .frame {
+    .app {
       position: relative;
       z-index: 4;
       min-height: 100vh;
       display: grid;
       grid-template-rows: auto 1fr auto;
-      padding: 2.75rem 4rem 2.25rem 6rem;
-      gap: 2rem;
+      padding: 1.8rem 2.5rem;
+      gap: 1.5rem;
       width: 100%;
     }
 
-    /* -------- TOP METADATA BAR -------- */
+    /* ---------- TOP METADATA STRIP ---------- */
 
-    .meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
+    .top {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 2rem;
       font-size: 10.5px;
       text-transform: uppercase;
       letter-spacing: 0.18em;
       color: var(--text-2);
-      line-height: 1.6;
+      padding-bottom: 1.3rem;
+      border-bottom: 1px solid var(--text-3);
+      position: relative;
     }
+    .top::before,
+    .top::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      height: 1px;
+      width: 120px;
+    }
+    .top::before {
+      left: 0;
+      background: linear-gradient(90deg, var(--orange), transparent);
+    }
+    .top::after {
+      right: 0;
+      background: linear-gradient(90deg, transparent, var(--violet));
+    }
+    .top .left { justify-self: start; display: flex; gap: 2rem; flex-wrap: wrap; }
+    .top .center {
+      color: var(--text-1);
+      letter-spacing: 0.3em;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .top .right { justify-self: end; display: flex; gap: 2rem; flex-wrap: wrap; text-align: right; }
+    .top span { display: inline-block; }
+    .top .k { color: var(--text-3); margin-right: 0.5rem; }
+    .top .v { color: var(--text-1); }
 
-    .meta .doc { color: var(--text-3); }
-    .meta .hl { color: var(--text-1); }
-    .meta .right { text-align: right; }
-    .meta span { display: block; }
+    /* ---------- HERO CENTER ---------- */
 
-    /* -------- MAIN HERO -------- */
-
-    .main {
+    .hero {
       display: flex;
       flex-direction: column;
       justify-content: center;
-      padding: 3vh 0;
+      align-items: center;
+      text-align: center;
+      padding: 3rem 2rem;
+      gap: 2.5rem;
       position: relative;
     }
 
-    .status {
+    /* Corner HUD brackets around the hero */
+    .hero::before,
+    .hero::after {
+      content: '';
+      position: absolute;
+      width: 56px;
+      height: 56px;
+      border: 1px solid var(--line-orange);
+    }
+    .hero::before {
+      top: 0;
+      left: 0;
+      border-right: none;
+      border-bottom: none;
+    }
+    .hero::after {
+      bottom: 0;
+      right: 0;
+      border-left: none;
+      border-top: none;
+      border-color: var(--line-violet);
+    }
+
+    /* Status pill */
+    .status-pill {
       display: inline-flex;
       align-items: center;
       gap: 0.85rem;
       font-size: 10.5px;
       text-transform: uppercase;
       letter-spacing: 0.24em;
-      color: var(--accent);
-      margin-bottom: 2.25rem;
-      padding: 0.5rem 0.9rem 0.5rem 0.8rem;
-      border: 1px solid var(--line);
+      color: var(--orange);
+      padding: 0.55rem 1.1rem 0.55rem 1rem;
+      border: 1px solid rgba(255, 140, 0, 0.28);
       border-radius: 999px;
-      background: rgba(255, 140, 0, 0.03);
-      width: fit-content;
+      background: rgba(255, 140, 0, 0.04);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
 
     .dot {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 10px var(--accent-glow), 0 0 22px var(--accent);
+      background: var(--orange);
+      box-shadow: 0 0 12px var(--orange-hi), 0 0 24px var(--orange);
       animation: pulse 2.2s ease-in-out infinite;
       flex-shrink: 0;
     }
     @keyframes pulse {
-      0%,   100% { opacity: 1;   transform: scale(1);    }
-      50%        { opacity: 0.35; transform: scale(0.65); }
+      0%,100% { opacity: 1;    transform: scale(1); }
+      50%     { opacity: 0.35; transform: scale(0.65); }
     }
 
-    /* Wordmark: layered duotone — violet echo behind, orange on top */
+    /* SVG WORDMARK — bulletproof gradient via SVG, no background-clip */
     .wordmark {
-      position: relative;
-      font-family: 'Orbitron', 'JetBrains Mono', sans-serif;
-      font-weight: 800;
-      font-size: clamp(4.5rem, 14vw, 18rem);
-      line-height: 0.92;
-      letter-spacing: 0.005em;
-      text-transform: uppercase;
-      margin-bottom: 0.5em;
-      user-select: none;
-      display: inline-block;
-      /* Parent glow — doesn't break child background-clip: text */
-      filter:
-        drop-shadow(0 0 28px rgba(255, 160, 20, 0.35))
-        drop-shadow(0 0 58px rgba(255, 120, 0, 0.18))
-        drop-shadow(0 0 48px rgba(145, 70, 255, 0.28));
-    }
-    .wordmark .layer {
+      width: min(1600px, 94%);
+      height: auto;
       display: block;
-      background-clip: text;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .wordmark .back {
-      position: absolute;
-      top: 0;
-      left: 0;
-      transform: translate(0.08em, 0.06em);
-      background: linear-gradient(180deg,
-        var(--violet-glow) 0%,
-        #a56bff 32%,
-        var(--violet) 65%,
-        var(--violet-deep) 100%);
-      opacity: 0.95;
-      z-index: 1;
-    }
-    .wordmark .front {
-      position: relative;
-      background: linear-gradient(180deg,
-        #ffeaa3 0%,
-        var(--accent-glow) 28%,
-        var(--accent) 60%,
-        var(--accent-deep) 100%);
-      z-index: 2;
+      filter:
+        drop-shadow(0 0 60px rgba(255, 140, 0, 0.22))
+        drop-shadow(0 0 120px rgba(145, 70, 255, 0.14));
     }
 
+    /* Slow chromatic drift of the violet echo */
+    .wordmark .echo {
+      animation: echo-drift 5.5s ease-in-out infinite;
+      transform-origin: center;
+    }
+    @keyframes echo-drift {
+      0%, 100% { transform: translate(16px, 14px); }
+      50%      { transform: translate(22px, 18px); }
+    }
+
+    /* Lede / subtitle */
     .lede {
-      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-family: 'JetBrains Mono', monospace;
       font-weight: 400;
-      font-size: clamp(0.95rem, 1.5vw, 1.2rem);
-      line-height: 1.65;
+      font-size: clamp(0.9rem, 1.05vw, 1.15rem);
+      line-height: 1.7;
       color: var(--text-1);
-      max-width: 60ch;
-      margin-top: 2rem;
+      max-width: 72ch;
       letter-spacing: 0.005em;
     }
     .lede em {
@@ -234,54 +251,71 @@
     .lede .ac {
       font-style: normal;
       font-weight: 500;
-      color: var(--accent-glow);
+      color: var(--orange-hi);
       text-shadow: 0 0 14px rgba(255, 180, 30, 0.45);
     }
     .lede .vi {
       font-style: normal;
       font-weight: 500;
-      color: var(--violet-glow);
+      color: var(--violet-hi);
       text-shadow: 0 0 14px rgba(145, 70, 255, 0.5);
     }
 
-    /* -------- BOTTOM LEDGER -------- */
+    /* ---------- BOTTOM LEDGER ---------- */
 
-    .ledger {
+    .bot {
       display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 2.5rem;
+      grid-template-columns: auto 1fr auto;
+      gap: 2rem;
       align-items: end;
+      padding-top: 1.3rem;
       border-top: 1px solid var(--text-3);
-      padding-top: 1.15rem;
       font-size: 10.5px;
       text-transform: uppercase;
       letter-spacing: 0.18em;
       color: var(--text-2);
+      position: relative;
     }
-    .ledger .col { display: flex; flex-direction: column; gap: 0.2rem; }
-    .ledger .col .k { color: var(--text-3); }
-    .ledger .col .v { color: var(--text-1); }
-    .ledger .col .v.ac { color: var(--accent); }
-    .ledger .col.right { align-items: flex-end; text-align: right; }
+    .bot::before,
+    .bot::after {
+      content: '';
+      position: absolute;
+      top: -1px;
+      height: 1px;
+      width: 120px;
+    }
+    .bot::before {
+      left: 0;
+      background: linear-gradient(90deg, var(--violet), transparent);
+    }
+    .bot::after {
+      right: 0;
+      background: linear-gradient(90deg, transparent, var(--orange));
+    }
+    .bot .col { display: flex; flex-direction: column; gap: 0.35rem; }
+    .bot .col .k { color: var(--text-3); }
+    .bot .col .v { color: var(--text-1); }
+    .bot .col.right { align-items: flex-end; text-align: right; }
 
-    .ledger a {
+    .bot a {
       color: var(--text-1);
       text-decoration: none;
       border-bottom: 1px solid var(--text-3);
       padding-bottom: 2px;
       transition: color 0.28s ease, border-color 0.28s ease;
     }
-    .ledger a:hover {
-      color: var(--accent);
-      border-color: var(--accent);
+    .bot a:hover {
+      color: var(--orange);
+      border-color: var(--orange);
     }
 
-    /* build progress — literal under-construction indicator */
+    /* Scanning progress */
     .progress {
       display: flex;
       flex-direction: column;
       gap: 0.35rem;
-      min-width: 200px;
+      min-width: 240px;
+      justify-self: center;
     }
     .progress .bar {
       position: relative;
@@ -292,87 +326,114 @@
     .progress .bar .fill {
       position: absolute;
       inset: 0 auto 0 0;
-      width: 22%;
-      background: linear-gradient(90deg, var(--accent-deep), var(--accent-glow));
-      box-shadow: 0 0 12px rgba(255, 180, 30, 0.6);
+      width: 0;
+      background: linear-gradient(90deg, var(--orange-lo), var(--orange-hi), var(--violet-hi));
+      box-shadow: 0 0 12px rgba(255, 180, 30, 0.55);
       animation: scan 3.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
     }
     @keyframes scan {
-      0%   { left: 0;   width: 0;   }
-      40%  { left: 0;   width: 38%; }
-      70%  { left: 38%; width: 22%; }
-      100% { left: 100%; width: 0;  }
+      0%   { left: 0;    width: 0;   }
+      40%  { left: 0;    width: 38%; }
+      70%  { left: 38%;  width: 22%; }
+      100% { left: 100%; width: 0;   }
     }
     .progress .pct {
       display: flex;
       justify-content: space-between;
       color: var(--text-2);
     }
-    .progress .pct .now { color: var(--accent-glow); }
+    .progress .pct .now { color: var(--orange-hi); }
 
-    /* ---------- Responsive ---------- */
-    /* Wide screens: spread content, scale metadata up */
+    /* ---------- RESPONSIVE ---------- */
+
     @media (min-width: 1800px) {
-      .frame { padding: 4rem 6rem 3rem 8rem; gap: 3rem; }
-      .rail  { left: 4rem; }
-      .meta  { font-size: 13px; }
-      .ledger { font-size: 13px; gap: 4rem; }
-      .lede  { font-size: 1.35rem; max-width: 70ch; }
+      .app    { padding: 2.5rem 4rem; gap: 2.5rem; }
+      .top    { font-size: 12px; }
+      .bot    { font-size: 12px; }
+      .lede   { font-size: 1.25rem; max-width: 80ch; }
+      .hero::before, .hero::after { width: 72px; height: 72px; }
     }
 
     @media (min-width: 2800px) {
-      .frame { padding: 6rem 8rem 4rem 12rem; }
-      .rail  { left: 6rem; }
-      .meta  { font-size: 15px; }
-      .ledger { font-size: 15px; gap: 6rem; }
-      .lede  { font-size: 1.65rem; max-width: 75ch; }
+      .app    { padding: 4rem 6rem; gap: 4rem; }
+      .top    { font-size: 14px; }
+      .bot    { font-size: 14px; }
+      .lede   { font-size: 1.5rem; max-width: 85ch; }
+      .hero::before, .hero::after { width: 96px; height: 96px; }
     }
 
     @media (max-width: 820px) {
-      .frame { padding: 2rem 1.5rem 1.5rem 3.25rem; }
-      .rail  { left: 1.25rem; }
-      .meta  { flex-direction: column; gap: 1rem; align-items: flex-start; }
-      .meta .right { text-align: left; }
-      .ledger { grid-template-columns: 1fr; gap: 1.25rem; }
-      .ledger .col.right { align-items: flex-start; text-align: left; }
+      .app  { padding: 1.25rem 1.25rem; gap: 1rem; }
+      .top  { grid-template-columns: 1fr; gap: 0.6rem; text-align: left; }
+      .top .left, .top .center, .top .right { justify-self: start; text-align: left; flex-direction: column; gap: 0.3rem; }
+      .hero { padding: 1.5rem 0; gap: 1.5rem; }
+      .hero::before, .hero::after { width: 40px; height: 40px; }
+      .bot  { grid-template-columns: 1fr; gap: 1rem; }
+      .bot .col.right { align-items: flex-start; text-align: left; }
+      .progress { justify-self: start; min-width: 100%; }
     }
 
-    /* Prefers-reduced-motion: pull back on animations */
     @media (prefers-reduced-motion: reduce) {
-      body::after, .dot, .progress .bar .fill {
-        animation: none !important;
-      }
+      .grain, .dot, .progress .bar .fill, .wordmark .echo { animation: none !important; }
     }
   </style>
 </head>
 <body>
-  <div class="rail"></div>
+  <div class="grain"></div>
 
-  <div class="frame">
+  <div class="app">
 
-    <header class="meta">
+    <header class="top">
       <div class="left">
-        <span class="doc">DOC № 001 · MANIFEST</span>
-        <span class="hl">JOUKI.CZ — PERSONAL DOMAIN</span>
-        <span>v0.0.1 — INITIAL BUILD</span>
+        <span><span class="k">DOC</span><span class="v">№ 001 · MANIFEST</span></span>
+        <span><span class="k">DOMAIN</span><span class="v">JOUKI.CZ</span></span>
       </div>
+      <div class="center">— PERSONAL INDEX —</div>
       <div class="right">
-        <span class="doc">ESTABLISHED MMXXVI</span>
-        <span class="hl">PRAGUE · CZ</span>
-        <span>50.0755°N · 14.4378°E</span>
+        <span><span class="k">LOC</span><span class="v">PRAGUE · CZ</span></span>
+        <span><span class="k">COORD</span><span class="v">50.08°N · 14.44°E</span></span>
       </div>
     </header>
 
-    <main class="main">
-      <div class="status">
+    <main class="hero">
+      <div class="status-pill">
         <span class="dot"></span>
         SYSTEM STATUS &nbsp;·&nbsp; UNDER CONSTRUCTION
       </div>
 
-      <h1 class="wordmark" aria-label="JOUKI">
-        <span class="layer back" aria-hidden="true">JOUKI</span>
-        <span class="layer front">JOUKI</span>
-      </h1>
+      <svg class="wordmark" viewBox="0 0 1100 280" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JOUKI">
+        <defs>
+          <linearGradient id="gradOrange" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stop-color="#fff3cc"/>
+            <stop offset="14%"  stop-color="#ffe29a"/>
+            <stop offset="34%"  stop-color="#ffc800"/>
+            <stop offset="62%"  stop-color="#ff8c00"/>
+            <stop offset="88%"  stop-color="#d16200"/>
+            <stop offset="100%" stop-color="#a85a00"/>
+          </linearGradient>
+          <linearGradient id="gradViolet" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stop-color="#e8d2ff"/>
+            <stop offset="18%"  stop-color="#c084fc"/>
+            <stop offset="44%"  stop-color="#a56bff"/>
+            <stop offset="72%"  stop-color="#9146ff"/>
+            <stop offset="100%" stop-color="#5a1fa3"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Violet echo layer -->
+        <g class="echo">
+          <text x="550" y="218" text-anchor="middle"
+                font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
+                letter-spacing="4"
+                fill="url(#gradViolet)" opacity="0.92">JOUKI</text>
+        </g>
+
+        <!-- Orange front layer -->
+        <text x="550" y="202" text-anchor="middle"
+              font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
+              letter-spacing="4"
+              fill="url(#gradOrange)">JOUKI</text>
+      </svg>
 
       <p class="lede">
         A quiet corner of the internet currently being <em>assembled</em> in the dark.
@@ -381,13 +442,13 @@
       </p>
     </main>
 
-    <footer class="ledger">
+    <footer class="bot">
       <div class="col">
         <span class="k">LAST REVISION</span>
         <span class="v">2026 · 04 · 11</span>
       </div>
 
-      <div class="col progress">
+      <div class="progress">
         <span class="k">BUILD IN PROGRESS</span>
         <div class="bar"><div class="fill"></div></div>
         <div class="pct"><span>0%</span><span class="now">— SCANNING —</span><span>100%</span></div>
