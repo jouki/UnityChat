@@ -1,4 +1,6 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.12.2
+# UnityChat - Chrome/Opera Extension + Backend v3.12.3
+
+> **Infra & deploy runbook**: see [SERVER.md](SERVER.md) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, common tasks, and gotchas. Start there if you need to touch anything on the live server.
 
 ## Popis projektu
 Monorepo s browser extensionem (Manifest V3) sjednocující live chat z **Twitch**, **YouTube** a **Kick** do jednoho panelu, plus backend API pro cross-platform user database, message log a stream events. Inspirováno Truffle extension. Primárně vyvíjeno pro streamera **robdiesalot**.
