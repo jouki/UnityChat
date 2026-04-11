@@ -82,17 +82,17 @@
       will-change: transform;
     }
 
-    /* Mouse spotlight — color shifts orange→violet based on cursor position */
+    /* Mouse spotlight — equal-sized radials, color shifts with position */
     .spotlight {
       position: fixed;
       inset: 0;
       pointer-events: none;
       z-index: 1;
       background:
-        radial-gradient(240px circle at var(--mx, 50%) var(--my, 50%),
-          rgba(255, 185, 35, var(--spot-o, 0.05)), transparent 65%),
-        radial-gradient(780px circle at var(--mx, 50%) var(--my, 50%),
-          rgba(145, 70, 255, var(--spot-v, 0.09)), transparent 72%);
+        radial-gradient(540px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(255, 185, 35, var(--spot-o, 0.06)), transparent 68%),
+        radial-gradient(560px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(145, 70, 255, var(--spot-v, 0.08)), transparent 70%);
       mix-blend-mode: screen;
       transition: background 0.15s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
@@ -264,24 +264,16 @@
       position: relative;
     }
 
-    /* 3D tilt wrappers — transformed by mouse position via CSS vars */
-    .tilt {
-      --factor: 1;
-      perspective: 1400px;
-      transform-style: preserve-3d;
-      display: flex;
-      justify-content: center;
-      width: 100%;
+    /* Grid stack for wordmark + terminated (overlay in same cell) */
+    .stack {
+      display: grid;
+      place-items: center;
+      position: relative;
     }
-    .tilt > * {
-      transform:
-        rotateX(calc(var(--tx, 0deg) * var(--factor)))
-        rotateY(calc(var(--ty, 0deg) * var(--factor)));
-      transition: transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
-      will-change: transform;
+    .stack > * {
+      grid-column: 1;
+      grid-row: 1;
     }
-    .tilt.wm   { --factor: 1; }
-    .tilt.term { --factor: 0.55; }
 
     /* Status pill */
     .status-pill {
@@ -333,8 +325,10 @@
               drop-shadow(0 0 24px rgba(255, 140, 0, 0.22));
       opacity: 0;
       animation: opacity-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s forwards;
-      transition: filter 0.35s ease;
+      transform: perspective(1400px) rotateX(var(--tx, 0deg)) rotateY(var(--ty, 0deg));
+      transition: filter 0.35s ease, transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
       pointer-events: auto;
+      will-change: transform;
     }
     .wordmark:hover {
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
@@ -481,8 +475,6 @@
 
     /* ---------- TERMINATED STATE (post-break) ---------- */
     .terminated {
-      position: absolute;
-      inset: 0;
       display: none;
       flex-direction: column;
       align-items: center;
@@ -491,6 +483,9 @@
       overflow: hidden;
       text-align: center;
       gap: 0.4rem;
+      padding: 1.5rem 1rem;
+      position: relative;
+      min-width: min(1100px, 90vw);
     }
     .terminated.active {
       display: flex;
@@ -639,6 +634,8 @@
         0 0 40px rgba(255, 140, 0, 0.06);
       opacity: 0;
       animation: opacity-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s forwards;
+      transform: perspective(1400px) rotateX(calc(var(--tx, 0deg) * 0.55)) rotateY(calc(var(--ty, 0deg) * 0.55));
+      will-change: transform;
     }
     .terminal, .terminal * { pointer-events: auto; }
     .terminal .term-head,
@@ -932,20 +929,17 @@
         SYSTEM &nbsp;·&nbsp; UNDER CONSTRUCTION
       </div>
 
-      <div class="tilt wm">
-        <div class="wordmark-area" style="position:relative;">
-          <h1 class="wordmark" role="img" aria-label="JOUKI" tabindex="0">
-            <span class="ltr j">J</span><span class="ltr o">O</span><span class="ltr u">U</span><span class="ltr k">K</span><span class="ltr i">I</span>
-          </h1>
-          <div class="terminated" aria-hidden="true">
-            <span class="err-tag">[FATAL · SEGFAULT 0xDEADBEEF]</span>
-            <span class="err-msg">oh sh*t, i gotta fix this</span>
-            <span class="err-state">TERMINATING<span class="dots"></span></span>
-          </div>
+      <div class="stack">
+        <h1 class="wordmark" role="img" aria-label="JOUKI" tabindex="0">
+          <span class="ltr j">J</span><span class="ltr o">O</span><span class="ltr u">U</span><span class="ltr k">K</span><span class="ltr i">I</span>
+        </h1>
+        <div class="terminated" aria-hidden="true">
+          <span class="err-tag">[FATAL · SEGFAULT 0xDEADBEEF]</span>
+          <span class="err-msg">oh sh*t, i gotta fix this</span>
+          <span class="err-state">TERMINATING<span class="dots"></span></span>
         </div>
       </div>
 
-      <div class="tilt term">
       <div class="terminal" role="button" tabindex="0" aria-label="Poke the terminal for a surprise">
         <div class="term-head">
           <span class="term-dots">
@@ -963,7 +957,6 @@
           <div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">error:</span>&nbsp;content&nbsp;not&nbsp;yet&nbsp;written</div>
           <div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">retry</span> <span class="arg">--when=</span><span class="st info" style="min-width:0;text-align:left;">soon</span><span class="cursor"></span></span></div>
         </div>
-      </div>
       </div>
     </main>
 
