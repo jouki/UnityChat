@@ -154,57 +154,35 @@
       justify-content: center;
       align-items: center;
       text-align: center;
-      padding: 3rem 2rem;
-      gap: 2.5rem;
+      padding: 2.5rem 2rem;
+      gap: 2rem;
       position: relative;
-    }
-
-    /* Corner HUD brackets around the hero */
-    .hero::before,
-    .hero::after {
-      content: '';
-      position: absolute;
-      width: 56px;
-      height: 56px;
-      border: 1px solid var(--line-orange);
-    }
-    .hero::before {
-      top: 0;
-      left: 0;
-      border-right: none;
-      border-bottom: none;
-    }
-    .hero::after {
-      bottom: 0;
-      right: 0;
-      border-left: none;
-      border-top: none;
-      border-color: var(--line-violet);
     }
 
     /* Status pill */
     .status-pill {
       display: inline-flex;
       align-items: center;
-      gap: 0.85rem;
-      font-size: 10.5px;
+      gap: 0.8rem;
+      font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 0.24em;
+      letter-spacing: 0.26em;
       color: var(--orange);
-      padding: 0.55rem 1.1rem 0.55rem 1rem;
-      border: 1px solid rgba(255, 140, 0, 0.28);
+      padding: 0.5rem 1rem 0.5rem 0.9rem;
+      border: 1px solid rgba(255, 140, 0, 0.25);
       border-radius: 999px;
-      background: rgba(255, 140, 0, 0.04);
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
+      background: rgba(255, 140, 0, 0.03);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      animation: fade-up 0.7s ease-out 0.1s backwards;
     }
 
     .dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--orange);
-      box-shadow: 0 0 12px var(--orange-hi), 0 0 24px var(--orange);
+      box-shadow: 0 0 10px var(--orange-hi), 0 0 20px var(--orange);
       animation: pulse 2.2s ease-in-out infinite;
       flex-shrink: 0;
     }
@@ -213,46 +191,150 @@
       50%     { opacity: 0.35; transform: scale(0.65); }
     }
 
-    /* SVG WORDMARK — bulletproof gradient via SVG, no background-clip */
+    /* SVG WORDMARK — subtle orange halo only, no bloom */
     .wordmark {
-      width: min(1600px, 94%);
+      width: min(1200px, 82%);
       height: auto;
       display: block;
-      /* Orange core + violet outer halo (atmospheric, not duplicate text) */
-      filter:
-        drop-shadow(0 0 30px rgba(255, 180, 30, 0.55))
-        drop-shadow(0 0 70px rgba(255, 140, 0, 0.35))
-        drop-shadow(0 0 120px rgba(145, 70, 255, 0.32))
-        drop-shadow(0 0 180px rgba(145, 70, 255, 0.18));
+      filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
+              drop-shadow(0 0 24px rgba(255, 140, 0, 0.22));
+      animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s backwards;
     }
 
-    /* Lede / subtitle */
-    .lede {
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 400;
-      font-size: clamp(0.9rem, 1.05vw, 1.15rem);
-      line-height: 1.7;
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ---------- TERMINAL PANEL ---------- */
+
+    .terminal {
+      width: min(760px, 92%);
+      background: rgba(12, 11, 18, 0.72);
+      border: 1px solid rgba(255, 140, 0, 0.18);
+      border-radius: 10px;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 12.5px;
+      text-align: left;
+      overflow: hidden;
+      box-shadow:
+        0 20px 60px -20px rgba(0, 0, 0, 0.8),
+        0 0 0 1px rgba(255, 255, 255, 0.02) inset,
+        0 0 40px rgba(255, 140, 0, 0.06);
+      animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s backwards;
+    }
+
+    .term-head {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.65rem 0.9rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.25));
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--text-3);
+    }
+    .term-dots {
+      display: flex;
+      gap: 6px;
+    }
+    .term-dots i {
+      display: block;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #2a2730;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+    }
+    .term-dots i.live {
+      background: var(--orange);
+      box-shadow: 0 0 8px rgba(255, 160, 20, 0.6);
+    }
+    .term-title {
+      flex: 1;
+      text-align: center;
+      color: var(--text-2);
+    }
+    .term-title b {
       color: var(--text-1);
-      max-width: 72ch;
-      letter-spacing: 0.005em;
-    }
-    .lede em {
-      font-style: normal;
       font-weight: 500;
-      color: var(--text-0);
     }
-    .lede .ac {
-      font-style: normal;
+    .term-clock { color: var(--text-3); }
+
+    .term-body {
+      padding: 1rem 1.25rem 1.2rem;
+      line-height: 1.9;
+      min-height: 220px;
+    }
+
+    .term-body .line {
+      display: flex;
+      align-items: baseline;
+      gap: 0.8em;
+      opacity: 0;
+      transform: translateX(-6px);
+      animation: line-in 0.4s ease-out forwards;
+    }
+    .term-body .line:nth-child(1) { animation-delay: 0.9s; }
+    .term-body .line:nth-child(2) { animation-delay: 1.4s; }
+    .term-body .line:nth-child(3) { animation-delay: 1.85s; }
+    .term-body .line:nth-child(4) { animation-delay: 2.3s; }
+    .term-body .line:nth-child(5) { animation-delay: 2.75s; }
+    .term-body .line:nth-child(6) { animation-delay: 3.2s; }
+    .term-body .line:nth-child(7) { animation-delay: 3.75s; }
+
+    @keyframes line-in {
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    .term-body .prompt {
+      color: var(--orange);
       font-weight: 500;
-      color: var(--orange-hi);
-      text-shadow: 0 0 14px rgba(255, 180, 30, 0.45);
+      flex-shrink: 0;
     }
-    .lede .vi {
-      font-style: normal;
+    .term-body .sym {
+      color: var(--text-3);
+      flex-shrink: 0;
+      width: 0.8em;
+    }
+    .term-body .msg {
+      flex: 1;
+      color: var(--text-1);
+    }
+    .term-body .indent { padding-left: 2.4em; color: var(--text-2); }
+    .term-body .indent .arrow { color: var(--text-3); }
+
+    .term-body .st {
+      flex-shrink: 0;
+      min-width: 3.5em;
+      text-align: right;
       font-weight: 500;
-      color: var(--violet-hi);
-      text-shadow: 0 0 14px rgba(145, 70, 255, 0.5);
+      letter-spacing: 0.05em;
     }
+    .term-body .st.ok   { color: #27c93f; }
+    .term-body .st.wait { color: var(--orange-hi); }
+    .term-body .st.err  { color: #ff5f56; }
+    .term-body .st.info { color: var(--violet-hi); }
+
+    .term-body .cmd { color: var(--text-0); font-weight: 500; }
+    .term-body .arg { color: var(--orange-hi); }
+    .term-body .cmt { color: var(--text-3); }
+
+    .cursor {
+      display: inline-block;
+      width: 0.55em;
+      height: 1em;
+      background: var(--orange);
+      box-shadow: 0 0 10px rgba(255, 160, 20, 0.65);
+      margin-left: 0.2em;
+      vertical-align: -0.15em;
+      animation: blink 1s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
 
     /* ---------- BOTTOM LEDGER ---------- */
 
@@ -391,7 +473,7 @@
     <main class="hero">
       <div class="status-pill">
         <span class="dot"></span>
-        SYSTEM STATUS &nbsp;·&nbsp; UNDER CONSTRUCTION
+        SYSTEM &nbsp;·&nbsp; UNDER CONSTRUCTION
       </div>
 
       <svg class="wordmark" viewBox="0 0 1100 280" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JOUKI">
@@ -412,11 +494,24 @@
               fill="url(#gradOrange)">JOUKI</text>
       </svg>
 
-      <p class="lede">
-        A quiet corner of the internet currently being <em>assembled</em> in the dark.
-        Something more considered is on its way — until then, the <span class="ac">orange</span>
-        and <span class="vi">violet</span> of the work itself will have to do.
-      </p>
+      <div class="terminal" role="presentation">
+        <div class="term-head">
+          <span class="term-dots">
+            <i></i><i></i><i class="live"></i>
+          </span>
+          <span class="term-title">~ / <b>jouki.cz</b> · build.log</span>
+          <span class="term-clock">v0.1.0 · pid 001</span>
+        </div>
+        <div class="term-body">
+          <div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">jouki</span> <span class="arg">--init</span> <span class="cmt"># begin assembly</span></span></div>
+          <div class="line"><span class="sym">~</span><span class="msg">initializing workspace</span><span class="st ok">ok</span></div>
+          <div class="line"><span class="sym">~</span><span class="msg">loading profile.json</span><span class="st ok">ok</span></div>
+          <div class="line"><span class="sym">~</span><span class="msg">resolving /projects/*.md</span><span class="st wait">wait</span></div>
+          <div class="line"><span class="sym">~</span><span class="msg">compiling portfolio</span><span class="st err">404</span></div>
+          <div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">error:</span>&nbsp;content&nbsp;not&nbsp;yet&nbsp;written</div>
+          <div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">retry</span> <span class="arg">--when=</span><span class="st info" style="min-width:0;text-align:left;">soon</span><span class="cursor"></span></span></div>
+        </div>
+      </div>
     </main>
 
     <footer class="bot">
