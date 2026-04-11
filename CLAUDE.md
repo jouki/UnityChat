@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.12.1
+# UnityChat - Chrome/Opera Extension + Backend v3.12.2
 
 ## Popis projektu
 Monorepo s browser extensionem (Manifest V3) sjednocující live chat z **Twitch**, **YouTube** a **Kick** do jednoho panelu, plus backend API pro cross-platform user database, message log a stream events. Inspirováno Truffle extension. Primárně vyvíjeno pro streamera **robdiesalot**.
@@ -6,21 +6,19 @@ Monorepo s browser extensionem (Manifest V3) sjednocující live chat z **Twitch
 ## Struktura projektu
 ```
 UnityChat/
-├── extension/               # Single-source pro Chrome i Operu
-│   ├── manifest.chrome.json    # Chrome manifest (sidePanel API)
-│   ├── manifest.opera.json     # Opera manifest (sidebar_action + popup fallback)
-│   ├── background.chrome.js    # Chrome service worker (sidePanel API)
-│   ├── background.opera.js     # Opera service worker (chrome.windows.create popup)
-│   ├── sidepanel.html          # UI - sdíleno
-│   ├── sidepanel.css           # Dark theme styling - sdíleno
-│   ├── sidepanel.js            # ~2000 řádků - UI/messaging logika, sdíleno
+├── extension/               # Jednotný zdroj pro Chrome i Operu (no build step)
+│   ├── manifest.json           # Unified MV3 manifest (sidePanel perm + side_panel key)
+│   ├── background.js           # Service worker s runtime feature-detection
+│   ├── sidepanel.html          # UI
+│   ├── sidepanel.css           # Dark theme styling
+│   ├── sidepanel.js            # ~2000 řádků - UI/messaging logika
 │   ├── content/
 │   │   ├── twitch.js           # Twitch DOM (Slate editor) + scrape + reply
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
 ├── landing/                 # jouki.cz under-construction static page
-│   ├── index.html              # Editorial/archive aesthetic, Fraunces + JetBrains Mono
+│   ├── index.html              # Gaming HUD aesthetic, Orbitron + JetBrains Mono
 │   ├── nginx.conf              # Nginx static server config
 │   └── Dockerfile              # nginx:alpine + curl for Coolify healthcheck
 ├── backend/                 # Node.js + Fastify + Drizzle + Postgres API server
@@ -36,41 +34,44 @@ UnityChat/
 │   ├── drizzle.config.ts
 │   ├── .env.example
 │   └── README.md
-├── build.mjs                # Extension build script (chrome/opera staging + ZIPy)
-├── package.json             # Root: adm-zip + npm run build scripts
 ├── logo-designer.html       # Standalone tool pro design ikon (orange gradient)
 └── CLAUDE.md                # Tato dokumentace
 ```
 
-### Rozdíly Chrome vs Opera
+### Kompatibilita Chrome + Opera (runtime feature detection)
+
+Jeden unified `extension/` loader, žádný build step. V `background.js` je feature-detection konstanta:
+
+```js
+const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
+  && typeof chrome.sidePanel.setPanelBehavior === 'function';
+```
+
 | | Chrome | Opera |
 |---|---|---|
-| Side panel API | `chrome.sidePanel` | nepodporováno |
-| UI metoda | side panel attached k tabu | popup okno (`chrome.windows.create`) |
-| Permission | `sidePanel` | bez (jen normal chrome.* APIs) |
-| background `onClicked` | `setPanelBehavior` | manuální `chrome.action.onClicked` |
-| Manifest key | `"side_panel"` | `"sidebar_action"` + `"action"` |
+| `chrome.sidePanel` API | ✅ dostupné | ❌ undefined |
+| `HAS_SIDE_PANEL` | `true` | `false` |
+| UI open flow | `setPanelBehavior({ openPanelOnActionClick: true })` → native side panel | `chrome.action.onClicked` → `chrome.windows.create({ type: 'popup' })` |
+| Manifest `sidePanel` permission | aktivní | Opera (Chromium-based) přijímá, ale API nepoužívá |
+| Manifest `side_panel` key | Chrome load | Opera ignoruje (neznámý key, warning) |
 
 Side panel JS používá `_getActiveBrowserTab()` který volá `chrome.windows.getLastFocused({ windowTypes: ['normal'] })` - funguje pro oba scénáře (Chrome side panel i Opera popup).
 
-## Build extensionu
+## Dev workflow
 
-Jedna single-source složka `extension/` obsahuje **sdílené soubory** + **dva browser-specifické manifesty/backgrounds**. Build script (`build.mjs`) kopíruje shared soubory + přiřadí správný manifest/background do `dist/{chrome,opera}/` a ZIPy pro upload do Chrome Web Store / Opera addons.
+Žádný build není potřeba. Unified `extension/` složku načti v obou browserech:
 
-```bash
-npm install              # instaluje adm-zip (jednorázově)
-npm run build            # builds oba browsery → dist/
-npm run build:chrome     # jen Chrome
-npm run build:opera      # jen Opera
-```
+**Chrome:**
+1. `chrome://extensions` → Developer mode ON
+2. Load unpacked → vyber `D:\...\UnityChat\extension\`
+3. Po každé změně klikni reload 🔄 u extensionu
 
-**Output:**
-- `dist/chrome/` — rozbalená extension (pro "Load unpacked" dev install)
-- `dist/opera/` — rozbalená extension
-- `dist/unitychat-chrome-v{version}.zip` — pro Chrome Web Store upload
-- `dist/unitychat-opera-v{version}.zip` — pro Opera addons upload
+**Opera:**
+1. `opera://extensions` → Developer mode ON
+2. Load unpacked → vyber `D:\...\UnityChat\extension\`
+3. Po každé změně klikni reload 🔄 u extensionu
 
-Workflow při vývoji: upravit soubory v `extension/`, spustit `npm run build`, v Chrome/Opera refresh extension (ikona 🔄 v `chrome://extensions`). Verze se řídí polem `version` v `manifest.chrome.json` / `manifest.opera.json` — bumpnout před buildem pro release.
+Verzi bumpni v `extension/manifest.json` (jediný soubor teď). Distribuční ZIPy pro store upload pokud někdy bude potřeba — stačí zipnout celou `extension/` složku.
 
 ## Architektura sidepanel.js
 
@@ -357,10 +358,9 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ```
 
 ## Verzování
-- Verze v `extension/manifest.chrome.json` + `extension/manifest.opera.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
-- Bumpovat oba manifesty ZÁROVEŇ při každé změně
-- Root `package.json` version drží stejnou hodnotu (nepovinné, ale hodí se pro tagy)
-- Aktuální: **v3.12.1**
+- Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
+- Bumpovat jediný manifest při release
+- Aktuální: **v3.12.2**
 
 ## Známé limitace / gotchas
 
@@ -457,3 +457,4 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.10** - Twitch chat scrape + boundary detection
 - **v3.11** - Opera verze + Opera-compatible active tab detection
 - **v3.12** - Pop-out button, platform badge tooltipy, single-source `extension/` (chrome+opera merge), build script, backend scaffold (Node.js + Fastify + Drizzle + Postgres)
+- **v3.12.2** - Unified `extension/` bez build kroku: jeden `manifest.json` + `background.js` s runtime `HAS_SIDE_PANEL` feature-detection. Chrome používá native side panel, Opera spadne na popup window. Load unpacked z `extension/` přímo v obou browserech, žádné build skripty, žádný `dist/`.

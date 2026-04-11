@@ -1,35 +1,42 @@
-// UnityChat - Background Service Worker (Opera verze)
-// Opera nepodporuje chrome.sidePanel API → otevíráme jako popup okno
+// UnityChat - Background Service Worker
+// Runtime detection: Chrome uses chrome.sidePanel, Opera falls back to popup window
 
-let _ucWindowId = null;
+const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
+  && typeof chrome.sidePanel.setPanelBehavior === 'function';
 
-chrome.action.onClicked.addListener(async () => {
-  // Pokud okno už existuje, fokusovat ho
-  if (_ucWindowId !== null) {
-    try {
-      const win = await chrome.windows.get(_ucWindowId);
-      if (win) {
-        chrome.windows.update(_ucWindowId, { focused: true });
-        return;
+if (HAS_SIDE_PANEL) {
+  // Chrome path: clicking the toolbar action opens the native side panel
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
+} else {
+  // Opera path: no side panel API — open a popup window instead and track it
+  let _ucWindowId = null;
+
+  chrome.action.onClicked.addListener(async () => {
+    if (_ucWindowId !== null) {
+      try {
+        const win = await chrome.windows.get(_ucWindowId);
+        if (win) {
+          chrome.windows.update(_ucWindowId, { focused: true });
+          return;
+        }
+      } catch {
+        _ucWindowId = null;
       }
-    } catch {
-      _ucWindowId = null;
     }
-  }
-  // Vytvořit nové popup okno se side panel obsahem
-  const win = await chrome.windows.create({
-    url: 'sidepanel.html',
-    type: 'popup',
-    width: 420,
-    height: 720
+    const win = await chrome.windows.create({
+      url: 'sidepanel.html',
+      type: 'popup',
+      width: 420,
+      height: 720
+    });
+    _ucWindowId = win.id;
   });
-  _ucWindowId = win.id;
-});
 
-// Sledovat zavření okna
-chrome.windows.onRemoved.addListener((windowId) => {
-  if (windowId === _ucWindowId) _ucWindowId = null;
-});
+  chrome.windows.onRemoved.addListener((windowId) => {
+    if (windowId === _ucWindowId) _ucWindowId = null;
+  });
+}
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
@@ -508,18 +515,26 @@ async function ytSend(tabId, videoId, text) {
       func: async (videoId, text) => {
         const log = [];
         try {
-          const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
-          const apiKey = gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+          const gc = (k) =>
+            typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
+          const apiKey =
+            gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
           log.push('apiKey:' + apiKey.substring(0, 10));
+
+          // Fetch live_chat page pro send params
           const chatResp = await fetch('/live_chat?v=' + videoId);
           if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
           const chatHtml = await chatResp.text();
           log.push('htmlLen:' + chatHtml.length);
+
+          // Zkusit více regex variant
           let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
           if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
           if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
           log.push('paramsLen:' + pm[1].length);
+
+          // Odeslat zprávu
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
@@ -530,9 +545,11 @@ async function ytSend(tabId, videoId, text) {
               richMessage: { textSegments: [{ text }] }
             })
           });
+
           log.push('apiStatus:' + r.status);
           if (r.ok) return { ok: true, log };
-          if (r.status === 401 || r.status === 403) return { ok: false, error: 'Nejsi přihlášen na YouTube', log };
+          if (r.status === 401 || r.status === 403)
+            return { ok: false, error: 'Nejsi přihlášen na YouTube', log };
           return { ok: false, error: 'YouTube API: HTTP ' + r.status, log };
         } catch (e) {
           return { ok: false, error: e.message, log };
@@ -540,6 +557,7 @@ async function ytSend(tabId, videoId, text) {
       },
       args: [videoId, text]
     });
+
     const result = results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };
     ucLog('YT_SEND', 'result:', JSON.stringify(result));
     return result;
