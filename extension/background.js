@@ -1,15 +1,29 @@
 // UnityChat - Background Service Worker
-// Runtime detection: Chrome uses chrome.sidePanel, Opera falls back to popup window
+//
+// Runtime browser detection for UI entry points:
+//
+//   Chrome:
+//     manifest "sidePanel" permission + "side_panel" key → native side panel.
+//     We call sidePanel.setPanelBehavior to make the toolbar action open it.
+//
+//   Opera:
+//     chrome.sidePanel is undefined. Opera uses the "sidebar_action" manifest
+//     key (Firefox-style) to surface UnityChat in its native left sidebar —
+//     no JS is needed for that, Opera picks it up from the manifest.
+//     As a second entry point, the toolbar action creates a popup window, so
+//     users who prefer a floating window (or who haven't pinned the sidebar)
+//     still have something to click.
 
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
 
 if (HAS_SIDE_PANEL) {
-  // Chrome path: clicking the toolbar action opens the native side panel
+  // Chrome path: clicking the toolbar action opens the native side panel.
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
 } else {
-  // Opera path: no side panel API — open a popup window instead and track it
+  // Opera path: the native sidebar is wired via "sidebar_action" in the
+  // manifest. The toolbar action falls back to a popup window.
   let _ucWindowId = null;
 
   chrome.action.onClicked.addListener(async () => {

@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.12.3
+# UnityChat - Chrome/Opera Extension + Backend v3.12.4
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -49,15 +49,19 @@ const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
 ```
 
+Manifest obsahuje **oba side panel mechanismy** (`side_panel` pro Chrome + `sidebar_action` pro Operu). Každý browser vezme ten svůj, druhý ignoruje jako neznámý key (jen warning, extension se načte OK).
+
 | | Chrome | Opera |
 |---|---|---|
 | `chrome.sidePanel` API | ✅ dostupné | ❌ undefined |
 | `HAS_SIDE_PANEL` | `true` | `false` |
-| UI open flow | `setPanelBehavior({ openPanelOnActionClick: true })` → native side panel | `chrome.action.onClicked` → `chrome.windows.create({ type: 'popup' })` |
-| Manifest `sidePanel` permission | aktivní | Opera (Chromium-based) přijímá, ale API nepoužívá |
-| Manifest `side_panel` key | Chrome load | Opera ignoruje (neznámý key, warning) |
+| Primary UI entry | native side panel přes `setPanelBehavior({ openPanelOnActionClick: true })` | native Opera sidebar přes `sidebar_action` manifest key (user si připne přes "Customize sidebar") |
+| Secondary UI entry | n/a (sidebar = main) | toolbar action → `chrome.windows.create({ type: 'popup' })` (pro userů co sidebar nepoužívají) |
+| Manifest `sidePanel` permission | aktivní | Opera (Chromium-based) přijímá syntakticky, ale API nepoužívá |
+| Manifest `side_panel` key | Chrome load | Opera ignoruje |
+| Manifest `sidebar_action` key | Chrome ignoruje (unknown key warning) | Opera load |
 
-Side panel JS používá `_getActiveBrowserTab()` který volá `chrome.windows.getLastFocused({ windowTypes: ['normal'] })` - funguje pro oba scénáře (Chrome side panel i Opera popup).
+Side panel JS používá `_getActiveBrowserTab()` který volá `chrome.windows.getLastFocused({ windowTypes: ['normal'] })` - funguje pro všechny scénáře (Chrome side panel, Opera sidebar, Opera popup).
 
 ## Dev workflow
 
@@ -362,7 +366,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.12.2**
+- Aktuální: **v3.12.4**
 
 ## Známé limitace / gotchas
 
@@ -460,3 +464,5 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.11** - Opera verze + Opera-compatible active tab detection
 - **v3.12** - Pop-out button, platform badge tooltipy, single-source `extension/` (chrome+opera merge), build script, backend scaffold (Node.js + Fastify + Drizzle + Postgres)
 - **v3.12.2** - Unified `extension/` bez build kroku: jeden `manifest.json` + `background.js` s runtime `HAS_SIDE_PANEL` feature-detection. Chrome používá native side panel, Opera spadne na popup window. Load unpacked z `extension/` přímo v obou browserech, žádné build skripty, žádný `dist/`.
+- **v3.12.3** - Platform badge tooltip přepsán na JS-positioned `.uc-tooltip` s viewport clamping (fix pro ořez u okrajů side panelu).
+- **v3.12.4** - Opera native sidebar support přes `sidebar_action` manifest key. Opera users si teď mohou připnout UnityChat přímo do Opera levého sidebaru (vedle Messenger/Twitch/atd.). Chrome ignoruje unknown key, používá dál `side_panel`. Popup window fallback zůstává pro Operu jako sekundární entry point.
