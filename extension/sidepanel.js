@@ -2102,9 +2102,8 @@ class UnityChat {
     const pi = document.createElement('span');
     pi.className = `pi ${pClass}${isUC ? ' uc' : ''}`;
     pi.textContent = pClass.toUpperCase();
-    const tooltip = isUC ? 'UnityChat User' : pName;
-    pi.title = tooltip;
-    pi.setAttribute('data-tooltip', tooltip);
+    const tooltipText = isUC ? 'UnityChat User' : pName;
+    pi.setAttribute('data-tooltip', tooltipText);
     el.appendChild(pi);
 
     // Čas
@@ -2265,5 +2264,67 @@ class UnityChat {
   }
 }
 
+// ---- Custom tooltip for platform badges (viewport-clamped, escapes overflow) ----
+function _initPlatformBadgeTooltip() {
+  const tooltip = document.createElement('div');
+  tooltip.className = 'uc-tooltip';
+  document.body.appendChild(tooltip);
+
+  let currentBadge = null;
+
+  function show(badge) {
+    const text = badge.getAttribute('data-tooltip');
+    if (!text) return;
+    currentBadge = badge;
+    tooltip.textContent = text;
+    // Make visible to measure, then reposition
+    tooltip.classList.add('visible');
+    const bRect = badge.getBoundingClientRect();
+    const tRect = tooltip.getBoundingClientRect();
+    const margin = 6;
+
+    // Prefer below the badge (matches cursor position for hover feedback)
+    let top = bRect.bottom + 4;
+    if (top + tRect.height > window.innerHeight - margin) {
+      // Not enough room below → flip above
+      top = bRect.top - tRect.height - 4;
+    }
+
+    // Horizontally centered to badge, clamped to viewport
+    let left = bRect.left + bRect.width / 2 - tRect.width / 2;
+    if (left < margin) left = margin;
+    if (left + tRect.width > window.innerWidth - margin) {
+      left = window.innerWidth - tRect.width - margin;
+    }
+
+    tooltip.style.left = left + 'px';
+    tooltip.style.top = top + 'px';
+  }
+
+  function hide() {
+    tooltip.classList.remove('visible');
+    currentBadge = null;
+  }
+
+  document.body.addEventListener('mouseover', (e) => {
+    const badge = e.target.closest('.pi[data-tooltip]');
+    if (!badge || badge === currentBadge) return;
+    show(badge);
+  });
+
+  document.body.addEventListener('mouseout', (e) => {
+    if (!currentBadge) return;
+    const related = e.relatedTarget;
+    if (related && currentBadge.contains(related)) return;
+    hide();
+  });
+
+  // Hide if the badge scrolls away or is removed
+  document.addEventListener('scroll', hide, true);
+}
+
 // ---- Start ----
-document.addEventListener('DOMContentLoaded', () => new UnityChat());
+document.addEventListener('DOMContentLoaded', () => {
+  new UnityChat();
+  _initPlatformBadgeTooltip();
+});

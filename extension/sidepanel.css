@@ -425,18 +425,14 @@ body.layout-large .reply-ctx { font-size: 12px; }
 
 .msg .pi.uc { background: linear-gradient(160deg, #ffc800, #ff8c00); color: #000; box-shadow: 0 0 6px rgba(255, 140, 0, 0.5); }
 
-/* Custom tooltip pro platform badges */
+/* Custom tooltip pro platform badges — JS-positioned, viewport-clamped */
 .msg .pi[data-tooltip] {
-  position: relative;
   cursor: default;
 }
 
-.msg .pi[data-tooltip]:hover::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
+.uc-tooltip {
+  position: fixed;
+  display: none;
   background: var(--bg-tertiary);
   color: var(--text-primary);
   padding: 4px 8px;
@@ -446,14 +442,16 @@ body.layout-large .reply-ctx { font-size: 12px; }
   white-space: nowrap;
   border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  z-index: 100;
+  z-index: 99999;
   pointer-events: none;
-  animation: tooltip-fade 0.15s ease-out;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
 }
-
-@keyframes tooltip-fade {
-  from { opacity: 0; transform: translateX(-50%) translateY(2px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+.uc-tooltip.visible {
+  display: block;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* @mention / reply-to-you highlight */
