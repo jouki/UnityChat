@@ -15,7 +15,8 @@ const DEFAULTS = {
   youtube: true,
   kick: true,
   maxMessages: 500,
-  username: ''
+  username: '',
+  layout: 'small'
 };
 
 // =============================================================
@@ -548,7 +549,11 @@ class TwitchProvider {
         .replace(/\\r/g, '')
         .replace(/\\:/g, ';')
         .replace(/\\\\/g, '\\');
-      replyTo = { username: replyUser, message: body };
+      replyTo = {
+        username: replyUser,
+        message: body,
+        id: tags['reply-parent-msg-id'] || null
+      };
     }
 
     // Twitch přidává @username na začátek reply zpráv - odstranit
@@ -1099,7 +1104,7 @@ class YouTubeProvider {
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
     this._videoId = null;
-    this._seen.clear();
+    // _seen NEMAZAT - musí přežít reconnect aby se neduplikovaly zprávy
     this._apiFails = 0;
     this._usePageRefresh = false;
     if (!internal) this.onStatus?.('disconnected');
@@ -1124,7 +1129,9 @@ class UnityChat {
     this._msgCache = [];
     this._cacheTimer = null;
     this._twitchBadges = {};
-    this._chatUsers = new Map(); // lowercase → { name, platform, color }
+    this._chatUsers = new Map();
+    this._seenMsgIds = new Set();
+    this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -1145,7 +1152,8 @@ class UnityChat {
   async _init() {
     // Verze v titulku
     const ver = chrome.runtime.getManifest().version;
-    document.getElementById('header-title').textContent = `\u26A1 UnityChat v${ver}`;
+    document.getElementById('header-title').innerHTML =
+      `<img src="icons/icon48.png" class="hdr-logo"> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
 
     await this._loadConfig();
     this._setupUI();
@@ -1154,7 +1162,7 @@ class UnityChat {
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await this._getActiveBrowserTab();
         if (tab) {
           await this._injectContentScript(tab);
           const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -1183,9 +1191,6 @@ class UnityChat {
 
     // Detekce aktivní platformy pro odesílání
     this._detectLoop();
-
-    // Auto-dump debug logů periodicky
-    setInterval(() => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).catch(() => {}), 15000);
   }
 
   // ---- Config ----
@@ -1211,6 +1216,13 @@ class UnityChat {
     $('input-channel').value = this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
+    $('input-layout').value = this.config.layout || 'small';
+    this._applyLayout();
+    $('input-layout').addEventListener('change', () => {
+      this.config.layout = $('input-layout').value;
+      this._saveConfig();
+      this._applyLayout();
+    });
     // Auto-resize textarea
     this.msgInput.addEventListener('input', () => {
       this.msgInput.style.height = 'auto';
@@ -1232,6 +1244,17 @@ class UnityChat {
     $('chk-youtube').checked = this.config.youtube;
     $('chk-kick').checked = this.config.kick;
 
+    $('btn-popout').addEventListener('click', () => {
+      chrome.windows.create({
+        url: 'sidepanel.html',
+        type: 'popup',
+        width: 420,
+        height: 720
+      });
+    });
+    $('btn-dump').addEventListener('click', () =>
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' })
+    );
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
     );
@@ -1255,17 +1278,20 @@ class UnityChat {
       this.msgCount = 0;
     });
 
-    // Scroll
+    // Scroll - detekce nových zpráv + auto-scroll pause
+    this._unreadCount = 0;
     this.chatEl.addEventListener('scroll', () => {
       const el = this.chatEl;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
       this.autoScroll = atBottom;
-      this.scrollBtn.classList.toggle('hidden', atBottom);
+      if (atBottom) {
+        this._clearUnread();
+      }
     });
     this.scrollBtn.addEventListener('click', () => {
-      this.chatEl.scrollTop = this.chatEl.scrollHeight;
+      this.chatEl.scrollTo({ top: this.chatEl.scrollHeight, behavior: 'smooth' });
       this.autoScroll = true;
-      this.scrollBtn.classList.add('hidden');
+      this._clearUnread();
     });
 
     // Filtry
@@ -1287,10 +1313,30 @@ class UnityChat {
     // Odesílání zpráv + Tab autocomplete
     this._ac = null;
     this.msgInput.addEventListener('keydown', (e) => {
+      // Tab / Shift+Tab - cykluje seznamem
       if (e.key === 'Tab') {
         e.preventDefault();
         this._acTab(e.shiftKey ? -1 : 1);
         return;
+      }
+      // Šipky během aktivního autocomplete
+      if (this._ac && this._ac.matches.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          this._acTab(1);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          this._acTab(-1);
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          // Potvrdit výběr - kurzor je už za doplněným textem, jen zavřít suggest
+          e.preventDefault();
+          this._acHide();
+          return;
+        }
       }
       if (e.key === 'Escape') {
         this._acHide();
@@ -1441,12 +1487,11 @@ class UnityChat {
       }
 
       const src = this._acSource(name);
-      html += `<span class="es-name">${this.emotes._eh(name)}</span>`;
+      html += `<span class="es-name"><span class="es-name-inner">${this.emotes._eh(name)}</span></span>`;
       if (src) html += `<span class="es-src">${src}</span>`;
       html += '</div>';
     }
 
-    // Počítadlo pokud je víc než VISIBLE
     if (total > VISIBLE) {
       html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
     }
@@ -1454,8 +1499,17 @@ class UnityChat {
     el.innerHTML = html;
     el.classList.remove('hidden');
 
-    // Klik na položku
+    // Detekce overflow + nastavení CSS variable pro scroll animaci
     el.querySelectorAll('.es-item').forEach((item) => {
+      const outer = item.querySelector('.es-name');
+      const inner = item.querySelector('.es-name-inner');
+      if (outer && inner) {
+        const overflow = inner.scrollWidth - outer.clientWidth;
+        if (overflow > 0) {
+          item.classList.add('overflowing');
+          item.style.setProperty('--scroll-dist', `-${overflow + 8}px`);
+        }
+      }
       item.addEventListener('click', () => {
         const i = parseInt(item.dataset.idx, 10);
         this._ac.index = i;
@@ -1478,9 +1532,22 @@ class UnityChat {
     setInterval(() => this._detectActivePlatform(), 3000);
   }
 
+  // Najít aktivní tab v hlavním okně (Opera popup je separátní okno → musíme hledat jinde)
+  async _getActiveBrowserTab() {
+    try {
+      const win = await chrome.windows.getLastFocused({ populate: true, windowTypes: ['normal'] });
+      return win?.tabs?.find((t) => t.active) || null;
+    } catch {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        return tab || null;
+      } catch { return null; }
+    }
+  }
+
   async _detectActivePlatform() {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this._getActiveBrowserTab();
       if (!tab) { this._setActivePlatform(null); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -1545,6 +1612,12 @@ class UnityChat {
       : 'Otevři stream pro odesílání...';
   }
 
+  _applyLayout() {
+    const layout = this.config.layout || 'small';
+    document.body.classList.remove('layout-small', 'layout-medium', 'layout-large');
+    document.body.classList.add('layout-' + layout);
+  }
+
   // ---- Twitch Badges ----
 
   async _loadTwitchBadges(roomId) {
@@ -1563,6 +1636,130 @@ class UnityChat {
     }
   }
 
+  // ---- Scroll to message ----
+
+  _scrollToMessage(msgId) {
+    const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
+    if (!target) {
+      this._sys('Původní zpráva už není v cache');
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.remove('msg-flash');
+    void target.offsetWidth; // restart animace
+    target.classList.add('msg-flash');
+    setTimeout(() => target.classList.remove('msg-flash'), 2000);
+  }
+
+  // ---- Pin message ----
+
+  async _pinMessage(msg) {
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'PIN_MESSAGE',
+        messageId: msg.id,
+        broadcasterId: this.config._roomId || null
+      });
+      if (resp?.ok) {
+        this._showPinnedBanner(msg);
+        // Sledovat pin entity ID z odpovědi (ne původní message ID)
+        this._startPinWatcher(resp.pinId || msg.id);
+      } else {
+        this._sys(`Pin: ${resp?.error || 'selhalo'}`);
+      }
+    } catch (e) {
+      this._sys(`Pin chyba: ${e.message}`);
+    }
+  }
+
+  _showPinnedBanner(msg) {
+    const banner = document.getElementById('pinned-banner');
+    if (!banner) return;
+
+    // Vyrenderovat zprávu v banneru
+    const ts = new Date(msg.timestamp);
+    const time = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}`;
+
+    let body;
+    if (msg.platform === 'twitch') {
+      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
+      body = this.emotes.renderTwitch(msg.message, emotesTag);
+    } else if (msg.platform === 'kick') {
+      body = this.emotes.renderKick(msg.kickContent || msg.message);
+    } else {
+      body = this.emotes.renderPlain(msg.message);
+    }
+
+    banner.innerHTML = `
+      <div class="pin-icon">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+          <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+        </svg>
+        <span>Připnuto</span>
+      </div>
+      <div class="pin-content">
+        <span class="pin-time">${time}</span>
+        <span class="pin-user" style="color:${msg.color}">${this.emotes._eh(msg.username)}:</span>
+        <span class="pin-text">${body}</span>
+      </div>
+      <button class="pin-close" title="Odepnout">&times;</button>
+    `;
+    banner.classList.remove('hidden');
+
+    banner.querySelector('.pin-close').addEventListener('click', () => {
+      this._hidePinnedBanner();
+    });
+
+    // Bez lokálního timeru - banner zmizí když polling detekuje unpin
+    clearTimeout(this._pinTimer);
+  }
+
+  _hidePinnedBanner() {
+    document.getElementById('pinned-banner')?.classList.add('hidden');
+    clearTimeout(this._pinTimer);
+    this._stopPinWatcher();
+  }
+
+  _startPinWatcher(pinId) {
+    this._stopPinWatcher();
+    this._pinWatcherId = pinId;
+    this._pinWatcherFails = 0;
+    // Delay first poll - dej pinu čas se propagovat
+    this._pinWatcherStartTimeout = setTimeout(() => {
+      this._pinWatcher = setInterval(async () => {
+        try {
+          const resp = await chrome.runtime.sendMessage({
+            type: 'CHECK_PIN',
+            channel: this.config.channel,
+            messageId: pinId
+          });
+          if (!resp?.ok) return; // GQL error - nezavírat banner
+          if (resp.stillPinned === false) {
+            this._pinWatcherFails++;
+            // Skrýt až po 3 konzistentních "not pinned" odpovědích (6s)
+            if (this._pinWatcherFails >= 3) {
+              this._hidePinnedBanner();
+            }
+          } else {
+            this._pinWatcherFails = 0;
+          }
+        } catch {}
+      }, 2000);
+    }, 8000);
+  }
+
+  _stopPinWatcher() {
+    if (this._pinWatcherStartTimeout) {
+      clearTimeout(this._pinWatcherStartTimeout);
+      this._pinWatcherStartTimeout = null;
+    }
+    if (this._pinWatcher) {
+      clearInterval(this._pinWatcher);
+      this._pinWatcher = null;
+      this._pinWatcherId = null;
+    }
+  }
+
   // ---- User Card ----
 
   async _openUserCard(platform, username) {
@@ -1572,7 +1769,7 @@ class UnityChat {
     setTimeout(() => { this._ucDebounce = false; }, 2000);
 
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this._getActiveBrowserTab();
       if (!tab) return;
 
       chrome.runtime.sendMessage({
@@ -1627,7 +1824,7 @@ class UnityChat {
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
 
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await this._getActiveBrowserTab();
       if (!tab) return;
 
       let resp;
@@ -1697,6 +1894,48 @@ class UnityChat {
     if (this.config.kick) { this.kick.connect(this.config.channel); connecting.push('Kick'); }
     if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
+
+    // Doparsovat existující zprávy z Twitch tabu (pokud existuje)
+    setTimeout(() => this._scrapeExistingChat(), 1500);
+  }
+
+  async _scrapeExistingChat() {
+    try {
+      const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
+      for (const tab of tabs) {
+        const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
+        if (!resp?.ok || !resp.messages?.length) continue;
+
+        // Boundary detection: najít poslední cached Twitch zprávu v scraped pole
+        const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim().substring(0, 80);
+        const cacheKeys = new Set(
+          this._msgCache
+            .filter((m) => m.platform === 'twitch' && m.username && m.message)
+            .slice(-50)
+            .map((m) => norm(m.username) + '|' + norm(m.message))
+        );
+
+        // Hledat od konce scraped (nejnovější) - poslední cached match je naše hranice
+        let boundary = -1;
+        for (let i = resp.messages.length - 1; i >= 0; i--) {
+          const m = resp.messages[i];
+          const key = norm(m.username) + '|' + norm(m.message);
+          if (cacheKeys.has(key)) {
+            boundary = i;
+            break;
+          }
+        }
+
+        const newMessages = resp.messages.slice(boundary + 1);
+        if (newMessages.length) {
+          this._sys(`Doparsováno ${newMessages.length} zpráv z Twitch chatu`);
+          for (const msg of newMessages) {
+            this._addMessage(msg);
+          }
+        }
+        break;
+      }
+    } catch {}
   }
 
   _disconnectAll() {
@@ -1733,6 +1972,36 @@ class UnityChat {
   }
 
   _addMessage(msg) {
+    // Dedup podle ID (cache + live zprávy)
+    if (msg.id) {
+      if (this._seenMsgIds.has(msg.id)) return;
+      this._seenMsgIds.add(msg.id);
+      if (this._seenMsgIds.size > 2000) {
+        const arr = [...this._seenMsgIds];
+        this._seenMsgIds = new Set(arr.slice(-1000));
+      }
+    }
+
+    // Content-based dedup pro scraped zprávy
+    // Normalizace: lowercase, sjednocené whitespace, jen alfanumerika a mezery
+    const norm = (s) => (s || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .substring(0, 80);
+    const contentKey = msg.username && msg.message
+      ? norm(msg.username) + '|' + norm(msg.message)
+      : null;
+    if (contentKey) {
+      if (msg.scraped && this._seenContentKeys.has(contentKey)) return;
+      this._seenContentKeys.add(contentKey);
+      if (this._seenContentKeys.size > 2000) {
+        const arr = [...this._seenContentKeys];
+        this._seenContentKeys = new Set(arr.slice(-1000));
+      }
+    }
+
     this.msgCount++;
 
     // Sbírat usernames pro @mention autocomplete
@@ -1787,6 +2056,7 @@ class UnityChat {
     const el = document.createElement('div');
     el.className = 'msg';
     el.dataset.platform = msg.platform;
+    if (msg.id) el.dataset.msgId = msg.id;
     if (msg.superChat) el.classList.add('superchat');
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
@@ -1813,18 +2083,28 @@ class UnityChat {
     if (msg.replyTo) {
       const ctx = document.createElement('div');
       ctx.className = 'reply-ctx';
+      if (msg.replyTo.id) ctx.classList.add('clickable');
       ctx.innerHTML =
         `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username)}</span> ` +
         `<span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>`;
+      if (msg.replyTo.id) {
+        ctx.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._scrollToMessage(msg.replyTo.id);
+        });
+      }
       el.appendChild(ctx);
     }
 
     // Platform badge
     const pClass = { twitch: 'tw', youtube: 'yt', kick: 'ki' }[msg.platform];
+    const pName = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' }[msg.platform];
     const pi = document.createElement('span');
     pi.className = `pi ${pClass}${isUC ? ' uc' : ''}`;
     pi.textContent = pClass.toUpperCase();
-    if (isUC) pi.title = 'UnityChat';
+    const tooltip = isUC ? 'UnityChat User' : pName;
+    pi.title = tooltip;
+    pi.setAttribute('data-tooltip', tooltip);
     el.appendChild(pi);
 
     // Čas
@@ -1885,9 +2165,27 @@ class UnityChat {
 
     el.appendChild(tx);
 
-    // Hover reply tlačítko
+    // Hover akce
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
+
+    // Pin button (jen Twitch zprávy - vyžaduje mod práva)
+    if (msg.platform === 'twitch') {
+      const pinBtn = document.createElement('button');
+      pinBtn.className = 'msg-action-btn';
+      pinBtn.title = 'Připnout zprávu (pouze mod)';
+      pinBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">' +
+        '<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>' +
+        '</svg>';
+      pinBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._pinMessage(msg);
+      });
+      actions.appendChild(pinBtn);
+    }
+
+    // Reply button
     const replyBtn = document.createElement('button');
     replyBtn.className = 'msg-action-btn';
     replyBtn.title = 'Odpovědět';
@@ -1898,6 +2196,21 @@ class UnityChat {
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
+
+    // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu)
+    if (!this.autoScroll) {
+      if (this._unreadCount === 0) {
+        // První nová zpráva → vložit separator
+        const sep = document.createElement('div');
+        sep.id = 'unread-separator';
+        sep.className = 'unread-sep';
+        sep.textContent = 'Nové zprávy';
+        this.chatEl.appendChild(sep);
+      }
+      this._unreadCount++;
+      this.scrollBtn.textContent = `↓ ${this._unreadCount} ${this._unreadCount === 1 ? 'nová zpráva' : 'nové zprávy'}`;
+      this.scrollBtn.classList.remove('hidden');
+    }
 
     this.chatEl.appendChild(el);
 
@@ -1929,6 +2242,12 @@ class UnityChat {
         this._addMessage(msg);
       }
     } catch {}
+  }
+
+  _clearUnread() {
+    this._unreadCount = 0;
+    this.scrollBtn.classList.add('hidden');
+    document.getElementById('unread-separator')?.remove();
   }
 
   _trim() {

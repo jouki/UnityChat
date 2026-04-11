@@ -10,7 +10,11 @@
   <!-- Header -->
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
-    <button id="btn-settings" title="Nastavení">&#9881;</button>
+    <div id="header-actions">
+      <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
+      <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
+      <button id="btn-settings" title="Nastavení">&#9881;</button>
+    </div>
   </div>
 
   <!-- Settings Panel -->
@@ -26,6 +30,14 @@
     <div class="setting-row">
       <label for="input-username">Tvoje username (pro zvýraznění @mention)</label>
       <input type="text" id="input-username" placeholder="Jouki728" spellcheck="false">
+    </div>
+    <div class="setting-row">
+      <label for="input-layout">Velikost layoutu</label>
+      <select id="input-layout">
+        <option value="small">Malá</option>
+        <option value="medium">Střední</option>
+        <option value="large">Velká</option>
+      </select>
     </div>
     <div class="setting-row platforms">
       <label class="platform-check">
@@ -62,6 +74,9 @@
       <button class="fbtn active" data-platform="kick">KI</button>
     </div>
   </div>
+
+  <!-- Pinned message banner -->
+  <div id="pinned-banner" class="hidden"></div>
 
   <!-- Chat -->
   <div id="chat-wrapper">

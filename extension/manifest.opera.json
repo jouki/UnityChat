@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "UnityChat (Opera)",
+  "version": "3.12.1",
+  "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu (Opera verze)",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "cookies",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://kick.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "wss://irc-ws.chat.twitch.tv/*",
+    "https://7tv.io/*",
+    "https://cdn.7tv.app/*",
+    "https://static-cdn.jtvnw.net/*",
+    "https://badges.twitch.tv/*",
+    "https://files.kick.com/*",
+    "https://cdn.betterttv.net/*",
+    "https://api.betterttv.net/*",
+    "https://api.frankerfacez.com/*",
+    "https://cdn.frankerfacez.com/*",
+    "https://www.twitch.tv/*",
+    "https://twitch.tv/*",
+    "https://api.twitch.tv/*",
+    "https://gql.twitch.tv/*",
+    "https://api.ivr.fi/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "sidebar_action": {
+    "default_panel": "sidepanel.html",
+    "default_title": "UnityChat",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "action": {
+    "default_title": "UnityChat - Otevřít sjednocený chat",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.twitch.tv/*"],
+      "js": ["content/twitch.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "all_frames": true,
+      "js": ["content/youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.kick.com/*"],
+      "js": ["content/kick.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

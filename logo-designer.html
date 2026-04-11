@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UnityChat // Logo Lab</title>
+<style>
+  :root {
+    --bg: #08080b;
+    --bg-elev: #11111a;
+    --surface: #14141d;
+    --surface-2: #1a1a25;
+    --line: #23232f;
+    --line-bright: #36364a;
+    --line-accent: #4a3a1a;
+    --text: #f0f0f5;
+    --text-mid: #9a9aaa;
+    --text-mute: #5a5a6a;
+    --text-dim: #383844;
+    --o1: #ffc800;
+    --o2: #ff8c00;
+    --o-bright: #ffb84d;
+    --o-glow: rgba(255, 140, 0, 0.55);
+    --grad: linear-gradient(160deg, #ffc800, #ff8c00);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --display: "Helvetica Neue", "Arial Black", Impact, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  body {
+    background-image:
+      radial-gradient(ellipse 80% 40% at 50% 0%, rgba(255, 140, 0, 0.04), transparent 60%),
+      linear-gradient(rgba(255, 200, 0, 0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 200, 0, 0.018) 1px, transparent 1px);
+    background-size: auto, 32px 32px, 32px 32px;
+    background-position: 0 0, -1px -1px, -1px -1px;
+  }
+
+  /* ========== TOP BAR ========== */
+  header {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 32px;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(8, 8, 11, 0.85);
+    backdrop-filter: blur(12px);
+    position: relative;
+  }
+
+  header::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 280px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--o2), transparent);
+    box-shadow: 0 0 20px var(--o-glow);
+  }
+
+  .brand-block {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+
+  .brand-mark {
+    font-family: var(--display);
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: -0.045em;
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 16px var(--o-glow));
+  }
+
+  .brand-suffix {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    padding-left: 14px;
+    border-left: 1px solid var(--line);
+  }
+
+  .brand-suffix em {
+    font-style: normal;
+    color: var(--o-bright);
+  }
+
+  .header-coords {
+    text-align: center;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .header-coords strong {
+    color: var(--text-mid);
+    font-weight: 500;
+  }
+
+  .header-status {
+    display: flex;
+    gap: 18px;
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+  }
+
+  .header-status span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--o2);
+    box-shadow: 0 0 8px var(--o2), 0 0 16px var(--o-glow);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ========== MAIN LAYOUT ========== */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    height: calc(100vh - 65px);
+  }
+
+  /* ========== PREVIEW SECTION ========== */
+  .preview-section {
+    display: flex;
+    flex-direction: column;
+    padding: 28px;
+    gap: 24px;
+    overflow: auto;
+    min-width: 0;
+  }
+
+  .canvas-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .canvas-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 4px 8px;
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .canvas-meta .label {
+    color: var(--text-mute);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .canvas-meta .label::before {
+    content: "";
+    width: 14px;
+    height: 1px;
+    background: var(--o2);
+  }
+
+  .canvas-meta .specs {
+    color: var(--text-dim);
+  }
+
+  .canvas-meta .specs strong {
+    color: var(--text-mid);
+    font-weight: 500;
+  }
+
+  .canvas-frame {
+    position: relative;
+    flex: 1;
+    min-height: 360px;
+    border: 1px solid var(--line);
+    background:
+      repeating-conic-gradient(#13131a 0% 25%, #181820 0% 50%) 50% / 22px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px;
+    overflow: hidden;
+  }
+
+  .canvas-frame::before,
+  .canvas-frame::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+  }
+
+  /* corner brackets */
+  .corner {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid var(--o2);
+    pointer-events: none;
+  }
+  .corner.tl { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .corner.tr { top: -1px; right: -1px; border-left: none; border-bottom: none; }
+  .corner.bl { bottom: -1px; left: -1px; border-right: none; border-top: none; }
+  .corner.br { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  /* axis markers */
+  .axis-h, .axis-v {
+    position: absolute;
+    background: var(--o2);
+    opacity: 0.25;
+  }
+  .axis-h { left: 0; right: 0; top: 50%; height: 1px; }
+  .axis-v { top: 0; bottom: 0; left: 50%; width: 1px; }
+
+  .preview-svg {
+    position: relative;
+    z-index: 1;
+    max-width: 320px;
+    max-height: 320px;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+  }
+
+  .preview-svg svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    filter: drop-shadow(0 0 24px rgba(255, 140, 0, 0.5));
+  }
+
+  /* ========== SIZE PREVIEWS ========== */
+  .sizes {
+    display: flex;
+    gap: 20px;
+    align-items: flex-end;
+    padding: 20px 24px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    position: relative;
+  }
+
+  .sizes::before {
+    content: "// OUTPUT // 1:1 PIXEL PREVIEW";
+    position: absolute;
+    top: -7px;
+    left: 16px;
+    background: var(--bg);
+    padding: 0 10px;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    color: var(--text-dim);
+  }
+
+  .size-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .size-frame {
+    background:
+      repeating-conic-gradient(#0c0c12 0% 25%, #14141a 0% 50%) 50% / 6px 6px;
+    border: 1px solid var(--line-bright);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+  .size-frame.s16 { width: 56px; height: 56px; padding: 20px; }
+  .size-frame.s48 { width: 88px; height: 88px; padding: 20px; }
+  .size-frame.s128 { width: 168px; height: 168px; padding: 20px; }
+
+  .size-frame svg {
+    display: block;
+    image-rendering: -webkit-optimize-contrast;
+  }
+
+  .size-frame.s16 svg { width: 16px; height: 16px; filter: drop-shadow(0 0 2px var(--o-glow)); }
+  .size-frame.s48 svg { width: 48px; height: 48px; filter: drop-shadow(0 0 6px var(--o-glow)); }
+  .size-frame.s128 svg { width: 128px; height: 128px; filter: drop-shadow(0 0 12px var(--o-glow)); }
+
+  .size-label {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    text-align: center;
+  }
+
+  .size-label strong {
+    display: block;
+    color: var(--o-bright);
+    font-size: 13px;
+    font-family: var(--display);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-bottom: 2px;
+  }
+
+  .size-label small {
+    color: var(--text-dim);
+    font-size: 8px;
+  }
+
+  /* ========== CONTROLS ASIDE ========== */
+  aside {
+    border-left: 1px solid var(--line);
+    background: var(--bg-elev);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .panel {
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .panel h2 {
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    color: var(--text-mute);
+    font-weight: 500;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+  }
+
+  .panel h2::before {
+    content: "";
+    width: 16px;
+    height: 1px;
+    background: var(--o2);
+    box-shadow: 0 0 6px var(--o-glow);
+  }
+
+  .panel h2 .num {
+    color: var(--text-dim);
+    font-size: 8px;
+    margin-left: auto;
+  }
+
+  /* Variant grid */
+  .variants {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .variant {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 10px 6px 6px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+
+  .variant svg {
+    width: 36px;
+    height: 36px;
+    transition: filter 0.2s;
+  }
+
+  .variant .vnum {
+    font-size: 8px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    font-family: var(--mono);
+  }
+
+  .variant:hover {
+    border-color: var(--line-bright);
+    background: var(--surface-2);
+  }
+
+  .variant:hover svg {
+    filter: drop-shadow(0 0 8px var(--o-glow));
+  }
+
+  .variant.active {
+    border-color: var(--o2);
+    background: linear-gradient(160deg, rgba(255, 200, 0, 0.08), rgba(255, 140, 0, 0.06));
+    box-shadow: inset 0 0 16px rgba(255, 140, 0, 0.08), 0 0 0 1px var(--line-accent);
+  }
+
+  .variant.active::before {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 6px;
+    height: 6px;
+    background: var(--o2);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--o-glow);
+  }
+
+  .variant.active svg {
+    filter: drop-shadow(0 0 8px var(--o-glow));
+  }
+
+  .variant.active .vnum {
+    color: var(--o-bright);
+  }
+
+  /* Sliders */
+  .slider {
+    margin-bottom: 18px;
+  }
+
+  .slider:last-child { margin-bottom: 0; }
+
+  .slider .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .slider label {
+    color: var(--text-mute);
+  }
+
+  .slider .val {
+    color: var(--o-bright);
+    font-weight: 500;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 2px;
+    background: var(--line);
+    outline: none;
+    border-radius: 1px;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--o2);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 12px var(--o-glow);
+    border: 2px solid var(--bg);
+    transition: transform 0.15s;
+  }
+
+  input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--o2);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 12px var(--o-glow);
+    border: 2px solid var(--bg);
+  }
+
+  /* Toggle */
+  .toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .toggle {
+    width: 34px;
+    height: 18px;
+    background: var(--line);
+    border-radius: 9px;
+    position: relative;
+    transition: background 0.2s;
+  }
+
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text-mute);
+    transition: all 0.2s;
+  }
+
+  .toggle.on {
+    background: linear-gradient(160deg, rgba(255, 200, 0, 0.3), rgba(255, 140, 0, 0.3));
+  }
+
+  .toggle.on::after {
+    left: 18px;
+    background: var(--o2);
+    box-shadow: 0 0 10px var(--o-glow);
+  }
+
+  /* Export buttons */
+  .export-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .export-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: left;
+  }
+
+  .export-btn:hover {
+    border-color: var(--o2);
+    background: var(--surface-2);
+    color: var(--o-bright);
+    transform: translateX(2px);
+  }
+
+  .export-btn .arrow {
+    color: var(--o2);
+    font-size: 12px;
+    transition: transform 0.15s;
+  }
+
+  .export-btn:hover .arrow {
+    transform: translateX(2px);
+  }
+
+  .export-btn.primary {
+    background: linear-gradient(160deg, rgba(255, 200, 0, 0.18), rgba(255, 140, 0, 0.18));
+    border-color: var(--o2);
+    color: var(--o-bright);
+    font-weight: 600;
+    margin-top: 6px;
+    box-shadow: 0 0 0 1px var(--line-accent), 0 4px 24px rgba(255, 140, 0, 0.12);
+  }
+
+  .export-btn.primary:hover {
+    background: linear-gradient(160deg, rgba(255, 200, 0, 0.28), rgba(255, 140, 0, 0.28));
+    box-shadow: 0 0 0 1px var(--o2), 0 4px 32px rgba(255, 140, 0, 0.25);
+    transform: translateX(0);
+  }
+
+  .filename {
+    color: var(--text-dim);
+    font-size: 9px;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 14px 22px;
+    background: var(--bg-elev);
+    border: 1px solid var(--o2);
+    color: var(--o-bright);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 30px rgba(255, 140, 0, 0.25);
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .toast::before {
+    content: "✓";
+    color: var(--o2);
+    font-size: 14px;
+  }
+
+  /* Scroll bars */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--line-bright); }
+
+  /* Page-load animation */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  header { animation: fadeUp 0.5s ease-out both; }
+  .preview-section { animation: fadeUp 0.6s 0.05s ease-out both; }
+  aside { animation: fadeUp 0.6s 0.1s ease-out both; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand-block">
+    <span class="brand-mark">UnityChat</span>
+    <span class="brand-suffix">Logo <em>Lab</em></span>
+  </div>
+  <div class="header-coords">
+    <strong>5 variants</strong> &middot; vector → raster pipeline &middot; chrome extension icons
+  </div>
+  <div class="header-status">
+    <span><span class="pulse"></span>render online</span>
+    <span>v1.0.0</span>
+  </div>
+</header>
+
+<main>
+  <section class="preview-section">
+    <div class="canvas-container">
+      <div class="canvas-meta">
+        <span class="label">PREVIEW &middot; LIVE RENDER</span>
+        <span class="specs">SVG &middot; <strong>320×320</strong> &middot; vector source</span>
+      </div>
+      <div class="canvas-frame">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+        <div class="axis-h"></div>
+        <div class="axis-v"></div>
+        <div class="preview-svg" id="mainPreview"></div>
+      </div>
+    </div>
+
+    <div class="sizes">
+      <div class="size-block">
+        <div class="size-frame s16" id="prev16"></div>
+        <div class="size-label"><strong>16</strong>16 × 16 px<br><small>favicon</small></div>
+      </div>
+      <div class="size-block">
+        <div class="size-frame s48" id="prev48"></div>
+        <div class="size-label"><strong>48</strong>48 × 48 px<br><small>extension</small></div>
+      </div>
+      <div class="size-block">
+        <div class="size-frame s128" id="prev128"></div>
+        <div class="size-label"><strong>128</strong>128 × 128 px<br><small>store listing</small></div>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h2>Variant <span class="num">5 / total</span></h2>
+      <div class="variants" id="variantGrid"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Parameters</h2>
+      <div class="slider">
+        <div class="row">
+          <label>Glow Intensity</label>
+          <span class="val" id="glowVal">8</span>
+        </div>
+        <input type="range" id="glow" min="0" max="20" value="8">
+      </div>
+      <div class="slider">
+        <div class="row">
+          <label>Gradient Angle</label>
+          <span class="val" id="angleVal">160°</span>
+        </div>
+        <input type="range" id="angle" min="0" max="360" value="160">
+      </div>
+      <div class="slider">
+        <div class="row">
+          <label>Inner Padding</label>
+          <span class="val" id="padVal">10</span>
+        </div>
+        <input type="range" id="pad" min="0" max="20" value="10">
+      </div>
+      <div class="toggle-row" id="borderToggleRow">
+        <span>Inner Outline</span>
+        <div class="toggle" id="borderToggle"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="border-bottom: none;">
+      <h2>Export <span class="num">PNG</span></h2>
+      <div class="export-list">
+        <button class="export-btn" data-size="16">
+          <span>16×16 <span class="filename">icon16.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn" data-size="48">
+          <span>48×48 <span class="filename">icon48.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn" data-size="128">
+          <span>128×128 <span class="filename">icon128.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn primary" id="exportAll">
+          <span>Export All Sizes</span>
+          <span class="arrow">↓↓↓</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast">Exported</div>
+
+<script>
+const state = {
+  variant: 1,
+  glow: 8,
+  angle: 160,
+  pad: 10,
+  border: false
+};
+
+let _uid = 0;
+const nextUid = () => ++_uid;
+
+// Bold U letter as a path (centered, ~60×60)
+// Two thick verticals connected at bottom by curved bowl
+function uPath(cx, cy, w, h, weight) {
+  const halfW = w / 2;
+  const halfH = h / 2;
+  const t = weight; // wall thickness
+  const r = halfW; // bowl radius
+  // outer outline of U + inner cutout
+  return `
+    M ${cx - halfW} ${cy - halfH}
+    L ${cx - halfW} ${cy + halfH - r}
+    Q ${cx - halfW} ${cy + halfH} ${cx} ${cy + halfH}
+    Q ${cx + halfW} ${cy + halfH} ${cx + halfW} ${cy + halfH - r}
+    L ${cx + halfW} ${cy - halfH}
+    L ${cx + halfW - t} ${cy - halfH}
+    L ${cx + halfW - t} ${cy + halfH - r}
+    Q ${cx + halfW - t} ${cy + halfH - t} ${cx} ${cy + halfH - t}
+    Q ${cx - halfW + t} ${cy + halfH - t} ${cx - halfW + t} ${cy + halfH - r}
+    L ${cx - halfW + t} ${cy - halfH}
+    Z
+  `.replace(/\s+/g, ' ').trim();
+}
+
+// SVG defs (gradient + glow filter)
+function defs(uid, angle, glow) {
+  // Convert angle (deg) to gradient direction
+  const rad = (angle - 90) * Math.PI / 180;
+  const x1 = 50 - 50 * Math.cos(rad);
+  const y1 = 50 - 50 * Math.sin(rad);
+  const x2 = 50 + 50 * Math.cos(rad);
+  const y2 = 50 + 50 * Math.sin(rad);
+
+  return `
+    <defs>
+      <linearGradient id="g${uid}" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%">
+        <stop offset="0%" stop-color="#ffc800"/>
+        <stop offset="100%" stop-color="#ff8c00"/>
+      </linearGradient>
+      ${glow > 0 ? `<filter id="f${uid}" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="${glow}" result="blur"/>
+        <feMerge>
+          <feMergeNode in="blur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>` : ''}
+    </defs>
+  `;
+}
+
+// 5 logo variants - all using viewBox 0 0 128 128
+const variants = {
+  // 1. Classic rounded chat bubble with bold U
+  1: (s) => {
+    const uid = nextUid();
+    const stroke = s.border ? `stroke="#0a0a0d" stroke-width="3" stroke-linejoin="round"` : '';
+    const filter = s.glow > 0 ? `filter="url(#f${uid})"` : '';
+    return `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      ${defs(uid, s.angle, s.glow)}
+      <g ${filter}>
+        <path d="M 28 14 H 100 Q 116 14 116 30 V 80 Q 116 96 100 96 H 58 L 38 116 L 44 96 H 28 Q 12 96 12 80 V 30 Q 12 14 28 14 Z"
+              fill="url(#g${uid})" ${stroke}/>
+        <path d="${uPath(64, 56, 50, 50, 14)}" fill="#0a0a0d"/>
+      </g>
+    </svg>`;
+  },
+
+  // 2. Speech bubble with pointed tail
+  2: (s) => {
+    const uid = nextUid();
+    const stroke = s.border ? `stroke="#0a0a0d" stroke-width="3" stroke-linejoin="round"` : '';
+    const filter = s.glow > 0 ? `filter="url(#f${uid})"` : '';
+    return `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      ${defs(uid, s.angle, s.glow)}
+      <g ${filter}>
+        <path d="M 16 18 H 112 Q 122 18 122 28 V 76 Q 122 86 112 86 H 70 L 36 118 L 48 86 H 16 Q 6 86 6 76 V 28 Q 6 18 16 18 Z"
+              fill="url(#g${uid})" ${stroke}/>
+        <path d="${uPath(64, 52, 48, 46, 13)}" fill="#0a0a0d"/>
+      </g>
+    </svg>`;
+  },
+
+  // 3. Circular bubble with serif italic monogram
+  3: (s) => {
+    const uid = nextUid();
+    const stroke = s.border ? `stroke="#0a0a0d" stroke-width="3" stroke-linejoin="round"` : '';
+    const filter = s.glow > 0 ? `filter="url(#f${uid})"` : '';
+    return `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      ${defs(uid, s.angle, s.glow)}
+      <g ${filter}>
+        <circle cx="62" cy="58" r="50" fill="url(#g${uid})" ${stroke}/>
+        <circle cx="100" cy="100" r="11" fill="url(#g${uid})" ${stroke}/>
+        <circle cx="116" cy="116" r="5" fill="url(#g${uid})" ${stroke}/>
+        <g transform="translate(4 0) skewX(-10)">
+          <path d="${uPath(60, 60, 46, 48, 13)}" fill="#0a0a0d"/>
+        </g>
+      </g>
+    </svg>`;
+  },
+
+  // 4. Hexagonal/geometric chat shape
+  4: (s) => {
+    const uid = nextUid();
+    const stroke = s.border ? `stroke="#0a0a0d" stroke-width="3" stroke-linejoin="round"` : '';
+    const filter = s.glow > 0 ? `filter="url(#f${uid})"` : '';
+    return `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      ${defs(uid, s.angle, s.glow)}
+      <g ${filter}>
+        <path d="M 64 6 L 116 36 L 116 86 L 84 86 L 64 122 L 64 86 L 12 86 L 12 36 Z"
+              fill="url(#g${uid})" ${stroke}/>
+        <path d="${uPath(64, 56, 48, 48, 13)}" fill="#0a0a0d"/>
+      </g>
+    </svg>`;
+  },
+
+  // 5. Stylized U-as-bubble (the U IS the chat shape)
+  5: (s) => {
+    const uid = nextUid();
+    const stroke = s.border ? `stroke="#0a0a0d" stroke-width="3" stroke-linejoin="round"` : '';
+    const filter = s.glow > 0 ? `filter="url(#f${uid})"` : '';
+    // Big chunky U shape with integrated speech tail at top right
+    return `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+      ${defs(uid, s.angle, s.glow)}
+      <g ${filter}>
+        <path d="
+          M 18 18
+          L 18 78
+          Q 18 116 64 116
+          Q 90 116 102 102
+          L 122 122
+          L 110 92
+          Q 110 86 110 78
+          L 110 18
+          L 78 18
+          L 78 78
+          Q 78 90 64 90
+          Q 50 90 50 78
+          L 50 18
+          Z
+        " fill="url(#g${uid})" ${stroke}/>
+      </g>
+    </svg>`;
+  }
+};
+
+function buildSVG() {
+  return variants[state.variant]({ ...state });
+}
+
+function inject(id, html) {
+  document.getElementById(id).innerHTML = html;
+}
+
+function render() {
+  inject('mainPreview', buildSVG());
+  inject('prev16', buildSVG());
+  inject('prev48', buildSVG());
+  inject('prev128', buildSVG());
+}
+
+function buildVariantGrid() {
+  const grid = document.getElementById('variantGrid');
+  grid.innerHTML = '';
+  for (let i = 1; i <= 5; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'variant' + (i === state.variant ? ' active' : '');
+    btn.dataset.variant = i;
+    const thumbSvg = variants[i]({ variant: i, glow: 3, angle: 160, pad: 10, border: false });
+    btn.innerHTML = thumbSvg + `<span class="vnum">0${i}</span>`;
+    btn.addEventListener('click', () => {
+      state.variant = i;
+      buildVariantGrid();
+      render();
+    });
+    grid.appendChild(btn);
+  }
+}
+
+function bindSlider(id, key, format) {
+  const el = document.getElementById(id);
+  const valEl = document.getElementById(id + 'Val');
+  el.addEventListener('input', () => {
+    state[key] = +el.value;
+    valEl.textContent = format ? format(el.value) : el.value;
+    render();
+  });
+}
+
+bindSlider('glow', 'glow');
+bindSlider('angle', 'angle', v => v + '°');
+bindSlider('pad', 'pad');
+
+const toggle = document.getElementById('borderToggle');
+const toggleRow = document.getElementById('borderToggleRow');
+toggleRow.addEventListener('click', () => {
+  state.border = !state.border;
+  toggle.classList.toggle('on', state.border);
+  render();
+});
+
+// Toast
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  // recreate the ::before by toggling class
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+// Export PNG via canvas
+async function exportPNG(size) {
+  const svgString = buildSVG();
+  const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = url;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, size, size);
+
+    return new Promise(resolve => {
+      canvas.toBlob(pngBlob => {
+        const a = document.createElement('a');
+        const objUrl = URL.createObjectURL(pngBlob);
+        a.href = objUrl;
+        a.download = `icon${size}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 100);
+        resolve();
+      }, 'image/png');
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+document.querySelectorAll('.export-btn[data-size]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const size = +btn.dataset.size;
+    btn.style.opacity = '0.6';
+    await exportPNG(size);
+    btn.style.opacity = '';
+    toast(`icon${size}.png saved`);
+  });
+});
+
+document.getElementById('exportAll').addEventListener('click', async () => {
+  const btn = document.getElementById('exportAll');
+  btn.style.opacity = '0.6';
+  for (const size of [16, 48, 128]) {
+    await exportPNG(size);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  btn.style.opacity = '';
+  toast('all sizes exported');
+});
+
+// Init
+buildVariantGrid();
+render();
+</script>
+
+</body>
+</html>

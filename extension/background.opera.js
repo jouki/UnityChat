@@ -1,6 +1,35 @@
-// UnityChat - Background Service Worker
+// UnityChat - Background Service Worker (Opera verze)
+// Opera nepodporuje chrome.sidePanel API → otevíráme jako popup okno
 
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+let _ucWindowId = null;
+
+chrome.action.onClicked.addListener(async () => {
+  // Pokud okno už existuje, fokusovat ho
+  if (_ucWindowId !== null) {
+    try {
+      const win = await chrome.windows.get(_ucWindowId);
+      if (win) {
+        chrome.windows.update(_ucWindowId, { focused: true });
+        return;
+      }
+    } catch {
+      _ucWindowId = null;
+    }
+  }
+  // Vytvořit nové popup okno se side panel obsahem
+  const win = await chrome.windows.create({
+    url: 'sidepanel.html',
+    type: 'popup',
+    width: 420,
+    height: 720
+  });
+  _ucWindowId = win.id;
+});
+
+// Sledovat zavření okna
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === _ucWindowId) _ucWindowId = null;
+});
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
@@ -63,6 +92,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     ucLog('UserCard', 'open', msg.platform, msg.username, 'tab:', msg.tabId);
     openUserCard(msg.tabId, msg.username, msg.platform, msg.channel, msg.broadcasterId);
     return;
+  }
+
+  if (msg.type === 'CHECK_PIN') {
+    checkPin(msg.channel, msg.messageId)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'PIN_MESSAGE') {
+    pinMessage(msg.messageId, msg.broadcasterId, msg.durationSecs)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
 
   if (msg.type === 'TW_REPLY' && sender.tab?.id) {
@@ -272,6 +315,122 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
   }
 }
 
+// Zkontrolovat jestli je pin stále aktivní (pinIdOrMsgId = pin entity ID)
+async function checkPin(channel, pinIdOrMsgId) {
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  try {
+    const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+    const headers = {
+      'Client-Id': CLIENT_ID,
+      'Content-Type': 'application/json',
+      ...(cookie?.value ? { Authorization: 'OAuth ' + cookie.value } : {})
+    };
+
+    const r = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        query: `{
+          channel(name: "${channel}") {
+            pinnedChatMessages {
+              edges { node { id } }
+            }
+          }
+        }`
+      })
+    });
+
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const data = await r.json();
+
+    if (data.errors) {
+      ucLog('Pin', 'CheckPin GQL errors:', JSON.stringify(data.errors));
+      return { ok: false, error: 'GQL schema error' };
+    }
+
+    const edges = data.data?.channel?.pinnedChatMessages?.edges || [];
+    // pinIdOrMsgId je pin entity ID (z PinChatMessage mutace)
+    const stillPinned = edges.some(e => e.node?.id === pinIdOrMsgId);
+    ucLog('Pin', `CheckPin: edges=${edges.length}, target=${pinIdOrMsgId}, stillPinned=${stillPinned}, ids=${JSON.stringify(edges.map(e => e.node?.id))}`);
+    return { ok: true, stillPinned };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Mapování sekund → Twitch enum
+function pinDurationEnum(secs) {
+  if (secs <= 30) return 'PIN_DURATION_THIRTY_SECONDS';
+  if (secs <= 60) return 'PIN_DURATION_ONE_MINUTE';
+  if (secs <= 120) return 'PIN_DURATION_TWO_MINUTES';
+  if (secs <= 300) return 'PIN_DURATION_FIVE_MINUTES';
+  if (secs <= 600) return 'PIN_DURATION_TEN_MINUTES';
+  if (secs <= 1800) return 'PIN_DURATION_THIRTY_MINUTES';
+  return 'PIN_DURATION_ONE_HOUR';
+}
+
+async function pinMessage(messageId, broadcasterId, durationSecs) {
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  try {
+    const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+    if (!cookie?.value) return { ok: false, error: 'Nejsi přihlášen' };
+    if (!broadcasterId) return { ok: false, error: 'Chybí broadcaster ID' };
+
+    // Default: maximální duration (1h) - polling detekuje unpin dřív pokud je
+    const duration = durationSecs ? pinDurationEnum(durationSecs) : 'PIN_DURATION_ONE_HOUR';
+
+    const r = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: {
+        'Client-Id': CLIENT_ID,
+        Authorization: 'OAuth ' + cookie.value,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        query: `mutation PinChatMessage($input: PinChatMessageInput!) {
+          pinChatMessage(input: $input) { __typename }
+        }`,
+        variables: {
+          input: {
+            channelID: broadcasterId,
+            messageID: messageId,
+            duration,
+            type: 'MOD'
+          }
+        }
+      })
+    });
+
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const data = await r.json();
+    if (data.errors?.length) return { ok: false, error: data.errors[0].message };
+
+    // Po pinnutí získat pin entity ID z seznamu pinned messages (last edge = nejnovější)
+    let pinId = null;
+    try {
+      const lr = await fetch('https://gql.twitch.tv/gql', {
+        method: 'POST',
+        headers: {
+          'Client-Id': CLIENT_ID,
+          Authorization: 'OAuth ' + cookie.value,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: `{ channelByID: channel(id: "${broadcasterId}") { pinnedChatMessages { edges { node { id } } } } }`
+        })
+      });
+      if (lr.ok) {
+        const ldata = await lr.json();
+        const edges = ldata.data?.channelByID?.pinnedChatMessages?.edges || [];
+        pinId = edges[edges.length - 1]?.node?.id || null;
+      }
+    } catch {}
+    ucLog('Pin', 'Created, pinId:', pinId);
+    return { ok: true, pinId };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
   const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 
@@ -341,55 +500,51 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
 }
 
 async function ytSend(tabId, videoId, text) {
+  ucLog('YT_SEND', 'tabId:', tabId, 'videoId:', videoId);
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: async (videoId, text) => {
+        const log = [];
         try {
-          const gc = (k) =>
-            typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
-          const apiKey =
-            gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+          const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
+          const apiKey = gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
-
-          // Fetch live_chat page pro send params
+          log.push('apiKey:' + apiKey.substring(0, 10));
           const chatResp = await fetch('/live_chat?v=' + videoId);
+          if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
           const chatHtml = await chatResp.text();
-          const pm = chatHtml.match(
-            /"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/
-          );
-          if (!pm) return { ok: false, error: 'Send params nenalezeny' };
-
-          // Odeslat zprávu
-          const r = await fetch(
-            '/youtubei/v1/live_chat/send_message?key=' + apiKey,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                context: {
-                  client: { clientName: 'WEB', clientVersion: cVer }
-                },
-                params: pm[1],
-                richMessage: { textSegments: [{ text }] }
-              })
-            }
-          );
-
-          if (r.ok) return { ok: true };
-          if (r.status === 401 || r.status === 403)
-            return { ok: false, error: 'Nejsi přihlášen na YouTube' };
-          return { ok: false, error: 'YouTube API: HTTP ' + r.status };
+          log.push('htmlLen:' + chatHtml.length);
+          let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
+          if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
+          if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
+          log.push('paramsLen:' + pm[1].length);
+          const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              context: { client: { clientName: 'WEB', clientVersion: cVer } },
+              params: pm[1],
+              richMessage: { textSegments: [{ text }] }
+            })
+          });
+          log.push('apiStatus:' + r.status);
+          if (r.ok) return { ok: true, log };
+          if (r.status === 401 || r.status === 403) return { ok: false, error: 'Nejsi přihlášen na YouTube', log };
+          return { ok: false, error: 'YouTube API: HTTP ' + r.status, log };
         } catch (e) {
-          return { ok: false, error: e.message };
+          return { ok: false, error: e.message, log };
         }
       },
       args: [videoId, text]
     });
-
-    return results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };
+    const result = results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };
+    ucLog('YT_SEND', 'result:', JSON.stringify(result));
+    return result;
   } catch (e) {
+    ucLog('YT_SEND', 'execError:', e.message);
     return { ok: false, error: e.message };
   }
 }

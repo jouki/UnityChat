@@ -49,6 +49,15 @@
       return true;
     }
 
+    if (msg.type === 'SCRAPE_CHAT') {
+      try {
+        sendResponse({ ok: true, messages: scrapeMessages() });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+      return;
+    }
+
     if (msg.type === 'SEND_CHAT') {
       sendChat(msg.text)
         .then(() => sendResponse({ ok: true }))
@@ -56,6 +65,74 @@
       return true;
     }
   });
+
+  function scrapeMessages() {
+    const messages = [];
+    const seenLines = new Set();
+
+    // Najít všechny chat lines (7TV i nativní Twitch)
+    const lineSelectors = [
+      '.seventv-message',
+      '.seventv-chat-line',
+      '.chat-line__message',
+      '[data-a-target="chat-line-message"]'
+    ];
+    const lines = [];
+    for (const sel of lineSelectors) {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (!seenLines.has(el)) {
+          seenLines.add(el);
+          lines.push(el);
+        }
+      });
+    }
+
+    // Synthetic timestamps - každá zpráva 1s rozestup, posledni je nejnovější (just before now)
+    const now = Date.now();
+    const baseTime = now - lines.length * 1000;
+
+    let idx = 0;
+    for (const line of lines) {
+      // Username
+      const userEl = line.querySelector(
+        '.seventv-chat-user-username, [data-a-user] .chat-author__display-name, ' +
+        '.chat-author__display-name, [data-a-target="chat-message-username"]'
+      );
+      const username = (userEl?.textContent || '').trim();
+      if (!username) continue;
+
+      // Color z parent .seventv-chat-user nebo z elementu samotného
+      const colorEl = line.querySelector('.seventv-chat-user, [data-a-user]') || userEl;
+      const color = colorEl?.style?.color || '#9146ff';
+
+      // Body - zkusit více selektorů
+      const bodyEl = line.querySelector(
+        '.seventv-message-body, .text-fragment, [data-a-target="chat-message-text"], ' +
+        '[class*="message-body"], [class*="message-content"]'
+      );
+      let text = (bodyEl?.textContent || '').trim();
+
+      // Fallback - vzít celý text linky a odečíst username
+      if (!text) {
+        const fullText = (line.textContent || '').trim();
+        text = fullText.replace(username, '').replace(/^[\s:]+/, '').trim();
+      }
+      if (!text) continue;
+
+      messages.push({
+        platform: 'twitch',
+        username,
+        message: text,
+        color,
+        timestamp: baseTime + idx * 1000,
+        id: 'scraped-' + idx + '-' + now,
+        scraped: true
+      });
+      idx++;
+    }
+
+    return messages;
+  }
 
   function findInput() {
     // Moderní Twitch - Slate editor (contenteditable div uvnitř chat-input)
