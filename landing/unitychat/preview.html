@@ -6,7 +6,7 @@
   <title>UnityChat preview</title>
   <link rel="stylesheet" href="/unitychat/assets/sidepanel.css">
   <style>
-    /* Iframe container: act as if we were in a real side panel window */
+    /* Iframe container: fit the parent viewport, no scroll at body level */
     html, body {
       margin: 0;
       padding: 0;
@@ -14,7 +14,52 @@
       overflow: hidden;
     }
 
-    /* Fake cursor blink in the disabled textarea to imply live input */
+    /* Header gets a logo to the left of the title */
+    #header-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #header-title img.logo {
+      width: 22px;
+      height: 22px;
+      display: block;
+    }
+
+    /* Inline reply context (click target style) */
+    .reply-ctx {
+      display: block;
+      font-size: 11px;
+      color: #ff8c00;
+      opacity: 0.75;
+      padding: 2px 0 2px 18px;
+    }
+
+    /* Badges container + badge image (mirrors sidepanel.js rendering) */
+    .bdg {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      margin-right: 4px;
+    }
+    .bdg img {
+      width: 18px;
+      height: 18px;
+      display: block;
+      image-rendering: -webkit-optimize-contrast;
+    }
+
+    /* Inline emote images — use same class the extension uses */
+    .emote {
+      display: inline-block;
+      height: 28px;
+      width: auto;
+      vertical-align: middle;
+      margin: -4px 2px;
+      image-rendering: -webkit-optimize-contrast;
+    }
+
+    /* Make the disabled input look alive */
     #msg-input {
       display: flex;
       align-items: center;
@@ -30,49 +75,12 @@
       opacity: 0.5;
     }
 
-    /* Pull inner scrollbar out of the preview so it looks clean */
+    /* Scrollbar cleanup so the preview reads clean */
     #chat::-webkit-scrollbar { width: 6px; }
     #chat::-webkit-scrollbar-track { background: transparent; }
     #chat::-webkit-scrollbar-thumb {
       background: rgba(255, 255, 255, 0.1);
       border-radius: 3px;
-    }
-
-    /* Tiny helpers so raids/first-msg badges show reliably even if real
-       CSS class names drift — fallback inline look. */
-    .raid-label, .first-msg-label {
-      display: inline-block;
-      font-size: 9px;
-      letter-spacing: 0.15em;
-      padding: 1px 6px;
-      border-radius: 4px;
-      margin-right: 6px;
-      font-weight: 600;
-      vertical-align: middle;
-    }
-    .raid-label { background: #cc3333; color: #fff; }
-    .first-msg-label { background: #9146ff; color: #fff; }
-
-    .reply-ctx {
-      display: block;
-      font-size: 11px;
-      color: #ff8c00;
-      opacity: 0.85;
-      padding: 2px 0 4px;
-      cursor: pointer;
-    }
-
-    /* Tiny emote placeholder so we don't need image URLs */
-    .emote-fake {
-      display: inline-block;
-      background: rgba(255, 200, 60, 0.12);
-      border: 1px solid rgba(255, 200, 60, 0.3);
-      border-radius: 4px;
-      padding: 0 6px;
-      margin: 0 1px;
-      color: #ffc800;
-      font-weight: 600;
-      font-size: 0.92em;
     }
   </style>
 </head>
@@ -80,23 +88,23 @@
 
   <!-- HEADER -->
   <div id="header">
-    <div id="header-title">⚡ UnityChat v3.12.4 [BETA]</div>
+    <div id="header-title">
+      <img class="logo" src="/unitychat/assets/icons/icon48.png" alt="UnityChat">
+      UnityChat v3.12.4 [BETA]
+    </div>
     <div id="header-actions">
-      <button id="btn-popout" title="Pop-out window" disabled>⎘</button>
-      <button id="btn-dump" title="Debug log" disabled>💾</button>
-      <button id="btn-settings" title="Settings" disabled>⚙</button>
+      <button title="Pop-out window" disabled>⎘</button>
+      <button title="Debug log" disabled>💾</button>
+      <button title="Settings" disabled>⚙</button>
     </div>
   </div>
 
-  <!-- SETTINGS (hidden by default) -->
-  <div id="settings" class="hidden"></div>
-
-  <!-- STATUS + FILTER BAR -->
+  <!-- STATUS + FILTERS -->
   <div id="bar">
     <div id="statuses">
-      <span class="st" id="st-twitch" title="Twitch"><span class="dot on"></span>TW</span>
-      <span class="st" id="st-youtube" title="YouTube"><span class="dot on"></span>YT</span>
-      <span class="st" id="st-kick" title="Kick"><span class="dot on"></span>KI</span>
+      <span class="st" id="st-twitch" title="Twitch"><span class="dot"></span>TW</span>
+      <span class="st" id="st-youtube" title="YouTube"><span class="dot"></span>YT</span>
+      <span class="st" id="st-kick" title="Kick"><span class="dot"></span>KI</span>
     </div>
     <div id="filters">
       <button class="fbtn active" data-platform="all">Vše</button>
@@ -110,129 +118,144 @@
   <div id="chat-wrapper">
     <div id="chat">
 
-      <!-- 1. Raid notification -->
+      <!-- 1. RAID NOTIFICATION -->
       <div class="msg raid">
-        <span class="raid-label">RAID</span>
+        <div class="raid-label">RAID</div>
         <span class="pi tw">TW</span>
         <span class="ts">22:14</span>
         <span class="un" style="color:#FF4500;">SirSlothMoth</span>
         <span class="txt"> přichází s <strong>42 diváky</strong>, pojďme je přivítat 🎉</span>
       </div>
 
-      <!-- 2. Streamer -->
+      <!-- 2. Broadcaster welcome -->
       <div class="msg">
         <span class="pi tw">TW</span>
         <span class="ts">22:14</span>
-        <span class="un" style="color:#FF4500;">robdiesalot</span>:
-        <span class="txt">Welcome everyone! Dneska konečně pokračujem Elden Ring DLC</span>
+        <span class="bdg"><img src="/unitychat/assets/badges/broadcaster.png" alt="broadcaster" title="Broadcaster"></span>
+        <span class="un" style="color:#FF4500;">RobDiesALot</span>:
+        <span class="txt">Welcome everyone! Dneska pokračujeme Elden Ring DLC, ať se daří 🔥</span>
       </div>
 
-      <!-- 3. YouTube viewer -->
+      <!-- 3. YouTube hype -->
       <div class="msg">
         <span class="pi yt">YT</span>
         <span class="ts">22:14</span>
         <span class="un" style="color:#00BFFF;">ViewerFromHungary</span>:
-        <span class="txt">Let's go! Gonna stay for the whole stream today</span>
+        <span class="txt">Let's goooo, zůstávám na celej stream dneska</span>
       </div>
 
-      <!-- 4. First-time chatter -->
+      <!-- 4. First-time chatter (real .first-label from sidepanel.css) -->
       <div class="msg first-msg">
-        <span class="first-msg-label">PRVNÍ ZPRÁVA</span>
+        <div class="first-label">PRVNÍ ZPRÁVA</div>
         <span class="pi ki">KI</span>
         <span class="ts">22:15</span>
-        <span class="un" style="color:#53fc18;">newbie_42</span>:
-        <span class="txt">Ahoj všem, poprvé tu :)</span>
+        <span class="un" style="color:#53fc18;">CzechCloud</span>:
+        <span class="txt">COŽE? Tohle je <strong>spojený chat???</strong> 👀</span>
       </div>
 
-      <!-- 5. UnityChat user (orange UC badge) -->
+      <!-- 5. Moderator (orange) explanation + UC badge -->
       <div class="msg">
         <span class="pi tw uc">TW</span>
         <span class="ts">22:15</span>
-        <span class="un" style="color:#9146FF;">Jouki728</span>:
-        <span class="txt">
-          Pojď bojovat s Margitem
-          <span class="emote-fake">catJAM</span>
-          <span class="emote-fake">catJAM</span>
-        </span>
+        <span class="bdg"><img src="/unitychat/assets/badges/moderator.png" alt="moderator" title="Moderator"></span>
+        <span class="un" style="color:#ff8c00;">Jouki728</span>:
+        <span class="txt">@CzechCloud ano, TW + YT + KI v jednom panelu. Stáhni si UnityChat 💜</span>
       </div>
 
-      <!-- 6. Emote spam on YouTube -->
+      <!-- 6. TT joke opener -->
       <div class="msg">
-        <span class="pi yt">YT</span>
+        <span class="pi tw">TW</span>
         <span class="ts">22:16</span>
-        <span class="un" style="color:#1abc9c;">KekStreamWatcher</span>:
-        <span class="txt">
-          <span class="emote-fake">KEKW</span>
-          <span class="emote-fake">KEKW</span>
-          <span class="emote-fake">KEKW</span>
-          tenhle boss je masakr
+        <span class="un" style="color:#1abc9c;">TTbrigáda</span>:
+        <span class="txt">@rob kdy ukážeš zase to svoje Áčko? pořád jezdíš ten kadeřnickej kombík?
+          <img class="emote" src="/unitychat/assets/emotes/kappa.png" alt="Kappa" title="Kappa">
         </span>
       </div>
 
-      <!-- 7. Mentioned (red highlight) -->
+      <!-- 7. Rob defends -->
+      <div class="msg">
+        <span class="pi tw">TW</span>
+        <span class="ts">22:16</span>
+        <span class="bdg"><img src="/unitychat/assets/badges/broadcaster.png" alt="broadcaster"></span>
+        <span class="un" style="color:#FF4500;">RobDiesALot</span>:
+        <span class="txt">TTčko je LUXUS, ne kadeřnickej auto. vy nevíte co jste ztratili
+          <img class="emote" src="/unitychat/assets/emotes/pogchamp.png" alt="PogChamp" title="PogChamp">
+        </span>
+      </div>
+
+      <!-- 8. @mention + rtěnka joke -->
       <div class="msg mentioned">
         <span class="pi tw">TW</span>
         <span class="ts">22:16</span>
         <span class="un" style="color:#E91916;">Pepega_enjoyer</span>:
-        <span class="txt">@Jouki728 kde najdu ten krystalický klíč? 🤔</span>
-      </div>
-
-      <!-- 8. Reply context (↪) -->
-      <div class="msg">
-        <div class="reply-ctx">↪ Pepega_enjoyer: @Jouki728 kde najdu ten krystalický klíč?</div>
-        <span class="pi tw uc">TW</span>
-        <span class="ts">22:17</span>
-        <span class="un" style="color:#9146FF;">Jouki728</span>:
-        <span class="txt">Ve druhém patře hradu, za branou s runou</span>
-      </div>
-
-      <!-- 9. Kick viewer with emotes -->
-      <div class="msg">
-        <span class="pi ki">KI</span>
-        <span class="ts">22:17</span>
-        <span class="un" style="color:#FFD700;">catJAM_lover</span>:
-        <span class="txt">
-          <span class="emote-fake">catJAM</span>
-          <span class="emote-fake">catJAM</span>
-          <span class="emote-fake">catJAM</span>
+        <span class="txt">@RobDiesALot a rtěnku máš v kundolapu pořád jako rezervu? 👜
+          <img class="emote" src="/unitychat/assets/emotes/lul.png" alt="LUL" title="LUL">
         </span>
       </div>
 
-      <!-- 10. Czech comment on YouTube -->
+      <!-- 9. Rob self-burn -->
       <div class="msg">
-        <span class="pi yt">YT</span>
-        <span class="ts">22:18</span>
-        <span class="un" style="color:#ff69b4;">CzechGirl</span>:
-        <span class="txt">Rob, chystáš dneska ještě Dark Souls speedrun?</span>
+        <span class="pi tw">TW</span>
+        <span class="ts">22:17</span>
+        <span class="bdg"><img src="/unitychat/assets/badges/broadcaster.png" alt="broadcaster"></span>
+        <span class="un" style="color:#FF4500;">RobDiesALot</span>:
+        <span class="txt">bez ni bych nemoh žít. a je tam i lak na vlasy + řasenka, díky za dotaz
+          <img class="emote" src="/unitychat/assets/emotes/kreygasm.png" alt="Kreygasm" title="Kreygasm">
+        </span>
       </div>
 
-      <!-- 11. Streamer replies -->
+      <!-- 10. UC user affectionate roast -->
+      <div class="msg">
+        <span class="pi ki uc">KI</span>
+        <span class="ts">22:17</span>
+        <span class="un" style="color:#ffb347;">Mirkosaur</span>:
+        <span class="txt">Rob je trochu přihřátej, ale je to NÁŠ přihřátej 💜💜</span>
+      </div>
+
+      <!-- 11. YouTube midlife observation -->
+      <div class="msg">
+        <span class="pi yt">YT</span>
+        <span class="ts">22:17</span>
+        <span class="un" style="color:#32CD32;">KekStreamWatcher</span>:
+        <span class="txt">rob: 35, single, řídí TT, chodí na barbera místo kadeřníka → midlife krize checklist complete
+          <img class="emote" src="/unitychat/assets/emotes/lul.png" alt="LUL">
+        </span>
+      </div>
+
+      <!-- 12. Mod reply context (clickable style) -->
+      <div class="msg">
+        <div class="reply-ctx">↪ Pepega_enjoyer: @RobDiesALot a rtěnku máš v kundolapu pořád jako rezervu?</div>
+        <span class="pi tw uc">TW</span>
+        <span class="ts">22:18</span>
+        <span class="bdg"><img src="/unitychat/assets/badges/moderator.png" alt="moderator"></span>
+        <span class="un" style="color:#ff8c00;">Jouki728</span>:
+        <span class="txt">Potvrzuju, Rob i v zimě nosí crop top pod bundou 👀</span>
+      </div>
+
+      <!-- 13. Rob enjoys the roast -->
       <div class="msg">
         <span class="pi tw">TW</span>
         <span class="ts">22:18</span>
-        <span class="un" style="color:#FF4500;">robdiesalot</span>:
-        <span class="txt">
-          @CzechGirl mozna kolem 23h, dam vedet
-          <span class="emote-fake">PogChamp</span>
+        <span class="bdg"><img src="/unitychat/assets/badges/broadcaster.png" alt="broadcaster"></span>
+        <span class="un" style="color:#FF4500;">RobDiesALot</span>:
+        <span class="txt">koukám, že jsem dneska mezi přáteli
+          <img class="emote" src="/unitychat/assets/emotes/ez.png" alt="EZ" title="EZ Clap">
         </span>
       </div>
 
-      <!-- 12. UC user again -->
+      <!-- 14. Kick fan girl -->
       <div class="msg">
-        <span class="pi tw uc">TW</span>
-        <span class="ts">22:18</span>
-        <span class="un" style="color:#9146FF;">Jouki728</span>:
-        <span class="txt">
-          Perfect, to stihnu po večeři
-          <span class="emote-fake">FrankerZ</span>
-        </span>
+        <span class="pi ki">KI</span>
+        <span class="ts">22:19</span>
+        <span class="un" style="color:#ff69b4;">CzechFanGirl</span>:
+        <span class="txt">@Rob kdy zase Dark Souls speedrun? chybí mi 🥺</span>
       </div>
 
     </div>
     <button id="btn-scroll" class="hidden">↓ Nové zprávy</button>
   </div>
 
-  <!-- INPUT AREA -->
+  <!-- INPUT -->
   <div id="input-area">
     <span id="active-badge" class="pi tw">TW</span>
     <div id="msg-input" contenteditable="false"></div>
@@ -240,10 +263,13 @@
   </div>
 
   <script>
-    // Fake a few subtle animations so the preview feels alive
-    document.querySelectorAll('#statuses .dot.on').forEach((dot) => {
-      dot.style.background = '#53fc18';
-      dot.style.boxShadow = '0 0 6px #53fc18';
+    // Force "connected" state color on status dots for visual appeal
+    document.querySelectorAll('#statuses .st').forEach((s) => {
+      const dot = s.querySelector('.dot');
+      if (dot) {
+        dot.style.background = '#53fc18';
+        dot.style.boxShadow = '0 0 6px #53fc18';
+      }
     });
   </script>
 

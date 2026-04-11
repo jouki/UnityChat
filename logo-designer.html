@@ -268,12 +268,15 @@
   /* ========== SIZE PREVIEWS ========== */
   .sizes {
     display: flex;
+    flex-wrap: wrap;
     gap: 20px;
-    align-items: flex-end;
+    align-items: flex-start;
     padding: 20px 24px;
     border: 1px solid var(--line);
     background: var(--surface);
     position: relative;
+    max-height: calc(100vh - 420px);
+    overflow-y: auto;
   }
 
   .sizes::before {
@@ -305,18 +308,24 @@
     position: relative;
   }
 
-  .size-frame.s16 { width: 56px; height: 56px; padding: 20px; }
-  .size-frame.s48 { width: 88px; height: 88px; padding: 20px; }
-  .size-frame.s128 { width: 168px; height: 168px; padding: 20px; }
+  .size-frame.s16   { width: 56px;   height: 56px;   padding: 20px; }
+  .size-frame.s48   { width: 88px;   height: 88px;   padding: 20px; }
+  .size-frame.s128  { width: 168px;  height: 168px;  padding: 20px; }
+  .size-frame.s256  { width: 296px;  height: 296px;  padding: 20px; }
+  .size-frame.s512  { width: 552px;  height: 552px;  padding: 20px; }
+  .size-frame.s1024 { width: 1064px; height: 1064px; padding: 20px; }
 
   .size-frame svg {
     display: block;
     image-rendering: -webkit-optimize-contrast;
   }
 
-  .size-frame.s16 svg { width: 16px; height: 16px; filter: drop-shadow(0 0 2px var(--o-glow)); }
-  .size-frame.s48 svg { width: 48px; height: 48px; filter: drop-shadow(0 0 6px var(--o-glow)); }
-  .size-frame.s128 svg { width: 128px; height: 128px; filter: drop-shadow(0 0 12px var(--o-glow)); }
+  .size-frame.s16   svg { width: 16px;   height: 16px;   filter: drop-shadow(0 0 2px  var(--o-glow)); }
+  .size-frame.s48   svg { width: 48px;   height: 48px;   filter: drop-shadow(0 0 6px  var(--o-glow)); }
+  .size-frame.s128  svg { width: 128px;  height: 128px;  filter: drop-shadow(0 0 12px var(--o-glow)); }
+  .size-frame.s256  svg { width: 256px;  height: 256px;  filter: drop-shadow(0 0 20px var(--o-glow)); }
+  .size-frame.s512  svg { width: 512px;  height: 512px;  filter: drop-shadow(0 0 36px var(--o-glow)); }
+  .size-frame.s1024 svg { width: 1024px; height: 1024px; filter: drop-shadow(0 0 60px var(--o-glow)); }
 
   .size-label {
     font-size: 9px;
@@ -717,6 +726,18 @@
         <div class="size-frame s128" id="prev128"></div>
         <div class="size-label"><strong>128</strong>128 × 128 px<br><small>store listing</small></div>
       </div>
+      <div class="size-block">
+        <div class="size-frame s256" id="prev256"></div>
+        <div class="size-label"><strong>256</strong>256 × 256 px<br><small>hi-dpi listing</small></div>
+      </div>
+      <div class="size-block">
+        <div class="size-frame s512" id="prev512"></div>
+        <div class="size-label"><strong>512</strong>512 × 512 px<br><small>app icon</small></div>
+      </div>
+      <div class="size-block">
+        <div class="size-frame s1024" id="prev1024"></div>
+        <div class="size-label"><strong>1024</strong>1024 × 1024 px<br><small>print · press kit</small></div>
+      </div>
     </div>
   </section>
 
@@ -768,6 +789,18 @@
         </button>
         <button class="export-btn" data-size="128">
           <span>128×128 <span class="filename">icon128.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn" data-size="256">
+          <span>256×256 <span class="filename">icon256.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn" data-size="512">
+          <span>512×512 <span class="filename">icon512.png</span></span>
+          <span class="arrow">→</span>
+        </button>
+        <button class="export-btn" data-size="1024">
+          <span>1024×1024 <span class="filename">icon1024.png</span></span>
           <span class="arrow">→</span>
         </button>
         <button class="export-btn primary" id="exportAll">
@@ -947,9 +980,12 @@ function inject(id, html) {
 
 function render() {
   inject('mainPreview', buildSVG());
-  inject('prev16', buildSVG());
-  inject('prev48', buildSVG());
-  inject('prev128', buildSVG());
+  inject('prev16',   buildSVG());
+  inject('prev48',   buildSVG());
+  inject('prev128',  buildSVG());
+  inject('prev256',  buildSVG());
+  inject('prev512',  buildSVG());
+  inject('prev1024', buildSVG());
 }
 
 function buildVariantGrid() {
@@ -1056,7 +1092,7 @@ document.querySelectorAll('.export-btn[data-size]').forEach(btn => {
 document.getElementById('exportAll').addEventListener('click', async () => {
   const btn = document.getElementById('exportAll');
   btn.style.opacity = '0.6';
-  for (const size of [16, 48, 128]) {
+  for (const size of [16, 48, 128, 256, 512, 1024]) {
     await exportPNG(size);
     await new Promise(r => setTimeout(r, 250));
   }
