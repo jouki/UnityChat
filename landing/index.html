@@ -218,19 +218,12 @@
       width: min(1600px, 94%);
       height: auto;
       display: block;
+      /* Orange core + violet outer halo (atmospheric, not duplicate text) */
       filter:
-        drop-shadow(0 0 60px rgba(255, 140, 0, 0.22))
-        drop-shadow(0 0 120px rgba(145, 70, 255, 0.14));
-    }
-
-    /* Slow chromatic drift of the violet echo */
-    .wordmark .echo {
-      animation: echo-drift 5.5s ease-in-out infinite;
-      transform-origin: center;
-    }
-    @keyframes echo-drift {
-      0%, 100% { transform: translate(16px, 14px); }
-      50%      { transform: translate(22px, 18px); }
+        drop-shadow(0 0 30px rgba(255, 180, 30, 0.55))
+        drop-shadow(0 0 70px rgba(255, 140, 0, 0.35))
+        drop-shadow(0 0 120px rgba(145, 70, 255, 0.32))
+        drop-shadow(0 0 180px rgba(145, 70, 255, 0.18));
     }
 
     /* Lede / subtitle */
@@ -327,8 +320,8 @@
       position: absolute;
       inset: 0 auto 0 0;
       width: 0;
-      background: linear-gradient(90deg, var(--orange-lo), var(--orange-hi), var(--violet-hi));
-      box-shadow: 0 0 12px rgba(255, 180, 30, 0.55);
+      background: linear-gradient(90deg, var(--orange-lo), var(--orange), var(--orange-hi));
+      box-shadow: 0 0 12px rgba(255, 180, 30, 0.65);
       animation: scan 3.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
     }
     @keyframes scan {
@@ -390,8 +383,8 @@
       </div>
       <div class="center">— PERSONAL INDEX —</div>
       <div class="right">
-        <span><span class="k">LOC</span><span class="v">PRAGUE · CZ</span></span>
-        <span><span class="k">COORD</span><span class="v">50.08°N · 14.44°E</span></span>
+        <span><span class="k">LOC</span><span class="v">BRNO · CZ</span></span>
+        <span><span class="k">COORD</span><span class="v">49.20°N · 16.61°E</span></span>
       </div>
     </header>
 
@@ -411,24 +404,8 @@
             <stop offset="88%"  stop-color="#d16200"/>
             <stop offset="100%" stop-color="#a85a00"/>
           </linearGradient>
-          <linearGradient id="gradViolet" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%"   stop-color="#e8d2ff"/>
-            <stop offset="18%"  stop-color="#c084fc"/>
-            <stop offset="44%"  stop-color="#a56bff"/>
-            <stop offset="72%"  stop-color="#9146ff"/>
-            <stop offset="100%" stop-color="#5a1fa3"/>
-          </linearGradient>
         </defs>
 
-        <!-- Violet echo layer -->
-        <g class="echo">
-          <text x="550" y="218" text-anchor="middle"
-                font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
-                letter-spacing="4"
-                fill="url(#gradViolet)" opacity="0.92">JOUKI</text>
-        </g>
-
-        <!-- Orange front layer -->
         <text x="550" y="202" text-anchor="middle"
               font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
               letter-spacing="4"
