@@ -954,6 +954,40 @@
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); poke(); }
       });
     })();
+
+    // Click JOUKI wordmark → progressive damage (5 hits → break + rebuild)
+    (function () {
+      var wm = document.querySelector('.wordmark');
+      if (!wm) return;
+      var hits = 0;
+      var resetTimer = null;
+
+      function reset() {
+        hits = 0;
+        wm.removeAttribute('data-hits');
+      }
+
+      function hit() {
+        if (hits >= 5) return;
+        hits++;
+        // Force re-trigger keyframes by re-setting attribute after reflow
+        wm.removeAttribute('data-hits');
+        void wm.offsetWidth;
+        wm.setAttribute('data-hits', String(hits));
+        clearTimeout(resetTimer);
+        if (hits === 5) {
+          resetTimer = setTimeout(reset, 3100);
+        } else {
+          resetTimer = setTimeout(reset, 2400);
+        }
+      }
+
+      wm.addEventListener('click', hit);
+      wm.setAttribute('tabindex', '0');
+      wm.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); hit(); }
+      });
+    })();
   </script>
 </body>
 </html>
