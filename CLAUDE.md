@@ -19,6 +19,10 @@ UnityChat/
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
+├── landing/                 # jouki.cz under-construction static page
+│   ├── index.html              # Editorial/archive aesthetic, Fraunces + JetBrains Mono
+│   ├── nginx.conf              # Nginx static server config
+│   └── Dockerfile              # nginx:alpine + curl for Coolify healthcheck
 ├── backend/                 # Node.js + Fastify + Drizzle + Postgres API server
 │   ├── src/
 │   │   ├── server.ts           # Fastify entry point + health endpoints
