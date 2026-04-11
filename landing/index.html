@@ -88,34 +88,35 @@
       transition: background 0.12s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
-    /* Scanning violet beam — passes vertically every ~14s */
+    /* Scanning violet beam — behind content, deep violet, diffuse */
     .scan-line {
       position: fixed;
       left: 0;
       right: 0;
       top: 0;
-      height: 2px;
+      height: 4px;
       pointer-events: none;
-      z-index: 5;
+      z-index: 3;
       background: linear-gradient(90deg,
         transparent 0%,
-        rgba(145, 70, 255, 0.25) 20%,
-        rgba(192, 132, 252, 0.85) 50%,
-        rgba(145, 70, 255, 0.25) 80%,
+        rgba(38, 12, 84, 0.45) 15%,
+        rgba(62, 22, 138, 0.78) 50%,
+        rgba(38, 12, 84, 0.45) 85%,
         transparent 100%);
       box-shadow:
-        0 0 14px rgba(145, 70, 255, 0.6),
-        0 0 28px rgba(145, 70, 255, 0.3);
+        0 0 34px rgba(52, 18, 120, 0.65),
+        0 0 70px rgba(38, 14, 92, 0.4),
+        0 0 130px rgba(28, 10, 70, 0.25);
       opacity: 0;
-      animation: scan-pass 14s ease-in-out infinite;
+      animation: scan-pass 16s ease-in-out infinite;
       will-change: transform, opacity;
     }
     @keyframes scan-pass {
-      0%, 5%    { transform: translateY(-10px);  opacity: 0; }
-      8%        { opacity: 1; }
-      48%       { transform: translateY(50vh); opacity: 0.8; }
-      92%       { opacity: 1; }
-      95%, 100% { transform: translateY(105vh); opacity: 0; }
+      0%, 5%    { transform: translateY(-12px); opacity: 0; }
+      9%        { opacity: 0.9; }
+      50%       { transform: translateY(50vh); opacity: 0.95; }
+      91%       { opacity: 0.85; }
+      95%, 100% { transform: translateY(106vh); opacity: 0; }
     }
 
     /* Viewport corner brackets — HUD framing */
@@ -254,6 +255,25 @@
       position: relative;
     }
 
+    /* 3D tilt wrappers — transformed by mouse position via CSS vars */
+    .tilt {
+      --factor: 1;
+      perspective: 1400px;
+      transform-style: preserve-3d;
+      display: flex;
+      justify-content: center;
+      width: 100%;
+    }
+    .tilt > * {
+      transform:
+        rotateX(calc(var(--tx, 0deg) * var(--factor)))
+        rotateY(calc(var(--ty, 0deg) * var(--factor)));
+      transition: transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+      will-change: transform;
+    }
+    .tilt.wm   { --factor: 1; }
+    .tilt.term { --factor: 0.55; }
+
     /* Status pill */
     .status-pill {
       display: inline-flex;
@@ -269,7 +289,7 @@
       background: rgba(255, 140, 0, 0.03);
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
-      animation: fade-up 0.7s ease-out 0.1s backwards;
+      animation: opacity-in 0.7s ease-out 0.1s backwards;
     }
 
     .dot {
@@ -294,34 +314,25 @@
       cursor: pointer;
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
               drop-shadow(0 0 24px rgba(255, 140, 0, 0.22));
-      animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s backwards;
-      transition: filter 0.35s ease;
+      opacity: 0;
+      animation: opacity-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s forwards;
+      transition: filter 0.35s ease, transform 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
     .wordmark:hover {
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
               drop-shadow(0 0 28px rgba(255, 140, 0, 0.35))
               drop-shadow(0 0 60px rgba(145, 70, 255, 0.28));
     }
-    .wordmark.glitch {
-      animation: glitch 0.45s steps(2, end);
-    }
-    @keyframes glitch {
-      0%   { transform: translate(0, 0); filter: drop-shadow(0 0 0 transparent); }
-      15%  { transform: translate(-3px, 1px); filter: drop-shadow(3px 0 0 rgba(145, 70, 255, 0.6)) drop-shadow(-2px 0 0 rgba(255, 140, 0, 0.6)); }
-      30%  { transform: translate(2px, -1px); filter: drop-shadow(-3px 0 0 rgba(145, 70, 255, 0.6)) drop-shadow(2px 0 0 rgba(255, 140, 0, 0.6)); }
-      45%  { transform: translate(-1px, 2px); filter: drop-shadow(2px 0 0 rgba(145, 70, 255, 0.6)); }
-      60%  { transform: translate(1px, 0); filter: drop-shadow(-2px 0 0 rgba(255, 140, 0, 0.6)); }
-      100% { transform: translate(0, 0); filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 24px rgba(255, 140, 0, 0.22)); }
-    }
 
-    @keyframes fade-up {
-      from { opacity: 0; transform: translateY(14px); }
-      to   { opacity: 1; transform: translateY(0); }
+    @keyframes opacity-in {
+      from { opacity: 0; }
+      to   { opacity: 1; }
     }
 
     /* ---------- TERMINAL PANEL ---------- */
 
     .terminal {
+      position: relative;
       width: min(760px, 92%);
       background: rgba(12, 11, 18, 0.72);
       border: 1px solid rgba(255, 140, 0, 0.18);
@@ -337,34 +348,31 @@
         0 20px 60px -20px rgba(0, 0, 0, 0.8),
         0 0 0 1px rgba(255, 255, 255, 0.02) inset,
         0 0 40px rgba(255, 140, 0, 0.06);
-      animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s backwards;
-      transition: border-color 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease;
+      opacity: 0;
+      animation: opacity-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s forwards;
     }
     .terminal::after {
-      content: 'CLICK TO REPLAY';
+      content: '·  POKE ME  ·';
       position: absolute;
-      bottom: 0.5rem;
-      right: 0.9rem;
+      bottom: 0.55rem;
+      right: 0.95rem;
       font-size: 9px;
-      letter-spacing: 0.22em;
-      color: rgba(145, 70, 255, 0.55);
+      letter-spacing: 0.28em;
+      color: rgba(192, 132, 252, 0.75);
+      text-shadow: 0 0 12px rgba(145, 70, 255, 0.55);
       opacity: 0;
       transition: opacity 0.3s ease;
       pointer-events: none;
     }
-    .terminal { position: relative; }
     .terminal:hover {
-      border-color: rgba(145, 70, 255, 0.45);
+      border-color: rgba(145, 70, 255, 0.5);
       box-shadow:
         0 20px 60px -20px rgba(0, 0, 0, 0.8),
-        0 0 0 1px rgba(145, 70, 255, 0.1) inset,
-        0 0 50px rgba(145, 70, 255, 0.15),
-        0 0 90px rgba(145, 70, 255, 0.08);
-      transform: translateY(-2px);
+        0 0 0 1px rgba(145, 70, 255, 0.12) inset,
+        0 0 50px rgba(145, 70, 255, 0.18),
+        0 0 100px rgba(145, 70, 255, 0.1);
     }
-    .terminal:hover::after {
-      opacity: 1;
-    }
+    .terminal:hover::after { opacity: 1; }
 
     .term-head {
       display: flex;
@@ -632,25 +640,28 @@
         SYSTEM &nbsp;·&nbsp; UNDER CONSTRUCTION
       </div>
 
-      <svg class="wordmark" viewBox="0 0 1100 280" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JOUKI">
-        <defs>
-          <linearGradient id="gradOrange" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%"   stop-color="#fff3cc"/>
-            <stop offset="14%"  stop-color="#ffe29a"/>
-            <stop offset="34%"  stop-color="#ffc800"/>
-            <stop offset="62%"  stop-color="#ff8c00"/>
-            <stop offset="88%"  stop-color="#d16200"/>
-            <stop offset="100%" stop-color="#a85a00"/>
-          </linearGradient>
-        </defs>
+      <div class="tilt wm">
+        <svg class="wordmark" viewBox="0 0 1100 280" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JOUKI">
+          <defs>
+            <linearGradient id="gradOrange" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%"   stop-color="#fff3cc"/>
+              <stop offset="14%"  stop-color="#ffe29a"/>
+              <stop offset="34%"  stop-color="#ffc800"/>
+              <stop offset="62%"  stop-color="#ff8c00"/>
+              <stop offset="88%"  stop-color="#d16200"/>
+              <stop offset="100%" stop-color="#a85a00"/>
+            </linearGradient>
+          </defs>
 
-        <text x="550" y="202" text-anchor="middle"
-              font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
-              letter-spacing="4"
-              fill="url(#gradOrange)">JOUKI</text>
-      </svg>
+          <text x="550" y="202" text-anchor="middle"
+                font-family="Orbitron, sans-serif" font-size="240" font-weight="800"
+                letter-spacing="4"
+                fill="url(#gradOrange)">JOUKI</text>
+        </svg>
+      </div>
 
-      <div class="terminal" role="button" tabindex="0" aria-label="Replay build log">
+      <div class="tilt term">
+      <div class="terminal" role="button" tabindex="0" aria-label="Poke the terminal for a surprise">
         <div class="term-head">
           <span class="term-dots">
             <i class="vio"></i><i></i><i class="live"></i>
@@ -667,6 +678,7 @@
           <div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">error:</span>&nbsp;content&nbsp;not&nbsp;yet&nbsp;written</div>
           <div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">retry</span> <span class="arg">--when=</span><span class="st info" style="min-width:0;text-align:left;">soon</span><span class="cursor"></span></span></div>
         </div>
+      </div>
       </div>
     </main>
 
@@ -691,20 +703,21 @@
   </div>
 
   <script>
-    // Mouse tracking for spotlight + grid parallax (rAF throttled)
+    // Mouse tracking: spotlight + grid parallax + 3D tilt (rAF throttled)
     (function () {
       var root = document.documentElement;
       var mx = innerWidth / 2, my = innerHeight / 2, queued = false;
       function update() {
         root.style.setProperty('--mx', mx + 'px');
         root.style.setProperty('--my', my + 'px');
-        var px = (mx / innerWidth - 0.5) * 22;
-        var py = (my / innerHeight - 0.5) * 22;
-        root.style.setProperty('--px', px + 'px');
-        root.style.setProperty('--py', py + 'px');
+        var nx = mx / innerWidth - 0.5;   // -0.5 .. 0.5
+        var ny = my / innerHeight - 0.5;
+        root.style.setProperty('--px', (nx * 22) + 'px');
+        root.style.setProperty('--py', (ny * 22) + 'px');
+        root.style.setProperty('--tx', (-ny * 4) + 'deg');
+        root.style.setProperty('--ty', (nx * 5) + 'deg');
         queued = false;
       }
-      // initial
       update();
       addEventListener('mousemove', function (e) {
         mx = e.clientX; my = e.clientY;
@@ -712,30 +725,91 @@
       }, { passive: true });
     })();
 
-    // Click terminal → replay the build log animation
+    // Terminal click → cycle through fake "build log" jokes
     (function () {
       var term = document.querySelector('.terminal');
-      if (!term) return;
-      function replay() {
-        var lines = term.querySelectorAll('.term-body .line');
-        lines.forEach(function (l) { l.style.animation = 'none'; });
-        void term.offsetWidth;
-        lines.forEach(function (l) { l.style.animation = ''; });
-      }
-      term.addEventListener('click', replay);
-      term.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); replay(); }
-      });
-    })();
+      var body = term && term.querySelector('.term-body');
+      if (!term || !body) return;
 
-    // Click JOUKI wordmark → glitch effect
-    (function () {
-      var wm = document.querySelector('.wordmark');
-      if (!wm) return;
-      wm.addEventListener('click', function () {
-        wm.classList.remove('glitch');
-        void wm.offsetWidth;
-        wm.classList.add('glitch');
+      var cursor = '<span class="cursor"></span>';
+
+      var jokes = [
+        // 1. sudo rm -rf
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">sudo</span> <span class="cmd">rm</span> <span class="arg">-rf</span> /portfolio <span class="cmt"># nuclear option</span></span></div>' +
+        '<div class="line"><span class="sym">?</span><span class="msg">are you absolutely sure [y/N]</span><span class="st info">y</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">scanning directory</span><span class="st wait">0 kb</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">nothing to delete</span><span class="st ok">ok</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">there was never anything here. the void just lives here now ✨</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 2. git commit
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">git</span> <span class="cmd">commit</span> <span class="arg">-am</span> <span class="cmt">"add portfolio"</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">on branch main</span><span class="st ok">ok</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">nothing to commit, working tree clean</span><span class="st info">0 files</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">that is, in fact, the entire problem</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 3. AI generate
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">npx</span> create-portfolio <span class="arg">--with-ai</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">calling gpt-5</span><span class="st wait">...</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">received response</span><span class="st err">429</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">rate limited. have you tried writing it yourself?</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 4. segfault
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">./launch_portfolio.sh</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">loading assets</span><span class="st wait">12%</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">segmentation fault</span><span class="st err">core dumped</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">the dev has been notified — it is me, and i already know</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 5. sandwich
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">sudo</span> make-me-a-sandwich</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">checking pantry</span><span class="st err">empty</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">delegating task to ./dev</span><span class="st wait">async</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">still building your sandwich. also this website.</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 6. infinite loop
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">while</span> <span class="arg">:;</span> <span class="cmd">do</span> make build; <span class="cmd">done</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">compiling assets</span><span class="st wait">5%</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">compiling assets</span><span class="st wait">7%</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">compiling assets</span><span class="st wait">6%</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">going great. truly. no notes.</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 7. curl 404
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">curl</span> <span class="arg">-I</span> https://jouki.cz/about</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">HTTP/2</span><span class="st err">404</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">x-message:</span><span class="st info">"soon"</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">content-type: future/tense; charset=optimistic</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 8. stack overflow
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">jouki</span> <span class="arg">--summon-inspiration</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">querying stackoverflow</span><span class="st wait">...</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">marked as duplicate</span><span class="st err">dup</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">"have you checked if it is plugged in?"</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+
+        // 9. sudo coffee
+        '<div class="line"><span class="prompt">$</span><span class="msg"><span class="cmd">sudo</span> brew coffee <span class="arg">--strength=max</span></span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">grinding beans</span><span class="st ok">ok</span></div>' +
+        '<div class="line"><span class="sym">~</span><span class="msg">brewing ☕</span><span class="st ok">done</span></div>' +
+        '<div class="line indent"><span class="arrow">└─</span>&nbsp;<span class="cmt">now the portfolio will write itself. definitely. probably. maybe.</span></div>' +
+        '<div class="line"><span class="prompt">$</span>&nbsp;' + cursor + '</div>',
+      ];
+
+      var idx = Math.floor(Math.random() * jokes.length);
+
+      function poke() {
+        body.innerHTML = jokes[idx];
+        idx = (idx + 1) % jokes.length;
+      }
+
+      term.addEventListener('click', poke);
+      term.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); poke(); }
       });
     })();
   </script>
