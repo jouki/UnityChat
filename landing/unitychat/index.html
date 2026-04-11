@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UnityChat — sjednocený chat pro Twitch, YouTube a Kick</title>
+  <meta name="description" content="Chrome/Edge/Opera/Brave extension co agreguje live chat z Twitch, YouTube a Kick do jednoho side panelu. 7TV emoty, odpovídání, raids, pin, user cards.">
+  <meta name="robots" content="index, follow">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg:            #08080a;
+      --bg-soft:       #0e0d14;
+      --bg-card:       #121018;
+      --text-0:        #f4f3ef;
+      --text-1:        #a39f94;
+      --text-2:        #5f5b52;
+      --text-3:        #3a3832;
+      --orange:        #ff8c00;
+      --orange-hi:     #ffc800;
+      --orange-lo:     #a85a00;
+      --violet:        #9146ff;
+      --violet-hi:     #c084fc;
+      --line-orange:   rgba(255, 140, 0, 0.22);
+      --line-violet:   rgba(145, 70, 255, 0.22);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      background: var(--bg);
+      color: var(--text-0);
+      font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    /* Ambient dual-tone wash */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      background:
+        radial-gradient(ellipse 70% 50% at 18% 10%, rgba(255, 150, 20, 0.08), transparent 55%),
+        radial-gradient(ellipse 65% 55% at 82% 88%, rgba(145, 70, 255, 0.09), transparent 58%);
+    }
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      background-image:
+        linear-gradient(to right, rgba(255, 255, 255, 0.038) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.038) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 45%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 45%, transparent 100%);
+    }
+
+    a { color: var(--violet-hi); text-decoration: none; }
+    a:hover { color: var(--orange-hi); text-shadow: 0 0 12px rgba(255, 180, 30, 0.4); }
+
+    h1, h2, h3 {
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 800;
+      letter-spacing: 0.015em;
+    }
+    h2 { font-size: clamp(1.5rem, 2.4vw, 2.2rem); margin-bottom: 0.4rem; text-transform: uppercase; }
+    h3 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.08em; }
+
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.12em 0.4em;
+      border-radius: 4px;
+      font-size: 0.92em;
+      color: var(--orange-hi);
+      border: 1px solid rgba(255, 140, 0, 0.15);
+    }
+
+    /* --------- TOP BAR --------- */
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1.5rem 2.5rem 1.2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--text-2);
+      border-bottom: 1px solid var(--text-3);
+      position: relative;
+    }
+    .top::before {
+      content: '';
+      position: absolute;
+      left: 2.5rem;
+      bottom: -1px;
+      height: 1px;
+      width: 120px;
+      background: linear-gradient(90deg, var(--orange), transparent);
+    }
+    .top::after {
+      content: '';
+      position: absolute;
+      right: 2.5rem;
+      bottom: -1px;
+      height: 1px;
+      width: 120px;
+      background: linear-gradient(90deg, transparent, var(--violet));
+    }
+    .top .k { color: var(--text-3); margin-right: 0.5rem; }
+    .top .v { color: var(--text-1); }
+    .top nav { display: flex; gap: 2rem; }
+    .top nav a { color: var(--text-2); letter-spacing: 0.12em; }
+    .top nav a:hover { color: var(--orange-hi); }
+
+    /* --------- APP CONTAINER --------- */
+    .app {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem 2.5rem 4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 5rem;
+    }
+
+    /* --------- HERO --------- */
+    .hero { text-align: center; padding-top: 3rem; }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.85rem;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.24em;
+      color: var(--orange);
+      padding: 0.55rem 1.1rem 0.55rem 1rem;
+      border: 1px solid rgba(255, 140, 0, 0.3);
+      border-radius: 999px;
+      background: rgba(255, 140, 0, 0.04);
+      margin-bottom: 2rem;
+    }
+    .status-pill .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--orange);
+      box-shadow: 0 0 10px var(--orange-hi), 0 0 22px var(--orange);
+      animation: pulse 2.2s ease-in-out infinite;
+    }
+    .status-pill .sep { opacity: 0.4; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    .wordmark {
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 900;
+      font-size: clamp(3rem, 9vw, 7rem);
+      line-height: 0.95;
+      letter-spacing: 0.015em;
+      background: linear-gradient(180deg, #fff3cc 0%, #ffe29a 14%, #ffc800 34%, #ff8c00 62%, #d16200 88%, #a85a00 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+      filter: drop-shadow(0 0 30px rgba(255, 140, 0, 0.28)) drop-shadow(0 0 60px rgba(145, 70, 255, 0.16));
+      margin-bottom: 1.5rem;
+    }
+    .wordmark .accent {
+      background: linear-gradient(180deg, #e8d2ff 0%, #c084fc 25%, #9146ff 65%, #5a1fa3 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .lede {
+      font-size: clamp(1rem, 1.4vw, 1.2rem);
+      color: var(--text-1);
+      max-width: 62ch;
+      margin: 0 auto 2.5rem;
+      line-height: 1.6;
+    }
+    .lede .tw { color: #9146ff; font-weight: 600; }
+    .lede .yt { color: #ff4b4b; font-weight: 600; }
+    .lede .ki { color: #53fc18; font-weight: 600; }
+
+    .cta-row {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.85rem;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 1rem 2.2rem;
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #0a0800;
+      background: linear-gradient(135deg, #ffeaa3, #ffc800 40%, #ff8c00);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 0 0 0 1px rgba(255, 200, 0, 0.4) inset,
+                  0 10px 32px -8px rgba(255, 140, 0, 0.55),
+                  0 0 60px -10px rgba(255, 140, 0, 0.3);
+      transition: transform 0.22s ease, box-shadow 0.22s ease, filter 0.22s ease;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 0 1px rgba(255, 200, 0, 0.55) inset,
+                  0 14px 42px -8px rgba(255, 140, 0, 0.75),
+                  0 0 80px -10px rgba(255, 140, 0, 0.45);
+      filter: brightness(1.08);
+    }
+    .btn-primary:active { transform: translateY(0); }
+    .version-note {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-2);
+    }
+    .version-note #version, .version-note #updated {
+      color: var(--orange-hi);
+    }
+
+    /* --------- SECTION STANDARD --------- */
+    section { position: relative; }
+    .section-sub {
+      color: var(--text-2);
+      font-size: 0.92rem;
+      margin-bottom: 1.5rem;
+    }
+
+    /* --------- PREVIEW IFRAME --------- */
+    .preview-wrap {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 0;
+    }
+    .preview-frame {
+      width: 420px;
+      height: 720px;
+      border: 1px solid var(--line-orange);
+      border-radius: 14px;
+      background: #0e0e10;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 30px 90px -20px rgba(0, 0, 0, 0.9),
+        0 0 60px rgba(255, 140, 0, 0.12),
+        0 0 120px rgba(145, 70, 255, 0.1);
+      overflow: hidden;
+    }
+    .preview-caption {
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+
+    /* --------- FEATURES GRID --------- */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+    }
+    .feature {
+      padding: 1.25rem 1.4rem;
+      background: var(--bg-card);
+      border: 1px solid var(--text-3);
+      border-radius: 10px;
+      transition: border-color 0.25s ease, transform 0.25s ease;
+    }
+    .feature:hover {
+      border-color: var(--line-orange);
+      transform: translateY(-2px);
+    }
+    .feature h3 {
+      color: var(--orange-hi);
+      margin-bottom: 0.35rem;
+      font-size: 0.88rem;
+    }
+    .feature p {
+      color: var(--text-1);
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+
+    /* --------- INSTALL STEPS --------- */
+    .steps {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-top: 1.5rem;
+      counter-reset: step;
+    }
+    .steps li {
+      display: flex;
+      gap: 1.25rem;
+      padding: 1.1rem 1.3rem;
+      background: var(--bg-card);
+      border: 1px solid var(--text-3);
+      border-radius: 10px;
+    }
+    .step-num {
+      font-family: 'Orbitron', sans-serif;
+      font-weight: 800;
+      font-size: 1.8rem;
+      color: var(--orange);
+      min-width: 2.2rem;
+      text-align: center;
+      line-height: 1;
+      padding-top: 0.25rem;
+      text-shadow: 0 0 14px rgba(255, 140, 0, 0.45);
+    }
+    .step-content { flex: 1; }
+    .step-content h3 {
+      color: var(--text-0);
+      font-size: 0.92rem;
+      margin-bottom: 0.35rem;
+    }
+    .step-content p {
+      color: var(--text-1);
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .step-content ul {
+      margin-top: 0.4rem;
+      padding-left: 1.2rem;
+      color: var(--text-1);
+      font-size: 0.85rem;
+    }
+    .step-content ul li {
+      display: list-item;
+      padding: 0;
+      background: none;
+      border: none;
+      margin: 0.15rem 0;
+    }
+
+    .callout {
+      margin-top: 2rem;
+      padding: 1rem 1.3rem;
+      background: rgba(145, 70, 255, 0.08);
+      border: 1px solid var(--line-violet);
+      border-left: 3px solid var(--violet);
+      border-radius: 8px;
+      color: var(--text-1);
+      font-size: 0.87rem;
+      line-height: 1.55;
+    }
+    .callout strong { color: var(--violet-hi); }
+
+    /* --------- UPDATES --------- */
+    .updates p {
+      color: var(--text-1);
+      margin-top: 0.8rem;
+      font-size: 0.92rem;
+    }
+    .updates strong { color: var(--orange-hi); }
+
+    /* --------- FAQ --------- */
+    .faq details {
+      background: var(--bg-card);
+      border: 1px solid var(--text-3);
+      border-radius: 8px;
+      padding: 0;
+      margin-bottom: 0.7rem;
+      transition: border-color 0.25s;
+    }
+    .faq details[open] { border-color: var(--line-orange); }
+    .faq summary {
+      padding: 0.95rem 1.25rem;
+      cursor: pointer;
+      color: var(--text-0);
+      font-weight: 500;
+      font-size: 0.92rem;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after {
+      content: '+';
+      color: var(--orange);
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.3rem;
+      line-height: 1;
+      transition: transform 0.22s;
+    }
+    .faq details[open] summary::after {
+      content: '−';
+      transform: rotate(180deg);
+    }
+    .faq details > p {
+      padding: 0 1.25rem 1.1rem;
+      color: var(--text-1);
+      font-size: 0.88rem;
+      line-height: 1.6;
+    }
+
+    /* --------- FOOTER --------- */
+    footer {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 1.5rem 2.5rem 2rem;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 2rem;
+      align-items: end;
+      border-top: 1px solid var(--text-3);
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--text-2);
+      position: relative;
+    }
+    footer::before {
+      content: '';
+      position: absolute;
+      left: 2.5rem;
+      top: -1px;
+      height: 1px;
+      width: 120px;
+      background: linear-gradient(90deg, var(--violet), transparent);
+    }
+    footer::after {
+      content: '';
+      position: absolute;
+      right: 2.5rem;
+      top: -1px;
+      height: 1px;
+      width: 120px;
+      background: linear-gradient(90deg, transparent, var(--orange));
+    }
+    .footer-col { display: flex; flex-direction: column; gap: 0.3rem; }
+    .footer-col .k { color: var(--text-3); }
+    .footer-col .v { color: var(--text-1); }
+    .footer-col.center { text-align: center; }
+    .footer-col.right { text-align: right; align-items: flex-end; }
+
+    @media (max-width: 780px) {
+      .top { padding: 1.2rem 1.5rem; }
+      .app { padding: 1.5rem 1.5rem 3rem; gap: 3.5rem; }
+      .preview-frame { width: 100%; max-width: 420px; height: 640px; }
+      footer { grid-template-columns: 1fr; gap: 1rem; padding: 1.5rem; }
+      .footer-col.center, .footer-col.right { text-align: left; align-items: flex-start; }
+      .top::before, .top::after, footer::before, footer::after { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="top">
+    <div>
+      <span class="k">DOC</span>
+      <span class="v">№ 002 · INSTALL GUIDE</span>
+    </div>
+    <nav>
+      <a href="/">← jouki.cz</a>
+      <a href="https://github.com/jouki/UnityChat" target="_blank" rel="noopener">github</a>
+    </nav>
+  </header>
+
+  <main class="app">
+
+    <!-- ================= HERO ================= -->
+    <section class="hero">
+      <div class="status-pill">
+        <span class="dot"></span>
+        UNITYCHAT <span class="sep">·</span> BROWSER EXTENSION
+      </div>
+      <h1 class="wordmark">UNITY<span class="accent">CHAT</span></h1>
+      <p class="lede">
+        Sjednocený live chat z <span class="tw">Twitch</span>, <span class="yt">YouTube</span>
+        a <span class="ki">Kick</span> v jednom side panelu. 7TV / BTTV / FFZ emoty,
+        odesílání zpráv, raids, pin, user cards. Chrome · Edge · Opera · Brave.
+      </p>
+
+      <div class="cta-row">
+        <a class="btn-primary" href="/download/unitychat.zip" download id="download-btn">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v11.59l3.29-3.3a1 1 0 1 1 1.42 1.42l-5 5a1 1 0 0 1-1.42 0l-5-5a1 1 0 1 1 1.42-1.42l3.29 3.3V3a1 1 0 0 1 1-1ZM4 19a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1Z"/>
+          </svg>
+          Stáhnout UnityChat.zip
+        </a>
+        <span class="version-note">
+          v<span id="version">…</span> · updated <span id="updated">…</span>
+        </span>
+      </div>
+    </section>
+
+    <!-- ================= LIVE PREVIEW ================= -->
+    <section class="preview">
+      <h2>Jak to vypadá</h2>
+      <p class="section-sub">Živý mockup sestavený z reálného <code>sidepanel.css</code> extensionu — to co vidíš je přesně to co dostaneš po instalaci.</p>
+      <div class="preview-wrap">
+        <iframe class="preview-frame" src="/unitychat/preview.html" title="UnityChat preview" loading="lazy"></iframe>
+      </div>
+    </section>
+
+    <!-- ================= FEATURES ================= -->
+    <section class="features">
+      <h2>Co to umí</h2>
+      <p class="section-sub">Funkce v aktuální verzi.</p>
+      <div class="feature-grid">
+        <div class="feature">
+          <h3>3 platformy najednou</h3>
+          <p>Twitch IRC (WebSocket), YouTube live chat API, Kick Pusher WebSocket. Všechny v jednom feedu, řazené chronologicky, s platform badges.</p>
+        </div>
+        <div class="feature">
+          <h3>7TV / BTTV / FFZ</h3>
+          <p>Všechny populární 3rd-party emoty + native Twitch a Kick. Tab autocomplete pro rychlé psaní.</p>
+        </div>
+        <div class="feature">
+          <h3>Odesílání zpráv</h3>
+          <p>Odpovídej do chatu na kterékoli ze tří platforem z jednoho input fieldu. Reply context se automaticky propaguje.</p>
+        </div>
+        <div class="feature">
+          <h3>Raids, pins, first-msg</h3>
+          <p>Raid notifikace, pin management přes Twitch GQL, first-time chatter highlight, auto-scroll pause.</p>
+        </div>
+        <div class="feature">
+          <h3>Opera native sidebar</h3>
+          <p>V Opeře se dá přidat do levého sidebaru (Customize → UnityChat). V Chrome native side panel. Runtime feature detection.</p>
+        </div>
+        <div class="feature">
+          <h3>User cards</h3>
+          <p>Klik na username otevře Twitch user card nebo draggable floating fallback s founded/followed datem a rolí.</p>
+        </div>
+        <div class="feature">
+          <h3>UnityChat marker</h3>
+          <p>Uživatelé s extension mají v chatu oranžový gradient badge — poznáš ostatní UnityChat uživatele na první pohled.</p>
+        </div>
+        <div class="feature">
+          <h3>Debug log export</h3>
+          <p>💾 tlačítko v headeru stáhne debug log do Downloads složky. Hodí se pro bug reporty.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= INSTALL ================= -->
+    <section class="install-steps">
+      <h2>Jak nainstalovat</h2>
+      <p class="section-sub">
+        UnityChat není v Chrome Web Store, distribuuje se self-hosted. Instalace přes "Load unpacked" v Developer mode trvá asi 2 minuty.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <div class="step-content">
+            <h3>Stáhni ZIP</h3>
+            <p>Klikni na tlačítko <strong>Stáhnout UnityChat.zip</strong> nahoře. Soubor se uloží do Downloads.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div class="step-content">
+            <h3>Rozbal ho</h3>
+            <p>Přesuň ZIP do stálé složky (třeba <code>Dokumenty\UnityChat\</code>) a rozbal. <strong>Nemaž ani nepřesunuj tu složku později</strong> — Chrome ztratí extension a přestane fungovat.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div class="step-content">
+            <h3>Otevři extensions</h3>
+            <p>V prohlížeči napiš do URL baru:</p>
+            <ul>
+              <li><code>chrome://extensions</code> pro Chrome</li>
+              <li><code>edge://extensions</code> pro Edge</li>
+              <li><code>opera://extensions</code> pro Opera</li>
+              <li><code>brave://extensions</code> pro Brave</li>
+            </ul>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">4</span>
+          <div class="step-content">
+            <h3>Zapni Developer mode</h3>
+            <p>Vpravo nahoře je přepínač <strong>Developer mode</strong>. Zapni ho.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">5</span>
+          <div class="step-content">
+            <h3>Load unpacked</h3>
+            <p>Objeví se tlačítko <strong>Load unpacked</strong> (nebo <strong>Načíst rozbalené</strong>). Klikni a vyber složku kam jsi ZIP rozbalil — tu co obsahuje <code>manifest.json</code>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">6</span>
+          <div class="step-content">
+            <h3>Otevři UnityChat</h3>
+            <p>Ikona UnityChat se objeví v toolbaru (nebo v 🧩 puzzle menu, odkud si ho pinni). Chrome/Edge/Brave: klik otevře side panel. Opera: popup window, nebo si přidej přes <em>Customize sidebar</em> pro native Opera sidebar.</p>
+          </div>
+        </li>
+      </ol>
+
+      <div class="callout">
+        <strong>Pozor na Developer mode warning:</strong> Chrome ti při startu občas ukáže varování "Disable developer mode extensions?". <strong>Klikni Cancel / Zrušit</strong>, jinak UnityChat vypne. Je to generický Google nag, ne problém s tímto extensionem.
+      </div>
+    </section>
+
+    <!-- ================= UPDATES ================= -->
+    <section class="updates">
+      <h2>Jak získat updaty</h2>
+      <p>
+        Když vydám novou verzi, stáhni znovu ZIP z tohoto webu a překopíruj obsah do stejné složky (nebo ji smaž a rozbal čerstvě). Pak v <code>chrome://extensions</code> klikni na <strong>🔄 reload</strong> u UnityChat extensionu. Hotovo.
+      </p>
+      <p>
+        Aktuální verze: <strong>v<span id="version-body">…</span></strong> · Pro notifikace o nových verzích
+        <a href="https://github.com/jouki/UnityChat" target="_blank" rel="noopener">watch the GitHub repo</a>.
+      </p>
+    </section>
+
+    <!-- ================= FAQ ================= -->
+    <section class="faq">
+      <h2>FAQ</h2>
+
+      <details>
+        <summary>Proč to není v Chrome Web Store?</summary>
+        <p>Store má specifická pravidla ohledně ukládání uživatelských dat která by mohla narážet na plánovaný cloud chat archiver (48h catch-up feature). Pro teď distribuuju self-hosted, abych neřešil policy gating. Pokud to jednou bude v plné konformitě, přesunu na store.</p>
+      </details>
+
+      <details>
+        <summary>Je to bezpečné?</summary>
+        <p>Zdrojový kód je veřejný na <a href="https://github.com/jouki/UnityChat" target="_blank" rel="noopener">github.com/jouki/UnityChat</a> — můžeš si ho přečíst celý. Extension se připojuje jen na Twitch, YouTube, Kick a jejich emote CDN (7TV, BTTV, FFZ, IVR badges). Žádná telemetrie, žádné analytiky, žádný tracking.</p>
+      </details>
+
+      <details>
+        <summary>Funguje to na Firefoxu?</summary>
+        <p>Zatím ne. Firefox má mírně odlišnou manifest syntax (<code>browser_specific_settings</code>, některé permissions). Na roadmapě je Firefox podpora jako separate adaptace.</p>
+      </details>
+
+      <details>
+        <summary>Ukládá to moje zprávy někam na server?</summary>
+        <p>Lokálně ano — malá cache v <code>chrome.storage.local</code> pro rychlé zobrazení po reloadu (max 200 zpráv, auto-rotace). <strong>Na žádný server nic neposílá.</strong> Plánovaný cloud sync bude vždy opt-in v settings.</p>
+      </details>
+
+      <details>
+        <summary>Proč musím povolit tolik permissions?</summary>
+        <p>
+          <code>sidePanel</code> pro side panel UI · <code>cookies</code> pro čtení Twitch auth-token (nutné pro odesílání zpráv, Helix API to vyžaduje) · <code>scripting</code> pro content scripty v chat stránkách · <code>tabs</code> pro detekci aktivní streamovací platformy · <code>storage</code> pro uložení nastavení a cache · <code>downloads</code> pro export debug logu.
+        </p>
+      </details>
+
+      <details>
+        <summary>Jak nahlásit bug?</summary>
+        <p>Otevři issue na <a href="https://github.com/jouki/UnityChat/issues" target="_blank" rel="noopener">GitHub Issues</a>. Přidej prosím výstup z 💾 debug log button v hlavičce extensionu — pomůže mi to najít příčinu rychleji.</p>
+      </details>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="footer-col">
+      <span class="k">VERZE</span>
+      <span class="v">v<span id="version-footer">…</span> · master</span>
+    </div>
+    <div class="footer-col center">
+      <span class="k">LAST BUILD</span>
+      <span class="v"><span id="updated-footer">…</span></span>
+    </div>
+    <div class="footer-col right">
+      <span class="k">FIND ME</span>
+      <span class="v"><a href="https://github.com/jouki" target="_blank" rel="noopener">github.com/jouki →</a></span>
+    </div>
+  </footer>
+
+  <script>
+    // Fetch current manifest.json to display real version everywhere
+    fetch('/download/manifest.json')
+      .then((r) => r.json())
+      .then((m) => {
+        const v = m.version || '?';
+        document.querySelectorAll('#version, #version-body, #version-footer')
+          .forEach((el) => { el.textContent = v; });
+      })
+      .catch(() => {
+        document.querySelectorAll('#version, #version-body, #version-footer')
+          .forEach((el) => { el.textContent = '?'; });
+      });
+
+    // Fetch Last-Modified header of the ZIP for "last build" timestamp
+    fetch('/download/unitychat.zip', { method: 'HEAD' })
+      .then((r) => {
+        const lm = r.headers.get('Last-Modified');
+        if (!lm) return;
+        const d = new Date(lm);
+        const fmt = d.toISOString().slice(0, 10).replace(/-/g, '·');
+        document.querySelectorAll('#updated, #updated-footer')
+          .forEach((el) => { el.textContent = fmt; });
+      })
+      .catch(() => {});
+  </script>
+
+</body>
+</html>
