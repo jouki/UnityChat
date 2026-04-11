@@ -292,9 +292,15 @@
     /* ================ FEATURES GRID ================ */
     .feature-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(3, 1fr);
       gap: 1.25rem;
       margin-top: 1.25rem;
+    }
+    @media (max-width: 880px) {
+      .feature-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 560px) {
+      .feature-grid { grid-template-columns: 1fr; }
     }
     .feature {
       padding: 1.25rem 1.4rem;
@@ -377,6 +383,55 @@
       border-radius: 6px;
       border: 1px solid var(--text-3);
       box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7);
+      cursor: zoom-in;
+      transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+    }
+    .step-img:hover {
+      transform: translateY(-2px);
+      border-color: var(--line-orange);
+      box-shadow: 0 18px 48px -10px rgba(0, 0, 0, 0.8), 0 0 30px rgba(255, 140, 0, 0.15);
+    }
+
+    /* ---- Lightbox ---- */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.92);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem;
+      cursor: zoom-out;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s ease;
+    }
+    .lightbox.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .lightbox img {
+      max-width: 94vw;
+      max-height: 94vh;
+      object-fit: contain;
+      border-radius: 8px;
+      border: 1px solid var(--line-orange);
+      box-shadow:
+        0 30px 100px rgba(0, 0, 0, 0.85),
+        0 0 60px rgba(255, 140, 0, 0.15);
+    }
+    .lightbox::after {
+      content: 'ESC pro zavření';
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text-2);
     }
 
     /* ================ UPDATES + FAQ SIDE BY SIDE ================ */
@@ -401,6 +456,13 @@
       border: 1px solid var(--line-orange);
       box-shadow: 0 15px 40px -10px rgba(0, 0, 0, 0.7),
                   0 0 30px rgba(255, 140, 0, 0.1);
+      cursor: zoom-in;
+      transition: transform 0.22s ease, box-shadow 0.22s ease;
+    }
+    .updates .reload-shot:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 22px 60px -10px rgba(0, 0, 0, 0.85),
+                  0 0 50px rgba(255, 140, 0, 0.22);
     }
 
     .faq details {
@@ -587,7 +649,7 @@
             <span class="step-num">2</span>
             <div class="step-content">
               <h3>Rozbal ho</h3>
-              <p>Přesuň ZIP do stálé složky (třeba <code>Dokumenty\UnityChat\</code>) a rozbal. <strong>Tu složku později nemaž ani nepřesunuj</strong> — prohlížeč si ji pamatuje a extension by přestal fungovat.</p>
+              <p>Rozbal ZIP a složku si přesuň někam na stálo (třeba <code>Dokumenty\UnityChat\</code>).</p>
             </div>
           </div>
 
@@ -619,7 +681,7 @@
           <div class="step">
             <span class="step-num">5</span>
             <div class="step-content">
-              <h3>Vyber složku s manifestem</h3>
+              <h3>Vyber složku</h3>
               <p>Klikni <strong>Načíst rozbalené</strong>, vyber tu složku kam jsi ZIP rozbalil — tu co obsahuje přímo <code>manifest.json</code>.</p>
             </div>
           </div>
@@ -685,6 +747,11 @@
 
   </main>
 
+  <!-- Lightbox for screenshots -->
+  <div id="lightbox" class="lightbox" role="dialog" aria-hidden="true">
+    <img id="lightbox-img" alt="">
+  </div>
+
   <footer>
     <div class="footer-col">
       <span class="k">VERZE</span>
@@ -725,6 +792,34 @@
           .forEach((el) => { el.textContent = fmt; });
       })
       .catch(() => {});
+
+    // Lightbox for clickable screenshots
+    (function () {
+      const lb = document.getElementById('lightbox');
+      const lbImg = document.getElementById('lightbox-img');
+      if (!lb || !lbImg) return;
+
+      function open(src, alt) {
+        lbImg.src = src;
+        lbImg.alt = alt || '';
+        lb.classList.add('open');
+        lb.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+      }
+      function close() {
+        lb.classList.remove('open');
+        lb.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+      }
+
+      document.querySelectorAll('.step-img, .reload-shot').forEach((img) => {
+        img.addEventListener('click', () => open(img.src, img.alt));
+      });
+      lb.addEventListener('click', close);
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && lb.classList.contains('open')) close();
+      });
+    })();
   </script>
 
 </body>
