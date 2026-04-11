@@ -55,19 +55,114 @@
         linear-gradient(180deg, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
     }
 
-    /* Technical grid — HUD vibe, masked to center */
+    /* Technical grid — HUD vibe, masked to center, parallax with mouse */
     body::after {
       content: '';
       position: fixed;
-      inset: 0;
+      inset: -40px;
       pointer-events: none;
       z-index: 2;
       background-image:
-        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+        linear-gradient(to right, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
       background-size: 72px 72px;
       mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
       -webkit-mask-image: radial-gradient(ellipse 65% 75% at 50% 50%, #000 25%, transparent 95%);
+      transform: translate3d(var(--px, 0), var(--py, 0), 0);
+      transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.2, 1);
+      will-change: transform;
+    }
+
+    /* Mouse spotlight — violet-dominant radial glow following cursor */
+    .spotlight {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      background:
+        radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(255, 180, 30, 0.05), transparent 65%),
+        radial-gradient(720px circle at var(--mx, 50%) var(--my, 50%),
+          rgba(145, 70, 255, 0.09), transparent 70%);
+      mix-blend-mode: screen;
+      transition: background 0.12s cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    /* Scanning violet beam — passes vertically every ~14s */
+    .scan-line {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 2px;
+      pointer-events: none;
+      z-index: 5;
+      background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(145, 70, 255, 0.25) 20%,
+        rgba(192, 132, 252, 0.85) 50%,
+        rgba(145, 70, 255, 0.25) 80%,
+        transparent 100%);
+      box-shadow:
+        0 0 14px rgba(145, 70, 255, 0.6),
+        0 0 28px rgba(145, 70, 255, 0.3);
+      opacity: 0;
+      animation: scan-pass 14s ease-in-out infinite;
+      will-change: transform, opacity;
+    }
+    @keyframes scan-pass {
+      0%, 5%    { transform: translateY(-10px);  opacity: 0; }
+      8%        { opacity: 1; }
+      48%       { transform: translateY(50vh); opacity: 0.8; }
+      92%       { opacity: 1; }
+      95%, 100% { transform: translateY(105vh); opacity: 0; }
+    }
+
+    /* Viewport corner brackets — HUD framing */
+    .corner {
+      position: fixed;
+      width: 58px;
+      height: 58px;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .corner.tl {
+      top: 1rem; left: 1rem;
+      border-top: 1px solid rgba(255, 140, 0, 0.45);
+      border-left: 1px solid rgba(255, 140, 0, 0.45);
+    }
+    .corner.tl::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: -1px;
+      width: 6px; height: 6px;
+      background: var(--orange);
+      box-shadow: 0 0 10px rgba(255, 160, 20, 0.8);
+    }
+    .corner.br {
+      bottom: 1rem; right: 1rem;
+      border-bottom: 1px solid rgba(145, 70, 255, 0.45);
+      border-right: 1px solid rgba(145, 70, 255, 0.45);
+    }
+    .corner.br::before {
+      content: '';
+      position: absolute;
+      bottom: -1px; right: -1px;
+      width: 6px; height: 6px;
+      background: var(--violet);
+      box-shadow: 0 0 10px rgba(145, 70, 255, 0.8);
+    }
+    .corner.tr {
+      top: 1rem; right: 1rem;
+      border-top: 1px solid rgba(145, 70, 255, 0.35);
+      border-right: 1px solid rgba(145, 70, 255, 0.35);
+      width: 36px; height: 36px;
+    }
+    .corner.bl {
+      bottom: 1rem; left: 1rem;
+      border-bottom: 1px solid rgba(255, 140, 0, 0.35);
+      border-left: 1px solid rgba(255, 140, 0, 0.35);
+      width: 36px; height: 36px;
     }
 
     /* Film grain overlay */
@@ -196,9 +291,27 @@
       width: min(1200px, 82%);
       height: auto;
       display: block;
+      cursor: pointer;
       filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
               drop-shadow(0 0 24px rgba(255, 140, 0, 0.22));
       animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s backwards;
+      transition: filter 0.35s ease;
+    }
+    .wordmark:hover {
+      filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
+              drop-shadow(0 0 28px rgba(255, 140, 0, 0.35))
+              drop-shadow(0 0 60px rgba(145, 70, 255, 0.28));
+    }
+    .wordmark.glitch {
+      animation: glitch 0.45s steps(2, end);
+    }
+    @keyframes glitch {
+      0%   { transform: translate(0, 0); filter: drop-shadow(0 0 0 transparent); }
+      15%  { transform: translate(-3px, 1px); filter: drop-shadow(3px 0 0 rgba(145, 70, 255, 0.6)) drop-shadow(-2px 0 0 rgba(255, 140, 0, 0.6)); }
+      30%  { transform: translate(2px, -1px); filter: drop-shadow(-3px 0 0 rgba(145, 70, 255, 0.6)) drop-shadow(2px 0 0 rgba(255, 140, 0, 0.6)); }
+      45%  { transform: translate(-1px, 2px); filter: drop-shadow(2px 0 0 rgba(145, 70, 255, 0.6)); }
+      60%  { transform: translate(1px, 0); filter: drop-shadow(-2px 0 0 rgba(255, 140, 0, 0.6)); }
+      100% { transform: translate(0, 0); filter: drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 24px rgba(255, 140, 0, 0.22)); }
     }
 
     @keyframes fade-up {
@@ -219,11 +332,38 @@
       font-size: 12.5px;
       text-align: left;
       overflow: hidden;
+      cursor: pointer;
       box-shadow:
         0 20px 60px -20px rgba(0, 0, 0, 0.8),
         0 0 0 1px rgba(255, 255, 255, 0.02) inset,
         0 0 40px rgba(255, 140, 0, 0.06);
       animation: fade-up 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.5s backwards;
+      transition: border-color 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease;
+    }
+    .terminal::after {
+      content: 'CLICK TO REPLAY';
+      position: absolute;
+      bottom: 0.5rem;
+      right: 0.9rem;
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      color: rgba(145, 70, 255, 0.55);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    }
+    .terminal { position: relative; }
+    .terminal:hover {
+      border-color: rgba(145, 70, 255, 0.45);
+      box-shadow:
+        0 20px 60px -20px rgba(0, 0, 0, 0.8),
+        0 0 0 1px rgba(145, 70, 255, 0.1) inset,
+        0 0 50px rgba(145, 70, 255, 0.15),
+        0 0 90px rgba(145, 70, 255, 0.08);
+      transform: translateY(-2px);
+    }
+    .terminal:hover::after {
+      opacity: 1;
     }
 
     .term-head {
@@ -254,16 +394,22 @@
       background: var(--orange);
       box-shadow: 0 0 8px rgba(255, 160, 20, 0.6);
     }
+    .term-dots i.vio {
+      background: var(--violet);
+      box-shadow: 0 0 8px rgba(145, 70, 255, 0.55);
+    }
     .term-title {
       flex: 1;
       text-align: center;
       color: var(--text-2);
     }
+    .term-title .slash { color: var(--violet-hi); }
     .term-title b {
       color: var(--text-1);
       font-weight: 500;
     }
-    .term-clock { color: var(--text-3); }
+    .term-title .ext { color: var(--violet-hi); }
+    .term-clock { color: var(--violet-hi); opacity: 0.75; }
 
     .term-body {
       padding: 1rem 1.25rem 1.2rem;
@@ -377,11 +523,12 @@
       text-decoration: none;
       border-bottom: 1px solid var(--text-3);
       padding-bottom: 2px;
-      transition: color 0.28s ease, border-color 0.28s ease;
+      transition: color 0.28s ease, border-color 0.28s ease, text-shadow 0.28s ease;
     }
     .bot a:hover {
-      color: var(--orange);
-      border-color: var(--orange);
+      color: var(--violet-hi);
+      border-color: var(--violet);
+      text-shadow: 0 0 12px rgba(145, 70, 255, 0.6);
     }
 
     /* Scanning progress */
@@ -449,12 +596,21 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .grain, .dot, .progress .bar .fill, .wordmark .echo { animation: none !important; }
+      .grain, .dot, .progress .bar .fill, .scan-line, .term-body .line { animation: none !important; }
+      .wordmark, .terminal, .status-pill { animation: none !important; opacity: 1; }
+      body::after { transition: none; transform: none; }
     }
   </style>
 </head>
 <body>
   <div class="grain"></div>
+  <div class="spotlight" aria-hidden="true"></div>
+  <div class="scan-line" aria-hidden="true"></div>
+
+  <div class="corner tl" aria-hidden="true"></div>
+  <div class="corner tr" aria-hidden="true"></div>
+  <div class="corner bl" aria-hidden="true"></div>
+  <div class="corner br" aria-hidden="true"></div>
 
   <div class="app">
 
@@ -494,12 +650,12 @@
               fill="url(#gradOrange)">JOUKI</text>
       </svg>
 
-      <div class="terminal" role="presentation">
+      <div class="terminal" role="button" tabindex="0" aria-label="Replay build log">
         <div class="term-head">
           <span class="term-dots">
-            <i></i><i></i><i class="live"></i>
+            <i class="vio"></i><i></i><i class="live"></i>
           </span>
-          <span class="term-title">~ / <b>jouki.cz</b> · build.log</span>
+          <span class="term-title"><span class="slash">~</span> / <b>jouki.cz</b> <span class="ext">· build.log</span></span>
           <span class="term-clock">v0.1.0 · pid 001</span>
         </div>
         <div class="term-body">
@@ -533,5 +689,55 @@
     </footer>
 
   </div>
+
+  <script>
+    // Mouse tracking for spotlight + grid parallax (rAF throttled)
+    (function () {
+      var root = document.documentElement;
+      var mx = innerWidth / 2, my = innerHeight / 2, queued = false;
+      function update() {
+        root.style.setProperty('--mx', mx + 'px');
+        root.style.setProperty('--my', my + 'px');
+        var px = (mx / innerWidth - 0.5) * 22;
+        var py = (my / innerHeight - 0.5) * 22;
+        root.style.setProperty('--px', px + 'px');
+        root.style.setProperty('--py', py + 'px');
+        queued = false;
+      }
+      // initial
+      update();
+      addEventListener('mousemove', function (e) {
+        mx = e.clientX; my = e.clientY;
+        if (!queued) { queued = true; requestAnimationFrame(update); }
+      }, { passive: true });
+    })();
+
+    // Click terminal → replay the build log animation
+    (function () {
+      var term = document.querySelector('.terminal');
+      if (!term) return;
+      function replay() {
+        var lines = term.querySelectorAll('.term-body .line');
+        lines.forEach(function (l) { l.style.animation = 'none'; });
+        void term.offsetWidth;
+        lines.forEach(function (l) { l.style.animation = ''; });
+      }
+      term.addEventListener('click', replay);
+      term.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); replay(); }
+      });
+    })();
+
+    // Click JOUKI wordmark → glitch effect
+    (function () {
+      var wm = document.querySelector('.wordmark');
+      if (!wm) return;
+      wm.addEventListener('click', function () {
+        wm.classList.remove('glitch');
+        void wm.offsetWidth;
+        wm.classList.add('glitch');
+      });
+    })();
+  </script>
 </body>
 </html>
