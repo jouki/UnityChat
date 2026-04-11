@@ -8,7 +8,7 @@
   <meta name="robots" content="noindex">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-0: #08080a;
@@ -167,11 +167,12 @@
     }
 
     .wordmark {
-      font-family: 'Fraunces', Georgia, serif;
-      font-variation-settings: "opsz" 144, "wght" 340, "SOFT" 0;
-      font-size: clamp(5.5rem, 19vw, 17rem);
-      line-height: 0.82;
-      letter-spacing: -0.045em;
+      font-family: 'Chakra Petch', 'JetBrains Mono', sans-serif;
+      font-weight: 700;
+      font-size: clamp(5.5rem, 19vw, 18rem);
+      line-height: 0.88;
+      letter-spacing: -0.02em;
+      text-transform: lowercase;
       color: var(--text-0);
       background: linear-gradient(118deg,
         #fff7e3 0%,
@@ -182,35 +183,52 @@
       background-clip: text;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      filter: drop-shadow(0 0 40px rgba(255, 140, 0, 0.12));
+      filter: drop-shadow(0 0 40px rgba(255, 140, 0, 0.18));
       margin-bottom: 0.35em;
       user-select: none;
+      position: relative;
+    }
+    .wordmark::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: 0.18em;
+      height: 0.08em;
+      width: 2.4ch;
+      background: linear-gradient(90deg, var(--accent), var(--accent-glow), transparent);
+      box-shadow: 0 0 18px rgba(255, 180, 30, 0.55);
     }
     .wordmark .p {
-      color: var(--text-3);
-      -webkit-text-fill-color: var(--text-3);
+      color: var(--accent);
+      -webkit-text-fill-color: var(--accent);
       background: none;
-      font-variation-settings: "opsz" 144, "wght" 200;
+      font-weight: 400;
+      font-size: 0.5em;
+      vertical-align: 0.9em;
+      margin-left: -0.05em;
+      letter-spacing: 0;
     }
 
     .lede {
-      font-family: 'Fraunces', Georgia, serif;
-      font-variation-settings: "opsz" 48, "wght" 320;
-      font-style: italic;
-      font-size: clamp(1.05rem, 1.9vw, 1.55rem);
-      line-height: 1.45;
+      font-family: 'Chakra Petch', 'JetBrains Mono', sans-serif;
+      font-weight: 300;
+      font-size: clamp(1rem, 1.75vw, 1.4rem);
+      line-height: 1.55;
       color: var(--text-1);
       max-width: 56ch;
-      margin-top: 1.5rem;
+      margin-top: 1.75rem;
+      letter-spacing: 0.005em;
     }
     .lede em {
       font-style: normal;
-      font-variation-settings: "opsz" 48, "wght" 480;
+      font-weight: 600;
       color: var(--text-0);
     }
     .lede .ac {
       font-style: normal;
+      font-weight: 500;
       color: var(--accent-glow);
+      text-shadow: 0 0 14px rgba(255, 180, 30, 0.45);
     }
 
     /* -------- BOTTOM LEDGER -------- */
