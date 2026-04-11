@@ -35,7 +35,8 @@
       font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
       font-size: 13px;
       min-height: 100vh;
-      overflow-x: hidden;
+      height: 100vh;
+      overflow: hidden;
       -webkit-font-smoothing: antialiased;
       user-select: text;
       -webkit-user-select: text;
@@ -483,9 +484,10 @@
       overflow: hidden;
       text-align: center;
       gap: 0.4rem;
-      padding: 1.5rem 1rem;
+      padding: 1.5rem 2rem;
       position: relative;
-      min-width: min(1100px, 90vw);
+      width: fit-content;
+      max-width: 96vw;
     }
     .terminated.active {
       display: flex;
@@ -493,7 +495,7 @@
     .terminated::before {
       content: '';
       position: absolute;
-      inset: -30%;
+      inset: 0;
       pointer-events: none;
       background: repeating-linear-gradient(
         0deg,
@@ -508,11 +510,11 @@
     .terminated::after {
       content: '';
       position: absolute;
-      inset: -30%;
+      inset: 0;
       pointer-events: none;
-      background: radial-gradient(ellipse 70% 80% at 50% 50%,
+      background: radial-gradient(ellipse 80% 90% at 50% 50%,
         transparent 40%,
-        rgba(0, 0, 0, 0.75) 100%);
+        rgba(0, 0, 0, 0.55) 100%);
     }
     @keyframes crt-scroll {
       from { transform: translateY(0); }
@@ -546,6 +548,7 @@
       letter-spacing: 0.08em;
       line-height: 1;
       color: #ff2a2a;
+      white-space: nowrap;
       text-shadow:
         0 0 22px rgba(255, 20, 20, 0.9),
         0 0 44px rgba(255, 60, 60, 0.6),
@@ -1131,9 +1134,10 @@
         clearTimeout(resetTimer);
         if (hits === 5) {
           broken = true;
-          // After the fall animation finishes, hide wordmark + show TERMINATING
+          // After the fall animation finishes, remove wordmark from layout
+          // and show TERMINATING (grid stack will resize to fit terminated).
           setTimeout(function () {
-            wm.style.visibility = 'hidden';
+            wm.style.display = 'none';
             if (terminated) terminated.classList.add('active');
           }, 2350);
         } else {
