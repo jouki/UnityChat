@@ -174,33 +174,35 @@
       position: relative;
       font-family: 'Orbitron', 'JetBrains Mono', sans-serif;
       font-weight: 800;
-      font-size: clamp(4.5rem, 17vw, 26rem);
+      font-size: clamp(4.5rem, 14vw, 18rem);
       line-height: 0.92;
       letter-spacing: 0.005em;
       text-transform: uppercase;
       margin-bottom: 0.5em;
       user-select: none;
       display: inline-block;
-      isolation: isolate;
+      /* Parent glow — doesn't break child background-clip: text */
+      filter:
+        drop-shadow(0 0 28px rgba(255, 160, 20, 0.35))
+        drop-shadow(0 0 58px rgba(255, 120, 0, 0.18))
+        drop-shadow(0 0 48px rgba(145, 70, 255, 0.28));
     }
     .wordmark .layer {
       display: block;
-      position: relative;
       background-clip: text;
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
     .wordmark .back {
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
       transform: translate(0.08em, 0.06em);
       background: linear-gradient(180deg,
         var(--violet-glow) 0%,
-        #a56bff 35%,
-        var(--violet) 68%,
+        #a56bff 32%,
+        var(--violet) 65%,
         var(--violet-deep) 100%);
-      filter: blur(0.5px) drop-shadow(0 0 30px rgba(145, 70, 255, 0.55))
-                          drop-shadow(0 0 60px rgba(145, 70, 255, 0.28));
       opacity: 0.95;
       z-index: 1;
     }
@@ -209,10 +211,8 @@
       background: linear-gradient(180deg,
         #ffeaa3 0%,
         var(--accent-glow) 28%,
-        var(--accent) 58%,
+        var(--accent) 60%,
         var(--accent-deep) 100%);
-      filter: drop-shadow(0 0 22px rgba(255, 160, 20, 0.55))
-              drop-shadow(0 0 48px rgba(255, 120, 0, 0.22));
       z-index: 2;
     }
 
