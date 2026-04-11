@@ -25,7 +25,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 
-RUN addgroup -S app && adduser -S app -G app
+RUN apk add --no-cache curl && addgroup -S app && adduser -S app -G app
 
 COPY --from=prod-deps --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
