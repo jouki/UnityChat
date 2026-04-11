@@ -98,7 +98,7 @@
       transition: background 0.15s cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
-    /* Scanning violet beam — thin bright laser with layered immediate glow */
+    /* Scanning violet beam — thin saturated line with tight glow halo */
     .scan-line {
       position: fixed;
       left: 0;
@@ -109,22 +109,22 @@
       z-index: 3;
       background: linear-gradient(90deg,
         transparent 0%,
-        rgba(145, 70, 255, 0.35) 12%,
-        rgba(192, 132, 252, 0.95) 42%,
-        #e0c6ff 50%,
-        rgba(192, 132, 252, 0.95) 58%,
-        rgba(145, 70, 255, 0.35) 88%,
+        rgba(60, 15, 130, 0.4) 14%,
+        rgba(105, 35, 200, 0.85) 42%,
+        rgba(145, 70, 255, 1) 50%,
+        rgba(105, 35, 200, 0.85) 58%,
+        rgba(60, 15, 130, 0.4) 86%,
         transparent 100%);
       box-shadow:
-        0 0 2px rgba(224, 198, 255, 1),
-        0 0 5px rgba(192, 132, 252, 0.95),
-        0 0 12px rgba(145, 70, 255, 0.75),
-        0 0 28px rgba(145, 70, 255, 0.5),
-        0 0 60px rgba(145, 70, 255, 0.3),
-        0 0 110px rgba(90, 30, 160, 0.18);
+        0 0 2px rgba(145, 70, 255, 0.85),
+        0 0 6px rgba(100, 35, 190, 0.65),
+        0 0 14px rgba(80, 25, 160, 0.42),
+        0 0 30px rgba(55, 15, 110, 0.22);
       opacity: 0;
       animation: scan-pass 16s ease-in-out infinite;
       will-change: transform, opacity;
+      transform: scaleY(0.75);
+      transform-origin: center;
     }
     @keyframes scan-pass {
       0%, 5%    { transform: translateY(-12px); opacity: 0; }
@@ -356,8 +356,8 @@
       color: transparent;
       -webkit-text-fill-color: transparent;
       transform-origin: 50% 85%;
-      transition: text-shadow 0.18s ease;
-      will-change: transform, text-shadow;
+      transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+      will-change: transform;
     }
 
     /* ---- HIT 1: mild tremor + soft violet aberration glow ---- */
@@ -390,7 +390,7 @@
       85% { transform: translate(2px, 0) rotate(0.1deg); }
     }
 
-    /* ---- HIT 3: letters displaced, violet halo wider ---- */
+    /* ---- HIT 3: letters smoothly displaced with bounce + violet halo ---- */
     .wordmark[data-hits="3"] {
       filter:
         drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
@@ -398,21 +398,11 @@
         drop-shadow(11px 0 5px rgba(145, 70, 255, 0.72))
         drop-shadow(0 0 40px rgba(145, 70, 255, 0.4));
     }
-    .wordmark[data-hits="3"] .ltr { animation: shake-3 0.58s ease-out; }
     .wordmark[data-hits="3"] .ltr.j { transform: translate(-4px, -2px) rotate(-1.2deg); }
     .wordmark[data-hits="3"] .ltr.o { transform: translate(2px, 3px) rotate(0.8deg); }
     .wordmark[data-hits="3"] .ltr.u { transform: translate(-2px, -1px) rotate(-0.5deg); }
     .wordmark[data-hits="3"] .ltr.k { transform: translate(3px, 2px) rotate(1deg); }
     .wordmark[data-hits="3"] .ltr.i { transform: translate(5px, -3px) rotate(-1.5deg); }
-    @keyframes shake-3 {
-      0%   { transform: translate(0, 0) rotate(0); }
-      10%  { transform: translate(-8px, 3px) rotate(-1deg); }
-      25%  { transform: translate(7px, -3px) rotate(0.8deg); }
-      40%  { transform: translate(-5px, 4px) rotate(-0.6deg); }
-      60%  { transform: translate(4px, -2px) rotate(0.5deg); }
-      80%  { transform: translate(-2px, 1px) rotate(-0.2deg); }
-      100% { transform: translate(0, 0) rotate(0); }
-    }
 
     /* ---- HIT 4: critical — letters barely holding together ---- */
     .wordmark[data-hits="4"] {
@@ -423,57 +413,53 @@
         drop-shadow(0 0 60px rgba(145, 70, 255, 0.55))
         drop-shadow(0 0 80px rgba(255, 140, 0, 0.3));
     }
-    .wordmark[data-hits="4"] .ltr { animation: shake-4 0.7s ease-out; }
     .wordmark[data-hits="4"] .ltr.j { transform: translate(-8px, 4px) rotate(-3deg); }
     .wordmark[data-hits="4"] .ltr.o { transform: translate(4px, -5px) rotate(2.5deg); }
     .wordmark[data-hits="4"] .ltr.u { transform: translate(-5px, 3px) rotate(-2deg); }
     .wordmark[data-hits="4"] .ltr.k { transform: translate(6px, -3px) rotate(3deg); }
     .wordmark[data-hits="4"] .ltr.i { transform: translate(9px, 5px) rotate(-3.5deg); }
-    @keyframes shake-4 {
-      0%   { filter: none; }
-      8%   { transform: translate(-14px, 5px) rotate(-2deg); }
-      20%  { transform: translate(12px, -6px) rotate(1.8deg); }
-      32%  { transform: translate(-10px, 7px) rotate(-1.5deg); }
-      44%  { transform: translate(9px, -4px) rotate(1.2deg); }
-      58%  { transform: translate(-6px, 3px) rotate(-1deg); }
-      72%  { transform: translate(4px, -2px) rotate(0.8deg); }
-      100% { }
-    }
 
-    /* ---- HIT 5: BREAK — letters fall with gravity ---- */
+    /* ---- HIT 5: BREAK — letters fall with gravity, aberration fades out ---- */
     .wordmark[data-hits="5"] {
       pointer-events: none;
+      filter:
+        drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5))
+        drop-shadow(0 0 24px rgba(255, 140, 0, 0.22))
+        drop-shadow(0 0 0 rgba(145, 70, 255, 0))
+        drop-shadow(0 0 0 rgba(145, 70, 255, 0))
+        drop-shadow(0 0 0 rgba(255, 140, 0, 0));
+      transition: filter 0.35s ease-out;
     }
-    .wordmark[data-hits="5"] .ltr.j { animation: fall-j 1.9s cubic-bezier(0.55, 0, 0.85, 0.6) forwards; }
-    .wordmark[data-hits="5"] .ltr.o { animation: fall-o 2.1s cubic-bezier(0.55, 0, 0.85, 0.6) 0.04s forwards; }
-    .wordmark[data-hits="5"] .ltr.u { animation: fall-u 1.85s cubic-bezier(0.55, 0, 0.85, 0.6) 0.02s forwards; }
-    .wordmark[data-hits="5"] .ltr.k { animation: fall-k 2.05s cubic-bezier(0.55, 0, 0.85, 0.6) 0.08s forwards; }
-    .wordmark[data-hits="5"] .ltr.i { animation: fall-i 2.2s cubic-bezier(0.55, 0, 0.85, 0.6) 0.11s forwards; }
+    .wordmark[data-hits="5"] .ltr.j { animation: fall-j 1.9s cubic-bezier(0.55, 0, 0.85, 0.6) forwards; transition: none; }
+    .wordmark[data-hits="5"] .ltr.o { animation: fall-o 2.1s cubic-bezier(0.55, 0, 0.85, 0.6) 0.04s forwards; transition: none; }
+    .wordmark[data-hits="5"] .ltr.u { animation: fall-u 1.85s cubic-bezier(0.55, 0, 0.85, 0.6) 0.02s forwards; transition: none; }
+    .wordmark[data-hits="5"] .ltr.k { animation: fall-k 2.05s cubic-bezier(0.55, 0, 0.85, 0.6) 0.08s forwards; transition: none; }
+    .wordmark[data-hits="5"] .ltr.i { animation: fall-i 2.2s cubic-bezier(0.55, 0, 0.85, 0.6) 0.11s forwards; transition: none; }
 
     @keyframes fall-j {
-      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
-      12%  { transform: translate(-4px, 8px) rotate(-10deg); text-shadow: 14px 0 0 rgba(145,70,255,0.8), -14px 0 0 rgba(255,140,0,0.8); }
-      100% { transform: translate(-80px, 800px) rotate(-140deg); opacity: 0; text-shadow: none; }
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; }
+      12%  { transform: translate(-4px, 8px) rotate(-10deg); }
+      100% { transform: translate(-80px, 800px) rotate(-140deg); opacity: 0; }
     }
     @keyframes fall-o {
-      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; }
       12%  { transform: translate(-1px, 10px) rotate(6deg); }
-      100% { transform: translate(-10px, 820px) rotate(70deg); opacity: 0; text-shadow: none; }
+      100% { transform: translate(-10px, 820px) rotate(70deg); opacity: 0; }
     }
     @keyframes fall-u {
-      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; }
       12%  { transform: translate(2px, 7px) rotate(-3deg); }
-      100% { transform: translate(20px, 780px) rotate(-40deg); opacity: 0; text-shadow: none; }
+      100% { transform: translate(20px, 780px) rotate(-40deg); opacity: 0; }
     }
     @keyframes fall-k {
-      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; }
       12%  { transform: translate(3px, 9px) rotate(5deg); }
-      100% { transform: translate(45px, 810px) rotate(95deg); opacity: 0; text-shadow: none; }
+      100% { transform: translate(45px, 810px) rotate(95deg); opacity: 0; }
     }
     @keyframes fall-i {
-      0%   { transform: translate(0, 0) rotate(0); opacity: 1; text-shadow: 18px 0 0 rgba(145,70,255,1), -18px 0 0 rgba(255,140,0,1); }
+      0%   { transform: translate(0, 0) rotate(0); opacity: 1; }
       12%  { transform: translate(5px, 11px) rotate(-8deg); }
-      100% { transform: translate(95px, 830px) rotate(-160deg); opacity: 0; text-shadow: none; }
+      100% { transform: translate(95px, 830px) rotate(-160deg); opacity: 0; }
     }
 
     @keyframes opacity-in {
@@ -554,23 +540,34 @@
       position: relative;
       z-index: 1;
     }
+    /* Sequential dots: "" → "." → ".." → "..." → "" (fixed-width cell) */
     .err-state .dots {
       display: inline-block;
-      width: 0.85em;
+      width: 0.88em;
       text-align: left;
       vertical-align: baseline;
     }
     .err-state .dots span {
       display: inline-block;
       opacity: 0;
-      animation: dot-cycle 1.4s infinite;
     }
-    .err-state .dots span:nth-child(1) { animation-delay: 0.1s; }
-    .err-state .dots span:nth-child(2) { animation-delay: 0.45s; }
-    .err-state .dots span:nth-child(3) { animation-delay: 0.8s; }
-    @keyframes dot-cycle {
-      0%, 100% { opacity: 0; }
-      20%, 95% { opacity: 1; }
+    .err-state .dots span:nth-child(1) { animation: dot-a 1.6s infinite; }
+    .err-state .dots span:nth-child(2) { animation: dot-b 1.6s infinite; }
+    .err-state .dots span:nth-child(3) { animation: dot-c 1.6s infinite; }
+    @keyframes dot-a {
+      0%, 24%   { opacity: 0; }
+      25%, 99%  { opacity: 1; }
+      100%      { opacity: 0; }
+    }
+    @keyframes dot-b {
+      0%, 49%   { opacity: 0; }
+      50%, 99%  { opacity: 1; }
+      100%      { opacity: 0; }
+    }
+    @keyframes dot-c {
+      0%, 74%   { opacity: 0; }
+      75%, 99%  { opacity: 1; }
+      100%      { opacity: 0; }
     }
     @keyframes crt-flicker {
       0%, 100% { opacity: 1;    filter: brightness(1); }
