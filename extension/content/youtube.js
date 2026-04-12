@@ -72,8 +72,6 @@
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
-      const pfbc = document.querySelector('#panels-full-bleed-container');
-      if (pfbc) pfbc.style.cssText = 'display:none!important;';
       // Theater mode for correct player sizing
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy) {
@@ -116,19 +114,14 @@
       btn.title = 'Otevřít UnityChat';
       Object.assign(btn.style, {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        gap: '6px', padding: '8px 16px', marginLeft: '8px',
-        background: 'linear-gradient(135deg, #ffc000, #ff7a00)',
+        gap: '6px', padding: '6px 12px', margin: '0 7px',
+        background: 'linear-gradient(135deg, rgb(255, 192, 0), rgb(255, 122, 0))',
         border: 'none', borderRadius: '18px', cursor: 'pointer',
-        fontFamily: 'Roboto, Arial, sans-serif', fontSize: '14px',
-        fontWeight: '500', color: '#0a0a0d', lineHeight: '1',
+        fontFamily: 'Roboto, Arial, sans-serif', fontSize: '12px',
+        fontWeight: '500', color: 'rgb(10, 10, 13)', lineHeight: '1',
         transition: 'filter 0.15s',
       });
-      const img = document.createElement('img');
-      img.src = chrome.runtime.getURL('icons/icon48.png');
-      img.alt = 'UC';
-      Object.assign(img.style, { width: '18px', height: '18px', display: 'block', pointerEvents: 'none' });
-      btn.appendChild(img);
-      btn.appendChild(document.createTextNode('UnityChat'));
+      btn.textContent = 'UnityChat';
       btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
       btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
       btn.addEventListener('click', async (e) => {
