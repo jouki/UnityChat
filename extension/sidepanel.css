@@ -692,6 +692,9 @@ body.layout-large .reply-ctx { font-size: 12px; }
   object-fit: contain;
 }
 
+/* /me (ACTION) messages — italic text in username color */
+.msg.action .tx { font-style: italic; }
+
 /* Click-to-play audio easter egg (StreamElements Bulgarians) */
 .msg.msg-audio { cursor: pointer; position: relative; }
 .msg.msg-audio:hover {

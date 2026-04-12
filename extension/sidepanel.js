@@ -707,9 +707,16 @@ class TwitchProvider {
     const ci = after.indexOf(':');
     if (ci === -1) return;
 
-    const message = after.substring(ci + 1);
+    let message = after.substring(ci + 1);
     const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
     const color = tags.color || '#9146ff';
+
+    // Detect /me (CTCP ACTION): \x01ACTION text\x01
+    let isAction = false;
+    if (message.startsWith('\x01ACTION ') && message.endsWith('\x01')) {
+      message = message.substring(8, message.length - 1);
+      isAction = true;
+    }
 
     // Surový badges string pro image rendering (parsuje se v _addMessage)
     const badgesRaw = tags.badges || '';
@@ -749,7 +756,8 @@ class TwitchProvider {
       badgesRaw,
       twitchEmotes: tags.emotes || null,
       replyTo,
-      firstMsg: tags['first-msg'] === '1'
+      firstMsg: tags['first-msg'] === '1',
+      isAction
     });
   }
 
@@ -2823,6 +2831,11 @@ class UnityChat {
     // Zpráva s emoty - platform-specifický rendering
     const tx = document.createElement('span');
     tx.className = 'tx';
+    // /me (ACTION) messages — text has username color, italic
+    if (msg.isAction) {
+      el.classList.add('action');
+      tx.style.color = un.style.color;
+    }
 
     if (msg.platform === 'twitch') {
       // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
