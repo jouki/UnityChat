@@ -100,8 +100,8 @@
     </p>
   </div>
   <script>
-    // Version from manifest.json (same as production page)
-    fetch('/download/manifest.json')
+    // Version from dev branch manifest on GitHub (not production /download/)
+    fetch('https://raw.githubusercontent.com/jouki/UnityChat/dev/extension/manifest.json')
       .then(r => r.json())
       .then(m => {
         document.getElementById('version').textContent = m.version || '?';
