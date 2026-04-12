@@ -57,6 +57,10 @@
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Collapse vanilla Twitch chat
+      const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+      if (collapseBtn) collapseBtn.click();
+      // Open UnityChat side panel
       chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
     });
     return btn;
@@ -93,15 +97,8 @@
     const header = findChatHeader();
     if (!header) return;
     const btn = buildUcButton();
-    // Insert directly into the header as second child (after collapse toggle wrapper).
-    // Don't insert inside toggle's parent — inherits tooltip + captures clicks.
-    const toggleWrapper = header.querySelector('[data-a-target="right-column__toggle-collapse-btn"]')?.closest('[class]');
-    if (toggleWrapper && toggleWrapper.parentElement === header) {
-      header.insertBefore(btn, toggleWrapper.nextSibling);
-    } else {
-      // Fallback: insert as second child of header
-      header.insertBefore(btn, header.children[1] || null);
-    }
+    // Always insert as second child of header (right after the collapse toggle area)
+    header.insertBefore(btn, header.children[1] || null);
   }
 
   function startHeaderObserver() {
