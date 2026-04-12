@@ -1924,6 +1924,14 @@ class UnityChat {
     } catch {}
   }
 
+  _savePlatformColor(platform, color) {
+    if (this._platformColors[platform] === color) return;
+    this._platformColors[platform] = color;
+    if (!this.config._platformColors) this.config._platformColors = {};
+    this.config._platformColors[platform] = color;
+    this._saveConfig();
+  }
+
   _setActivePlatform(platform) {
     this.activePlatform = platform;
     if (!this.platformBadge) return;
@@ -2448,18 +2456,19 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Track color per platform from own messages + persist
-      if (msg.color && msg.platform) {
-        const myName = this._platformUsernames[msg.platform]?.toLowerCase();
-        if (myName && msg.username?.toLowerCase() === myName && this._platformColors[msg.platform] !== msg.color) {
-          this._platformColors[msg.platform] = msg.color;
-          if (!this.config._platformColors) this.config._platformColors = {};
-          this.config._platformColors[msg.platform] = msg.color;
-          this._saveConfig();
-        }
-      }
+      // Track color from own sent message echo + persist
       if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
+        if (msg.color && msg.platform) {
+          this._savePlatformColor(msg.platform, msg.color);
+        }
+      }
+      // Also track from username match
+      if (msg.color && msg.platform) {
+        const myName = this._platformUsernames[msg.platform]?.toLowerCase();
+        if (myName && msg.username?.toLowerCase() === myName) {
+          this._savePlatformColor(msg.platform, msg.color);
+        }
       }
     }
 
