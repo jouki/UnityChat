@@ -1304,6 +1304,9 @@ class UnityChat {
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
+    if (this.config._platformColors) {
+      this._platformColors = { ...this.config._platformColors };
+    }
     await this.nicknames.loadCache();
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
@@ -2445,11 +2448,14 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Track color per platform from own messages
+      // Track color per platform from own messages + persist
       if (msg.color && msg.platform) {
         const myName = this._platformUsernames[msg.platform]?.toLowerCase();
-        if (myName && msg.username?.toLowerCase() === myName) {
+        if (myName && msg.username?.toLowerCase() === myName && this._platformColors[msg.platform] !== msg.color) {
           this._platformColors[msg.platform] = msg.color;
+          if (!this.config._platformColors) this.config._platformColors = {};
+          this.config._platformColors[msg.platform] = msg.color;
+          this._saveConfig();
         }
       }
       if (this._lastSentText && msg.message === this._lastSentText) {
