@@ -1236,7 +1236,7 @@ class UnityChat {
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
       if (this._msgCache.length > 0) {
-        chrome.storage.local.set({ uc_messages: this._msgCache });
+        chrome.storage.local.set({ [this._cacheKey]: this._msgCache });
       }
       this.nicknames?.disconnect();
     });
@@ -1439,8 +1439,8 @@ class UnityChat {
       $('dev-tools').classList.toggle('hidden', !$('chk-devmode').checked);
     });
     $('btn-dump-cache').addEventListener('click', () => {
-      chrome.storage.local.get('uc_messages', (d) => {
-        const json = JSON.stringify(d.uc_messages || [], null, 2);
+      chrome.storage.local.get(this._cacheKey, (d) => {
+        const json = JSON.stringify(d[this._cacheKey] || [], null, 2);
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1463,7 +1463,7 @@ class UnityChat {
       });
     });
     $('btn-clear-cache').addEventListener('click', () => {
-      chrome.storage.local.remove('uc_messages');
+      chrome.storage.local.remove(this._cacheKey);
       this._msgCache = [];
       this._seenMsgIds.clear();
       this._seenContentKeys.clear();
@@ -2448,26 +2448,70 @@ class UnityChat {
     this._cacheMsg(msg);
   }
 
-  // ---- Message cache (přežije reload) ----
+  // ---- Message cache (per-channel, 72h TTL, compact format) ----
+
+  get _cacheKey() {
+    return `uc_messages_${(this.config.channel || 'default').toLowerCase()}`;
+  }
+
+  _compactMsg(msg) {
+    const m = {};
+    for (const [k, v] of Object.entries(msg)) {
+      // Strip null, undefined, false, empty string
+      if (v === null || v === undefined || v === false || v === '') continue;
+      m[k] = v;
+    }
+    // rgb() → #hex (shorter)
+    if (m.color?.startsWith('rgb')) {
+      const [r, g, b] = m.color.match(/\d+/g);
+      m.color = '#' + [r, g, b].map(c => (+c).toString(16).padStart(2, '0')).join('');
+    }
+    // Slim replyTo: drop message text, keep id + username
+    if (m.replyTo && typeof m.replyTo === 'object') {
+      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username };
+    }
+    return m;
+  }
+
+  _expandMsg(msg) {
+    // Restore defaults expected by _addMessage
+    if (!('firstMsg' in msg)) msg.firstMsg = false;
+    if (!('replyTo' in msg)) msg.replyTo = null;
+    if (!('twitchEmotes' in msg)) msg.twitchEmotes = null;
+    // Expand string replyTo (legacy compact) to object
+    if (typeof msg.replyTo === 'string') {
+      msg.replyTo = { id: msg.replyTo, username: null, message: null };
+    }
+    // Expand replyTo missing message field
+    if (msg.replyTo && !('message' in msg.replyTo)) msg.replyTo.message = null;
+    return msg;
+  }
 
   _cacheMsg(msg) {
-    this._msgCache.push(msg);
+    this._msgCache.push(this._compactMsg(msg));
     if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
     if (!this._cacheTimer) {
       this._cacheTimer = setTimeout(() => {
         this._cacheTimer = null;
-        chrome.storage.local.set({ uc_messages: this._msgCache }).catch(() => {});
+        chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
       }, 500);
     }
   }
 
   async _loadCachedMessages() {
     try {
-      const { uc_messages } = await chrome.storage.local.get('uc_messages');
-      if (!uc_messages?.length) return;
-      for (const msg of uc_messages) {
-        this._addMessage(msg);
+      const data = await chrome.storage.local.get(this._cacheKey);
+      const raw = data[this._cacheKey];
+      if (!raw?.length) return;
+
+      // 72h TTL filter
+      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+      const msgs = raw.filter((m) => !m.timestamp || m.timestamp > cutoff);
+
+      for (const msg of msgs) {
+        this._addMessage(this._expandMsg(msg));
       }
+      this._msgCache = msgs;
     } catch {}
   }
 
