@@ -427,33 +427,29 @@ class EmoteManager {
 
   _toHtml(segments) {
     const out = [];
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
+    // Track whether the last output item is an open emote-stack
+    let stackOpen = false;
+    for (const s of segments) {
       if (s.type !== 'emote') {
+        if (stackOpen) { out.push('</span>'); stackOpen = false; }
         out.push(this._eh(s.value));
         continue;
       }
-      if (s.zw && out.length) {
-        // Zero-width emote: find the last regular emote in output and wrap together
-        const lastIdx = out.length - 1;
-        const last = out[lastIdx];
-        if (last.includes('class="emote"') && !last.includes('emote-stack')) {
-          // Wrap previous emote + this ZW emote in a stack container
-          const alt = this._ea(s.value);
-          const zwImg = `<img class="emote emote-zw" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
-          out[lastIdx] = `<span class="emote-stack">${last}${zwImg}</span>`;
-          continue;
-        } else if (last.includes('emote-stack')) {
-          // Already a stack — append inside
-          const alt = this._ea(s.value);
-          const zwImg = `<img class="emote emote-zw" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
-          out[lastIdx] = last.replace('</span>', zwImg + '</span>');
-          continue;
-        }
-      }
       const alt = this._ea(s.value);
-      out.push(`<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`);
+      const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+      if (s.zw) {
+        // Zero-width: append into current stack (or create one if needed)
+        if (!stackOpen) out.push('<span class="emote-stack">');
+        out.push(img);
+        stackOpen = true;
+      } else {
+        // Regular emote: close previous stack if any, start a new one
+        if (stackOpen) { out.push('</span>'); stackOpen = false; }
+        out.push(`<span class="emote-stack">${img}`);
+        stackOpen = true;
+      }
     }
+    if (stackOpen) out.push('</span>');
     return out.join('');
   }
 
