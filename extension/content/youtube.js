@@ -85,7 +85,7 @@
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
-    // ---- UnityChat button on YouTube page ----
+    // ---- UnityChat button next to "Otevřít panel" ----
     const UC_BTN_ID = 'uc-yt-open-btn';
 
     function buildYtButton() {
@@ -94,24 +94,34 @@
       btn.title = 'Otevřít UnityChat';
       Object.assign(btn.style, {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: '36px', height: '36px', padding: '6px',
-        background: 'transparent', border: 'none',
-        borderRadius: '50%', cursor: 'pointer',
-        transition: 'background 0.15s',
+        gap: '6px', padding: '8px 16px', marginLeft: '8px',
+        background: 'linear-gradient(135deg, #ffc000, #ff7a00)',
+        border: 'none', borderRadius: '18px', cursor: 'pointer',
+        fontFamily: 'Roboto, Arial, sans-serif', fontSize: '14px',
+        fontWeight: '500', color: '#0a0a0d', lineHeight: '1',
+        transition: 'filter 0.15s',
       });
       const img = document.createElement('img');
       img.src = chrome.runtime.getURL('icons/icon48.png');
-      img.alt = 'UnityChat';
-      Object.assign(img.style, {
-        width: '24px', height: '24px', display: 'block',
-        filter: 'drop-shadow(0 0 4px rgba(255,140,0,0.5))', pointerEvents: 'none',
-      });
+      img.alt = 'UC';
+      Object.assign(img.style, { width: '18px', height: '18px', display: 'block', pointerEvents: 'none' });
       btn.appendChild(img);
-      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,140,0,0.15)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
-      btn.addEventListener('click', (e) => {
+      btn.appendChild(document.createTextNode('UnityChat'));
+      btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
+      btn.addEventListener('click', async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // Open chat invisibly
+        const cp = document.querySelector('ytd-live-chat-frame');
+        if (cp) {
+          const tb = cp.querySelector('#show-hide-button button, #show-hide-button ytd-button-renderer button');
+          if (tb) {
+            tb.click();
+            await new Promise((r) => setTimeout(r, 2500));
+            hideYtChat();
+          }
+        }
         chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
       });
       return btn;
@@ -119,26 +129,16 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      // Place in the top actions bar (right side, near subscribe/notifications)
-      const targets = [
-        '#actions ytd-menu-renderer',           // next to ... menu
-        '#top-row #actions',                     // actions container
-        'ytd-watch-metadata #actions',           // new layout
-        '#owner',                                // near channel name
-      ];
-      for (const sel of targets) {
-        const el = document.querySelector(sel);
-        if (el) {
-          el.appendChild(buildYtButton());
-          return;
-        }
+      // Place next to "Otevřít panel" button inside ytd-live-chat-frame
+      const showHide = document.querySelector('ytd-live-chat-frame #show-hide-button');
+      if (showHide) {
+        showHide.parentElement.insertBefore(buildYtButton(), showHide.nextSibling);
+        return;
       }
     }
 
     function tryInject() {
-      if (document.querySelector('ytd-watch-flexy') && !document.getElementById(UC_BTN_ID)) {
-        injectYtButton();
-      }
+      if (!document.getElementById(UC_BTN_ID)) injectYtButton();
     }
     tryInject();
     const ytObs = new MutationObserver(tryInject);
