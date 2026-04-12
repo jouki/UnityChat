@@ -604,6 +604,24 @@ body.layout-large .reply-ctx { font-size: 12px; }
   letter-spacing: 0.3px;
 }
 
+/* Right-side message tags (Replying to you, Mentions you, etc.) */
+.msg-tag {
+  float: right;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  margin-left: 6px;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+.msg-tag.tag-reply { color: #cc3333; }
+.msg-tag.tag-mention { color: #cc3333; }
+.msg-tag.tag-first { color: #9146ff; }
+.msg-tag.tag-raid { color: #ff6b6b; }
+.msg-tag.tag-sus { color: #ffc107; }
+
 /* Raid */
 .msg.raid {
   background: rgba(255, 107, 107, 0.12);
@@ -622,6 +640,16 @@ body.layout-large .reply-ctx { font-size: 12px; }
   padding: 1px 0 1px 18px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* Suspicious user */
+.msg.sus-msg {
+  background: rgba(255, 193, 7, 0.1);
+  border-left: 2px solid #ffc107;
+  padding-left: 8px;
+}
+.msg.sus-msg:hover {
+  background: rgba(255, 193, 7, 0.2);
 }
 
 /* Reply context */

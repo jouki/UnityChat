@@ -2359,6 +2359,14 @@ class UnityChat {
     const text = this.msgInput.value.trim();
     if (!text || !this.activePlatform) return;
 
+    // /uc commands — local mock messages for testing (mod/broadcaster only)
+    if (text.startsWith('/uc ')) {
+      this.msgInput.value = '';
+      this.msgInput.style.height = 'auto';
+      this._handleUcCommand(text.substring(4).trim());
+      return;
+    }
+
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
@@ -2433,6 +2441,41 @@ class UnityChat {
   }
 
   // ---- Providers ----
+
+  _handleUcCommand(args) {
+    const parts = args.split(/\s+/);
+    const cmd = parts[0]?.toLowerCase();
+    const text = parts.slice(1).join(' ') || 'test message';
+    const platform = this.activePlatform || 'twitch';
+    const now = Date.now();
+    const mockUser = 'MockUser';
+
+    const base = {
+      platform,
+      username: mockUser,
+      message: text,
+      color: '#9146ff',
+      timestamp: now,
+      id: `uc-mock-${now}`,
+    };
+
+    switch (cmd) {
+      case 'raid':
+        this._addMessage({ ...base, username: mockUser, message: `${text} přichází s raidem!`, isRaid: true, color: '#ff6b6b' });
+        break;
+      case 'raider':
+        this._addMessage({ ...base, firstMsg: true, isRaid: false, color: '#9146ff' });
+        break;
+      case 'first':
+        this._addMessage({ ...base, firstMsg: true, color: '#9146ff' });
+        break;
+      case 'sus':
+        this._addMessage({ ...base, isSus: true, color: '#ffc107' });
+        break;
+      default:
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus`);
+    }
+  }
 
   _setupProviders() {
     this.twitch.onMessage = (m) => this._addMessage(m);
@@ -2735,9 +2778,48 @@ class UnityChat {
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
     if (msg.isRaid) el.classList.add('raid');
+    if (msg.isSus) el.classList.add('sus-msg');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
 
-    // First-time chatter label
+    // Determine if reply is TO the current user (not just any reply)
+    const isReplyToMe = msg.replyTo && (
+      replyTarget === myName ||
+      (myNick && replyTarget === myNick) ||
+      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
+    );
+
+    // Right-side tag (float right — must be first child for float to work)
+    if (isReplyToMe) {
+      const tag = document.createElement('span');
+      tag.className = 'msg-tag tag-reply';
+      tag.textContent = 'Replying to you';
+      el.appendChild(tag);
+    } else if (isMentioned && !isReplyToMe) {
+      const tag = document.createElement('span');
+      tag.className = 'msg-tag tag-mention';
+      tag.textContent = 'Mentions you';
+      el.appendChild(tag);
+    }
+    if (msg.firstMsg) {
+      const tag = document.createElement('span');
+      tag.className = 'msg-tag tag-first';
+      tag.textContent = 'First message';
+      el.appendChild(tag);
+    }
+    if (msg.isRaid) {
+      const tag = document.createElement('span');
+      tag.className = 'msg-tag tag-raid';
+      tag.textContent = 'Raid';
+      el.appendChild(tag);
+    }
+    if (msg.isSus) {
+      const tag = document.createElement('span');
+      tag.className = 'msg-tag tag-sus';
+      tag.textContent = 'Suspicious';
+      el.appendChild(tag);
+    }
+
+    // First-time chatter label (left side)
     if (msg.firstMsg) {
       const fl = document.createElement('div');
       fl.className = 'first-label';
@@ -2745,7 +2827,7 @@ class UnityChat {
       el.appendChild(fl);
     }
 
-    // Raid label
+    // Raid label (left side)
     if (msg.isRaid) {
       const rl = document.createElement('div');
       rl.className = 'raid-label';
