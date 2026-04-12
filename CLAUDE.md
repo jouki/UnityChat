@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.12.4
+# UnityChat - Chrome/Opera Extension + Backend v3.12.5
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -19,10 +19,20 @@ UnityChat/
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
-├── landing/                 # jouki.cz under-construction static page
-│   ├── index.html              # Gaming HUD aesthetic, Orbitron + JetBrains Mono
-│   ├── nginx.conf              # Nginx static server config
-│   └── Dockerfile              # nginx:alpine + curl for Coolify healthcheck
+├── landing/                 # jouki.cz root + /UnityChat install page
+│   ├── index.html              # Root page (under construction, gaming HUD aesthetic)
+│   ├── nginx.conf              # Nginx static server config (case-insensitive /UnityChat)
+│   ├── Dockerfile              # nginx:alpine, zips extension/, healthcheck
+│   └── unitychat/              # /UnityChat install page
+│       ├── index.html          # Install guide: hero+preview, steps, features, FAQ
+│       ├── preview.html        # Iframe mockup using real sidepanel.css
+│       └── assets/
+│           ├── brand/unitychat-logo.png  # 512px polished logo for hero branding
+│           ├── badges/         # broadcaster, moderator, chatbot, vip, partner PNG
+│           ├── emotes/         # kappa, lul, kreygasm, ragey(7TV), waytoodank(7TV)
+│           ├── audio/          # streamelements-bulgarians.mp3 (click-to-play demo)
+│           ├── chrome-extension-card.png
+│           └── chrome-extensions-header.png
 ├── backend/                 # Node.js + Fastify + Drizzle + Postgres API server
 │   ├── src/
 │   │   ├── server.ts           # Fastify entry point + health endpoints
@@ -366,7 +376,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.12.4**
+- Aktuální: **v3.12.5**
 
 ## Známé limitace / gotchas
 
@@ -411,6 +421,72 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 - Soubor: `Downloads/unitychat-debug.log`
 - Side panel posílá `UC_LOG` do background, background drží `_logs[]` array
 - Read přes `Read tool` při debugování
+
+## Twitch chat header button (v3.12.5)
+Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (vedle collapse toggle). Tlačítko používá `chrome.runtime.getURL('icons/icon48.png')` (reálné extension logo). Klik pošle `OPEN_SIDE_PANEL` do background → `chrome.sidePanel.open({ tabId })` (Chrome) nebo popup window (Opera).
+
+**Klíčové detaily:**
+- `web_accessible_resources` v manifestu zpřístupňuje `icons/*` pro Twitch stránky
+- `chrome.sidePanel.open()` musí být volán synchronně v rámci user gesture chain — žádné awaity před voláním v background handleru
+- `MutationObserver` na `document.body` re-injektuje button po Twitch chat remountech (změna kanálu, 7TV rerender)
+- Selektory pro chat header: `.stream-chat-header`, `[data-a-target="stream-chat-header"]`, `.chat-room__header`, `.chat-shell__header`, `.chat-header` + fallback přes parent collapse toggle buttonu
+
+## Landing page (jouki.cz/UnityChat)
+
+Statická install stránka na `jouki.cz/UnityChat` (case-insensitive). Nasazena jako nginx container přes Coolify, auto-deploy z GitHub pushů (webhook na `landing/**` a `extension/**`).
+
+### Architektura
+- `landing/unitychat/index.html` — hlavní install page (Orbitron + JetBrains Mono, gaming HUD)
+- `landing/unitychat/preview.html` — iframe mockup (načítá `extension/sidepanel.css` pro pixel-accurate rendering)
+- `landing/Dockerfile` — base_directory je `/` (repo root), zipuje extension/ pro download, kopíruje sidepanel.css + icons z extension/
+
+### Dockerfile build kontext
+```dockerfile
+# Base directory v Coolify = "/" (repo root)
+# Dockerfile location = "/landing/Dockerfile"
+FROM alpine:3 AS zipper    # zipuje extension/ → unitychat.zip
+FROM nginx:alpine           # runtime
+COPY landing/unitychat → /unitychat        # install page
+COPY extension/sidepanel.css → /unitychat/assets/sidepanel.css  # real CSS for preview
+COPY extension/icons → /unitychat/assets/icons
+COPY unitychat.zip → /download/unitychat.zip
+COPY extension/manifest.json → /download/manifest.json
+```
+
+### Nginx routing
+```nginx
+location ~* ^/unitychat/?$   # case-insensitive → /unitychat/index.html
+location /unitychat/          # static files
+location = /download/unitychat.zip  # Content-Disposition: attachment
+```
+
+### Preview mockup (preview.html)
+Interaktivní demo v iframe simulující reálný UnityChat panel:
+- 16 chat zpráv (Rob TT jokes, raids, first-msg, mentions, replies, commands)
+- **Filtry funkční** — klik na TW/YT/KI toggle filtruje zprávy podle platformy
+- **Click-to-play audio** — klik na StreamElements zprávu přehraje mp3 (ElevenLabs voiced)
+- **Dynamická verze** — fetch `/download/manifest.json` pro header verzi
+- **Dynamický věk** — Rob's věk počítán z birthdate (29.6.1991)
+- Reálné CSS třídy: `.tx` (ne `.txt`), `.bdg-img`, `.pi.uc` — matchují `sidepanel.css`
+- 7TV emoty: RAGEY (`01F7JCJ0D80007RBBSW6MHGEVC`), WAYTOODANK (`01EZPJ8YRR000C438200A44F2Y`)
+
+### Install page features
+- Hero: 512px brand logo + Orbitron wordmark (gradient `background-clip: text`) + glow
+- HUD grid pozadí (dual-res 72px/18px, `body::after`, background na `html` aby `z-index: -1` fungoval)
+- `<code data-copy="chrome://extensions">` — click-to-copy (browsers blokují navigaci na chrome:// URL)
+- Toast notifikace po kopírování s Ctrl+L → Ctrl+V → Enter instrukcemi
+- FAQ `<details>` animované přes `::details-content` + `interpolate-size: allow-keywords` (Chrome 129+)
+- Lightbox pro klikací screenshoty
+- JS fetches `/download/manifest.json` pro verzi a ZIP `Last-Modified` pro datum updatu
+
+### Emote/badge zdroje pro mockup
+| Asset | CDN |
+|---|---|
+| Twitch native emoty (Kappa, LUL, Kreygasm, EZ) | `static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/1.0` |
+| 7TV emoty (RAGEY, WAYTOODANK) | `cdn.7tv.app/emote/{id}/2x.gif` |
+| BTTV emoty (search) | `api.betterttv.net/3/emotes/shared/search?query={name}` |
+| Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
+| Chatbot badge | `bot-badge` set v IVR API |
 
 ## Backend (v0.1.0)
 
@@ -466,3 +542,4 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.12.2** - Unified `extension/` bez build kroku: jeden `manifest.json` + `background.js` s runtime `HAS_SIDE_PANEL` feature-detection. Chrome používá native side panel, Opera spadne na popup window. Load unpacked z `extension/` přímo v obou browserech, žádné build skripty, žádný `dist/`.
 - **v3.12.3** - Platform badge tooltip přepsán na JS-positioned `.uc-tooltip` s viewport clamping (fix pro ořez u okrajů side panelu).
 - **v3.12.4** - Opera native sidebar support přes `sidebar_action` manifest key. Opera users si teď mohou připnout UnityChat přímo do Opera levého sidebaru (vedle Messenger/Twitch/atd.). Chrome ignoruje unknown key, používá dál `side_panel`. Popup window fallback zůstává pro Operu jako sekundární entry point.
+- **v3.12.5** - Twitch chat header button (UnityChat logo v chatu, klik otevře side panel), `OPEN_SIDE_PANEL` background handler s user-gesture propagací, `web_accessible_resources` pro ikony. jouki.cz/UnityChat install page: hero s 512px brand logem, funkční platform filtry v preview mockupu, click-to-play audio na StreamElements zprávě, animované FAQ, click-to-copy chrome:// URL.
