@@ -12,25 +12,12 @@
 
   const UC_BTN_ID = 'uc-open-panel-btn';
 
-  const UC_LOGO_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" aria-hidden="true">
-  <defs>
-    <linearGradient id="uc-g" x1="17%" y1="0%" x2="83%" y2="100%">
-      <stop offset="0%" stop-color="#ffc800"/>
-      <stop offset="100%" stop-color="#ff8c00"/>
-    </linearGradient>
-  </defs>
-  <path d="M 28 14 H 100 Q 116 14 116 30 V 80 Q 116 96 100 96 H 58 L 38 116 L 44 96 H 28 Q 12 96 12 80 V 30 Q 12 14 28 14 Z" fill="url(#uc-g)"/>
-  <path d="M 44 38 L 44 68 Q 44 82 64 82 Q 84 82 84 68 L 84 38 L 74 38 L 74 68 Q 74 72 64 72 Q 54 72 54 68 L 54 38 Z" fill="#0a0a0d"/>
-</svg>`.trim();
-
   function buildUcButton() {
     const btn = document.createElement('button');
     btn.id = UC_BTN_ID;
     btn.type = 'button';
     btn.setAttribute('aria-label', 'Otevřít UnityChat');
     btn.title = 'Otevřít UnityChat';
-    btn.innerHTML = UC_LOGO_SVG;
     Object.assign(btn.style, {
       display: 'inline-flex',
       alignItems: 'center',
@@ -46,18 +33,26 @@
       flexShrink: '0',
       transition: 'background 0.15s ease, transform 0.15s ease'
     });
-    const svg = btn.querySelector('svg');
-    if (svg) {
-      svg.style.width = '20px';
-      svg.style.height = '20px';
-      svg.style.display = 'block';
-      svg.style.filter = 'drop-shadow(0 0 4px rgba(255, 140, 0, 0.45))';
-    }
+
+    const img = document.createElement('img');
+    img.src = chrome.runtime.getURL('icons/icon48.png');
+    img.alt = 'UnityChat';
+    Object.assign(img.style, {
+      width: '22px',
+      height: '22px',
+      display: 'block',
+      filter: 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))',
+      pointerEvents: 'none'
+    });
+    btn.appendChild(img);
+
     btn.addEventListener('mouseenter', () => {
       btn.style.background = 'rgba(255, 140, 0, 0.12)';
+      img.style.filter = 'drop-shadow(0 0 10px rgba(255, 160, 20, 0.8))';
     });
     btn.addEventListener('mouseleave', () => {
       btn.style.background = 'transparent';
+      img.style.filter = 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))';
     });
     btn.addEventListener('click', (e) => {
       e.preventDefault();

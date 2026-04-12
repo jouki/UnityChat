@@ -33,7 +33,12 @@
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
-    html { background: var(--bg); }
+    html {
+      background: var(--bg);
+      /* Opt into animatable height: auto — needed for the FAQ <details>
+         open/close transition (Chrome 129+, Edge 129+). */
+      interpolate-size: allow-keywords;
+    }
     html, body {
       color: var(--text-0);
       font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
@@ -577,6 +582,20 @@
       transition: border-color 0.25s;
     }
     .faq details[open] { border-color: var(--line-orange); }
+    /* Animate open/close (interpolate-size opt-in on <html>) */
+    .faq details::details-content {
+      block-size: 0;
+      overflow: clip;
+      opacity: 0;
+      transition:
+        block-size 0.3s ease,
+        opacity 0.25s ease,
+        content-visibility 0.3s allow-discrete;
+    }
+    .faq details[open]::details-content {
+      block-size: auto;
+      opacity: 1;
+    }
     .faq summary {
       padding: 0.85rem 1.15rem;
       cursor: pointer;

@@ -85,7 +85,7 @@
   <div id="header">
     <div id="header-title">
       <img class="logo" src="/unitychat/assets/icons/icon48.png" alt="UnityChat">
-      UnityChat v3.12.4 [BETA]
+      UnityChat v<span id="preview-version">…</span> [BETA]
     </div>
     <div id="header-actions">
       <button id="btn-popout"   title="Pop-out window">⎘</button>
@@ -238,9 +238,9 @@
         <span class="tx">gdy aoe?</span>
       </div>
 
-      <!-- 15. Jouki triggers the !bulgarians command (commands don't get UC marker) -->
+      <!-- 15. Jouki triggers the !bulgarians command — gold UC badge for consistency -->
       <div class="msg">
-        <span class="pi tw">TW</span>
+        <span class="pi tw uc">TW</span>
         <span class="ts">22:19</span>
         <span class="bdg"><img class="bdg-img" src="/unitychat/assets/badges/moderator.png" alt="moderator"></span><span class="un" style="color:#ff8c00;">Jouki728</span>:
         <span class="tx">!bulgarians</span>
@@ -276,6 +276,18 @@
         dot.style.boxShadow = '0 0 6px #53fc18';
       }
     });
+
+    // Real extension version from manifest.json (shared with install page)
+    fetch('/download/manifest.json')
+      .then((r) => r.json())
+      .then((m) => {
+        const el = document.getElementById('preview-version');
+        if (el) el.textContent = m.version || '?';
+      })
+      .catch(() => {
+        const el = document.getElementById('preview-version');
+        if (el) el.textContent = '?';
+      });
 
     // Rob's age — computed from birthdate so the joke stays current
     (function () {
