@@ -74,6 +74,22 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Delete nickname
+  app.delete('/nicknames', async (req, reply) => {
+    const body = req.body as { platform?: string; username?: string };
+    if (!body?.platform || !body?.username) {
+      reply.code(400);
+      return { ok: false, error: 'Missing platform or username' };
+    }
+
+    await db
+      .delete(nicknames)
+      .where(and(eq(nicknames.platform, body.platform), eq(nicknames.username, body.username)));
+
+    broadcast('nickname-delete', { platform: body.platform, username: body.username });
+    return { ok: true };
+  });
+
   // SSE stream
   app.get('/nicknames/stream', async (req, reply) => {
     reply.hijack();

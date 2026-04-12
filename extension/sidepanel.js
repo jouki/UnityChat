@@ -497,6 +497,14 @@ class NicknameManager {
     if (this._eventSource) return;
     try {
       this._eventSource = new EventSource(`${UC_API}/nicknames/stream`);
+      this._eventSource.addEventListener('nickname-delete', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          this._map.delete(`${d.platform}:${d.username.toLowerCase()}`);
+          this._saveCache();
+          if (this.onChange) this.onChange({ ...d, nickname: null, color: null });
+        } catch {}
+      });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
           const d = JSON.parse(e.data);
@@ -547,6 +555,25 @@ class NicknameManager {
       const data = await resp.json();
       if (data.ok) {
         this._map.set(`${platform}:${cleanName.toLowerCase()}`, { nickname, color: color || null });
+        this._saveCache();
+      }
+      return data;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  async remove(platform, username) {
+    const cleanName = username.replace(/^@/, '');
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform, username: cleanName }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        this._map.delete(`${platform}:${cleanName.toLowerCase()}`);
         this._saveCache();
       }
       return data;
@@ -1452,16 +1479,11 @@ class UnityChat {
       $('settings').classList.toggle('hidden')
     );
 
-    // Nickname
+    // Nickname (empty = delete)
     $('btn-nickname').addEventListener('click', async () => {
       const nick = $('input-nickname').value.trim();
       const color = $('input-color-hex').value.trim() || null;
       const statusEl = $('nickname-status');
-      if (!nick) {
-        statusEl.textContent = 'Zadej přezdívku';
-        statusEl.className = 'nick-status error';
-        return;
-      }
       if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) {
         statusEl.textContent = 'Barva musí být #RRGGBB';
         statusEl.className = 'nick-status error';
@@ -1491,7 +1513,9 @@ class UnityChat {
           } catch {}
         }
         if (!uname) continue;
-        const result = await this.nicknames.save(p, uname, nick, color);
+        const result = nick
+          ? await this.nicknames.save(p, uname, nick, color)
+          : await this.nicknames.remove(p, uname);
         if (result.ok) saved++;
         else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
         else lastError = result.error;
@@ -1499,7 +1523,9 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        statusEl.textContent = `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`;
+        statusEl.textContent = nick
+          ? `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+          : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
         statusEl.textContent = lastError || 'Nepodařilo se uložit';
@@ -1927,6 +1953,17 @@ class UnityChat {
         el.value = pName;
         this._platformUsernames[platform] = pName;
       }
+    }
+    // Update nickname + color fields from cache for this platform's username
+    const nickEl = document.getElementById('input-nickname');
+    const colorHexEl = document.getElementById('input-color-hex');
+    const colorPickerEl = document.getElementById('input-color-picker');
+    if (nickEl && platform) {
+      const pName = this._platformUsernames[platform];
+      const profile = pName ? this.nicknames.get(platform, pName) : null;
+      nickEl.value = profile?.nickname || '';
+      if (colorHexEl) colorHexEl.value = profile?.color || '';
+      if (colorPickerEl) colorPickerEl.value = profile?.color || '#ff8c00';
     }
     if (label) {
       const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
