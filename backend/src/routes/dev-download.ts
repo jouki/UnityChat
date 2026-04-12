@@ -17,6 +17,16 @@ async function buildZip(): Promise<void> {
 }
 
 export default async function devDownloadRoutes(app: FastifyInstance) {
+  // Dev manifest.json (extension version from dev branch)
+  app.get('/dev/manifest.json', async (_req, reply) => {
+    try {
+      const manifest = await readFile(join(EXT_DIR, 'manifest.json'), 'utf-8');
+      reply.type('application/json').header('Cache-Control', 'no-cache').send(manifest);
+    } catch {
+      reply.code(404).send({ error: 'manifest.json not found' });
+    }
+  });
+
   // Dev download page
   app.get('/dev', async (_req, reply) => {
     let version = '?';
