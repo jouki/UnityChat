@@ -695,14 +695,12 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .emote-zw-wrap {
   display: inline-block;
   width: 0;
+  overflow: visible;
   vertical-align: middle;
-  position: relative;
 }
 .emote-zw-wrap img.emote {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  position: relative;
+  transform: translateX(-50%);
   margin: 0;
 }
 
