@@ -692,6 +692,34 @@ body.layout-large .reply-ctx { font-size: 12px; }
   object-fit: contain;
 }
 
+/* Click-to-play audio easter egg (StreamElements Bulgarians) */
+.msg.msg-audio { cursor: pointer; position: relative; }
+.msg.msg-audio:hover {
+  box-shadow: inset 2px 0 0 rgba(255, 140, 0, 0.55);
+}
+.msg.msg-audio.playing {
+  box-shadow: inset 2px 0 0 #ff8c00, 0 0 18px -6px rgba(255, 140, 0, 0.5);
+  background: rgba(255, 140, 0, 0.06);
+}
+.msg.msg-audio::after {
+  content: '\25b6';
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: rgba(255, 140, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.msg.msg-audio:hover::after { opacity: 1; }
+.msg.msg-audio.playing::after {
+  content: '\23f8';
+  color: #ff8c00;
+  opacity: 1;
+}
+
 .emote-stack {
   display: inline-grid;
   place-items: center;
