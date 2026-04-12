@@ -2113,53 +2113,54 @@ class UnityChat {
 
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
+    const platform = this.activePlatform;
+    const reply = this._reply ? { ...this._reply } : null;
 
+    // Clear input IMMEDIATELY — responsive feel
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    this._clearReply();
+
+    // Optimistic UI: show message instantly
+    const username = this.config.username || 'me';
+    const ucProfile = this.nicknames.get(platform, username);
+    const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
+    this._lastSentText = text;
+    this._addMessage({
+      id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      platform,
+      username,
+      message: text,
+      color: ucProfile?.color || this._lastUserColor || defaultColors[platform] || null,
+      timestamp: Date.now(),
+      _uc: true,
+      _optimistic: true,
+    });
+
+    // Send in background (don't block UI)
     try {
       const tab = await this._getActiveBrowserTab();
-      if (!tab) return;
+      if (!tab) { this._sys('Žádný aktivní tab'); return; }
 
       let resp;
-
-      // Native reply pokud odpovídáme na stejné platformě
-      if (this._reply?.messageId && this._reply.platform === this.activePlatform) {
+      if (reply?.messageId && reply.platform === platform) {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
           text: markedText,
-          parentMsgId: this._reply.messageId,
-          username: this._reply.username,
+          parentMsgId: reply.messageId,
+          username: reply.username,
           broadcasterId: this.config._roomId || null
         });
       } else {
-        // Cross-platform reply → @mention prefix
         let sendText = markedText;
-        if (this._reply) {
-          const at = `@${this._reply.username}`;
+        if (reply) {
+          const at = `@${reply.username}`;
           if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
         }
         resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
       }
 
-      if (resp?.ok) {
-        this._lastSentText = text; // originální text bez markeru
-
-        // Optimistic UI: show the message immediately without waiting for polling
-        const username = this.config.username || 'me';
-        const ucProfile = this.nicknames.get(this.activePlatform, username);
-        this._addMessage({
-          id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          platform: this.activePlatform,
-          username,
-          message: text,
-          color: ucProfile?.color || null,
-          timestamp: Date.now(),
-          _uc: true,
-          _optimistic: true,
-        });
-
-        this.msgInput.value = '';
-        this.msgInput.style.height = 'auto'; // reset multi-line height
-        this._clearReply();
-      } else {
+      if (!resp?.ok) {
         this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
       }
     } catch (err) {
@@ -2355,9 +2356,10 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Auto-detekce username (msg.message může mít stripnutý @prefix u reply)
+      // Auto-detekce username + track color
       if (this._lastSentText && (msg.message === this._lastSentText || msg.message?.includes(this._lastSentText))) {
         this._lastSentText = null;
+        if (msg.color) this._lastUserColor = msg.color;
         if (msg.username && this.config.username !== msg.username) {
           this.config.username = msg.username;
           const el = document.getElementById('input-username');
