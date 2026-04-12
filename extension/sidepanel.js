@@ -1311,22 +1311,22 @@ class UnityChat {
       } catch {}
     }
 
-    // Načíst VŠECHNY emotes + badges před cache
-    await this.emotes.loadGlobal();
-    if (this.config._roomId) {
-      await Promise.all([
-        this.emotes.loadChannel('twitch', this.config._roomId),
-        this.emotes.loadBTTV(this.config._roomId),
-        this.emotes.loadFFZ(this.config._roomId),
-        this._loadTwitchBadges(this.config._roomId)
-      ]);
-    }
+    // Load cache + connect FIRST (instant), emotes in background
     await this._loadCachedMessages();
-
     this._connectAll();
-
-    // Detekce aktivní platformy pro odesílání
     this._detectLoop();
+
+    // Load emotes + badges in background (don't block the UI)
+    this.emotes.loadGlobal().then(() => {
+      if (this.config._roomId) {
+        return Promise.all([
+          this.emotes.loadChannel('twitch', this.config._roomId),
+          this.emotes.loadBTTV(this.config._roomId),
+          this.emotes.loadFFZ(this.config._roomId),
+          this._loadTwitchBadges(this.config._roomId)
+        ]);
+      }
+    }).catch(() => {});
   }
 
   // ---- Config ----
@@ -2595,12 +2595,8 @@ class UnityChat {
   _cacheMsg(msg) {
     this._msgCache.push(this._compactMsg(msg));
     if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
-    if (!this._cacheTimer) {
-      this._cacheTimer = setTimeout(() => {
-        this._cacheTimer = null;
-        chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
-      }, 500);
-    }
+    // Save immediately — extension reload can kill context anytime
+    chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
   }
 
   async _loadCachedMessages() {
