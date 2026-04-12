@@ -448,6 +448,103 @@ class EmoteManager {
 }
 
 // =============================================================
+// NicknameManager - custom display names backed by api.jouki.cz
+// SSE push for real-time updates, chrome.storage.local cache
+// =============================================================
+
+const UC_API = 'https://api.jouki.cz';
+
+class NicknameManager {
+  constructor() {
+    this._map = new Map();       // "platform:username" → nickname
+    this._eventSource = null;
+    this.onChange = null;         // callback: ({ platform, username, nickname }) => void
+  }
+
+  async loadCache() {
+    try {
+      const s = await chrome.storage.local.get('uc_nicknames');
+      if (s.uc_nicknames && typeof s.uc_nicknames === 'object') {
+        for (const [k, v] of Object.entries(s.uc_nicknames)) {
+          this._map.set(k, v);
+        }
+      }
+    } catch {}
+  }
+
+  async fetchAll() {
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      this._map.clear();
+      for (const n of data.nicknames) {
+        this._map.set(`${n.platform}:${n.username.toLowerCase()}`, n.nickname);
+      }
+      this._saveCache();
+    } catch {}
+  }
+
+  connectSSE() {
+    if (this._eventSource) return;
+    try {
+      this._eventSource = new EventSource(`${UC_API}/nicknames/stream`);
+      this._eventSource.addEventListener('nickname-change', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          const key = `${d.platform}:${d.username.toLowerCase()}`;
+          this._map.set(key, d.nickname);
+          this._saveCache();
+          if (this.onChange) this.onChange(d);
+        } catch {}
+      });
+      this._eventSource.onerror = () => {
+        // EventSource auto-reconnects; if CLOSED, reconnect manually
+        if (this._eventSource?.readyState === EventSource.CLOSED) {
+          this._eventSource = null;
+          setTimeout(() => this.connectSSE(), 5000);
+        }
+      };
+    } catch {}
+  }
+
+  disconnect() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
+  }
+
+  get(platform, username) {
+    if (!platform || !username) return null;
+    return this._map.get(`${platform}:${username.toLowerCase()}`) || null;
+  }
+
+  async setNickname(platform, username, nickname) {
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform, username, nickname }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        this._map.set(`${platform}:${username.toLowerCase()}`, nickname);
+        this._saveCache();
+      }
+      return data;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  _saveCache() {
+    const obj = Object.fromEntries(this._map);
+    chrome.storage.local.set({ uc_nicknames: obj }).catch(() => {});
+  }
+}
+
+// =============================================================
 // Twitch IRC Provider
 // =============================================================
 
@@ -1119,6 +1216,7 @@ class UnityChat {
   constructor() {
     this.config = { ...DEFAULTS };
     this.emotes = new EmoteManager();
+    this.nicknames = new NicknameManager();
     this.twitch = new TwitchProvider();
     this.kick = new KickProvider();
     this.youtube = new YouTubeProvider();
@@ -1138,6 +1236,7 @@ class UnityChat {
       if (this._msgCache.length > 0) {
         chrome.storage.local.set({ uc_messages: this._msgCache });
       }
+      this.nicknames?.disconnect();
     });
 
     this.chatEl = document.getElementById('chat');
@@ -1156,6 +1255,10 @@ class UnityChat {
       `<img src="icons/icon48.png" class="hdr-logo"> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
 
     await this._loadConfig();
+    await this.nicknames.loadCache();
+    this.nicknames.fetchAll();  // non-blocking, fire-and-forget
+    this.nicknames.connectSSE();
+    this.nicknames.onChange = (d) => this._onNicknameChange(d);
     this._setupUI();
     this._setupProviders();
 
@@ -1258,6 +1361,38 @@ class UnityChat {
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
     );
+
+    // Nickname
+    $('btn-nickname').addEventListener('click', async () => {
+      const nick = $('input-nickname').value.trim();
+      const platform = this.activePlatform;
+      const username = this.config.username;
+      const statusEl = $('nickname-status');
+      if (!platform || !username) {
+        statusEl.textContent = 'Nejdříve se připoj a pošli zprávu';
+        statusEl.className = 'nick-status error';
+        return;
+      }
+      if (!nick) {
+        statusEl.textContent = 'Zadej přezdívku';
+        statusEl.className = 'nick-status error';
+        return;
+      }
+      $('btn-nickname').disabled = true;
+      const result = await this.nicknames.setNickname(platform, username, nick);
+      $('btn-nickname').disabled = false;
+      if (result.ok) {
+        statusEl.textContent = 'Přezdívka uložena!';
+        statusEl.className = 'nick-status success';
+      } else if (result.retryAfter) {
+        statusEl.textContent = `Počkej ${Math.ceil(result.retryAfter)}s`;
+        statusEl.className = 'nick-status error';
+      } else {
+        statusEl.textContent = result.error || 'Chyba';
+        statusEl.className = 'nick-status error';
+      }
+      setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'nick-status'; }, 4000);
+    });
 
     $('btn-connect').addEventListener('click', () => {
       this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
@@ -1760,6 +1895,19 @@ class UnityChat {
     }
   }
 
+  // ---- Nickname live update ----
+
+  _onNicknameChange({ platform, username, nickname }) {
+    // Update all visible messages from this user
+    const key = `${platform}:${username.toLowerCase()}`;
+    this.chatEl.querySelectorAll('.un').forEach((un) => {
+      if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
+        un.textContent = nickname;
+        un.title = username;
+      }
+    });
+  }
+
   // ---- User Card ----
 
   async _openUserCard(platform, username) {
@@ -2140,7 +2288,11 @@ class UnityChat {
     const un = document.createElement('span');
     un.className = 'un';
     un.style.color = msg.color;
-    un.textContent = msg.username;
+    const nick = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
+    un.textContent = nick || msg.username;
+    if (nick) un.title = msg.username; // tooltip shows real username
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
     el.appendChild(un);
     el.appendChild(document.createTextNode(' '));

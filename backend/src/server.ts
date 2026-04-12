@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { config } from './config.js';
 import { pingDb, closeDb } from './db/index.js';
+import nicknameRoutes from './routes/nicknames.js';
+import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 
 const startedAt = Date.now();
 
@@ -31,10 +33,13 @@ app.get('/', async () => ({
 app.get('/health', async () => ({
   ok: true,
   service: 'unitychat-backend',
-  version: '0.1.0',
+  version: '0.2.0',
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
+  sseClients: clientCount(),
 }));
+
+await app.register(nicknameRoutes);
 
 app.get('/health/db', async (_request, reply) => {
   const ok = await pingDb();
@@ -48,6 +53,7 @@ app.get('/health/db', async (_request, reply) => {
 const shutdown = async (signal: string): Promise<void> => {
   app.log.info(`${signal} received, shutting down gracefully`);
   try {
+    disconnectSSE();
     await app.close();
     await closeDb();
     process.exit(0);

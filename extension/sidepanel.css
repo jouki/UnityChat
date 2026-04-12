@@ -236,6 +236,34 @@ body.layout-large .reply-ctx { font-size: 12px; }
   filter: brightness(1.1);
 }
 
+/* ---- Nickname setting ---- */
+
+.nickname-row {
+  display: flex;
+  gap: 6px;
+}
+.nickname-row input { flex: 1; }
+.btn-nick {
+  background: var(--accent-gradient);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-nick:disabled { opacity: 0.5; cursor: default; }
+.nick-status {
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  min-height: 15px;
+}
+.nick-status.error { color: #ff4444; }
+.nick-status.success { color: #53fc18; }
+
 /* ---- Status + Filter Bar ---- */
 
 #bar {

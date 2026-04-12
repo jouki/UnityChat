@@ -83,6 +83,23 @@ export const events = pgTable(
   }),
 );
 
+export const nicknames = pgTable(
+  'nicknames',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    username: text('username').notNull(),
+    nickname: text('nickname').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    platformUsernameUnique: uniqueIndex('nicknames_platform_username_unique').on(t.platform, t.username),
+  }),
+);
+
+export type Nickname = typeof nicknames.$inferSelect;
+export type NewNickname = typeof nicknames.$inferInsert;
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;

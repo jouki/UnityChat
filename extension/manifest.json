@@ -29,7 +29,8 @@
     "https://twitch.tv/*",
     "https://api.twitch.tv/*",
     "https://gql.twitch.tv/*",
-    "https://api.ivr.fi/*"
+    "https://api.ivr.fi/*",
+    "https://api.jouki.cz/*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
