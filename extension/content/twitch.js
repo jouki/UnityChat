@@ -19,19 +19,22 @@
     btn.setAttribute('aria-label', 'Otevřít UnityChat');
     btn.title = 'Otevřít UnityChat';
     Object.assign(btn.style, {
+      position: 'absolute',
+      left: '34px',
+      top: '50%',
+      transform: 'translateY(-50%)',
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
       width: '30px',
       height: '30px',
       padding: '4px',
-      margin: '0 4px',
       background: 'transparent',
       border: 'none',
       borderRadius: '4px',
       cursor: 'pointer',
-      flexShrink: '0',
-      transition: 'background 0.15s ease, transform 0.15s ease'
+      zIndex: '10',
+      transition: 'background 0.15s ease'
     });
 
     const img = document.createElement('img');
@@ -96,9 +99,8 @@
     if (document.getElementById(UC_BTN_ID)) return;
     const header = findChatHeader();
     if (!header) return;
-    const btn = buildUcButton();
-    // Always insert as second child of header (right after the collapse toggle area)
-    header.insertBefore(btn, header.children[1] || null);
+    header.style.position = 'relative';
+    header.appendChild(buildUcButton());
   }
 
   function startHeaderObserver() {
