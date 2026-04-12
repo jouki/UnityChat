@@ -54,29 +54,7 @@
   }
 
   function findChatHeader() {
-    // Twitch uses several header classes across layouts; try them in order.
-    const selectors = [
-      '.stream-chat-header',
-      '[data-a-target="stream-chat-header"]',
-      '.chat-room__header',
-      '.chat-shell__header',
-      '.chat-header'
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) return el;
-    }
-    // Fallback: climb from the collapse toggle button.
-    const toggle = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-    if (toggle) {
-      // Walk up until we find a row-ish container (flex parent with siblings).
-      let n = toggle.parentElement;
-      for (let i = 0; i < 5 && n; i++) {
-        if (n.childElementCount >= 2) return n;
-        n = n.parentElement;
-      }
-    }
-    return null;
+    return document.querySelector('.stream-chat-header');
   }
 
   function injectSidePanelButton() {
@@ -93,19 +71,12 @@
     console.log('[UC] Twitch button injected into header');
   }
 
-  function startHeaderObserver() {
-    injectSidePanelButton();
-    const obs = new MutationObserver(() => {
-      if (!document.getElementById(UC_BTN_ID)) injectSidePanelButton();
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startHeaderObserver, { once: true });
-  } else {
-    startHeaderObserver();
-  }
+  // Poll for header — Twitch re-mounts on navigation
+  setInterval(() => {
+    if (document.querySelectorAll('#' + UC_BTN_ID).length === 0) {
+      injectSidePanelButton();
+    }
+  }, 2000);
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
