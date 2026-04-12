@@ -1414,14 +1414,7 @@ class UnityChat {
     $('btn-nickname').addEventListener('click', async () => {
       const nick = $('input-nickname').value.trim();
       const color = $('input-color-hex').value.trim() || null;
-      const platform = this.activePlatform;
-      const username = this.config.username;
       const statusEl = $('nickname-status');
-      if (!platform || !username) {
-        statusEl.textContent = 'Nejdříve se připoj a pošli zprávu';
-        statusEl.className = 'nick-status error';
-        return;
-      }
       if (!nick) {
         statusEl.textContent = 'Zadej přezdívku';
         statusEl.className = 'nick-status error';
@@ -1433,16 +1426,41 @@ class UnityChat {
         return;
       }
       $('btn-nickname').disabled = true;
-      const result = await this.nicknames.save(platform, username, nick, color);
+
+      // Detect username on each platform via PING and save nickname for all
+      const platforms = ['twitch', 'youtube', 'kick'];
+      const tabUrls = { twitch: '*://*.twitch.tv/*', youtube: '*://*.youtube.com/*', kick: '*://*.kick.com/*' };
+      let saved = 0;
+      let lastError = null;
+
+      for (const p of platforms) {
+        let uname = null;
+        // Try config username first (always set for Twitch)
+        if (p === 'twitch' && this.config.username) {
+          uname = this.config.username;
+        } else {
+          // PING active tab for this platform
+          try {
+            const tabs = await chrome.tabs.query({ url: [tabUrls[p]] });
+            for (const tab of tabs) {
+              const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+              if (resp?.username) { uname = resp.username; break; }
+            }
+          } catch {}
+        }
+        if (!uname) continue;
+        const result = await this.nicknames.save(p, uname, nick, color);
+        if (result.ok) saved++;
+        else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
+        else lastError = result.error;
+      }
+
       $('btn-nickname').disabled = false;
-      if (result.ok) {
-        statusEl.textContent = 'Přezdívka uložena!';
+      if (saved > 0) {
+        statusEl.textContent = `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`;
         statusEl.className = 'nick-status success';
-      } else if (result.retryAfter) {
-        statusEl.textContent = `Počkej ${Math.ceil(result.retryAfter)}s`;
-        statusEl.className = 'nick-status error';
       } else {
-        statusEl.textContent = result.error || 'Chyba';
+        statusEl.textContent = lastError || 'Nepodařilo se uložit';
         statusEl.className = 'nick-status error';
       }
       setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'nick-status'; }, 4000);
