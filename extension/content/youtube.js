@@ -66,16 +66,23 @@
   // ---- Hide chat listener (main frame) ----
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
-    const UC_HIDE_CSS = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+    function hideYtChat() {
+      // Hide the #chat container — collapses the layout column
+      const chat = document.querySelector('#chat, #chat-container');
+      if (chat) chat.style.cssText = 'display:none!important;';
+      // Remove two-column layout so video fills full width
+      const flexy = document.querySelector('ytd-watch-flexy');
+      if (flexy) {
+        flexy.removeAttribute('is-two-columns_');
+        flexy.removeAttribute('is-two-columns-layout');
+      }
+      // Mark as hidden
+      const chatPanel = document.querySelector('ytd-live-chat-frame');
+      if (chatPanel) chatPanel.dataset.ucHidden = '1';
+    }
 
     window.addEventListener('message', (e) => {
-      if (e.data?.type === 'UC_HIDE_CHAT') {
-        const chatPanel = document.querySelector('ytd-live-chat-frame');
-        if (chatPanel) {
-          chatPanel.style.cssText = UC_HIDE_CSS;
-          chatPanel.dataset.ucHidden = '1';
-        }
-      }
+      if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
     // ---- UnityChat button on YouTube page ----
@@ -112,15 +119,19 @@
         e.preventDefault();
         e.stopPropagation();
         // Open chat invisibly if closed
-        const chatPanel = document.querySelector('ytd-live-chat-frame');
-        if (chatPanel && chatPanel.offsetHeight < 100) {
-          const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button');
-          if (toggleBtn) toggleBtn.click();
-          await new Promise((r) => setTimeout(r, 2000));
-          chatPanel.style.cssText = UC_HIDE_CSS;
-          chatPanel.dataset.ucHidden = '1';
+        const cp = document.querySelector('ytd-live-chat-frame');
+        if (cp && cp.offsetHeight < 100) {
+          // Restore layout temporarily so toggle works
+          const cc = document.querySelector('#chat, #chat-container');
+          if (cc) cc.style.cssText = '';
+          const fl = document.querySelector('ytd-watch-flexy');
+          if (fl) fl.setAttribute('is-two-columns_', '');
+
+          const tb = cp.querySelector('#show-hide-button button, #show-hide-button');
+          if (tb) tb.click();
+          await new Promise((r) => setTimeout(r, 2500));
+          hideYtChat();
         }
-        // Open UnityChat side panel
         chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
       });
       return btn;
@@ -179,18 +190,17 @@
     const chatVisible = chatPanel && chatPanel.offsetHeight > 100;
 
     if (!chatVisible && chatPanel) {
-      // Find and click YouTube's show/hide chat button
       const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button ytd-toggle-button-renderer, #show-hide-button');
       if (toggleBtn) {
+        // First, restore #chat visibility so toggle button works
+        const chatContainer = document.querySelector('#chat, #chat-container');
+        if (chatContainer) chatContainer.style.cssText = '';
+        const flexy = document.querySelector('ytd-watch-flexy');
+        if (flexy) flexy.setAttribute('is-two-columns_', '');
+
         toggleBtn.click();
-        // Wait for iframe to load
         await new Promise((r) => setTimeout(r, 2000));
-        // Hide the chat panel — YouTube thinks it's open, user doesn't see it
-        if (!chatPanel.dataset.ucHidden) {
-          chatPanel.style.cssText = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
-          chatPanel.dataset.ucHidden = '1';
-        }
-        // Wait more for iframe content to fully initialize
+        hideYtChat();
         await new Promise((r) => setTimeout(r, 1500));
       }
     }
