@@ -2119,23 +2119,28 @@ class UnityChat {
         const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
         if (!resp?.ok || !resp.messages?.length) continue;
 
-        // Boundary detection: najít poslední cached Twitch zprávu v scraped pole
-        const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim().substring(0, 80);
-        const cacheKeys = new Set(
-          this._msgCache
-            .filter((m) => m.platform === 'twitch' && m.username && m.message)
-            .slice(-50)
-            .map((m) => norm(m.username) + '|' + norm(m.message))
-        );
+        // Boundary detection: match on username sequence (not message text,
+        // because scraped text is often incomplete — emotes are img tags).
+        // Take last N cached Twitch usernames and find that sequence in scraped.
+        const cachedUsers = this._msgCache
+          .filter((m) => m.platform === 'twitch' && m.username)
+          .slice(-20)
+          .map((m) => m.username.toLowerCase());
+        const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
 
-        // Hledat od konce scraped (nejnovější) - poslední cached match je naše hranice
         let boundary = -1;
-        for (let i = resp.messages.length - 1; i >= 0; i--) {
-          const m = resp.messages[i];
-          const key = norm(m.username) + '|' + norm(m.message);
-          if (cacheKeys.has(key)) {
-            boundary = i;
-            break;
+        // Try decreasing suffix lengths (5→2) of cached username sequence
+        for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
+          const suffix = cachedUsers.slice(-len);
+          for (let i = scrapedUsers.length - len; i >= 0; i--) {
+            let match = true;
+            for (let j = 0; j < len; j++) {
+              if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
+            }
+            if (match) {
+              boundary = i + len - 1;
+              break;
+            }
           }
         }
 
@@ -2262,7 +2267,9 @@ class UnityChat {
     // @mention zvýraznění - kontroluje text zprávy i reply-parent
     // Matchuje jak @username tak @nickname (pokud je nastavený)
     const myName = this.config.username?.toLowerCase();
-    const myNick = myName ? this.nicknames.get(this.activePlatform, this.config.username)?.toLowerCase() : null;
+    // Check nickname on the message's platform (not activePlatform —
+    // that may be null when rendering cached messages at startup)
+    const myNick = myName ? this.nicknames.get(msg.platform, this.config.username)?.toLowerCase() : null;
     const msgLower = msg.message?.toLowerCase() || '';
     const isMentioned = myName && (
       msgLower.includes(`@${myName}`) ||
