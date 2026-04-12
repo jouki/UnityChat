@@ -75,33 +75,50 @@
       } catch {}
     }
 
-    // 2. Zkusit extrahovat send params z iframe HTML (správný kanál!)
-    //    Iframe je same-origin → contentDocument přístupný.
-    //    Tyto params jsou vygenerované pro aktivní YouTube kanál.
+    // 2. Force-load iframe and use DOM send (correct channel guaranteed).
+    //    When chat is collapsed, #chatframe exists but is empty. Loading its
+    //    src populates it with YouTube's session context (correct channel).
     if (frame) {
       try {
-        const iframeHtml = frame.contentDocument?.documentElement?.innerHTML;
-        if (iframeHtml) {
-          let pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
-          if (!pm) pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
-          if (pm) {
-            const videoId = getVideoId();
-            if (videoId) {
-              const result = await chrome.runtime.sendMessage({
-                type: 'YT_SEND',
-                videoId,
-                text,
-                iframeParams: pm[1]  // params z iframe — správný kanál
-              });
-              if (result?.ok) return;
-              // Pokud selže, fallback na plný API path
+        const doc = frame.contentDocument;
+        const isEmpty = !doc || doc.documentElement.innerHTML.length < 1000;
+
+        if (isEmpty) {
+          const videoId = getVideoId();
+          if (videoId) {
+            const chatUrl = `https://www.youtube.com/live_chat?v=${videoId}&is_popout=0`;
+            frame.src = chatUrl;
+            // Wait for iframe to load (max 8s)
+            await new Promise((resolve) => {
+              const onLoad = () => { frame.removeEventListener('load', onLoad); resolve(); };
+              frame.addEventListener('load', onLoad);
+              setTimeout(resolve, 8000);
+            });
+            await new Promise((r) => setTimeout(r, 500)); // let DOM settle
+          }
+        }
+
+        // Now try DOM send in the loaded iframe
+        const loadedDoc = frame.contentDocument;
+        if (loadedDoc) {
+          for (let i = 0; i < 5; i++) {
+            const input = findInput(loadedDoc);
+            if (input) {
+              input.focus();
+              input.textContent = '';
+              frame.contentWindow.document.execCommand('insertText', false, text);
+              await new Promise((r) => setTimeout(r, 150));
+              const btn = findSendBtn(loadedDoc);
+              if (btn) btn.click();
+              return;
             }
+            await new Promise((r) => setTimeout(r, 500));
           }
         }
       } catch {}
     }
 
-    // 3. Fallback: API přes background (fetchne /live_chat fresh)
+    // 3. Fallback: API přes background (fetchne /live_chat fresh — may use wrong channel)
     const videoId = getVideoId();
     if (!videoId) throw new Error('Video ID nenalezeno');
 
