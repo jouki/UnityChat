@@ -427,10 +427,25 @@ class EmoteManager {
 
   _toHtml(segments) {
     const out = [];
-    // Track whether the last output item is an open emote-stack
     let stackOpen = false;
-    for (const s of segments) {
+
+    // Check if a ZW emote follows at or after position i (skipping whitespace)
+    const zwAhead = (i) => {
+      for (let j = i; j < segments.length; j++) {
+        const s = segments[j];
+        if (s.type === 'emote' && s.zw) return true;
+        if (s.type === 'emote' && !s.zw) return false; // solid emote = no
+        if (s.type === 'text' && s.value.trim()) return false; // non-whitespace text = no
+        // whitespace text → keep looking
+      }
+      return false;
+    };
+
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
       if (s.type !== 'emote') {
+        // Whitespace between base and ZW emote — skip (don't close stack)
+        if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
         out.push(this._eh(s.value));
         continue;
@@ -438,12 +453,10 @@ class EmoteManager {
       const alt = this._ea(s.value);
       const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
       if (s.zw) {
-        // Zero-width: append into current stack (or create one if needed)
         if (!stackOpen) out.push('<span class="emote-stack">');
         out.push(img);
         stackOpen = true;
       } else {
-        // Regular emote: close previous stack if any, start a new one
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
         out.push(`<span class="emote-stack">${img}`);
         stackOpen = true;
