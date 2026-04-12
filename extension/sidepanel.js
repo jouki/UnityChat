@@ -2275,11 +2275,9 @@ class UnityChat {
     const platform = this.activePlatform;
     const reply = this._reply ? { ...this._reply } : null;
 
-    // Save to message history (max 50, no consecutive duplicates)
-    if (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text) {
-      this._msgHistory.push(text);
-      if (this._msgHistory.length > 50) this._msgHistory.shift();
-    }
+    // Save to message history (max 50)
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
     this._msgHistoryIdx = -1;
     this._msgHistoryDraft = '';
 
@@ -2947,9 +2945,7 @@ class UnityChat {
       for (const m of msgs) {
         if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
           const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
-          if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
-            this._msgHistory.push(text);
-          }
+          if (text) this._msgHistory.push(text);
         }
       }
       if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
