@@ -2198,8 +2198,8 @@ class UnityChat {
 
   // ---- Odpovědi na zprávy ----
 
-  _setReply(platform, username, messageId) {
-    this._reply = { platform, username, messageId };
+  _setReply(platform, username, messageId, message) {
+    this._reply = { platform, username, messageId, message };
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -2259,7 +2259,7 @@ class UnityChat {
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
-      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username } } : {}),
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null } } : {}),
     });
 
     // Send in background (don't block UI)
@@ -2720,7 +2720,7 @@ class UnityChat {
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._setReply(msg.platform, msg.username, msg.id);
+      this._setReply(msg.platform, msg.username, msg.id, msg.message);
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
