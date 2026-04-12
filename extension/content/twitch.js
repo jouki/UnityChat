@@ -93,13 +93,14 @@
     const header = findChatHeader();
     if (!header) return;
     const btn = buildUcButton();
-    // Prefer to sit right after the collapse toggle (matches the red-box
-    // position in the UI). Otherwise prepend into the header row.
-    const toggle = header.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-    if (toggle && toggle.parentElement) {
-      toggle.parentElement.insertBefore(btn, toggle.nextSibling);
+    // Insert directly into the header as second child (after collapse toggle wrapper).
+    // Don't insert inside toggle's parent — inherits tooltip + captures clicks.
+    const toggleWrapper = header.querySelector('[data-a-target="right-column__toggle-collapse-btn"]')?.closest('[class]');
+    if (toggleWrapper && toggleWrapper.parentElement === header) {
+      header.insertBefore(btn, toggleWrapper.nextSibling);
     } else {
-      header.insertBefore(btn, header.firstChild);
+      // Fallback: insert as second child of header
+      header.insertBefore(btn, header.children[1] || null);
     }
   }
 
