@@ -144,13 +144,9 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      // Find the "Otevřít panel" button by its text and insert before it
-      const allBtns = document.querySelectorAll('ytd-live-chat-frame button, ytd-live-chat-frame button-view-model');
-      for (const el of allBtns) {
-        if (el.textContent.trim().includes('Otevřít panel') || el.textContent.trim().includes('Show chat')) {
-          el.parentElement.insertBefore(buildYtButton(), el);
-          return;
-        }
+      const container = document.querySelector('ytd-live-chat-frame #teaser-carousel .ytVideoMetadataCarouselViewModelCarouselContainer');
+      if (container) {
+        container.appendChild(buildYtButton());
       }
     }
 
