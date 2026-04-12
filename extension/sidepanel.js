@@ -2408,16 +2408,10 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Auto-detekce username + track color
+      // Track color from own messages (username detection is PING-only)
       if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
         if (msg.color) this._lastUserColor = msg.color;
-        if (msg.username && this.config.username !== msg.username) {
-          this.config.username = msg.username;
-          const el = document.getElementById('input-username');
-          if (el) el.value = msg.username;
-          this._saveConfig();
-        }
       }
     }
 
