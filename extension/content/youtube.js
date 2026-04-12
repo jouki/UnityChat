@@ -144,9 +144,14 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      const openBtn = document.querySelector('ytd-live-chat-frame #teaser-carousel .ytTextCarouselItemViewModelButton');
-      if (openBtn) {
-        openBtn.parentElement.insertBefore(buildYtButton(), openBtn);
+      const frame = document.querySelector('ytd-live-chat-frame');
+      const carousel = document.querySelector('#teaser-carousel');
+      const container = document.querySelector('.ytVideoMetadataCarouselViewModelCarouselContainer');
+      const targetBtn = document.querySelector('.ytTextCarouselItemViewModelButton');
+      console.log('[UC] inject attempt:', { frame: !!frame, carousel: !!carousel, container: !!container, targetBtn: !!targetBtn });
+      if (targetBtn) {
+        targetBtn.parentElement.insertBefore(buildYtButton(), targetBtn);
+        console.log('[UC] button injected!');
       }
     }
 
