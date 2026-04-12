@@ -2309,8 +2309,8 @@ class UnityChat {
       ctx.className = 'reply-ctx';
       if (msg.replyTo.id) ctx.classList.add('clickable');
       ctx.innerHTML =
-        `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username)}</span> ` +
-        `<span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>`;
+        `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username || '')}</span>` +
+        (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
           e.stopPropagation();
