@@ -149,11 +149,16 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      // Place next to "Otevřít panel" button inside ytd-live-chat-frame
+      // Place before the "Otevřít panel" button-view-model
+      const openPanelBtn = document.querySelector('ytd-live-chat-frame button-view-model.ytTextCarouselItemViewModelButton');
+      if (openPanelBtn) {
+        openPanelBtn.parentElement.insertBefore(buildYtButton(), openPanelBtn);
+        return;
+      }
+      // Fallback: next to #show-hide-button
       const showHide = document.querySelector('ytd-live-chat-frame #show-hide-button');
       if (showHide) {
         showHide.parentElement.insertBefore(buildYtButton(), showHide.nextSibling);
-        return;
       }
     }
 
