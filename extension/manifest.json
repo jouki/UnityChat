@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.19.9",
+  "version": "3.19.10",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",

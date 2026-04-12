@@ -692,12 +692,18 @@ body.layout-large .reply-ctx { font-size: 12px; }
   object-fit: contain;
 }
 
-.msg .tx img.emote-zw {
+.emote-zw-wrap {
+  display: inline-block;
   width: 0;
-  overflow: visible;
-  margin-left: 0;
-  margin-right: 0;
-  transform: translateX(-50%);
+  vertical-align: middle;
+  position: relative;
+}
+.emote-zw-wrap img.emote {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
 }
 
 .msg.superchat {

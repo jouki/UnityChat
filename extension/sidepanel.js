@@ -430,8 +430,8 @@ class EmoteManager {
       .map((s) => {
         if (s.type === 'emote') {
           const alt = this._ea(s.value);
-          const cls = s.zw ? 'emote emote-zw' : 'emote';
-          return `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+          const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+          return s.zw ? `<span class="emote-zw-wrap">${img}</span>` : img;
         }
         return this._eh(s.value);
       })
