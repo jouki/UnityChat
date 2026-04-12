@@ -1311,6 +1311,7 @@ class UnityChat {
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._platformColors = {};    // per-platform user color (from IRC/API)
+    this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
     this._msgHistory = [];         // sent message history (newest last)
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
     this._msgHistoryDraft = '';    // unsent text before browsing history
@@ -1411,6 +1412,9 @@ class UnityChat {
       }
     } catch {}
 
+    // Load SE bot commands in background (for ! autocomplete)
+    this._loadSECommands().catch(() => {});
+
     console.log('[UC] init: loading cache...');
     await this._loadCachedMessages();
     console.log('[UC] init: cache loaded, connecting all...');
@@ -1499,9 +1503,22 @@ class UnityChat {
         } else {
           this._acHide();
         }
-      } else if (!partial.startsWith('@')) {
-        // Not typing @, clear any open @suggest (emote suggest is Tab-only)
-        if (this._ac && this._ac.matches[0]?.startsWith('@')) this._acHide();
+      } else if (partial.startsWith('!') && partial.length >= 2 && ws === 0) {
+        // !command autocomplete (only at start of message)
+        const prefix = partial.substring(1).toLowerCase();
+        const matches = this._seCommands
+          .filter(c => c.name.toLowerCase().startsWith(prefix))
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(c => '!' + c.name);
+        if (matches.length) {
+          this._ac = { start: ws, end: pos, index: 0, matches };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
+        // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
+        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!'))) this._acHide();
       }
     });
 
@@ -2105,6 +2122,30 @@ class UnityChat {
       }
     } catch (e) {
       console.error('[Badges] Load error:', e);
+    }
+  }
+
+  // ---- StreamElements bot commands (for ! autocomplete) ----
+
+  async _loadSECommands() {
+    try {
+      // Get SE channel ID from channel name
+      const chResp = await fetch(`https://api.streamelements.com/kappa/v2/channels/${this.config.channel}`);
+      if (!chResp.ok) return;
+      const chData = await chResp.json();
+      const seId = chData._id;
+      if (!seId) return;
+      // Fetch commands
+      const cmdResp = await fetch(`https://api.streamelements.com/kappa/v2/bot/commands/${seId}`);
+      if (!cmdResp.ok) return;
+      const cmds = await cmdResp.json();
+      this._seCommands = cmds.filter(c => c.enabled).map(c => ({
+        name: c.command,
+        reply: c.reply || '',
+      }));
+      console.log(`[SE] ${this._seCommands.length} commands loaded`);
+    } catch (e) {
+      console.warn('[SE] Failed to load commands:', e);
     }
   }
 
@@ -2791,6 +2832,30 @@ class UnityChat {
     }
 
     el.appendChild(tx);
+
+    // Easter egg: StreamElements !bulgarians response — click to play audio
+    if (msg.username?.toLowerCase() === 'streamelements' && msg.message?.includes('Bulgarians a pojedeš')) {
+      el.classList.add('msg-audio');
+      const audioUrl = chrome.runtime.getURL('audio/streamelements-bulgarians.mp3');
+      el.addEventListener('click', () => {
+        if (!this._bulgarianAudio) {
+          this._bulgarianAudio = new Audio(audioUrl);
+          this._bulgarianAudio.addEventListener('ended', () => {
+            document.querySelectorAll('.msg-audio.playing').forEach(m => m.classList.remove('playing'));
+          });
+        }
+        const a = this._bulgarianAudio;
+        if (!a.paused) {
+          a.pause(); a.currentTime = 0;
+          el.classList.remove('playing');
+        } else {
+          // Stop any other playing instance
+          document.querySelectorAll('.msg-audio.playing').forEach(m => m.classList.remove('playing'));
+          a.currentTime = 0;
+          a.play().then(() => el.classList.add('playing')).catch(() => {});
+        }
+      });
+    }
 
     // Hover akce
     const actions = document.createElement('div');
