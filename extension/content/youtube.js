@@ -69,16 +69,9 @@
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
     function hideYtChat() {
-      // Layout elements: display:none to collapse columns
-      for (const sel of ['#secondary', '#secondary-inner', '#panels-full-bleed-container']) {
-        const el = document.querySelector(sel);
-        if (el) el.style.cssText = 'display:none!important;';
-      }
-      // #chat + ytd-live-chat-frame: move off-screen (NOT display:none — iframe must stay alive for DOM send)
-      for (const sel of ['#chat', 'ytd-live-chat-frame']) {
-        const el = document.querySelector(sel);
-        if (el) el.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
-      }
+      // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
+      const chat = document.querySelector('#chat');
+      if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       // Theater mode for correct player sizing
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy) {
