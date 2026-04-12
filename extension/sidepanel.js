@@ -1275,6 +1275,7 @@ class UnityChat {
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
+    this._platformColors = {};    // per-platform user color (from IRC/API)
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -2204,7 +2205,6 @@ class UnityChat {
     // Optimistic UI: show message instantly (include @mention for cross-platform reply)
     const username = this._platformUsernames[platform] || this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
-    const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
     let displayText = text;
     if (reply && reply.platform !== platform) {
       const at = `@${reply.username}`;
@@ -2216,7 +2216,7 @@ class UnityChat {
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || this._lastUserColor || defaultColors[platform] || null,
+      color: ucProfile?.color || this._platformColors?.[platform] || null,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
@@ -2445,10 +2445,15 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Track color from own messages (username detection is PING-only)
+      // Track color per platform from own messages
+      if (msg.color && msg.platform) {
+        const myName = this._platformUsernames[msg.platform]?.toLowerCase();
+        if (myName && msg.username?.toLowerCase() === myName) {
+          this._platformColors[msg.platform] = msg.color;
+        }
+      }
       if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
-        if (msg.color) this._lastUserColor = msg.color;
       }
     }
 
