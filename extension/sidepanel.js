@@ -33,6 +33,7 @@ class EmoteManager {
     this.ffzEmotes = new Map();    // name -> url (FFZ global + channel)
     this.twitchNative = new Map(); // name -> url (naučené z IRC)
     this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
+    this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
     this._globalLoaded = false;
   }
 
@@ -47,7 +48,10 @@ class EmoteManager {
       const emotes = data.emotes || [];
       for (const emote of emotes) {
         const url = this._build7tvUrl(emote);
-        if (url) this.global7tv.set(emote.name, url);
+        if (url) {
+          this.global7tv.set(emote.name, url);
+          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
+        }
       }
       this._globalLoaded = true;
       console.log(`[7TV] ${this.global7tv.size} global emotes loaded`);
@@ -70,6 +74,7 @@ class EmoteManager {
         const url = this._build7tvUrl(emote);
         if (url) {
           this.channel7tv.set(emote.name, url);
+          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
           count++;
         }
       }
@@ -248,7 +253,7 @@ class EmoteManager {
       for (const part of parts) {
         const url = this._get7tv(part);
         if (url) {
-          out.push({ type: 'emote', value: part, url });
+          out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
           out.push({ type: 'text', value: part });
         }
@@ -421,15 +426,44 @@ class EmoteManager {
   // ---- HTML helpers ----
 
   _toHtml(segments) {
-    return segments
-      .map((s) => {
-        if (s.type === 'emote') {
-          const alt = this._ea(s.value);
-          return `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
-        }
-        return this._eh(s.value);
-      })
-      .join('');
+    const out = [];
+    let stackOpen = false;
+
+    // Check if a ZW emote follows at or after position i (skipping whitespace)
+    const zwAhead = (i) => {
+      for (let j = i; j < segments.length; j++) {
+        const s = segments[j];
+        if (s.type === 'emote' && s.zw) return true;
+        if (s.type === 'emote' && !s.zw) return false; // solid emote = no
+        if (s.type === 'text' && s.value.trim()) return false; // non-whitespace text = no
+        // whitespace text → keep looking
+      }
+      return false;
+    };
+
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      if (s.type !== 'emote') {
+        // Whitespace between base and ZW emote — skip (don't close stack)
+        if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
+        if (stackOpen) { out.push('</span>'); stackOpen = false; }
+        out.push(this._eh(s.value));
+        continue;
+      }
+      const alt = this._ea(s.value);
+      const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+      if (s.zw) {
+        if (!stackOpen) out.push('<span class="emote-stack">');
+        out.push(img);
+        stackOpen = true;
+      } else {
+        if (stackOpen) { out.push('</span>'); stackOpen = false; }
+        out.push(`<span class="emote-stack">${img}`);
+        stackOpen = true;
+      }
+    }
+    if (stackOpen) out.push('</span>');
+    return out.join('');
   }
 
   _eh(s) {
@@ -2275,11 +2309,9 @@ class UnityChat {
     const platform = this.activePlatform;
     const reply = this._reply ? { ...this._reply } : null;
 
-    // Save to message history (max 50, no consecutive duplicates)
-    if (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text) {
-      this._msgHistory.push(text);
-      if (this._msgHistory.length > 50) this._msgHistory.shift();
-    }
+    // Save to message history (max 50)
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
     this._msgHistoryIdx = -1;
     this._msgHistoryDraft = '';
 
@@ -2764,6 +2796,20 @@ class UnityChat {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-action-btn';
+    copyBtn.title = 'Kopírovat zprávu';
+    const copySvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+    copyBtn.innerHTML = copySvg;
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText((msg.message || '') + ' ').catch(() => {});
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>';
+      setTimeout(() => { copyBtn.innerHTML = copySvg; }, 1500);
+    });
+    actions.appendChild(copyBtn);
+
     // Pin button (jen Twitch zprávy - vyžaduje mod práva)
     if (msg.platform === 'twitch') {
       const pinBtn = document.createElement('button');
@@ -2938,19 +2984,19 @@ class UnityChat {
       this._msgCache = msgs;
 
       // Populate message history from cached user messages (for ArrowUp/Down)
-      const myName = (this.config.username || '').toLowerCase();
-      if (myName) {
-        for (const m of msgs) {
-          if (m.username?.toLowerCase() === myName && m.message) {
-            const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
-            if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
-              this._msgHistory.push(text);
-            }
-          }
-        }
-        // Keep only last 50
-        if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
+      // Match all known username variants + UC-marked messages
+      const myNames = new Set();
+      if (this.config.username) myNames.add(this.config.username.toLowerCase());
+      for (const name of Object.values(this._platformUsernames)) {
+        if (name) myNames.add(name.toLowerCase());
       }
+      for (const m of msgs) {
+        if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
+          const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+          if (text) this._msgHistory.push(text);
+        }
+      }
+      if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
     } catch (e) {
       console.error('Cache load failed:', e);
       // DON'T reset _msgCache — keep whatever was there so beforeunload
