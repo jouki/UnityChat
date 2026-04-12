@@ -1271,7 +1271,7 @@ class UnityChat {
     this._msgCache = [];
     this._cacheTimer = null;
     this._twitchBadges = {};
-    this._chatUsers = new Map();
+    this._chatUsers = new Map();  // username → { name, platform, color }
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
@@ -1307,6 +1307,15 @@ class UnityChat {
     if (this.config._platformColors) {
       this._platformColors = { ...this.config._platformColors };
     }
+    // Load persisted user colors
+    try {
+      const d = await chrome.storage.local.get('uc_user_colors');
+      if (d.uc_user_colors) {
+        for (const [k, v] of Object.entries(d.uc_user_colors)) {
+          this._chatUsers.set(k, v);
+        }
+      }
+    } catch {}
     await this.nicknames.loadCache();
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
@@ -2401,16 +2410,17 @@ class UnityChat {
   }
 
   _addMessage(msg) {
-    // Track platform color BEFORE dedup (echo gets deduped but we still want the color)
-    if (msg.color && msg.platform && !msg._optimistic && msg.message?.includes(UC_MARKER)) {
-      const cleanMsg = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
-      if (this._lastSentText && cleanMsg === this._lastSentText) {
-        this._savePlatformColor(msg.platform, msg.color);
-        this._lastSentText = null;
+    // Track color BEFORE dedup (echo gets deduped but we still want the color)
+    if (msg.color && msg.username && !msg._optimistic) {
+      const key = msg.username.toLowerCase();
+      const prev = this._chatUsers.get(key);
+      if (!prev || prev.color !== msg.color) {
+        this._chatUsers.set(key, { name: msg.username, platform: msg.platform, color: msg.color });
       }
-      const myName = this._platformUsernames[msg.platform]?.toLowerCase();
-      if (myName && msg.username?.toLowerCase() === myName) {
-        this._savePlatformColor(msg.platform, msg.color);
+      if (msg.platform) this._savePlatformColor(msg.platform, msg.color);
+      if (this._lastSentText && msg.message) {
+        const cleanMsg = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+        if (cleanMsg === this._lastSentText) this._lastSentText = null;
       }
     }
 
@@ -2448,8 +2458,25 @@ class UnityChat {
 
     this.msgCount++;
 
-    // Sbírat usernames pro @mention autocomplete
-    if (msg.username) {
+    // Sbírat usernames + barvy (username → color mapping)
+    if (msg.username && msg.color) {
+      const key = msg.username.toLowerCase();
+      const prev = this._chatUsers.get(key);
+      this._chatUsers.set(key, {
+        name: msg.username,
+        platform: msg.platform,
+        color: msg.color
+      });
+      // Persist color map (debounced)
+      if (!prev || prev.color !== msg.color) {
+        if (!this._userColorTimer) {
+          this._userColorTimer = setTimeout(() => {
+            this._userColorTimer = null;
+            chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+          }, 2000);
+        }
+      }
+    } else if (msg.username && !this._chatUsers.has(msg.username.toLowerCase())) {
       this._chatUsers.set(msg.username.toLowerCase(), {
         name: msg.username,
         platform: msg.platform,
