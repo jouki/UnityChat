@@ -2631,8 +2631,12 @@ class UnityChat {
       const ctx = document.createElement('div');
       ctx.className = 'reply-ctx';
       if (msg.replyTo.id) ctx.classList.add('clickable');
+      // Show nickname if available, otherwise platform username
+      const replyRawName = (msg.replyTo.username || '').replace(/^@/, '');
+      const replyProfile = this.nicknames.get(msg.platform, replyRawName);
+      const replyDisplayName = replyProfile?.nickname || replyRawName;
       ctx.innerHTML =
-        `&#8617; <span class="rctx-user">@${this.emotes._eh((msg.replyTo.username || '').replace(/^@/, ''))}</span>` +
+        `&#8617; <span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` +
         (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
