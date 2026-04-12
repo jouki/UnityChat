@@ -2594,7 +2594,8 @@ class UnityChat {
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
-    un.style.color = ucProfile?.color || msg.color;
+    // Color priority: UC custom → chatUsers map (username-bound) → msg.color fallback
+    un.style.color = ucProfile?.color || this._chatUsers.get(msg.username?.toLowerCase())?.color || msg.color;
     un.textContent = ucProfile?.nickname || msg.username;
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
