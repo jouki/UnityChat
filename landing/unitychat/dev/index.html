@@ -88,7 +88,7 @@
     <h1>Unity<span>Chat</span></h1>
     <div class="version">v<span id="version">...</span> &middot; branch: <span id="branch">dev</span></div>
     <div class="commit" id="commit">...</div>
-    <a class="btn" id="download-btn" href="/download/unitychat.zip">Stáhnout DEV ZIP</a>
+    <a class="btn" id="download-btn" href="/dev-api/dev/download">Stáhnout DEV ZIP</a>
     <ul class="features">
       <li>Custom nicknamy (SSE real-time push)</li>
       <li>Twitch chat header button</li>
@@ -100,24 +100,22 @@
     </p>
   </div>
   <script>
-    // Version from dev branch manifest on GitHub (not production /download/)
-    fetch('https://raw.githubusercontent.com/jouki/UnityChat/dev/extension/manifest.json')
+    // Version + commit from dev API (reads manifest from VPS dev branch repo)
+    fetch('/dev-api/dev/manifest.json')
       .then(r => r.json())
       .then(m => {
         document.getElementById('version').textContent = m.version || '?';
       })
       .catch(() => {
         document.getElementById('version').textContent = '?';
+        document.getElementById('download-btn').style.opacity = '0.4';
+        document.getElementById('download-btn').style.pointerEvents = 'none';
       });
-    // Commit hash from dev API (optional — if server runs)
     fetch('/dev-api/health')
       .then(r => r.json())
-      .then(d => {
-        if (d.commit) document.getElementById('commit').textContent = d.commit;
-        else document.getElementById('commit').textContent = '';
-      })
+      .then(() => { document.getElementById('commit').textContent = ''; })
       .catch(() => {
-        document.getElementById('commit').textContent = '';
+        document.getElementById('commit').textContent = 'Dev server offline';
       });
   </script>
 </body>
