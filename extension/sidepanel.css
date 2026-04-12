@@ -254,6 +254,43 @@ body.layout-large .reply-ctx { font-size: 12px; }
   cursor: pointer;
 }
 .btn-nick:disabled { opacity: 0.5; cursor: default; }
+/* ---- Collapsible channel settings ---- */
+
+.settings-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+}
+.settings-section summary {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+}
+.settings-section summary::-webkit-details-marker { display: none; }
+.settings-section summary::after {
+  content: '+';
+  font-size: 14px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+.settings-section[open] summary::after {
+  content: '−';
+}
+.settings-section .setting-row {
+  padding: 4px 10px 6px;
+}
+.settings-section .setting-row:last-child {
+  padding-bottom: 10px;
+}
+
 .nick-status {
   display: block;
   font-size: 11px;

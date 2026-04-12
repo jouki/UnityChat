@@ -19,14 +19,21 @@
 
   <!-- Settings Panel -->
   <div id="settings" class="hidden">
-    <div class="setting-row">
-      <label for="input-channel">Kanál (Twitch / Kick)</label>
-      <input type="text" id="input-channel" value="robdiesalot" spellcheck="false">
-    </div>
-    <div class="setting-row">
-      <label for="input-yt-channel">YouTube kanál (URL cesta)</label>
-      <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="robdiesalot nebo @robdiesalot" spellcheck="false">
-    </div>
+    <details class="settings-section" id="channels-section">
+      <summary>Kanály</summary>
+      <div class="setting-row">
+        <label for="input-channel">Twitch</label>
+        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false">
+      </div>
+      <div class="setting-row">
+        <label for="input-kick-channel">Kick</label>
+        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false">
+      </div>
+      <div class="setting-row">
+        <label for="input-yt-channel">YouTube</label>
+        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="robdiesalot nebo @robdiesalot" spellcheck="false">
+      </div>
+    </details>
     <div class="setting-row">
       <label for="input-username">Tvoje username</label>
       <input type="text" id="input-username" placeholder="Jouki728" spellcheck="false">

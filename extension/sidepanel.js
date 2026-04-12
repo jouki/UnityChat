@@ -10,6 +10,7 @@ const UC_MARKER = '\u2800';
 
 const DEFAULTS = {
   channel: 'robdiesalot',
+  kickChannel: 'robdiesalot',
   ytChannel: 'robdiesalot',
   twitch: true,
   youtube: true,
@@ -1349,6 +1350,7 @@ class UnityChat {
     const $ = (id) => document.getElementById(id);
 
     $('input-channel').value = this.config.channel;
+    $('input-kick-channel').value = this.config.kickChannel || this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
     // Pre-populate nickname + color from cache
@@ -1457,6 +1459,7 @@ class UnityChat {
 
     $('btn-connect').addEventListener('click', () => {
       this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
+      this.config.kickChannel = $('input-kick-channel').value.trim() || this.config.channel;
       this.config.ytChannel = $('input-yt-channel').value.trim() || this.config.channel;
       this.config.username = $('input-username').value.trim();
       this.config.twitch = $('chk-twitch').checked;
@@ -2136,7 +2139,7 @@ class UnityChat {
     this._updateDisabled();
     const connecting = [];
     if (this.config.twitch) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
-    if (this.config.kick) { this.kick.connect(this.config.channel); connecting.push('Kick'); }
+    if (this.config.kick) { this.kick.connect(this.config.kickChannel || this.config.channel); connecting.push('Kick'); }
     if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
