@@ -2690,8 +2690,8 @@ class UnityChat {
     // Username (klik → otevře user card na platformě)
     const un = document.createElement('span');
     un.className = 'un';
-    const ucProfile = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
-    // Color priority: UC custom → chatUsers map (platform:username) → msg.color fallback
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
     un.style.color = ucProfile?.color || this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`)?.color || msg.color;
     un.textContent = ucProfile?.nickname || msg.username;
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
