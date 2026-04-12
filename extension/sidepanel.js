@@ -2945,8 +2945,7 @@ class UnityChat {
         if (name) myNames.add(name.toLowerCase());
       }
       for (const m of msgs) {
-        const isOwn = (m.username && myNames.has(m.username.toLowerCase())) || m._uc;
-        if (isOwn && m.message) {
+        if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
           const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
           if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
             this._msgHistory.push(text);
