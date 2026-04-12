@@ -68,19 +68,19 @@
   if (isMainFrame) {
     function hideYtChat() {
       // Hide everything in the right column
-      const selectors = ['#chat', '#chat-container', '#secondary', '#secondary-inner'];
-      for (const sel of selectors) {
+      for (const sel of ['#chat', '#chat-container', '#secondary', '#secondary-inner']) {
         const el = document.querySelector(sel);
         if (el) el.style.cssText = 'display:none!important;';
       }
-      // Remove layout attributes
+      // Remove layout attributes + force full width on all containers
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy) {
         flexy.removeAttribute('is-two-columns_');
         flexy.removeAttribute('is-two-columns-layout');
-        // Force primary to full width
-        const primary = flexy.querySelector('#primary, #primary-inner');
-        if (primary) primary.style.cssText = 'max-width:none!important;';
+      }
+      for (const sel of ['#primary', '#primary-inner', '#player-container-outer', '#player-container-inner', '#player-container', '#columns']) {
+        const el = document.querySelector(sel);
+        if (el) el.style.cssText = 'max-width:none!important;width:100%!important;';
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
