@@ -2196,9 +2196,13 @@ class UnityChat {
     }
 
     // @mention zvýraznění - kontroluje text zprávy i reply-parent
+    // Matchuje jak @username tak @nickname (pokud je nastavený)
     const myName = this.config.username?.toLowerCase();
+    const myNick = myName ? this.nicknames.get(this.activePlatform, this.config.username)?.toLowerCase() : null;
+    const msgLower = msg.message?.toLowerCase() || '';
     const isMentioned = myName && (
-      msg.message?.toLowerCase().includes(`@${myName}`) ||
+      msgLower.includes(`@${myName}`) ||
+      (myNick && msgLower.includes(`@${myNick}`)) ||
       msg.replyTo?.username?.toLowerCase() === myName
     );
 
