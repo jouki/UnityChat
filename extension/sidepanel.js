@@ -1374,13 +1374,37 @@ class UnityChat {
       this._saveConfig();
       this._applyLayout();
     });
-    // Auto-resize textarea
+    // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
       this.msgInput.style.height = 'auto';
       const max = 250;
       const h = Math.min(this.msgInput.scrollHeight, max);
       this.msgInput.style.height = h + 'px';
       this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+
+      // Auto-trigger @username autocomplete while typing
+      const text = this.msgInput.value;
+      const pos = this.msgInput.selectionStart;
+      // Find the word being typed
+      let ws = pos;
+      while (ws > 0 && text[ws - 1] !== ' ') ws--;
+      const partial = text.substring(ws, pos);
+      if (partial.startsWith('@') && partial.length >= 2) {
+        const prefix = partial.substring(1).toLowerCase();
+        const matches = [...this._chatUsers.values()]
+          .filter(u => u.name.toLowerCase().startsWith(prefix))
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(u => '@' + u.name);
+        if (matches.length) {
+          this._ac = { start: ws, end: pos, index: 0, matches };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (!partial.startsWith('@')) {
+        // Not typing @, clear any open @suggest (emote suggest is Tab-only)
+        if (this._ac && this._ac.matches[0]?.startsWith('@')) this._acHide();
+      }
     });
 
     // Username se nastaví okamžitě při psaní, uloží při blur
