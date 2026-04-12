@@ -1806,6 +1806,11 @@ class UnityChat {
 
     // Cycling - opakovaný Tab / Shift+Tab
     if (this._ac && this._ac.end === pos) {
+      if (!this._ac.applied) {
+        // First TAB after input-triggered suggest → confirm current selection
+        this._acApply();
+        return;
+      }
       const len = this._ac.matches.length;
       this._ac.index = (this._ac.index + dir + len) % len;
       this._acApply();
@@ -1855,6 +1860,7 @@ class UnityChat {
     const after = text.substring(ac.end);
     input.value = before + match + ' ' + after;
     ac.end = ac.start + match.length + 1;
+    ac.applied = true;
     input.setSelectionRange(ac.end, ac.end);
     this._acRender();
   }
