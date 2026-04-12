@@ -568,6 +568,27 @@ async function ytSend(tabId, videoId, text) {
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
           log.push('apiKey:' + apiKey.substring(0, 10));
 
+          // SAPISIDHASH auth — required for YouTube API when chat is closed
+          const origin = 'https://www.youtube.com';
+          const cookies = Object.fromEntries(
+            document.cookie.split(';').map((c) => {
+              const [k, ...v] = c.trim().split('=');
+              return [k, v.join('=')];
+            })
+          );
+          const sapisid = cookies['SAPISID'] || cookies['__Secure-3PAPISID'];
+          let authHeader = null;
+          if (sapisid) {
+            const ts = Math.floor(Date.now() / 1000);
+            const str = ts + ' ' + sapisid + ' ' + origin;
+            const hashBuf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(str));
+            const hex = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+            authHeader = 'SAPISIDHASH ' + ts + '_' + hex;
+            log.push('auth:SAPISIDHASH');
+          } else {
+            log.push('auth:none(no SAPISID cookie)');
+          }
+
           // Fetch live_chat page pro send params
           const chatResp = await fetch('/live_chat?v=' + videoId);
           if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
@@ -581,10 +602,13 @@ async function ytSend(tabId, videoId, text) {
           log.push('paramsLen:' + pm[1].length);
 
           // Odeslat zprávu
+          const headers = { 'Content-Type': 'application/json', 'X-Origin': origin };
+          if (authHeader) headers['Authorization'] = authHeader;
+
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({
               context: { client: { clientName: 'WEB', clientVersion: cVer } },
               params: pm[1],
