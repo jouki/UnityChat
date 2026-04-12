@@ -101,6 +101,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     ucLog(msg.tag, ...msg.args);
     return;
   }
+
+  // Open side panel from a content script (e.g. the Twitch chat button).
+  // Chrome requires sidePanel.open() to run inside the user gesture — the
+  // gesture propagates through onMessage, so we must call it synchronously
+  // here (no awaits before the open call).
+  if (msg.type === 'OPEN_SIDE_PANEL') {
+    const tabId = sender.tab?.id;
+    const windowId = sender.tab?.windowId;
+    if (HAS_SIDE_PANEL && tabId != null) {
+      chrome.sidePanel.open({ tabId })
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => {
+          if (windowId != null) {
+            chrome.sidePanel.open({ windowId })
+              .then(() => sendResponse({ ok: true }))
+              .catch((err) => sendResponse({ ok: false, error: err.message }));
+          } else {
+            sendResponse({ ok: false, error: e.message });
+          }
+        });
+      return true;
+    }
+    // Opera (no sidePanel API) → popup window fallback
+    chrome.windows.create({
+      url: 'sidepanel.html',
+      type: 'popup',
+      width: 420,
+      height: 720
+    }).then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg.type === 'LOAD_BADGES') {
     ucLog('Badges', 'Loading for channel:', msg.channel, 'roomId:', msg.roomId);
     loadTwitchBadges(msg.channel, msg.roomId)

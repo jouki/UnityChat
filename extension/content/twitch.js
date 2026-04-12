@@ -5,6 +5,123 @@
 (function () {
   if (window._ucTwitch) return;
   window._ucTwitch = true;
+
+  // ---- Side panel opener button injected into Twitch chat header ----
+  // Twitch's chat shell re-mounts on channel/route changes, so we keep a
+  // MutationObserver alive and re-inject whenever our button disappears.
+
+  const UC_BTN_ID = 'uc-open-panel-btn';
+
+  const UC_LOGO_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" aria-hidden="true">
+  <defs>
+    <linearGradient id="uc-g" x1="17%" y1="0%" x2="83%" y2="100%">
+      <stop offset="0%" stop-color="#ffc800"/>
+      <stop offset="100%" stop-color="#ff8c00"/>
+    </linearGradient>
+  </defs>
+  <path d="M 28 14 H 100 Q 116 14 116 30 V 80 Q 116 96 100 96 H 58 L 38 116 L 44 96 H 28 Q 12 96 12 80 V 30 Q 12 14 28 14 Z" fill="url(#uc-g)"/>
+  <path d="M 44 38 L 44 68 Q 44 82 64 82 Q 84 82 84 68 L 84 38 L 74 38 L 74 68 Q 74 72 64 72 Q 54 72 54 68 L 54 38 Z" fill="#0a0a0d"/>
+</svg>`.trim();
+
+  function buildUcButton() {
+    const btn = document.createElement('button');
+    btn.id = UC_BTN_ID;
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Otevřít UnityChat');
+    btn.title = 'Otevřít UnityChat';
+    btn.innerHTML = UC_LOGO_SVG;
+    Object.assign(btn.style, {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '30px',
+      height: '30px',
+      padding: '4px',
+      margin: '0 4px',
+      background: 'transparent',
+      border: 'none',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      flexShrink: '0',
+      transition: 'background 0.15s ease, transform 0.15s ease'
+    });
+    const svg = btn.querySelector('svg');
+    if (svg) {
+      svg.style.width = '20px';
+      svg.style.height = '20px';
+      svg.style.display = 'block';
+      svg.style.filter = 'drop-shadow(0 0 4px rgba(255, 140, 0, 0.45))';
+    }
+    btn.addEventListener('mouseenter', () => {
+      btn.style.background = 'rgba(255, 140, 0, 0.12)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      btn.style.background = 'transparent';
+    });
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
+    });
+    return btn;
+  }
+
+  function findChatHeader() {
+    // Twitch uses several header classes across layouts; try them in order.
+    const selectors = [
+      '.stream-chat-header',
+      '[data-a-target="stream-chat-header"]',
+      '.chat-room__header',
+      '.chat-shell__header',
+      '.chat-header'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    // Fallback: climb from the collapse toggle button.
+    const toggle = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+    if (toggle) {
+      // Walk up until we find a row-ish container (flex parent with siblings).
+      let n = toggle.parentElement;
+      for (let i = 0; i < 5 && n; i++) {
+        if (n.childElementCount >= 2) return n;
+        n = n.parentElement;
+      }
+    }
+    return null;
+  }
+
+  function injectSidePanelButton() {
+    if (document.getElementById(UC_BTN_ID)) return;
+    const header = findChatHeader();
+    if (!header) return;
+    const btn = buildUcButton();
+    // Prefer to sit right after the collapse toggle (matches the red-box
+    // position in the UI). Otherwise prepend into the header row.
+    const toggle = header.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+    if (toggle && toggle.parentElement) {
+      toggle.parentElement.insertBefore(btn, toggle.nextSibling);
+    } else {
+      header.insertBefore(btn, header.firstChild);
+    }
+  }
+
+  function startHeaderObserver() {
+    injectSidePanelButton();
+    const obs = new MutationObserver(() => {
+      if (!document.getElementById(UC_BTN_ID)) injectSidePanelButton();
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startHeaderObserver, { once: true });
+  } else {
+    startHeaderObserver();
+  }
+
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
       // Username z Twitch cookie (vždy dostupné, ne DOM dropdown)
