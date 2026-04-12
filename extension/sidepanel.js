@@ -1247,7 +1247,7 @@ class UnityChat {
     this._chatUsers = new Map();
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
-    this._platformUsernames = {}; // per-platform username tracking
+    this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -1273,6 +1273,9 @@ class UnityChat {
       `<img src="icons/icon48.png" class="hdr-logo"> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
 
     await this._loadConfig();
+    if (this.config._platformUsernames) {
+      this._platformUsernames = { ...this.config._platformUsernames };
+    }
     await this.nicknames.loadCache();
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
@@ -1412,10 +1415,18 @@ class UnityChat {
 
     // Username se nastaví okamžitě při psaní, uloží při blur
     $('input-username').addEventListener('input', () => {
-      this.config.username = $('input-username').value.trim();
+      const val = $('input-username').value.trim();
+      this.config.username = val;
+      if (this.activePlatform) this._platformUsernames[this.activePlatform] = val;
     });
     $('input-username').addEventListener('change', () => {
-      this.config.username = $('input-username').value.trim();
+      const val = $('input-username').value.trim();
+      this.config.username = val;
+      if (this.activePlatform) {
+        this._platformUsernames[this.activePlatform] = val;
+        if (!this.config._platformUsernames) this.config._platformUsernames = {};
+        this.config._platformUsernames[this.activePlatform] = val;
+      }
       this._saveConfig();
     });
     $('chk-twitch').checked = this.config.twitch;
@@ -1842,9 +1853,15 @@ class UnityChat {
 
       this._setActivePlatform(resp?.platform || null);
 
-      // Track username per platform
+      // Track username per platform + persist
       if (resp?.username && resp?.platform) {
-        this._platformUsernames[resp.platform] = resp.username.replace(/^@/, '');
+        const name = resp.username.replace(/^@/, '');
+        this._platformUsernames[resp.platform] = name;
+        if (!this.config._platformUsernames) this.config._platformUsernames = {};
+        if (this.config._platformUsernames[resp.platform] !== name) {
+          this.config._platformUsernames[resp.platform] = name;
+          this._saveConfig();
+        }
       }
       // Auto-detekce username z platformy (hlavní config field)
       if (resp?.username && !this.config.username) {
@@ -1896,6 +1913,18 @@ class UnityChat {
     this.msgInput.placeholder = platform
       ? `Zpráva do ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`
       : 'Otevři stream pro odesílání...';
+
+    // Update username field to show current platform's username
+    const el = document.getElementById('input-username');
+    const label = document.querySelector('label[for="input-username"]');
+    if (el && platform) {
+      const pName = this._platformUsernames[platform];
+      if (pName) el.value = pName;
+    }
+    if (label) {
+      const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
+      label.textContent = platform ? `Username (${names[platform] || platform})` : 'Tvoje username';
+    }
   }
 
   _applyLayout() {
