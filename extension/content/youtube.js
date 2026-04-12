@@ -37,6 +37,46 @@
     }
   });
 
+  // ---- Close button interceptor (inside live_chat iframe) ----
+  // When user clicks X to close chat, hide the panel instead of closing it.
+  // This keeps the iframe functional for DOM send.
+  if (isLiveChat) {
+    const UC_HIDE_CSS = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+
+    function interceptCloseButton() {
+      const closeBtn = document.querySelector('#close-button button');
+      if (closeBtn && !closeBtn.dataset.ucIntercepted) {
+        closeBtn.dataset.ucIntercepted = '1';
+        closeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          // Tell main frame to hide (not close) the chat panel
+          window.parent.postMessage({ type: 'UC_HIDE_CHAT' }, '*');
+        }, true); // capture phase — fires before YouTube's handler
+      }
+    }
+
+    // Close button appears async — watch for it
+    interceptCloseButton();
+    const closeObs = new MutationObserver(interceptCloseButton);
+    closeObs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ---- Hide chat listener (main frame) ----
+  // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
+  if (isMainFrame) {
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === 'UC_HIDE_CHAT') {
+        const chatPanel = document.querySelector('ytd-live-chat-frame');
+        if (chatPanel) {
+          chatPanel.style.cssText = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+          chatPanel.dataset.ucHidden = '1';
+        }
+      }
+    });
+  }
+
   // Přímé odeslání v live_chat iframe
   async function sendDirect(text) {
     const input = findInput(document);
