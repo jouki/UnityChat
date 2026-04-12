@@ -1271,10 +1271,12 @@ class UnityChat {
     this._msgCache = [];
     this._cacheTimer = null;
     this._twitchBadges = {};
-    this._chatUsers = new Map();
+    this._chatUsers = new Map();  // username → { name, platform, color }
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
+    this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
+    this._platformColors = {};    // per-platform user color (from IRC/API)
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -1303,6 +1305,18 @@ class UnityChat {
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
+    if (this.config._platformColors) {
+      this._platformColors = { ...this.config._platformColors };
+    }
+    // Load persisted user colors
+    try {
+      const d = await chrome.storage.local.get('uc_user_colors');
+      if (d.uc_user_colors) {
+        for (const [k, v] of Object.entries(d.uc_user_colors)) {
+          this._chatUsers.set(k, v);
+        }
+      }
+    } catch {}
     await this.nicknames.loadCache();
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
@@ -1345,25 +1359,27 @@ class UnityChat {
       } catch {}
     }
 
-    console.log('[UC] init: loading cache + connecting...');
-    // Load cache + connect FIRST (instant), emotes in background
-    await this._loadCachedMessages();
-    console.log('[UC] init: cache loaded, connecting all...');
-    this._connectAll();
-    console.log('[UC] init: connected, starting detect loop');
-    this._detectLoop();
-
-    // Load emotes + badges in background (don't block the UI)
-    this.emotes.loadGlobal().then(() => {
+    console.log('[UC] init: loading emotes + badges...');
+    // Load emotes + badges FIRST so cached messages render with correct emotes/badges.
+    // Use Promise.allSettled — one failing source shouldn't block the rest.
+    try {
+      await this.emotes.loadGlobal();
       if (this.config._roomId) {
-        return Promise.all([
+        await Promise.allSettled([
           this.emotes.loadChannel('twitch', this.config._roomId),
           this.emotes.loadBTTV(this.config._roomId),
           this.emotes.loadFFZ(this.config._roomId),
           this._loadTwitchBadges(this.config._roomId)
         ]);
       }
-    }).catch(() => {});
+    } catch {}
+
+    console.log('[UC] init: loading cache...');
+    await this._loadCachedMessages();
+    console.log('[UC] init: cache loaded, connecting all...');
+    this._connectAll();
+    console.log('[UC] init: connected, starting detect loop');
+    this._detectLoop();
   }
 
   // ---- Config ----
@@ -1445,11 +1461,7 @@ class UnityChat {
     });
 
     // Username se nastaví okamžitě při psaní, uloží při blur
-    $('input-username').addEventListener('input', () => {
-      const val = $('input-username').value.trim();
-      this.config.username = val;
-      if (this.activePlatform) this._platformUsernames[this.activePlatform] = val;
-    });
+    // Username change (only in dev mode — field is readonly otherwise)
     $('input-username').addEventListener('change', () => {
       const val = $('input-username').value.trim();
       this.config.username = val;
@@ -1498,11 +1510,9 @@ class UnityChat {
       let lastError = null;
 
       for (const p of platforms) {
-        let uname = null;
-        // Try config username first (always set for Twitch)
-        if (p === 'twitch' && this.config.username) {
-          uname = this.config.username;
-        } else {
+        // Use platform-specific username, falling back to config username
+        let uname = this._platformUsernames[p] || this.config.username;
+        if (!uname) {
           // PING active tab for this platform
           try {
             const tabs = await chrome.tabs.query({ url: [tabUrls[p]] });
@@ -1513,9 +1523,16 @@ class UnityChat {
           } catch {}
         }
         if (!uname) continue;
-        const result = nick
-          ? await this.nicknames.save(p, uname, nick, color)
-          : await this.nicknames.remove(p, uname);
+        let result;
+        if (nick || color) {
+          // If no custom nickname, use the display name (from IRC display-name tag)
+          // so it looks unchanged — only color changes
+          const displayName = nick || this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.name || uname;
+          result = await this.nicknames.save(p, uname, displayName, color);
+        } else {
+          // Both empty → delete
+          result = await this.nicknames.remove(p, uname);
+        }
         if (result.ok) saved++;
         else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
         else lastError = result.error;
@@ -1523,8 +1540,9 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        statusEl.textContent = nick
-          ? `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+        const what = nick ? 'Přezdívka' : color ? 'Barva' : 'Přezdívka smazána';
+        statusEl.textContent = nick || color
+          ? `${what} uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
           : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
@@ -1565,7 +1583,10 @@ class UnityChat {
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {
-      $('dev-tools').classList.toggle('hidden', !$('chk-devmode').checked);
+      const on = $('chk-devmode').checked;
+      $('dev-tools').classList.toggle('hidden', !on);
+      // Enable/disable username editing
+      $('input-username').readOnly = !on;
     });
     $('btn-dump-cache').addEventListener('click', () => {
       chrome.storage.local.get(this._cacheKey, (d) => {
@@ -1620,14 +1641,7 @@ class UnityChat {
     document.querySelectorAll('.fbtn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const p = btn.dataset.platform;
-        if (p === 'all') {
-          const all = Object.values(this.filters).every(Boolean);
-          this.filters.twitch = !all;
-          this.filters.youtube = !all;
-          this.filters.kick = !all;
-        } else {
-          this.filters[p] = !this.filters[p];
-        }
+        this.filters[p] = !this.filters[p];
         this._applyFilters();
       });
     });
@@ -1682,11 +1696,7 @@ class UnityChat {
 
   _applyFilters() {
     document.querySelectorAll('.fbtn').forEach((btn) => {
-      const p = btn.dataset.platform;
-      btn.classList.toggle(
-        'active',
-        p === 'all' ? Object.values(this.filters).every(Boolean) : this.filters[p]
-      );
+      btn.classList.toggle('active', !!this.filters[btn.dataset.platform]);
     });
     this.chatEl.querySelectorAll('.msg').forEach((el) => {
       el.classList.toggle('hide-platform', !this.filters[el.dataset.platform]);
@@ -1724,11 +1734,20 @@ class UnityChat {
     let matches;
     if (partial.startsWith('@')) {
       // @username autocomplete (@ samotné = všichni uživatelé)
+      // Deduplicate by display name (map has both plain + platform:username keys)
       const prefix = partial.substring(1).toLowerCase();
-      matches = [...this._chatUsers.values()]
-        .filter(u => !prefix || u.name.toLowerCase().startsWith(prefix))
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map(u => '@' + u.name);
+      const seen = new Set();
+      matches = [...this._chatUsers.entries()]
+        .filter(([key, u]) => {
+          if (key.includes(':')) return false;
+          const name = u.name.replace(/^@/, '').toLowerCase();
+          if (seen.has(name)) return false;
+          if (prefix && !name.startsWith(prefix)) return false;
+          seen.add(name);
+          return true;
+        })
+        .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+        .map(([, u]) => '@' + u.name.replace(/^@/, ''));
     } else {
       // Emote autocomplete
       matches = this.emotes.findCompletions(partial);
@@ -1920,7 +1939,25 @@ class UnityChat {
     } catch {}
   }
 
+  _savePlatformColor(platform, color) {
+    if (this._platformColors[platform] === color) return;
+    this._platformColors[platform] = color;
+    if (!this.config._platformColors) this.config._platformColors = {};
+    this.config._platformColors[platform] = color;
+    this._saveConfig();
+    // Retroactively apply to all visible messages from this user
+    const myName = (this._platformUsernames[platform] || this.config.username || '').toLowerCase();
+    if (myName) {
+      this.chatEl.querySelectorAll('.un').forEach((un) => {
+        if (un.dataset.platform === platform && un.dataset.username === myName) {
+          un.style.color = color;
+        }
+      });
+    }
+  }
+
   _setActivePlatform(platform) {
+    const changed = this.activePlatform !== platform;
     this.activePlatform = platform;
     if (!this.platformBadge) return;
 
@@ -1944,6 +1981,10 @@ class UnityChat {
       ? `Zpráva do ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`
       : 'Otevři stream pro odesílání...';
 
+    // Only update settings fields when platform actually changes
+    // (detect loop runs every 3s — without this guard it overwrites user-typed values)
+    if (!changed) return;
+
     // Update username field to show current platform's username
     const el = document.getElementById('input-username');
     const label = document.querySelector('label[for="input-username"]');
@@ -1959,15 +2000,17 @@ class UnityChat {
     const colorHexEl = document.getElementById('input-color-hex');
     const colorPickerEl = document.getElementById('input-color-picker');
     if (nickEl && platform) {
-      const pName = this._platformUsernames[platform];
+      const pName = this._platformUsernames[platform] || this.config.username;
       const profile = pName ? this.nicknames.get(platform, pName) : null;
       nickEl.value = profile?.nickname || '';
-      if (colorHexEl) colorHexEl.value = profile?.color || '';
-      if (colorPickerEl) colorPickerEl.value = profile?.color || '#ff8c00';
+      if (profile?.color) {
+        if (colorHexEl) colorHexEl.value = profile.color;
+        if (colorPickerEl) colorPickerEl.value = profile.color;
+      }
     }
     if (label) {
       const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
-      label.textContent = platform ? `Username (${names[platform] || platform})` : 'Tvoje username';
+      label.textContent = platform ? `USERNAME (${(names[platform] || platform).toUpperCase()})` : 'USERNAME';
     }
   }
 
@@ -2158,8 +2201,8 @@ class UnityChat {
 
   // ---- Odpovědi na zprávy ----
 
-  _setReply(platform, username, messageId) {
-    this._reply = { platform, username, messageId };
+  _setReply(platform, username, messageId, message) {
+    this._reply = { platform, username, messageId, message };
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -2204,7 +2247,6 @@ class UnityChat {
     // Optimistic UI: show message instantly (include @mention for cross-platform reply)
     const username = this._platformUsernames[platform] || this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
-    const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
     let displayText = text;
     if (reply && reply.platform !== platform) {
       const at = `@${reply.username}`;
@@ -2216,11 +2258,11 @@ class UnityChat {
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || this._lastUserColor || defaultColors[platform] || null,
+      color: ucProfile?.color || this._chatUsers.get(`${platform}:${username.toLowerCase()}`)?.color || this._platformColors?.[platform] || null,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
-      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username } } : {}),
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null } } : {}),
     });
 
     // Send in background (don't block UI)
@@ -2356,16 +2398,20 @@ class UnityChat {
   // ---- Status ----
 
   _status(platform, status, detail) {
-    const dot = document.querySelector(`#st-${platform} .dot`);
+    const stEl = document.getElementById(`st-${platform}`);
+    const dot = stEl?.querySelector('.dot');
     if (!dot) return;
     dot.className = 'dot';
+    const name = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' }[platform] || platform;
     if (status === 'connected') {
       dot.classList.add('connected');
-      // Jen tiché připojení - indikátor stačí
+      if (stEl) stEl.title = `${name} - Connected`;
     } else if (status === 'connecting') {
       dot.classList.add('connecting');
+      if (stEl) stEl.title = `${name} - Connecting...`;
     } else if (status === 'error') {
       dot.classList.add('error');
+      if (stEl) stEl.title = `${name} - Disconnected`;
       this._sys(`${platform.toUpperCase()}: ${detail || 'chyba připojení'}`);
     }
   }
@@ -2381,6 +2427,41 @@ class UnityChat {
   }
 
   _addMessage(msg) {
+    // Track color BEFORE dedup (echo gets deduped but we still want the color)
+    if (msg.color && msg.username && !msg._optimistic) {
+      const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
+      const prev = this._chatUsers.get(colorKey);
+      if (!prev || prev.color !== msg.color) {
+        this._chatUsers.set(colorKey, { name: msg.username, platform: msg.platform, color: msg.color });
+      }
+      // Also set plain username key for @autocomplete
+      this._chatUsers.set(msg.username.toLowerCase(), { name: msg.username, platform: msg.platform, color: msg.color });
+      // Only track platform color for the current user's OWN messages
+      // (previously this ran for every message → _platformColors got overwritten
+      // with other users' colors → optimistic messages got wrong color)
+      {
+        const myName = (this._platformUsernames[msg.platform] || this.config.username || '').toLowerCase();
+        if (msg.platform && myName && msg.username.toLowerCase() === myName) {
+          this._savePlatformColor(msg.platform, msg.color);
+          // Update platform username with display-name casing from IRC
+          // (PING returns login "jouki728", IRC has display-name "Jouki728")
+          if (msg.username !== this._platformUsernames[msg.platform]) {
+            this._platformUsernames[msg.platform] = msg.username;
+            if (!this.config._platformUsernames) this.config._platformUsernames = {};
+            this.config._platformUsernames[msg.platform] = msg.username;
+            this._saveConfig();
+            // Update username field if settings are open
+            const el = document.getElementById('input-username');
+            if (el) el.value = msg.username;
+          }
+        }
+      }
+      if (this._lastSentText && msg.message) {
+        const cleanMsg = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+        if (cleanMsg === this._lastSentText) this._lastSentText = null;
+      }
+    }
+
     // Dedup podle ID (cache + live zprávy)
     if (msg.id) {
       if (this._seenMsgIds.has(msg.id)) return;
@@ -2403,10 +2484,26 @@ class UnityChat {
       ? norm(msg.username) + '|' + norm(msg.message)
       : null;
     if (contentKey) {
-      // Drop duplicates: scraped messages always, live messages if we already
-      // have an optimistic (sent) version with the same content
-      if (this._seenContentKeys.has(contentKey) && (msg.scraped || !msg._optimistic)) return;
-      this._seenContentKeys.add(contentKey);
+      if (this._seenContentKeys.has(contentKey)) {
+        if (msg._optimistic) {
+          // Optimistic messages always pass through — user can send same text twice
+          // (e.g. "1", "k", "lol"). Update optimistic key to latest sent ID.
+          this._optimisticKeys.set(contentKey, msg.id);
+        } else if (msg.scraped) {
+          return; // always drop scraped duplicates
+        } else {
+          // Real message (IRC echo) matching an optimistic message → upgrade in-place
+          const optId = this._optimisticKeys.get(contentKey);
+          if (optId) {
+            this._upgradeOptimistic(optId, msg);
+            this._optimisticKeys.delete(contentKey);
+          }
+          return;
+        }
+      } else {
+        this._seenContentKeys.add(contentKey);
+        if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
+      }
       if (this._seenContentKeys.size > 2000) {
         const arr = [...this._seenContentKeys];
         this._seenContentKeys = new Set(arr.slice(-1000));
@@ -2415,13 +2512,29 @@ class UnityChat {
 
     this.msgCount++;
 
-    // Sbírat usernames pro @mention autocomplete
-    if (msg.username) {
-      this._chatUsers.set(msg.username.toLowerCase(), {
-        name: msg.username,
-        platform: msg.platform,
-        color: msg.color
-      });
+    // Sbírat usernames + barvy (platform:username → color mapping)
+    // Optimistic messages skip — their color may be wrong (from _platformColors fallback);
+    // the real IRC echo will set the correct color via _upgradeOptimistic
+    if (msg.username && !msg._optimistic) {
+      const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
+      const plainKey = msg.username.toLowerCase();
+      const entry = { name: msg.username, platform: msg.platform, color: msg.color };
+      if (msg.color) {
+        const prev = this._chatUsers.get(colorKey);
+        this._chatUsers.set(colorKey, entry);
+        this._chatUsers.set(plainKey, entry); // for @autocomplete
+        if (!prev || prev.color !== msg.color) {
+          if (!this._userColorTimer) {
+            this._userColorTimer = setTimeout(() => {
+              this._userColorTimer = null;
+              chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+            }, 2000);
+          }
+        }
+      } else if (!this._chatUsers.has(colorKey)) {
+        this._chatUsers.set(colorKey, entry);
+        if (!this._chatUsers.has(plainKey)) this._chatUsers.set(plainKey, entry);
+      }
     }
 
     // Učení nativních emotes z příchozích zpráv
@@ -2445,10 +2558,19 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Track color from own messages (username detection is PING-only)
+      // Track color from own sent message echo + persist
       if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
-        if (msg.color) this._lastUserColor = msg.color;
+        if (msg.color && msg.platform) {
+          this._savePlatformColor(msg.platform, msg.color);
+        }
+      }
+      // Also track from username match
+      if (msg.color && msg.platform) {
+        const myName = this._platformUsernames[msg.platform]?.toLowerCase();
+        if (myName && msg.username?.toLowerCase() === myName) {
+          this._savePlatformColor(msg.platform, msg.color);
+        }
       }
     }
 
@@ -2459,10 +2581,14 @@ class UnityChat {
     // that may be null when rendering cached messages at startup)
     const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
     const msgLower = msg.message?.toLowerCase() || '';
+    const replyTarget = msg.replyTo?.username?.toLowerCase();
     const isMentioned = myName && (
       msgLower.includes(`@${myName}`) ||
       (myNick && msgLower.includes(`@${myNick}`)) ||
-      msg.replyTo?.username?.toLowerCase() === myName
+      replyTarget === myName ||
+      (myNick && replyTarget === myNick) ||
+      // Also match platform-specific username
+      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
     );
 
     const el = document.createElement('div');
@@ -2552,7 +2678,8 @@ class UnityChat {
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
-    un.style.color = ucProfile?.color || msg.color;
+    // Color priority: UC custom → chatUsers map (platform:username) → msg.color fallback
+    un.style.color = ucProfile?.color || this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`)?.color || msg.color;
     un.textContent = ucProfile?.nickname || msg.username;
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
@@ -2607,7 +2734,7 @@ class UnityChat {
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._setReply(msg.platform, msg.username, msg.id);
+      this._setReply(msg.platform, msg.username, msg.id, msg.message);
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
@@ -2654,9 +2781,9 @@ class UnityChat {
       const [r, g, b] = m.color.match(/\d+/g);
       m.color = '#' + [r, g, b].map(c => (+c).toString(16).padStart(2, '0')).join('');
     }
-    // Slim replyTo: drop message text, keep id + username
+    // Slim replyTo: keep id, username and message
     if (m.replyTo && typeof m.replyTo === 'object') {
-      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username };
+      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username, message: m.replyTo.message || null };
     }
     return m;
   }
@@ -2680,6 +2807,63 @@ class UnityChat {
     if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
     // Save immediately — extension reload can kill context anytime
     chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+  }
+
+  // Upgrade an optimistic message to a real one (IRC echo arrived)
+  _upgradeOptimistic(optId, realMsg) {
+    // Update DOM element in-place
+    const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+    if (el && realMsg.id) el.dataset.msgId = realMsg.id;
+    if (realMsg.id) this._seenMsgIds.add(realMsg.id);
+
+    // Update username color
+    if (el && realMsg.color) {
+      const un = el.querySelector('.un');
+      if (un) un.style.color = realMsg.color;
+    }
+
+    // Add badges if the optimistic message didn't have them
+    if (el && realMsg.badgesRaw && !el.querySelector('.bdg')) {
+      const un = el.querySelector('.un');
+      const bdg = document.createElement('span');
+      bdg.className = 'bdg';
+      for (const badge of realMsg.badgesRaw.split(',')) {
+        if (!badge) continue;
+        const url = this._twitchBadges[badge];
+        if (url) {
+          const img = document.createElement('img');
+          img.className = 'bdg-img';
+          img.src = url;
+          img.alt = badge.split('/')[0];
+          img.title = badge.split('/')[0];
+          bdg.appendChild(img);
+        }
+      }
+      if (bdg.children.length && un) el.insertBefore(bdg, un);
+    }
+
+    // Update cache entry: replace optimistic data with real data
+    const cacheIdx = this._msgCache.findIndex(m => m.id === optId);
+    if (cacheIdx !== -1) {
+      const cached = this._msgCache[cacheIdx];
+      if (realMsg.id) cached.id = realMsg.id;
+      if (realMsg.color) cached.color = realMsg.color;
+      if (realMsg.badgesRaw) cached.badgesRaw = realMsg.badgesRaw;
+      if (realMsg.twitchEmotes) cached.twitchEmotes = realMsg.twitchEmotes;
+      delete cached._optimistic;
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+
+    // Update _chatUsers with the correct color from the real message
+    if (realMsg.color && realMsg.username) {
+      const colorKey = `${realMsg.platform}:${realMsg.username.toLowerCase()}`;
+      this._chatUsers.set(colorKey, { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
+      this._chatUsers.set(realMsg.username.toLowerCase(), { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
+      const myName = (this._platformUsernames[realMsg.platform] || this.config.username || '').toLowerCase();
+      if (myName && realMsg.username.toLowerCase() === myName) {
+        this._savePlatformColor(realMsg.platform, realMsg.color);
+      }
+    }
   }
 
   async _loadCachedMessages() {

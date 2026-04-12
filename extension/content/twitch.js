@@ -19,103 +19,63 @@
     btn.setAttribute('aria-label', 'Otevřít UnityChat');
     btn.title = 'Otevřít UnityChat';
     Object.assign(btn.style, {
-      display: 'inline-flex',
+      display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       width: '30px',
       height: '30px',
-      padding: '4px',
-      margin: '0 4px',
+      minWidth: '30px',
+      padding: '0',
+      margin: '0 2px',
       background: 'transparent',
       border: 'none',
       borderRadius: '4px',
       cursor: 'pointer',
       flexShrink: '0',
-      transition: 'background 0.15s ease, transform 0.15s ease'
+      transition: 'background 0.15s ease'
     });
-
     const img = document.createElement('img');
     img.src = chrome.runtime.getURL('icons/icon48.png');
-    img.alt = 'UnityChat';
-    Object.assign(img.style, {
-      width: '22px',
-      height: '22px',
-      display: 'block',
-      filter: 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))',
-      pointerEvents: 'none'
-    });
+    img.alt = 'UC';
+    Object.assign(img.style, { width: '20px', height: '20px', display: 'block', pointerEvents: 'none' });
     btn.appendChild(img);
-
-    btn.addEventListener('mouseenter', () => {
-      btn.style.background = 'rgba(255, 140, 0, 0.12)';
-      img.style.filter = 'drop-shadow(0 0 10px rgba(255, 160, 20, 0.8))';
-    });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.background = 'transparent';
-      img.style.filter = 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))';
-    });
+    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,140,0,0.15)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // Collapse vanilla Twitch chat
+      const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+      if (collapseBtn) collapseBtn.click();
+      // Open UnityChat side panel
       chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
     });
     return btn;
   }
 
   function findChatHeader() {
-    // Twitch uses several header classes across layouts; try them in order.
-    const selectors = [
-      '.stream-chat-header',
-      '[data-a-target="stream-chat-header"]',
-      '.chat-room__header',
-      '.chat-shell__header',
-      '.chat-header'
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) return el;
-    }
-    // Fallback: climb from the collapse toggle button.
-    const toggle = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-    if (toggle) {
-      // Walk up until we find a row-ish container (flex parent with siblings).
-      let n = toggle.parentElement;
-      for (let i = 0; i < 5 && n; i++) {
-        if (n.childElementCount >= 2) return n;
-        n = n.parentElement;
-      }
-    }
-    return null;
+    return document.querySelector('.stream-chat-header');
   }
 
   function injectSidePanelButton() {
-    if (document.getElementById(UC_BTN_ID)) return;
-    const header = findChatHeader();
+    if (document.querySelectorAll('#' + UC_BTN_ID).length > 0) return;
+    const header = document.querySelector('.stream-chat-header');
     if (!header) return;
-    const btn = buildUcButton();
-    // Prefer to sit right after the collapse toggle (matches the red-box
-    // position in the UI). Otherwise prepend into the header row.
-    const toggle = header.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-    if (toggle && toggle.parentElement) {
-      toggle.parentElement.insertBefore(btn, toggle.nextSibling);
-    } else {
-      header.insertBefore(btn, header.firstChild);
+    const label = header.querySelector('#chat-room-header-label');
+    if (!label) return;
+    // label is inside a wrapper div — insert button before that wrapper
+    const wrapper = label.parentElement;
+    if (wrapper && wrapper.parentElement === header) {
+      header.insertBefore(buildUcButton(), wrapper);
     }
   }
 
-  function startHeaderObserver() {
-    injectSidePanelButton();
-    const obs = new MutationObserver(() => {
-      if (!document.getElementById(UC_BTN_ID)) injectSidePanelButton();
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startHeaderObserver, { once: true });
-  } else {
-    startHeaderObserver();
-  }
+  // Poll for header — Twitch re-mounts on navigation
+  setInterval(() => {
+    if (document.querySelectorAll('#' + UC_BTN_ID).length === 0) {
+      injectSidePanelButton();
+    }
+  }, 2000);
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
