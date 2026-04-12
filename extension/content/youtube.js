@@ -72,6 +72,8 @@
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
+      const pfbc = document.querySelector('#panels-full-bleed-container');
+      if (pfbc) pfbc.style.cssText = 'display:none!important;';
       // Theater mode for correct player sizing
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy) {
