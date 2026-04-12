@@ -2464,7 +2464,7 @@ class UnityChat {
         this._addMessage({ ...base, username: mockUser, message: `${text} přichází s raidem!`, isRaid: true, color: '#ff6b6b' });
         break;
       case 'raider':
-        this._addMessage({ ...base, firstMsg: true, isRaid: false, color: '#9146ff' });
+        this._addMessage({ ...base, isRaider: true, color: '#00e676' });
         break;
       case 'first':
         this._addMessage({ ...base, firstMsg: true, color: '#9146ff' });
@@ -2778,6 +2778,7 @@ class UnityChat {
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
     if (msg.isRaid) el.classList.add('raid');
+    if (msg.isRaider) el.classList.add('raider-msg');
     if (msg.isSus) el.classList.add('sus-msg');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
 
@@ -2787,53 +2788,6 @@ class UnityChat {
       (myNick && replyTarget === myNick) ||
       (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
     );
-
-    // Right-side tag (float right — must be first child for float to work)
-    if (isReplyToMe) {
-      const tag = document.createElement('span');
-      tag.className = 'msg-tag tag-reply';
-      tag.textContent = 'Replying to you';
-      el.appendChild(tag);
-    } else if (isMentioned && !isReplyToMe) {
-      const tag = document.createElement('span');
-      tag.className = 'msg-tag tag-mention';
-      tag.textContent = 'Mentions you';
-      el.appendChild(tag);
-    }
-    if (msg.firstMsg) {
-      const tag = document.createElement('span');
-      tag.className = 'msg-tag tag-first';
-      tag.textContent = 'First message';
-      el.appendChild(tag);
-    }
-    if (msg.isRaid) {
-      const tag = document.createElement('span');
-      tag.className = 'msg-tag tag-raid';
-      tag.textContent = 'Raid';
-      el.appendChild(tag);
-    }
-    if (msg.isSus) {
-      const tag = document.createElement('span');
-      tag.className = 'msg-tag tag-sus';
-      tag.textContent = 'Suspicious';
-      el.appendChild(tag);
-    }
-
-    // First-time chatter label (left side)
-    if (msg.firstMsg) {
-      const fl = document.createElement('div');
-      fl.className = 'first-label';
-      fl.textContent = 'První zpráva';
-      el.appendChild(fl);
-    }
-
-    // Raid label (left side)
-    if (msg.isRaid) {
-      const rl = document.createElement('div');
-      rl.className = 'raid-label';
-      rl.textContent = 'RAID';
-      el.appendChild(rl);
-    }
 
     // Reply context (Twitch reply-parent tagy)
     if (msg.replyTo) {
@@ -2854,6 +2808,28 @@ class UnityChat {
         });
       }
       el.appendChild(ctx);
+    }
+
+    // Tag line (right-aligned, above message content)
+    const tagText =
+      isReplyToMe ? 'Replying to you' :
+      isMentioned ? 'Mentions you' :
+      msg.isRaid ? 'Raid' :
+      msg.isRaider ? 'Raider' :
+      msg.firstMsg ? 'First message' :
+      msg.isSus ? 'Suspicious' : null;
+    if (tagText) {
+      const tagLine = document.createElement('div');
+      tagLine.className = 'msg-tag-line';
+      const tagCls =
+        isReplyToMe ? 'tag-reply' :
+        isMentioned ? 'tag-mention' :
+        msg.isRaid ? 'tag-raid' :
+        msg.isRaider ? 'tag-raider' :
+        msg.firstMsg ? 'tag-first' :
+        'tag-sus';
+      tagLine.innerHTML = `<span class="msg-tag ${tagCls}">${tagText}</span>`;
+      el.appendChild(tagLine);
     }
 
     // Platform badge

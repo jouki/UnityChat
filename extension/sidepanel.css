@@ -595,31 +595,25 @@ body.layout-large .reply-ctx { font-size: 12px; }
   background: rgba(145, 70, 255, 0.22);
 }
 
-.first-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent);
-  padding: 1px 0 1px 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
+/* (first-label removed — replaced by right-side .msg-tag system) */
 
-/* Right-side message tags (Replying to you, Mentions you, etc.) */
+/* Right-aligned tag line above message content */
+.msg-tag-line {
+  text-align: right;
+  padding: 1px 4px 0 18px;
+}
 .msg-tag {
-  float: right;
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 1px 4px;
-  margin-left: 6px;
-  border-radius: 2px;
   opacity: 0.85;
 }
 .msg-tag.tag-reply { color: #cc3333; }
 .msg-tag.tag-mention { color: #cc3333; }
 .msg-tag.tag-first { color: #9146ff; }
 .msg-tag.tag-raid { color: #ff6b6b; }
+.msg-tag.tag-raider { color: #00e676; }
 .msg-tag.tag-sus { color: #ffc107; }
 
 /* Raid */
@@ -633,13 +627,16 @@ body.layout-large .reply-ctx { font-size: 12px; }
   background: rgba(255, 107, 107, 0.2);
 }
 
-.raid-label {
-  font-size: 10px;
-  font-weight: 800;
-  color: #ff6b6b;
-  padding: 1px 0 1px 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+/* (raid-label removed — replaced by right-side .msg-tag system) */
+
+/* Raider (came from raid) */
+.msg.raider-msg {
+  background: rgba(0, 230, 118, 0.1);
+  border-left: 2px solid #00e676;
+  padding-left: 8px;
+}
+.msg.raider-msg:hover {
+  background: rgba(0, 230, 118, 0.2);
 }
 
 /* Suspicious user */
