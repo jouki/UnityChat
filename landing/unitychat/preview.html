@@ -50,6 +50,11 @@
       border-radius: 3px;
     }
 
+    /* Hide filtered-out messages */
+    .msg.filtered-out {
+      display: none !important;
+    }
+
     /* Click-to-play message (StreamElements Bulgarians) */
     .msg.msg-audio { cursor: pointer; position: relative; }
     .msg.msg-audio:hover {
@@ -277,6 +282,50 @@
         dot.style.boxShadow = '0 0 6px #53fc18';
       }
     });
+
+    // Platform filter buttons — toggle visibility of messages by platform.
+    // "Vše" turns all platforms on. Individual TW/YT/KI buttons toggle
+    // that platform. The "active" class on the button reflects its state.
+    (function () {
+      const platformMap = { twitch: 'tw', youtube: 'yt', kick: 'ki' };
+      const active = { tw: true, yt: true, ki: true };
+      const btns = document.querySelectorAll('#filters .fbtn');
+      const msgs = document.querySelectorAll('#chat .msg');
+
+      function applyFilters() {
+        msgs.forEach((msg) => {
+          const pi = msg.querySelector('.pi');
+          if (!pi) return;
+          let show = false;
+          for (const [, cls] of Object.entries(platformMap)) {
+            if (pi.classList.contains(cls) && active[cls]) show = true;
+          }
+          msg.classList.toggle('filtered-out', !show);
+        });
+      }
+
+      btns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const p = btn.dataset.platform;
+          if (p === 'all') {
+            // Turn all on
+            for (const k in active) active[k] = true;
+            btns.forEach((b) => b.classList.add('active'));
+          } else {
+            const cls = platformMap[p];
+            if (!cls) return;
+            active[cls] = !active[cls];
+            btn.classList.toggle('active', active[cls]);
+            // If all are now active, also light up "Vše"; otherwise deactivate it
+            const allOn = Object.values(active).every(Boolean);
+            btns.forEach((b) => {
+              if (b.dataset.platform === 'all') b.classList.toggle('active', allOn);
+            });
+          }
+          applyFilters();
+        });
+      });
+    })();
 
     // Real extension version from manifest.json (shared with install page)
     fetch('/download/manifest.json')
