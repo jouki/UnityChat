@@ -693,7 +693,9 @@ body.layout-large .reply-ctx { font-size: 12px; }
 }
 
 .msg .tx img.emote-zw {
+  position: relative;
   margin-left: -1.75em;
+  margin-right: 0;
 }
 
 .msg.superchat {

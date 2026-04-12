@@ -33,6 +33,7 @@ class EmoteManager {
     this.ffzEmotes = new Map();    // name -> url (FFZ global + channel)
     this.twitchNative = new Map(); // name -> url (naučené z IRC)
     this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
+    this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
     this._globalLoaded = false;
   }
 
@@ -47,7 +48,10 @@ class EmoteManager {
       const emotes = data.emotes || [];
       for (const emote of emotes) {
         const url = this._build7tvUrl(emote);
-        if (url) this.global7tv.set(emote.name, url);
+        if (url) {
+          this.global7tv.set(emote.name, url);
+          if ((emote.data?.flags || emote.flags || 0) & 1) this.zeroWidth.add(emote.name);
+        }
       }
       this._globalLoaded = true;
       console.log(`[7TV] ${this.global7tv.size} global emotes loaded`);
@@ -70,6 +74,7 @@ class EmoteManager {
         const url = this._build7tvUrl(emote);
         if (url) {
           this.channel7tv.set(emote.name, url);
+          if ((emote.data?.flags || emote.flags || 0) & 1) this.zeroWidth.add(emote.name);
           count++;
         }
       }
@@ -248,7 +253,7 @@ class EmoteManager {
       for (const part of parts) {
         const url = this._get7tv(part);
         if (url) {
-          out.push({ type: 'emote', value: part, url });
+          out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
           out.push({ type: 'text', value: part });
         }
@@ -425,7 +430,8 @@ class EmoteManager {
       .map((s) => {
         if (s.type === 'emote') {
           const alt = this._ea(s.value);
-          return `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+          const cls = s.zw ? 'emote emote-zw' : 'emote';
+          return `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
         }
         return this._eh(s.value);
       })
