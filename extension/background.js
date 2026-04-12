@@ -568,9 +568,11 @@ async function ytSend(tabId, videoId, text) {
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
           const delegatedSessionId = gc('DELEGATED_SESSION_ID') || null;
           const datasyncId = gc('DATASYNC_ID') || null;
+          const channelId = gc('CHANNEL_ID') || null;
           log.push('apiKey:' + apiKey.substring(0, 10));
-          log.push('delegated:' + (delegatedSessionId ? delegatedSessionId.substring(0, 10) : 'none'));
-          log.push('datasync:' + (datasyncId ? datasyncId.substring(0, 10) : 'none'));
+          log.push('channelId:' + (channelId || 'none'));
+          log.push('delegated:' + (delegatedSessionId || 'none'));
+          log.push('datasync:' + (datasyncId || 'none'));
 
           // SAPISIDHASH auth — required for YouTube API when chat is closed
           const origin = 'https://www.youtube.com';
@@ -619,18 +621,24 @@ async function ytSend(tabId, videoId, text) {
 
           const context = { client: { clientName: 'WEB', clientVersion: cVer } };
           // Multi-channel: tell YouTube which channel to send as
-          if (delegatedSessionId) context.user = { delegatedSessionId };
-          if (datasyncId) context.request = { useSsl: true, consistencyTokenJars: [] };
+          if (channelId) {
+            context.user = { onBehalfOfUser: channelId };
+          }
+          if (delegatedSessionId) {
+            context.user = { ...(context.user || {}), delegatedSessionId };
+          }
+
+          const sendHeaders = { ...headers };
+          if (delegatedSessionId) sendHeaders['X-Goog-PageId'] = delegatedSessionId;
 
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
-            headers,
+            headers: sendHeaders,
             body: JSON.stringify({
               context,
               params: pm[1],
-              richMessage: { textSegments: [{ text }] },
-              ...(datasyncId ? { requestContext: { activeDatasyncIds: [datasyncId] } } : {})
+              richMessage: { textSegments: [{ text }] }
             })
           });
 
