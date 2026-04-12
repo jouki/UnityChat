@@ -190,12 +190,18 @@
       font-size: clamp(2.4rem, 5.6vw, 4.4rem);
       line-height: 0.92;
       letter-spacing: 0.02em;
-      color: #f2efe8;
       margin: 0;
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
+      background: linear-gradient(180deg, #ffffff 0%, #f2efe8 55%, #c9c1ad 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
     }
     .wordmark .accent {
-      color: var(--orange);
+      background: linear-gradient(160deg, #ffe08a 0%, #ffc800 28%, #ff9a00 62%, #e05c00 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
     .wordmark-sub {
       display: block;
