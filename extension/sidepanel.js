@@ -1593,7 +1593,8 @@ class UnityChat {
         }
       }
       if (e.key === 'Escape') {
-        this._acHide();
+        if (this._ac) { this._acHide(); return; }
+        if (this._reply) { this._clearReply(); return; }
         return;
       }
       // Modifier klávesy (Shift, Ctrl, Alt) samy o sobě neruší autocomplete
@@ -2117,6 +2118,7 @@ class UnityChat {
       if (resp?.ok) {
         this._lastSentText = text; // originální text bez markeru
         this.msgInput.value = '';
+        this.msgInput.style.height = 'auto'; // reset multi-line height
         this._clearReply();
       } else {
         this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
