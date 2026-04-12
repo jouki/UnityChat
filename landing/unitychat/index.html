@@ -53,6 +53,8 @@
         radial-gradient(ellipse 70% 50% at 15% 8%,  rgba(255, 150, 20, 0.09),  transparent 55%),
         radial-gradient(ellipse 65% 55% at 85% 92%, rgba(145, 70, 255, 0.10), transparent 58%);
     }
+    /* Technical grid — HUD vibe, dual-resolution (72px major + 18px minor).
+       Toned down vs. jouki.cz root so it stays a subtle backdrop, not a focal point. */
     body::after {
       content: '';
       position: fixed;
@@ -60,11 +62,13 @@
       pointer-events: none;
       z-index: -1;
       background-image:
-        linear-gradient(to right,  rgba(255, 255, 255, 0.038) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.038) 1px, transparent 1px);
-      background-size: 72px 72px;
-      mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 45%, transparent 100%);
-      -webkit-mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 45%, transparent 100%);
+        linear-gradient(to right,  rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+        linear-gradient(to right,  rgba(255, 255, 255, 0.010) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.010) 1px, transparent 1px);
+      background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px;
+      mask-image: radial-gradient(ellipse 80% 85% at 50% 50%, #000 40%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 80% 85% at 50% 50%, #000 40%, transparent 100%);
     }
 
     a { color: var(--violet-hi); text-decoration: none; }
