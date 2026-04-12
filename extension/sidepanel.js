@@ -452,7 +452,8 @@ class EmoteManager {
 // SSE push for real-time updates, chrome.storage.local cache
 // =============================================================
 
-const UC_API = 'https://api.jouki.cz';
+// DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
+const UC_API = 'http://178.104.160.182:3001';
 
 class NicknameManager {
   constructor() {
