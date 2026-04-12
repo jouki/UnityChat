@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { createReadStream, existsSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { execSync } from 'child_process';
+import { exec, execSync } from 'child_process';
 import { join, resolve } from 'path';
+import { createHmac } from 'crypto';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const EXT_DIR = join(REPO_ROOT, 'extension');
 const ZIP_PATH = '/tmp/unitychat-dev.zip';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'unitychat-dev-deploy';
 
 async function buildZip(): Promise<void> {
   execSync(`cd "${EXT_DIR}" && zip -r "${ZIP_PATH}" . -x "*.DS_Store" "*.log"`, {
@@ -143,5 +145,33 @@ export default async function devDownloadRoutes(app: FastifyInstance) {
       .header('Content-Type', 'application/zip')
       .header('Content-Disposition', 'attachment; filename="unitychat-dev.zip"');
     return reply.send(createReadStream(ZIP_PATH));
+  });
+
+  // GitHub webhook → git pull (tsx watch auto-restarts on file changes)
+  app.post('/webhook/deploy', async (req, reply) => {
+    // Verify GitHub signature
+    const sig = req.headers['x-hub-signature-256'] as string;
+    const body = JSON.stringify(req.body);
+    if (sig) {
+      const expected = 'sha256=' + createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex');
+      if (sig !== expected) {
+        reply.code(403);
+        return { ok: false, error: 'Invalid signature' };
+      }
+    }
+
+    // Only deploy on dev branch pushes
+    const payload = req.body as { ref?: string };
+    if (payload.ref && payload.ref !== 'refs/heads/dev') {
+      return { ok: true, skipped: true, reason: 'Not dev branch' };
+    }
+
+    // Git pull in background (don't block the response)
+    exec(`cd "${REPO_ROOT}" && git pull origin dev --ff-only`, (err, stdout, stderr) => {
+      if (err) console.error('Deploy pull failed:', stderr);
+      else console.log('Deploy pull:', stdout.trim());
+    });
+
+    return { ok: true, deploying: true };
   });
 }
