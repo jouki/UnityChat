@@ -144,9 +144,9 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      const container = document.querySelector('ytd-live-chat-frame #teaser-carousel .ytVideoMetadataCarouselViewModelCarouselContainer');
-      if (container) {
-        container.appendChild(buildYtButton());
+      const openBtn = document.querySelector('ytd-live-chat-frame #teaser-carousel .ytTextCarouselItemViewModelButton');
+      if (openBtn) {
+        openBtn.parentElement.insertBefore(buildYtButton(), openBtn);
       }
     }
 
