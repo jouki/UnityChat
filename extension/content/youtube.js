@@ -67,16 +67,21 @@
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
     function hideYtChat() {
-      // Hide the #chat container — collapses the layout column
-      const chat = document.querySelector('#chat, #chat-container');
-      if (chat) chat.style.cssText = 'display:none!important;';
-      // Remove two-column layout so video fills full width
+      // Hide everything in the right column
+      const selectors = ['#chat', '#chat-container', '#secondary', '#secondary-inner'];
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el) el.style.cssText = 'display:none!important;';
+      }
+      // Remove layout attributes
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy) {
         flexy.removeAttribute('is-two-columns_');
         flexy.removeAttribute('is-two-columns-layout');
+        // Force primary to full width
+        const primary = flexy.querySelector('#primary, #primary-inner');
+        if (primary) primary.style.cssText = 'max-width:none!important;';
       }
-      // Mark as hidden
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
     }
@@ -85,23 +90,20 @@
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
-    // Periodic layout fix: if YouTube is in two-column mode but chat
-    // is not actually showing a live chat iframe, collapse to single column.
-    // Catches X button close, SPA navigation, or any other state mismatch.
+    // Periodic layout fix: if #secondary takes up space but chat is not
+    // actually showing live content, collapse it. Catches X button close,
+    // SPA navigation, or any state mismatch.
     setInterval(() => {
-      const flexy = document.querySelector('ytd-watch-flexy');
-      if (!flexy?.hasAttribute('is-two-columns_')) return;
-      const chatFrame = document.querySelector('ytd-live-chat-frame');
-      if (!chatFrame) return;
-      // Check if the chat iframe is actually showing live chat content
-      const iframe = chatFrame.querySelector('#chatframe');
-      const showBtn = chatFrame.querySelector('#show-hide-button');
-      const isChatOpen = iframe && iframe.offsetHeight > 100;
-      const isShowBtnVisible = showBtn && showBtn.offsetHeight > 0;
-      // If the "Otevřít panel" banner is showing OR chat frame is tiny,
-      // the chat is collapsed but layout is still two-column → fix it
-      if (!isChatOpen || isShowBtnVisible) {
-        hideYtChat();
+      const secondary = document.querySelector('#secondary');
+      if (!secondary || secondary.style.display === 'none') return;
+      // If secondary has width but chat iframe is not active → fix layout
+      if (secondary.offsetWidth > 50) {
+        const chatFrame = document.querySelector('ytd-live-chat-frame');
+        const iframe = chatFrame?.querySelector('#chatframe');
+        const isChatActive = iframe && iframe.offsetHeight > 100;
+        if (!isChatActive) {
+          hideYtChat();
+        }
       }
     }, 1500);
 
