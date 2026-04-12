@@ -49,6 +49,34 @@
       background: rgba(255, 255, 255, 0.1);
       border-radius: 3px;
     }
+
+    /* Click-to-play message (StreamElements Bulgarians) */
+    .msg.msg-audio { cursor: pointer; position: relative; }
+    .msg.msg-audio:hover {
+      box-shadow: inset 2px 0 0 rgba(255, 140, 0, 0.55);
+    }
+    .msg.msg-audio.playing {
+      box-shadow: inset 2px 0 0 #ff8c00, 0 0 18px -6px rgba(255, 140, 0, 0.5);
+      background: rgba(255, 140, 0, 0.06);
+    }
+    .msg.msg-audio::after {
+      content: '▶';
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      transform: translateY(-50%);
+      font-size: 11px;
+      color: rgba(255, 140, 0, 0.55);
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      pointer-events: none;
+    }
+    .msg.msg-audio:hover::after { opacity: 1; }
+    .msg.msg-audio.playing::after {
+      content: '⏸';
+      color: #ff8c00;
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -218,8 +246,8 @@
         <span class="tx">!bulgarians</span>
       </div>
 
-      <!-- 16. StreamElements bot response — mod + chatbot badges -->
-      <div class="msg">
+      <!-- 16. StreamElements bot response — mod + chatbot badges, click-to-play audio -->
+      <div class="msg msg-audio" id="msg-se-bulgarians">
         <span class="pi tw">TW</span>
         <span class="ts">22:19</span>
         <span class="bdg"><img class="bdg-img" src="/unitychat/assets/badges/moderator.png" alt="moderator"></span><span class="bdg"><img class="bdg-img" src="/unitychat/assets/badges/chatbot.png" alt="chatbot"></span><span class="un" style="color:#3b82f6;">StreamElements</span>:
@@ -259,6 +287,30 @@
       const m = now.getMonth() - birth.getMonth();
       if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
       ageEl.textContent = age;
+    })();
+
+    // Click the StreamElements Bulgarians line to hear the voiced version.
+    // Click again mid-playback to stop (next click restarts from the top).
+    (function () {
+      const msg = document.getElementById('msg-se-bulgarians');
+      if (!msg) return;
+      const audio = new Audio('/unitychat/assets/audio/streamelements-bulgarians.mp3');
+      audio.preload = 'auto';
+
+      function stop() {
+        audio.pause();
+        audio.currentTime = 0;
+        msg.classList.remove('playing');
+      }
+
+      msg.addEventListener('click', () => {
+        if (!audio.paused) { stop(); return; }
+        audio.currentTime = 0;
+        audio.play()
+          .then(() => msg.classList.add('playing'))
+          .catch(() => msg.classList.remove('playing'));
+      });
+      audio.addEventListener('ended', () => msg.classList.remove('playing'));
     })();
   </script>
 
