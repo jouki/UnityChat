@@ -53,8 +53,12 @@
   async function sendSmart(text) {
     const frame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
 
-    // 1. Zkusit iframe DOM (přímé psaní do inputu)
-    if (frame) {
+    // 1. Zkusit iframe DOM (přímé psaní do inputu) — ONLY if chat is
+    //    visually open. After force-load the iframe has content but DOM
+    //    send doesn't work (YouTube components aren't initialized).
+    const chatPanel = document.querySelector('ytd-live-chat-frame');
+    const chatVisible = chatPanel && chatPanel.offsetHeight > 100;
+    if (frame && chatVisible) {
       try {
         const doc = frame.contentDocument;
         if (doc) {
