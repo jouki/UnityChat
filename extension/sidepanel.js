@@ -483,6 +483,7 @@ class NicknameManager {
         this._map.set(`${n.platform}:${n.username.toLowerCase()}`, n.nickname);
       }
       this._saveCache();
+      if (this.onLoad) this.onLoad();
     } catch {}
   }
 
@@ -1260,6 +1261,18 @@ class UnityChat {
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
+    this.nicknames.onLoad = () => {
+      // After API fetch, update nickname input if we now know our nick
+      if (this.config.username) {
+        const el = document.getElementById('input-nickname');
+        if (el && !el.value) {
+          for (const p of ['twitch', 'youtube', 'kick']) {
+            const nick = this.nicknames.get(p, this.config.username);
+            if (nick) { el.value = nick; break; }
+          }
+        }
+      }
+    };
     this._setupUI();
     this._setupProviders();
 
@@ -1320,6 +1333,13 @@ class UnityChat {
     $('input-channel').value = this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
+    // Pre-populate nickname from cache (any platform — user sees their nick)
+    if (this.config.username) {
+      for (const p of ['twitch', 'youtube', 'kick']) {
+        const nick = this.nicknames.get(p, this.config.username);
+        if (nick) { $('input-nickname').value = nick; break; }
+      }
+    }
     $('input-layout').value = this.config.layout || 'small';
     this._applyLayout();
     $('input-layout').addEventListener('change', () => {
