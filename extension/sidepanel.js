@@ -975,7 +975,7 @@ class YouTubeProvider {
         this.onDebug?.('YouTube: API polling mód');
       }
 
-      this._pt = setTimeout(() => this._poll(), 4000);
+      this._pt = setTimeout(() => this._poll(), 2000);
     } catch (err) {
       console.error('YouTube:', err);
       this.onStatus?.('error', err.message);
@@ -1126,7 +1126,7 @@ class YouTubeProvider {
       }
 
       if (this.polling) {
-        this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 2000));
+        this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 1500));
       }
     } catch (err) {
       console.error('YouTube API poll:', err);
@@ -1157,7 +1157,7 @@ class YouTubeProvider {
       this._processActions(actions);
 
       if (this.polling) {
-        this._pt = setTimeout(() => this._poll(), 6000);
+        this._pt = setTimeout(() => this._poll(), 3000);
       }
     } catch (err) {
       console.error('YouTube page refresh:', err);
@@ -2141,6 +2141,21 @@ class UnityChat {
 
       if (resp?.ok) {
         this._lastSentText = text; // originální text bez markeru
+
+        // Optimistic UI: show the message immediately without waiting for polling
+        const username = this.config.username || 'me';
+        const ucProfile = this.nicknames.get(this.activePlatform, username);
+        this._addMessage({
+          id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          platform: this.activePlatform,
+          username,
+          message: text,
+          color: ucProfile?.color || null,
+          timestamp: Date.now(),
+          _uc: true,
+          _optimistic: true,
+        });
+
         this.msgInput.value = '';
         this.msgInput.style.height = 'auto'; // reset multi-line height
         this._clearReply();
@@ -2298,7 +2313,9 @@ class UnityChat {
       ? norm(msg.username) + '|' + norm(msg.message)
       : null;
     if (contentKey) {
-      if (msg.scraped && this._seenContentKeys.has(contentKey)) return;
+      // Drop duplicates: scraped messages always, live messages if we already
+      // have an optimistic (sent) version with the same content
+      if (this._seenContentKeys.has(contentKey) && (msg.scraped || !msg._optimistic)) return;
       this._seenContentKeys.add(contentKey);
       if (this._seenContentKeys.size > 2000) {
         const arr = [...this._seenContentKeys];
