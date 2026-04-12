@@ -76,17 +76,22 @@ export default async function nicknameRoutes(app: FastifyInstance) {
 
   // Delete nickname
   app.delete('/nicknames', async (req, reply) => {
-    const body = req.body as { platform?: string; username?: string };
-    if (!body?.platform || !body?.username) {
+    const parsed = z.object({
+      platform: z.enum(['twitch', 'youtube', 'kick']),
+      username: z.string().min(1).max(50).transform((s) => s.trim()),
+    }).safeParse(req.body);
+
+    if (!parsed.success) {
       reply.code(400);
       return { ok: false, error: 'Missing platform or username' };
     }
 
+    const { platform, username } = parsed.data;
     await db
       .delete(nicknames)
-      .where(and(eq(nicknames.platform, body.platform), eq(nicknames.username, body.username)));
+      .where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
 
-    broadcast('nickname-delete', { platform: body.platform, username: body.username });
+    broadcast('nickname-delete', { platform, username });
     return { ok: true };
   });
 
