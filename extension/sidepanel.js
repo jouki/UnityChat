@@ -1434,6 +1434,43 @@ class UnityChat {
       this.msgCount = 0;
     });
 
+    // Dev mode
+    $('chk-devmode').addEventListener('change', () => {
+      $('dev-tools').classList.toggle('hidden', !$('chk-devmode').checked);
+    });
+    $('btn-dump-cache').addEventListener('click', () => {
+      chrome.storage.local.get('uc_messages', (d) => {
+        const json = JSON.stringify(d.uc_messages || [], null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'unitychat-message-cache.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+    $('btn-dump-nicknames').addEventListener('click', () => {
+      chrome.storage.local.get('uc_nicknames', (d) => {
+        const json = JSON.stringify(d.uc_nicknames || {}, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'unitychat-nickname-cache.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+    $('btn-clear-cache').addEventListener('click', () => {
+      chrome.storage.local.remove('uc_messages');
+      this._msgCache = [];
+      this._seenMsgIds.clear();
+      this._seenContentKeys.clear();
+      this.chatEl.innerHTML = '';
+      this.msgCount = 0;
+    });
+
     // Scroll - detekce nových zpráv + auto-scroll pause
     this._unreadCount = 0;
     this.chatEl.addEventListener('scroll', () => {

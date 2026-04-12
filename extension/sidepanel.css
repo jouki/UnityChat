@@ -262,6 +262,28 @@ body.layout-large .reply-ctx { font-size: 12px; }
   min-height: 15px;
 }
 .nick-status.error { color: #ff4444; }
+
+/* ---- Dev tools ---- */
+
+.dev-mode-row { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; margin-top: 4px; }
+.dev-mode-row label { font-size: 11px; color: var(--text-muted); }
+.dev-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dev-tools button {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: rgba(255, 60, 60, 0.1);
+  border: 1px solid rgba(255, 60, 60, 0.3);
+  border-radius: 4px;
+  color: #ff6b6b;
+  cursor: pointer;
+}
+.dev-tools button:hover {
+  background: rgba(255, 60, 60, 0.2);
+}
 .nick-status.success { color: #53fc18; }
 
 /* ---- Status + Filter Bar ---- */
