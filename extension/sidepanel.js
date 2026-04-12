@@ -2392,6 +2392,19 @@ class UnityChat {
   }
 
   _addMessage(msg) {
+    // Track platform color BEFORE dedup (echo gets deduped but we still want the color)
+    if (msg.color && msg.platform && !msg._optimistic && msg.message?.includes(UC_MARKER)) {
+      const cleanMsg = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+      if (this._lastSentText && cleanMsg === this._lastSentText) {
+        this._savePlatformColor(msg.platform, msg.color);
+        this._lastSentText = null;
+      }
+      const myName = this._platformUsernames[msg.platform]?.toLowerCase();
+      if (myName && msg.username?.toLowerCase() === myName) {
+        this._savePlatformColor(msg.platform, msg.color);
+      }
+    }
+
     // Dedup podle ID (cache + live zprávy)
     if (msg.id) {
       if (this._seenMsgIds.has(msg.id)) return;
