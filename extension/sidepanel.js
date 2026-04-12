@@ -1277,6 +1277,9 @@ class UnityChat {
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._platformColors = {};    // per-platform user color (from IRC/API)
+    this._msgHistory = [];         // sent message history (newest last)
+    this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
+    this._msgHistoryDraft = '';    // unsent text before browsing history
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -1681,6 +1684,31 @@ class UnityChat {
           this._acHide();
           return;
         }
+      }
+      // Message history (ArrowUp/Down when no autocomplete is active)
+      if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
+        e.preventDefault();
+        if (this._msgHistoryIdx === -1) {
+          // Start browsing — save current draft
+          this._msgHistoryDraft = this.msgInput.value;
+          this._msgHistoryIdx = this._msgHistory.length - 1;
+        } else if (this._msgHistoryIdx > 0) {
+          this._msgHistoryIdx--;
+        }
+        this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+        return;
+      }
+      if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
+        e.preventDefault();
+        if (this._msgHistoryIdx < this._msgHistory.length - 1) {
+          this._msgHistoryIdx++;
+          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+        } else {
+          // Past the end — restore draft
+          this._msgHistoryIdx = -1;
+          this.msgInput.value = this._msgHistoryDraft;
+        }
+        return;
       }
       if (e.key === 'Escape') {
         if (this._ac) { this._acHide(); return; }
@@ -2246,6 +2274,14 @@ class UnityChat {
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
     const reply = this._reply ? { ...this._reply } : null;
+
+    // Save to message history (max 50, no consecutive duplicates)
+    if (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text) {
+      this._msgHistory.push(text);
+      if (this._msgHistory.length > 50) this._msgHistory.shift();
+    }
+    this._msgHistoryIdx = -1;
+    this._msgHistoryDraft = '';
 
     // Clear input IMMEDIATELY — responsive feel
     this.msgInput.value = '';
