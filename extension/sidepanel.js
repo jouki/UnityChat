@@ -1444,10 +1444,18 @@ class UnityChat {
       const partial = text.substring(ws, pos);
       if (partial.startsWith('@') && partial.length >= 2) {
         const prefix = partial.substring(1).toLowerCase();
-        const matches = [...this._chatUsers.values()]
-          .filter(u => u.name.toLowerCase().startsWith(prefix))
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map(u => '@' + u.name);
+        const seen = new Set();
+        const matches = [...this._chatUsers.entries()]
+          .filter(([key, u]) => {
+            if (key.includes(':')) return false;
+            const name = u.name.replace(/^@/, '').toLowerCase();
+            if (seen.has(name)) return false;
+            if (!name.startsWith(prefix)) return false;
+            seen.add(name);
+            return true;
+          })
+          .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+          .map(([, u]) => '@' + u.name.replace(/^@/, ''));
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
           this._acRender();
@@ -2487,18 +2495,19 @@ class UnityChat {
       if (this._seenContentKeys.has(contentKey)) {
         if (msg._optimistic) {
           // Optimistic messages always pass through — user can send same text twice
-          // (e.g. "1", "k", "lol"). Update optimistic key to latest sent ID.
           this._optimisticKeys.set(contentKey, msg.id);
         } else if (msg.scraped) {
           return; // always drop scraped duplicates
         } else {
-          // Real message (IRC echo) matching an optimistic message → upgrade in-place
+          // Real message — try to upgrade matching optimistic message
           const optId = this._optimisticKeys.get(contentKey);
           if (optId) {
             this._upgradeOptimistic(optId, msg);
             this._optimisticKeys.delete(contentKey);
+            return; // upgraded in-place, don't render again
           }
-          return;
+          // No matching optimistic → legitimate repeat (e.g. bot responses
+          // like !bulgarians always send the same text). Let it through.
         }
       } else {
         this._seenContentKeys.add(contentKey);
