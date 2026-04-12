@@ -1525,8 +1525,10 @@ class UnityChat {
         if (!uname) continue;
         let result;
         if (nick || color) {
-          // Save nickname + color (if no nickname, use original username = just color override)
-          result = await this.nicknames.save(p, uname, nick || uname, color);
+          // If no custom nickname, use the display name (from IRC display-name tag)
+          // so it looks unchanged — only color changes
+          const displayName = nick || this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.name || uname;
+          result = await this.nicknames.save(p, uname, displayName, color);
         } else {
           // Both empty → delete
           result = await this.nicknames.remove(p, uname);
@@ -1538,8 +1540,9 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        statusEl.textContent = nick
-          ? `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+        const what = nick ? 'Přezdívka' : color ? 'Barva' : 'Přezdívka smazána';
+        statusEl.textContent = nick || color
+          ? `${what} uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
           : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
@@ -2440,6 +2443,17 @@ class UnityChat {
         const myName = (this._platformUsernames[msg.platform] || this.config.username || '').toLowerCase();
         if (msg.platform && myName && msg.username.toLowerCase() === myName) {
           this._savePlatformColor(msg.platform, msg.color);
+          // Update platform username with display-name casing from IRC
+          // (PING returns login "jouki728", IRC has display-name "Jouki728")
+          if (msg.username !== this._platformUsernames[msg.platform]) {
+            this._platformUsernames[msg.platform] = msg.username;
+            if (!this.config._platformUsernames) this.config._platformUsernames = {};
+            this.config._platformUsernames[msg.platform] = msg.username;
+            this._saveConfig();
+            // Update username field if settings are open
+            const el = document.getElementById('input-username');
+            if (el) el.value = msg.username;
+          }
         }
       }
       if (this._lastSentText && msg.message) {
