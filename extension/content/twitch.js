@@ -19,21 +19,20 @@
     btn.setAttribute('aria-label', 'Otevřít UnityChat');
     btn.title = 'Otevřít UnityChat';
     Object.assign(btn.style, {
-      position: 'absolute',
-      left: '34px',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      display: 'inline-flex',
+      display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       width: '30px',
       height: '30px',
-      padding: '4px',
+      minWidth: '30px',
+      padding: '0',
+      margin: '0',
       background: 'transparent',
       border: 'none',
       borderRadius: '4px',
       cursor: 'pointer',
-      zIndex: '10',
+      flexShrink: '0',
+      order: '1',
       transition: 'background 0.15s ease'
     });
 
@@ -99,8 +98,14 @@
     if (document.getElementById(UC_BTN_ID)) return;
     const header = findChatHeader();
     if (!header) return;
-    header.style.position = 'relative';
-    header.appendChild(buildUcButton());
+    const btn = buildUcButton();
+    // Insert after first child (collapse toggle), flex order:1 keeps it there
+    if (header.children.length > 0) {
+      header.insertBefore(btn, header.children[1] || null);
+    } else {
+      header.appendChild(btn);
+    }
+    console.log('[UC] Twitch button injected into header');
   }
 
   function startHeaderObserver() {
