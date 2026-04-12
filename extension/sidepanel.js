@@ -1247,6 +1247,7 @@ class UnityChat {
     this._chatUsers = new Map();
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
+    this._platformUsernames = {}; // per-platform username tracking
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
@@ -1841,7 +1842,11 @@ class UnityChat {
 
       this._setActivePlatform(resp?.platform || null);
 
-      // Auto-detekce username z platformy
+      // Track username per platform
+      if (resp?.username && resp?.platform) {
+        this._platformUsernames[resp.platform] = resp.username.replace(/^@/, '');
+      }
+      // Auto-detekce username z platformy (hlavní config field)
       if (resp?.username && !this.config.username) {
         this.config.username = resp.username;
         const el = document.getElementById('input-username');
@@ -2124,7 +2129,7 @@ class UnityChat {
     this._clearReply();
 
     // Optimistic UI: show message instantly (include @mention for cross-platform reply)
-    const username = this.config.username || 'me';
+    const username = this._platformUsernames[platform] || this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
     const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
     let displayText = text;

@@ -185,7 +185,7 @@
     input.focus();
     input.textContent = '';
     document.execCommand('insertText', false, text);
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 30));
     const btn = findSendBtn(document);
     if (btn) btn.click();
   }
@@ -204,7 +204,7 @@
             input.focus();
             input.textContent = '';
             frame.contentWindow.document.execCommand('insertText', false, text);
-            await new Promise((r) => setTimeout(r, 150));
+            await new Promise((r) => setTimeout(r, 30));
             const btn = findSendBtn(doc);
             if (btn) btn.click();
             return;
@@ -245,12 +245,12 @@
                 input.focus();
                 input.textContent = '';
                 loadedFrame.contentWindow.document.execCommand('insertText', false, text);
-                await new Promise((r) => setTimeout(r, 150));
+                await new Promise((r) => setTimeout(r, 30));
                 const btn = findSendBtn(doc);
                 if (btn) btn.click();
                 return;
               }
-              await new Promise((r) => setTimeout(r, 400));
+              await new Promise((r) => setTimeout(r, 200));
             }
           }
         } catch {}
