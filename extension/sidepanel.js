@@ -2613,11 +2613,18 @@ class UnityChat {
       const cutoff = Date.now() - 72 * 60 * 60 * 1000;
       const msgs = raw.filter((m) => !m.timestamp || m.timestamp > cutoff);
 
+      // Load each message individually — don't let one bad message kill the rest
       for (const msg of msgs) {
-        this._addMessage(this._expandMsg(msg));
+        try { this._addMessage(this._expandMsg(msg)); } catch {}
       }
+      // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
+      // Use the raw filtered messages as the authoritative cache
       this._msgCache = msgs;
-    } catch {}
+    } catch (e) {
+      console.error('Cache load failed:', e);
+      // DON'T reset _msgCache — keep whatever was there so beforeunload
+      // doesn't overwrite the storage with an empty array
+    }
   }
 
   _clearUnread() {
