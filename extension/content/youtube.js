@@ -150,12 +150,11 @@
       }
     }
 
-    function tryInject() {
-      if (!document.getElementById(UC_BTN_ID)) injectYtButton();
-    }
-    tryInject();
-    const ytObs = new MutationObserver(tryInject);
-    ytObs.observe(document.body, { childList: true, subtree: true });
+    // Poll every 2s until the button is injected (YT loads elements async)
+    const injectInterval = setInterval(() => {
+      if (document.getElementById(UC_BTN_ID)) { clearInterval(injectInterval); return; }
+      injectYtButton();
+    }, 2000);
   }
 
   // Přímé odeslání v live_chat iframe
