@@ -124,19 +124,25 @@
       btn.textContent = 'UnityChat';
       btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
       btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
-      btn.addEventListener('click', async (e) => {
+      btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // Open chat invisibly
-        const cp = document.querySelector('ytd-live-chat-frame');
-        if (cp) {
-          const tb = cp.querySelector('#show-hide-button button, #show-hide-button ytd-button-renderer button');
-          if (tb) {
-            tb.click();
-            await new Promise((r) => setTimeout(r, 2500));
-            hideYtChat();
-          }
+        // 1. Click "Otevřít panel" to open vanilla chat (if closed)
+        const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+        if (openPanelBtn && !openPanelBtn.disabled) {
+          openPanelBtn.click();
+          // 3. Watch for X button to appear → hide vanilla chat panel
+          const closeObs = new MutationObserver(() => {
+            const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+            if (closeBtn) {
+              closeObs.disconnect();
+              hideYtChat();
+            }
+          });
+          closeObs.observe(document.body, { childList: true, subtree: true });
+          setTimeout(() => closeObs.disconnect(), 10000);
         }
+        // 2. Open UnityChat side panel
         chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
       });
       return btn;
@@ -155,11 +161,10 @@
       }
     }
 
-    // Poll every 2s until the button is injected (YT loads elements async)
     const injectInterval = setInterval(() => {
       if (document.getElementById(UC_BTN_ID)) { clearInterval(injectInterval); return; }
       injectYtButton();
-    }, 2000);
+    }, 500);
   }
 
   // Přímé odeslání v live_chat iframe
