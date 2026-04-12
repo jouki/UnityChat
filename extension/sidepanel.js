@@ -2121,20 +2121,26 @@ class UnityChat {
     this.msgInput.style.height = 'auto';
     this._clearReply();
 
-    // Optimistic UI: show message instantly
+    // Optimistic UI: show message instantly (include @mention for cross-platform reply)
     const username = this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
     const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
+    let displayText = text;
+    if (reply && reply.platform !== platform) {
+      const at = `@${reply.username}`;
+      if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
+    }
     this._lastSentText = text;
     this._addMessage({
       id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       platform,
       username,
-      message: text,
+      message: displayText,
       color: ucProfile?.color || this._lastUserColor || defaultColors[platform] || null,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username } } : {}),
     });
 
     // Send in background (don't block UI)
