@@ -10,6 +10,7 @@ const UC_MARKER = '\u2800';
 
 const DEFAULTS = {
   channel: 'robdiesalot',
+  kickChannel: 'robdiesalot',
   ytChannel: 'robdiesalot',
   twitch: true,
   youtube: true,
@@ -448,6 +449,146 @@ class EmoteManager {
 }
 
 // =============================================================
+// NicknameManager - custom display names backed by api.jouki.cz
+// SSE push for real-time updates, chrome.storage.local cache
+// =============================================================
+
+// DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
+const UC_API = 'http://178.104.160.182:3001';
+
+class NicknameManager {
+  constructor() {
+    this._map = new Map();       // "platform:username" → { nickname, color }
+    this._eventSource = null;
+    this.onChange = null;         // callback: ({ platform, username, nickname, color }) => void
+    this.onLoad = null;          // callback after fetchAll completes
+  }
+
+  async loadCache() {
+    try {
+      const s = await chrome.storage.local.get('uc_nicknames');
+      if (s.uc_nicknames && typeof s.uc_nicknames === 'object') {
+        for (const [k, v] of Object.entries(s.uc_nicknames)) {
+          // Backward compat: old cache stored string, new stores {nickname, color}
+          this._map.set(k, typeof v === 'string' ? { nickname: v, color: null } : v);
+        }
+      }
+    } catch {}
+  }
+
+  async fetchAll() {
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      this._map.clear();
+      for (const n of data.nicknames) {
+        this._map.set(`${n.platform}:${n.username.toLowerCase()}`, {
+          nickname: n.nickname,
+          color: n.color || null,
+        });
+      }
+      this._saveCache();
+      if (this.onLoad) this.onLoad();
+    } catch {}
+  }
+
+  connectSSE() {
+    if (this._eventSource) return;
+    try {
+      this._eventSource = new EventSource(`${UC_API}/nicknames/stream`);
+      this._eventSource.addEventListener('nickname-delete', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          this._map.delete(`${d.platform}:${d.username.toLowerCase()}`);
+          this._saveCache();
+          if (this.onChange) this.onChange({ ...d, nickname: null, color: null });
+        } catch {}
+      });
+      this._eventSource.addEventListener('nickname-change', (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          const key = `${d.platform}:${d.username.toLowerCase()}`;
+          this._map.set(key, { nickname: d.nickname, color: d.color || null });
+          this._saveCache();
+          if (this.onChange) this.onChange(d);
+        } catch {}
+      });
+      this._eventSource.onerror = () => {
+        if (this._eventSource?.readyState === EventSource.CLOSED) {
+          this._eventSource = null;
+          setTimeout(() => this.connectSSE(), 5000);
+        }
+      };
+    } catch {}
+  }
+
+  disconnect() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
+  }
+
+  get(platform, username) {
+    if (!platform || !username) return null;
+    const name = username.toLowerCase().replace(/^@/, '');
+    return this._map.get(`${platform}:${name}`) || null;
+  }
+
+  getNickname(platform, username) {
+    return this.get(platform, username)?.nickname || null;
+  }
+
+  getColor(platform, username) {
+    return this.get(platform, username)?.color || null;
+  }
+
+  async save(platform, username, nickname, color) {
+    const cleanName = username.replace(/^@/, '');
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform, username: cleanName, nickname, color: color || null }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        this._map.set(`${platform}:${cleanName.toLowerCase()}`, { nickname, color: color || null });
+        this._saveCache();
+      }
+      return data;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  async remove(platform, username) {
+    const cleanName = username.replace(/^@/, '');
+    try {
+      const resp = await fetch(`${UC_API}/nicknames`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform, username: cleanName }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        this._map.delete(`${platform}:${cleanName.toLowerCase()}`);
+        this._saveCache();
+      }
+      return data;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  _saveCache() {
+    const obj = Object.fromEntries(this._map);
+    chrome.storage.local.set({ uc_nicknames: obj }).catch(() => {});
+  }
+}
+
+// =============================================================
 // Twitch IRC Provider
 // =============================================================
 
@@ -863,7 +1004,7 @@ class YouTubeProvider {
         this.onDebug?.('YouTube: API polling mód');
       }
 
-      this._pt = setTimeout(() => this._poll(), 4000);
+      this._pt = setTimeout(() => this._poll(), 2000);
     } catch (err) {
       console.error('YouTube:', err);
       this.onStatus?.('error', err.message);
@@ -1014,7 +1155,7 @@ class YouTubeProvider {
       }
 
       if (this.polling) {
-        this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 2000));
+        this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 1500));
       }
     } catch (err) {
       console.error('YouTube API poll:', err);
@@ -1045,7 +1186,7 @@ class YouTubeProvider {
       this._processActions(actions);
 
       if (this.polling) {
-        this._pt = setTimeout(() => this._poll(), 6000);
+        this._pt = setTimeout(() => this._poll(), 3000);
       }
     } catch (err) {
       console.error('YouTube page refresh:', err);
@@ -1119,6 +1260,7 @@ class UnityChat {
   constructor() {
     this.config = { ...DEFAULTS };
     this.emotes = new EmoteManager();
+    this.nicknames = new NicknameManager();
     this.twitch = new TwitchProvider();
     this.kick = new KickProvider();
     this.youtube = new YouTubeProvider();
@@ -1132,12 +1274,14 @@ class UnityChat {
     this._chatUsers = new Map();
     this._seenMsgIds = new Set();
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
+    this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
 
     // Uložit cache okamžitě při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
       if (this._msgCache.length > 0) {
-        chrome.storage.local.set({ uc_messages: this._msgCache });
+        chrome.storage.local.set({ [this._cacheKey]: this._msgCache });
       }
+      this.nicknames?.disconnect();
     });
 
     this.chatEl = document.getElementById('chat');
@@ -1156,9 +1300,35 @@ class UnityChat {
       `<img src="icons/icon48.png" class="hdr-logo"> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
 
     await this._loadConfig();
+    if (this.config._platformUsernames) {
+      this._platformUsernames = { ...this.config._platformUsernames };
+    }
+    await this.nicknames.loadCache();
+    this.nicknames.fetchAll();  // non-blocking, fire-and-forget
+    this.nicknames.connectSSE();
+    this.nicknames.onChange = (d) => this._onNicknameChange(d);
+    this.nicknames.onLoad = () => {
+      if (this.config.username) {
+        for (const p of ['twitch', 'youtube', 'kick']) {
+          const profile = this.nicknames.get(p, this.config.username);
+          if (profile) {
+            const nickEl = document.getElementById('input-nickname');
+            const colorEl = document.getElementById('input-color-hex');
+            const pickerEl = document.getElementById('input-color-picker');
+            if (nickEl && !nickEl.value) nickEl.value = profile.nickname;
+            if (colorEl && !colorEl.value && profile.color) {
+              colorEl.value = profile.color;
+              if (pickerEl) pickerEl.value = profile.color;
+            }
+            break;
+          }
+        }
+      }
+    };
     this._setupUI();
     this._setupProviders();
 
+    console.log('[UC] init: providers set up, detecting username...');
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
@@ -1175,22 +1345,25 @@ class UnityChat {
       } catch {}
     }
 
-    // Načíst VŠECHNY emotes + badges před cache
-    await this.emotes.loadGlobal();
-    if (this.config._roomId) {
-      await Promise.all([
-        this.emotes.loadChannel('twitch', this.config._roomId),
-        this.emotes.loadBTTV(this.config._roomId),
-        this.emotes.loadFFZ(this.config._roomId),
-        this._loadTwitchBadges(this.config._roomId)
-      ]);
-    }
+    console.log('[UC] init: loading cache + connecting...');
+    // Load cache + connect FIRST (instant), emotes in background
     await this._loadCachedMessages();
-
+    console.log('[UC] init: cache loaded, connecting all...');
     this._connectAll();
-
-    // Detekce aktivní platformy pro odesílání
+    console.log('[UC] init: connected, starting detect loop');
     this._detectLoop();
+
+    // Load emotes + badges in background (don't block the UI)
+    this.emotes.loadGlobal().then(() => {
+      if (this.config._roomId) {
+        return Promise.all([
+          this.emotes.loadChannel('twitch', this.config._roomId),
+          this.emotes.loadBTTV(this.config._roomId),
+          this.emotes.loadFFZ(this.config._roomId),
+          this._loadTwitchBadges(this.config._roomId)
+        ]);
+      }
+    }).catch(() => {});
   }
 
   // ---- Config ----
@@ -1214,8 +1387,23 @@ class UnityChat {
     const $ = (id) => document.getElementById(id);
 
     $('input-channel').value = this.config.channel;
+    $('input-kick-channel').value = this.config.kickChannel || this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
+    // Pre-populate nickname + color from cache
+    if (this.config.username) {
+      for (const p of ['twitch', 'youtube', 'kick']) {
+        const profile = this.nicknames.get(p, this.config.username);
+        if (profile) {
+          $('input-nickname').value = profile.nickname || '';
+          if (profile.color) {
+            $('input-color-hex').value = profile.color;
+            $('input-color-picker').value = profile.color;
+          }
+          break;
+        }
+      }
+    }
     $('input-layout').value = this.config.layout || 'small';
     this._applyLayout();
     $('input-layout').addEventListener('change', () => {
@@ -1223,21 +1411,53 @@ class UnityChat {
       this._saveConfig();
       this._applyLayout();
     });
-    // Auto-resize textarea
+    // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
       this.msgInput.style.height = 'auto';
       const max = 250;
       const h = Math.min(this.msgInput.scrollHeight, max);
       this.msgInput.style.height = h + 'px';
       this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+
+      // Auto-trigger @username autocomplete while typing
+      const text = this.msgInput.value;
+      const pos = this.msgInput.selectionStart;
+      // Find the word being typed
+      let ws = pos;
+      while (ws > 0 && text[ws - 1] !== ' ') ws--;
+      const partial = text.substring(ws, pos);
+      if (partial.startsWith('@') && partial.length >= 2) {
+        const prefix = partial.substring(1).toLowerCase();
+        const matches = [...this._chatUsers.values()]
+          .filter(u => u.name.toLowerCase().startsWith(prefix))
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(u => '@' + u.name);
+        if (matches.length) {
+          this._ac = { start: ws, end: pos, index: 0, matches };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (!partial.startsWith('@')) {
+        // Not typing @, clear any open @suggest (emote suggest is Tab-only)
+        if (this._ac && this._ac.matches[0]?.startsWith('@')) this._acHide();
+      }
     });
 
     // Username se nastaví okamžitě při psaní, uloží při blur
     $('input-username').addEventListener('input', () => {
-      this.config.username = $('input-username').value.trim();
+      const val = $('input-username').value.trim();
+      this.config.username = val;
+      if (this.activePlatform) this._platformUsernames[this.activePlatform] = val;
     });
     $('input-username').addEventListener('change', () => {
-      this.config.username = $('input-username').value.trim();
+      const val = $('input-username').value.trim();
+      this.config.username = val;
+      if (this.activePlatform) {
+        this._platformUsernames[this.activePlatform] = val;
+        if (!this.config._platformUsernames) this.config._platformUsernames = {};
+        this.config._platformUsernames[this.activePlatform] = val;
+      }
       this._saveConfig();
     });
     $('chk-twitch').checked = this.config.twitch;
@@ -1259,8 +1479,73 @@ class UnityChat {
       $('settings').classList.toggle('hidden')
     );
 
+    // Nickname (empty = delete)
+    $('btn-nickname').addEventListener('click', async () => {
+      const nick = $('input-nickname').value.trim();
+      const color = $('input-color-hex').value.trim() || null;
+      const statusEl = $('nickname-status');
+      if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) {
+        statusEl.textContent = 'Barva musí být #RRGGBB';
+        statusEl.className = 'nick-status error';
+        return;
+      }
+      $('btn-nickname').disabled = true;
+
+      // Detect username on each platform via PING and save nickname for all
+      const platforms = ['twitch', 'youtube', 'kick'];
+      const tabUrls = { twitch: '*://*.twitch.tv/*', youtube: '*://*.youtube.com/*', kick: '*://*.kick.com/*' };
+      let saved = 0;
+      let lastError = null;
+
+      for (const p of platforms) {
+        let uname = null;
+        // Try config username first (always set for Twitch)
+        if (p === 'twitch' && this.config.username) {
+          uname = this.config.username;
+        } else {
+          // PING active tab for this platform
+          try {
+            const tabs = await chrome.tabs.query({ url: [tabUrls[p]] });
+            for (const tab of tabs) {
+              const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+              if (resp?.username) { uname = resp.username; break; }
+            }
+          } catch {}
+        }
+        if (!uname) continue;
+        const result = nick
+          ? await this.nicknames.save(p, uname, nick, color)
+          : await this.nicknames.remove(p, uname);
+        if (result.ok) saved++;
+        else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
+        else lastError = result.error;
+      }
+
+      $('btn-nickname').disabled = false;
+      if (saved > 0) {
+        statusEl.textContent = nick
+          ? `Přezdívka uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+          : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
+        statusEl.className = 'nick-status success';
+      } else {
+        statusEl.textContent = lastError || 'Nepodařilo se uložit';
+        statusEl.className = 'nick-status error';
+      }
+      setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'nick-status'; }, 4000);
+    });
+
+    // Sync color picker ↔ hex input
+    $('input-color-picker').addEventListener('input', () => {
+      $('input-color-hex').value = $('input-color-picker').value;
+    });
+    $('input-color-hex').addEventListener('input', () => {
+      const v = $('input-color-hex').value;
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) $('input-color-picker').value = v;
+    });
+
     $('btn-connect').addEventListener('click', () => {
       this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
+      this.config.kickChannel = $('input-kick-channel').value.trim() || this.config.channel;
       this.config.ytChannel = $('input-yt-channel').value.trim() || this.config.channel;
       this.config.username = $('input-username').value.trim();
       this.config.twitch = $('chk-twitch').checked;
@@ -1274,6 +1559,43 @@ class UnityChat {
 
     $('btn-disconnect').addEventListener('click', () => this._disconnectAll());
     $('btn-clear').addEventListener('click', () => {
+      this.chatEl.innerHTML = '';
+      this.msgCount = 0;
+    });
+
+    // Dev mode
+    $('chk-devmode').addEventListener('change', () => {
+      $('dev-tools').classList.toggle('hidden', !$('chk-devmode').checked);
+    });
+    $('btn-dump-cache').addEventListener('click', () => {
+      chrome.storage.local.get(this._cacheKey, (d) => {
+        const json = JSON.stringify(d[this._cacheKey] || [], null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'unitychat-message-cache.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+    $('btn-dump-nicknames').addEventListener('click', () => {
+      chrome.storage.local.get('uc_nicknames', (d) => {
+        const json = JSON.stringify(d.uc_nicknames || {}, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'unitychat-nickname-cache.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    });
+    $('btn-clear-cache').addEventListener('click', () => {
+      chrome.storage.local.remove(this._cacheKey);
+      this._msgCache = [];
+      this._seenMsgIds.clear();
+      this._seenContentKeys.clear();
       this.chatEl.innerHTML = '';
       this.msgCount = 0;
     });
@@ -1339,7 +1661,8 @@ class UnityChat {
         }
       }
       if (e.key === 'Escape') {
-        this._acHide();
+        if (this._ac) { this._acHide(); return; }
+        if (this._reply) { this._clearReply(); return; }
         return;
       }
       // Modifier klávesy (Shift, Ctrl, Alt) samy o sobě neruší autocomplete
@@ -1560,7 +1883,17 @@ class UnityChat {
 
       this._setActivePlatform(resp?.platform || null);
 
-      // Auto-detekce username z platformy
+      // Track username per platform + persist
+      if (resp?.username && resp?.platform) {
+        const name = resp.username.replace(/^@/, '');
+        this._platformUsernames[resp.platform] = name;
+        if (!this.config._platformUsernames) this.config._platformUsernames = {};
+        if (this.config._platformUsernames[resp.platform] !== name) {
+          this.config._platformUsernames[resp.platform] = name;
+          this._saveConfig();
+        }
+      }
+      // Auto-detekce username z platformy (hlavní config field)
       if (resp?.username && !this.config.username) {
         this.config.username = resp.username;
         const el = document.getElementById('input-username');
@@ -1610,6 +1943,32 @@ class UnityChat {
     this.msgInput.placeholder = platform
       ? `Zpráva do ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`
       : 'Otevři stream pro odesílání...';
+
+    // Update username field to show current platform's username
+    const el = document.getElementById('input-username');
+    const label = document.querySelector('label[for="input-username"]');
+    if (el && platform) {
+      const pName = this._platformUsernames[platform] || this.config._platformUsernames?.[platform];
+      if (pName) {
+        el.value = pName;
+        this._platformUsernames[platform] = pName;
+      }
+    }
+    // Update nickname + color fields from cache for this platform's username
+    const nickEl = document.getElementById('input-nickname');
+    const colorHexEl = document.getElementById('input-color-hex');
+    const colorPickerEl = document.getElementById('input-color-picker');
+    if (nickEl && platform) {
+      const pName = this._platformUsernames[platform];
+      const profile = pName ? this.nicknames.get(platform, pName) : null;
+      nickEl.value = profile?.nickname || '';
+      if (colorHexEl) colorHexEl.value = profile?.color || '';
+      if (colorPickerEl) colorPickerEl.value = profile?.color || '#ff8c00';
+    }
+    if (label) {
+      const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
+      label.textContent = platform ? `Username (${names[platform] || platform})` : 'Tvoje username';
+    }
   }
 
   _applyLayout() {
@@ -1760,6 +2119,18 @@ class UnityChat {
     }
   }
 
+  // ---- Nickname live update ----
+
+  _onNicknameChange({ platform, username, nickname, color }) {
+    this.chatEl.querySelectorAll('.un').forEach((un) => {
+      if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
+        un.textContent = nickname;
+        un.title = username;
+        if (color) un.style.color = color;
+      }
+    });
+  }
+
   // ---- User Card ----
 
   async _openUserCard(platform, username) {
@@ -1822,37 +2193,63 @@ class UnityChat {
 
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
+    const platform = this.activePlatform;
+    const reply = this._reply ? { ...this._reply } : null;
 
+    // Clear input IMMEDIATELY — responsive feel
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    this._clearReply();
+
+    // Optimistic UI: show message instantly (include @mention for cross-platform reply)
+    const username = this._platformUsernames[platform] || this.config.username || 'me';
+    const ucProfile = this.nicknames.get(platform, username);
+    const defaultColors = { twitch: '#9146ff', youtube: '#ff4b4b', kick: '#53fc18' };
+    let displayText = text;
+    if (reply && reply.platform !== platform) {
+      const at = `@${reply.username}`;
+      if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
+    }
+    this._lastSentText = text;
+    this._addMessage({
+      id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      platform,
+      username,
+      message: displayText,
+      color: ucProfile?.color || this._lastUserColor || defaultColors[platform] || null,
+      timestamp: Date.now(),
+      _uc: true,
+      _optimistic: true,
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username } } : {}),
+    });
+
+    // Send in background (don't block UI)
     try {
       const tab = await this._getActiveBrowserTab();
-      if (!tab) return;
+      if (!tab) { this._sys('Žádný aktivní tab'); return; }
 
       let resp;
-
-      // Native reply pokud odpovídáme na stejné platformě
-      if (this._reply?.messageId && this._reply.platform === this.activePlatform) {
+      // Native reply only on Twitch (GQL threading).
+      // YouTube/Kick don't support native reply → @mention prefix.
+      if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
           text: markedText,
-          parentMsgId: this._reply.messageId,
-          username: this._reply.username,
+          parentMsgId: reply.messageId,
+          username: reply.username,
           broadcasterId: this.config._roomId || null
         });
       } else {
-        // Cross-platform reply → @mention prefix
         let sendText = markedText;
-        if (this._reply) {
-          const at = `@${this._reply.username}`;
+        if (reply) {
+          const name = reply.username.replace(/^@/, '');
+          const at = `@${name}`;
           if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
         }
         resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
       }
 
-      if (resp?.ok) {
-        this._lastSentText = text; // originální text bez markeru
-        this.msgInput.value = '';
-        this._clearReply();
-      } else {
+      if (!resp?.ok) {
         this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
       }
     } catch (err) {
@@ -1891,7 +2288,7 @@ class UnityChat {
     this._updateDisabled();
     const connecting = [];
     if (this.config.twitch) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
-    if (this.config.kick) { this.kick.connect(this.config.channel); connecting.push('Kick'); }
+    if (this.config.kick) { this.kick.connect(this.config.kickChannel || this.config.channel); connecting.push('Kick'); }
     if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
@@ -1900,29 +2297,41 @@ class UnityChat {
   }
 
   async _scrapeExistingChat() {
+    // Skip scrape if cache has recent messages (< 2 min old).
+    // After a reload the cache IS the backfill — scraping would just
+    // create incomplete duplicates (emotes are img tags in DOM, lost
+    // during text extraction → boundary detection fails).
+    const lastCached = this._msgCache[this._msgCache.length - 1];
+    if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
+
     try {
       const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
       for (const tab of tabs) {
         const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
         if (!resp?.ok || !resp.messages?.length) continue;
 
-        // Boundary detection: najít poslední cached Twitch zprávu v scraped pole
-        const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').replace(/[^a-z0-9\s]/g, '').trim().substring(0, 80);
-        const cacheKeys = new Set(
-          this._msgCache
-            .filter((m) => m.platform === 'twitch' && m.username && m.message)
-            .slice(-50)
-            .map((m) => norm(m.username) + '|' + norm(m.message))
-        );
+        // Boundary detection: match on username sequence (not message text,
+        // because scraped text is often incomplete — emotes are img tags).
+        // Take last N cached Twitch usernames and find that sequence in scraped.
+        const cachedUsers = this._msgCache
+          .filter((m) => m.platform === 'twitch' && m.username)
+          .slice(-20)
+          .map((m) => m.username.toLowerCase());
+        const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
 
-        // Hledat od konce scraped (nejnovější) - poslední cached match je naše hranice
         let boundary = -1;
-        for (let i = resp.messages.length - 1; i >= 0; i--) {
-          const m = resp.messages[i];
-          const key = norm(m.username) + '|' + norm(m.message);
-          if (cacheKeys.has(key)) {
-            boundary = i;
-            break;
+        // Try decreasing suffix lengths (5→2) of cached username sequence
+        for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
+          const suffix = cachedUsers.slice(-len);
+          for (let i = scrapedUsers.length - len; i >= 0; i--) {
+            let match = true;
+            for (let j = 0; j < len; j++) {
+              if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
+            }
+            if (match) {
+              boundary = i + len - 1;
+              break;
+            }
           }
         }
 
@@ -1994,7 +2403,9 @@ class UnityChat {
       ? norm(msg.username) + '|' + norm(msg.message)
       : null;
     if (contentKey) {
-      if (msg.scraped && this._seenContentKeys.has(contentKey)) return;
+      // Drop duplicates: scraped messages always, live messages if we already
+      // have an optimistic (sent) version with the same content
+      if (this._seenContentKeys.has(contentKey) && (msg.scraped || !msg._optimistic)) return;
       this._seenContentKeys.add(contentKey);
       if (this._seenContentKeys.size > 2000) {
         const arr = [...this._seenContentKeys];
@@ -2034,22 +2445,23 @@ class UnityChat {
       }
       msg._uc = true; // zachovat pro cache
 
-      // Auto-detekce username (msg.message může mít stripnutý @prefix u reply)
-      if (this._lastSentText && (msg.message === this._lastSentText || msg.message?.includes(this._lastSentText))) {
+      // Track color from own messages (username detection is PING-only)
+      if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
-        if (msg.username && this.config.username !== msg.username) {
-          this.config.username = msg.username;
-          const el = document.getElementById('input-username');
-          if (el) el.value = msg.username;
-          this._saveConfig();
-        }
+        if (msg.color) this._lastUserColor = msg.color;
       }
     }
 
     // @mention zvýraznění - kontroluje text zprávy i reply-parent
+    // Matchuje jak @username tak @nickname (pokud je nastavený)
     const myName = this.config.username?.toLowerCase();
+    // Check nickname on the message's platform (not activePlatform —
+    // that may be null when rendering cached messages at startup)
+    const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
+    const msgLower = msg.message?.toLowerCase() || '';
     const isMentioned = myName && (
-      msg.message?.toLowerCase().includes(`@${myName}`) ||
+      msgLower.includes(`@${myName}`) ||
+      (myNick && msgLower.includes(`@${myNick}`)) ||
       msg.replyTo?.username?.toLowerCase() === myName
     );
 
@@ -2085,8 +2497,8 @@ class UnityChat {
       ctx.className = 'reply-ctx';
       if (msg.replyTo.id) ctx.classList.add('clickable');
       ctx.innerHTML =
-        `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username)}</span> ` +
-        `<span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>`;
+        `&#8617; <span class="rctx-user">@${this.emotes._eh((msg.replyTo.username || '').replace(/^@/, ''))}</span>` +
+        (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -2139,8 +2551,12 @@ class UnityChat {
     // Username (klik → otevře user card na platformě)
     const un = document.createElement('span');
     un.className = 'un';
-    un.style.color = msg.color;
-    un.textContent = msg.username;
+    const ucProfile = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
+    un.style.color = ucProfile?.color || msg.color;
+    un.textContent = ucProfile?.nickname || msg.username;
+    if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
     el.appendChild(un);
     el.appendChild(document.createTextNode(' '));
@@ -2220,27 +2636,74 @@ class UnityChat {
     this._cacheMsg(msg);
   }
 
-  // ---- Message cache (přežije reload) ----
+  // ---- Message cache (per-channel, 72h TTL, compact format) ----
+
+  get _cacheKey() {
+    return `uc_messages_${(this.config.channel || 'default').toLowerCase()}`;
+  }
+
+  _compactMsg(msg) {
+    const m = {};
+    for (const [k, v] of Object.entries(msg)) {
+      // Strip null, undefined, false, empty string
+      if (v === null || v === undefined || v === false || v === '') continue;
+      m[k] = v;
+    }
+    // rgb() → #hex (shorter)
+    if (m.color?.startsWith('rgb')) {
+      const [r, g, b] = m.color.match(/\d+/g);
+      m.color = '#' + [r, g, b].map(c => (+c).toString(16).padStart(2, '0')).join('');
+    }
+    // Slim replyTo: drop message text, keep id + username
+    if (m.replyTo && typeof m.replyTo === 'object') {
+      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username };
+    }
+    return m;
+  }
+
+  _expandMsg(msg) {
+    // Restore defaults expected by _addMessage
+    if (!('firstMsg' in msg)) msg.firstMsg = false;
+    if (!('replyTo' in msg)) msg.replyTo = null;
+    if (!('twitchEmotes' in msg)) msg.twitchEmotes = null;
+    // Expand string replyTo (legacy compact) to object
+    if (typeof msg.replyTo === 'string') {
+      msg.replyTo = { id: msg.replyTo, username: null, message: null };
+    }
+    // Expand replyTo missing message field
+    if (msg.replyTo && !('message' in msg.replyTo)) msg.replyTo.message = null;
+    return msg;
+  }
 
   _cacheMsg(msg) {
-    this._msgCache.push(msg);
+    this._msgCache.push(this._compactMsg(msg));
     if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
-    if (!this._cacheTimer) {
-      this._cacheTimer = setTimeout(() => {
-        this._cacheTimer = null;
-        chrome.storage.local.set({ uc_messages: this._msgCache }).catch(() => {});
-      }, 500);
-    }
+    // Save immediately — extension reload can kill context anytime
+    chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
   }
 
   async _loadCachedMessages() {
     try {
-      const { uc_messages } = await chrome.storage.local.get('uc_messages');
-      if (!uc_messages?.length) return;
-      for (const msg of uc_messages) {
-        this._addMessage(msg);
+      const data = await chrome.storage.local.get(this._cacheKey);
+      const raw = data[this._cacheKey];
+      if (!raw?.length) return;
+
+      // 72h TTL filter
+      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+      const msgs = raw.filter((m) => !m.timestamp || m.timestamp > cutoff);
+
+      // Load each message individually — don't let one bad message kill the rest
+      for (const msg of msgs) {
+        try { this._addMessage(this._expandMsg(msg)); } catch {}
       }
-    } catch {}
+      // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
+      // Use the raw filtered messages as the authoritative cache
+      this._msgCache = msgs;
+    } catch (e) {
+      console.error('Cache load failed:', e);
+      // DON'T reset _msgCache — keep whatever was there so beforeunload
+      // doesn't overwrite the storage with an empty array
+    }
   }
 
   _clearUnread() {

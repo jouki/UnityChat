@@ -6,6 +6,7 @@ const EnvSchema = z.object({
   HOST: z.string().default('0.0.0.0'),
   DATABASE_URL: z.string().url(),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  NICKNAME_RATE_LIMIT_SECS: z.coerce.number().int().positive().default(300),
 });
 
 export const config = EnvSchema.parse(process.env);

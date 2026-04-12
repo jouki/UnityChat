@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.12.8",
+  "version": "3.18.7",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",
@@ -29,7 +29,9 @@
     "https://twitch.tv/*",
     "https://api.twitch.tv/*",
     "https://gql.twitch.tv/*",
-    "https://api.ivr.fi/*"
+    "https://api.ivr.fi/*",
+    "https://api.jouki.cz/*",
+    "http://178.104.160.182:*"
   ],
   "side_panel": {
     "default_path": "sidepanel.html"
@@ -79,7 +81,7 @@
   "web_accessible_resources": [
     {
       "resources": ["icons/icon16.png", "icons/icon48.png", "icons/icon128.png"],
-      "matches": ["*://*.twitch.tv/*"]
+      "matches": ["*://*.twitch.tv/*", "*://*.youtube.com/*"]
     }
   ]
 }

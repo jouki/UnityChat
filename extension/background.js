@@ -169,8 +169,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'YT_GET_USERNAME' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: () => {
+        try {
+          const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
+          // Try external channel ID handle first, then display name
+          const externalId = gc('CHANNEL_HANDLE') || gc('LOGGED_IN_CHANNEL_HANDLE');
+          if (externalId) return { username: externalId.replace(/^@/, '') };
+          // Fallback: try DOM
+          const el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
+          if (el?.textContent?.trim()) return { username: el.textContent.trim().replace(/^@/, '') };
+          return { username: null };
+        } catch { return { username: null }; }
+      }
+    }).then(results => {
+      sendResponse(results?.[0]?.result || { username: null });
+    }).catch(() => sendResponse({ username: null }));
+    return true;
+  }
+
   if (msg.type === 'YT_SEND' && sender.tab?.id) {
-    ytSend(sender.tab.id, msg.videoId, msg.text)
+    ytSend(sender.tab.id, msg.videoId, msg.text, msg.iframeParams)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -552,13 +574,13 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
   }
 }
 
-async function ytSend(tabId, videoId, text) {
-  ucLog('YT_SEND', 'tabId:', tabId, 'videoId:', videoId);
+async function ytSend(tabId, videoId, text, iframeParams) {
+  ucLog('YT_SEND', 'tabId:', tabId, 'videoId:', videoId, 'iframeParams:', !!iframeParams);
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: async (videoId, text) => {
+      func: async (videoId, text, iframeParams) => {
         const log = [];
         try {
           const gc = (k) =>
@@ -566,28 +588,75 @@ async function ytSend(tabId, videoId, text) {
           const apiKey =
             gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
+          const delegatedSessionId = gc('DELEGATED_SESSION_ID') || null;
+          const datasyncId = gc('DATASYNC_ID') || null;
+          const channelId = gc('CHANNEL_ID') || null;
           log.push('apiKey:' + apiKey.substring(0, 10));
+          log.push('channelId:' + (channelId || 'none'));
+          log.push('delegated:' + (delegatedSessionId || 'none'));
+          log.push('datasync:' + (datasyncId || 'none'));
 
-          // Fetch live_chat page pro send params
-          const chatResp = await fetch('/live_chat?v=' + videoId);
-          if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
-          const chatHtml = await chatResp.text();
-          log.push('htmlLen:' + chatHtml.length);
+          // SAPISIDHASH auth — required for YouTube API when chat is closed
+          const origin = 'https://www.youtube.com';
+          const cookies = Object.fromEntries(
+            document.cookie.split(';').map((c) => {
+              const [k, ...v] = c.trim().split('=');
+              return [k, v.join('=')];
+            })
+          );
+          const sapisid = cookies['SAPISID'] || cookies['__Secure-3PAPISID'];
+          let authHeader = null;
+          if (sapisid) {
+            const ts = Math.floor(Date.now() / 1000);
+            const str = ts + ' ' + sapisid + ' ' + origin;
+            const hashBuf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(str));
+            const hex = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+            authHeader = 'SAPISIDHASH ' + ts + '_' + hex;
+            log.push('auth:SAPISIDHASH');
+          } else {
+            log.push('auth:none(no SAPISID cookie)');
+          }
 
-          // Zkusit více regex variant
-          let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
-          if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
-          if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
-          log.push('paramsLen:' + pm[1].length);
+          // Use iframe params if provided (correct channel), otherwise fetch
+          let sendParams = iframeParams;
+          if (sendParams) {
+            log.push('params:iframe');
+          } else {
+            const chatResp = await fetch('/live_chat?v=' + videoId, { credentials: 'include' });
+            if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
+            const chatHtml = await chatResp.text();
+            log.push('htmlLen:' + chatHtml.length);
+            let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
+            if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
+            if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
+            sendParams = pm[1];
+            log.push('params:fetched');
+          }
+          log.push('paramsLen:' + sendParams.length);
 
           // Odeslat zprávu
+          const headers = { 'Content-Type': 'application/json', 'X-Origin': origin };
+          if (authHeader) headers['Authorization'] = authHeader;
+
+          // Build context with channel delegation
+          // datasyncId format: "accountId||channelId" — use channelId part
+          const activeChannelId = datasyncId?.includes('||')
+            ? datasyncId.split('||')[1]
+            : delegatedSessionId;
+          log.push('activeChannel:' + (activeChannelId || 'none'));
+
+          const context = { client: { clientName: 'WEB', clientVersion: cVer } };
+          if (activeChannelId) {
+            context.user = { delegatedSessionId: activeChannelId };
+          }
+
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({
-              context: { client: { clientName: 'WEB', clientVersion: cVer } },
-              params: pm[1],
+              context,
+              params: sendParams,
               richMessage: { textSegments: [{ text }] }
             })
           });
@@ -601,7 +670,7 @@ async function ytSend(tabId, videoId, text) {
           return { ok: false, error: e.message, log };
         }
       },
-      args: [videoId, text]
+      args: [videoId, text, iframeParams || null]
     });
 
     const result = results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };
