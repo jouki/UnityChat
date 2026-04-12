@@ -61,13 +61,13 @@
       pointer-events: none;
       z-index: -1;
       background-image:
-        linear-gradient(to right,  rgba(255, 255, 255, 0.050) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.050) 1px, transparent 1px),
-        linear-gradient(to right,  rgba(255, 255, 255, 0.016) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+        linear-gradient(to right,  rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.032) 1px, transparent 1px),
+        linear-gradient(to right,  rgba(255, 255, 255, 0.010) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.010) 1px, transparent 1px);
       background-size: 72px 72px, 72px 72px, 18px 18px, 18px 18px;
-      mask-image: radial-gradient(ellipse 85% 90% at 50% 50%, #000 48%, transparent 100%);
-      -webkit-mask-image: radial-gradient(ellipse 85% 90% at 50% 50%, #000 48%, transparent 100%);
+      mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 42%, transparent 100%);
+      -webkit-mask-image: radial-gradient(ellipse 82% 88% at 50% 50%, #000 42%, transparent 100%);
     }
 
     a { color: var(--violet-hi); text-decoration: none; }
@@ -93,6 +93,74 @@
       font-size: 0.92em;
       color: var(--orange-hi);
       border: 1px solid rgba(255, 140, 0, 0.15);
+    }
+    /* Clickable code that copies its data-copy value to the clipboard.
+       Browsers block direct navigation from web pages to chrome:// URLs,
+       so copy-to-clipboard is the least-friction workaround. */
+    code[data-copy] {
+      cursor: pointer;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35em;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+    }
+    code[data-copy]:hover {
+      background: rgba(255, 140, 0, 0.14);
+      border-color: rgba(255, 140, 0, 0.5);
+      color: #ffd454;
+    }
+    code[data-copy]:active { transform: translateY(1px); }
+    code[data-copy] .copy-ico {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      opacity: 0.55;
+      transition: opacity 0.15s ease;
+    }
+    code[data-copy]:hover .copy-ico { opacity: 1; }
+    code[data-copy].copied {
+      background: rgba(83, 252, 24, 0.14);
+      border-color: rgba(83, 252, 24, 0.5);
+      color: #9fff7a;
+    }
+
+    /* Toast shown after copy-to-clipboard */
+    #copy-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 2.2rem;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(14, 13, 20, 0.96);
+      border: 1px solid rgba(255, 140, 0, 0.45);
+      color: var(--text-0);
+      padding: 0.85rem 1.3rem;
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.03em;
+      box-shadow:
+        0 12px 40px -8px rgba(0, 0, 0, 0.6),
+        0 0 40px -10px rgba(255, 140, 0, 0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s ease, transform 0.22s ease;
+      z-index: 60;
+    }
+    #copy-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    #copy-toast .toast-label { color: var(--orange-hi); font-weight: 600; margin-right: 0.35em; }
+    #copy-toast kbd {
+      display: inline-block;
+      padding: 0.1em 0.45em;
+      margin: 0 0.15em;
+      font-size: 0.9em;
+      color: var(--text-0);
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
     }
 
     /* ================ TOP BAR ================ */
@@ -705,10 +773,10 @@
               <h3>Otevři extensions stránku</h3>
               <p>V prohlížeči napiš do URL baru:</p>
               <ul>
-                <li><code>chrome://extensions</code> pro Chrome</li>
-                <li><code>edge://extensions</code> pro Edge</li>
-                <li><code>opera://extensions</code> pro Opera</li>
-                <li><code>brave://extensions</code> pro Brave</li>
+                <li><code data-copy="chrome://extensions">chrome://extensions<svg class="copy-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></code> pro Chrome</li>
+                <li><code data-copy="edge://extensions">edge://extensions<svg class="copy-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></code> pro Edge</li>
+                <li><code data-copy="opera://extensions">opera://extensions<svg class="copy-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></code> pro Opera</li>
+                <li><code data-copy="brave://extensions">brave://extensions<svg class="copy-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></code> pro Brave</li>
               </ul>
             </div>
           </div>
@@ -749,7 +817,7 @@
       <section class="updates">
         <h2>Updaty</h2>
         <p>
-          Když vydám novou verzi, stáhni znovu ZIP, rozbal přes starou složku a v <code>chrome://extensions</code> klikni na <strong>🔄 reload</strong> u UnityChat karty. Hotovo, nemusíš znovu Load unpacked.
+          Když vydám novou verzi, stáhni znovu ZIP, rozbal přes starou složku a v <code data-copy="chrome://extensions">chrome://extensions<svg class="copy-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></code> klikni na <strong>🔄 reload</strong> u UnityChat karty. Hotovo, nemusíš znovu Load unpacked.
         </p>
         <img class="reload-shot" src="/unitychat/assets/chrome-extension-card.png" alt="UnityChat extension card v chrome://extensions s reload tlačítkem">
         <p>
@@ -796,6 +864,10 @@
   <!-- Lightbox for screenshots -->
   <div id="lightbox" class="lightbox" role="dialog" aria-hidden="true">
     <img id="lightbox-img" alt="">
+  </div>
+
+  <div id="copy-toast" role="status" aria-live="polite">
+    <span class="toast-label">Zkopírováno!</span>vlož do adresního řádku — <kbd>Ctrl</kbd>+<kbd>L</kbd> → <kbd>Ctrl</kbd>+<kbd>V</kbd> → <kbd>Enter</kbd>
   </div>
 
   <footer>
@@ -864,6 +936,51 @@
       lb.addEventListener('click', close);
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && lb.classList.contains('open')) close();
+      });
+    })();
+
+    // Copy-to-clipboard on <code data-copy="..."> — browsers block direct
+    // navigation to chrome:// URLs from web pages, so copy is the best we
+    // can offer. Click → writeText → toast → reset after 2s.
+    (function () {
+      const toast = document.getElementById('copy-toast');
+      let toastTimer = null;
+
+      function showToast() {
+        if (!toast) return;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+      }
+
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          // Fallback for older browsers / non-secure contexts
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch {}
+          document.body.removeChild(ta);
+          return ok;
+        }
+      }
+
+      document.addEventListener('click', async (e) => {
+        const el = e.target.closest('code[data-copy]');
+        if (!el) return;
+        e.preventDefault();
+        const ok = await copyText(el.dataset.copy);
+        if (!ok) return;
+        el.classList.add('copied');
+        showToast();
+        setTimeout(() => el.classList.remove('copied'), 1400);
       });
     })();
   </script>
