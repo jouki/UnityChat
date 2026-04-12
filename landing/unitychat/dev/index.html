@@ -88,7 +88,7 @@
     <h1>Unity<span>Chat</span></h1>
     <div class="version">v<span id="version">...</span> &middot; branch: <span id="branch">dev</span></div>
     <div class="commit" id="commit">...</div>
-    <a class="btn" id="download-btn" href="/dev-api/dev/download">Stáhnout DEV ZIP</a>
+    <a class="btn" id="download-btn" href="/download/unitychat.zip">Stáhnout DEV ZIP</a>
     <ul class="features">
       <li>Custom nicknamy (SSE real-time push)</li>
       <li>Twitch chat header button</li>
@@ -100,24 +100,24 @@
     </p>
   </div>
   <script>
-    fetch('/dev-api/health')
+    // Version from manifest.json (same as production page)
+    fetch('/download/manifest.json')
       .then(r => r.json())
-      .then(d => {
-        // Dev API is running — fetch version info
-        return fetch('/dev-api/dev').then(r => r.text());
-      })
-      .then(html => {
-        // Extract version and commit from the dev API response
-        const m = html.match(/v([\d.]+)/);
-        if (m) document.getElementById('version').textContent = m[1];
-        const c = html.match(/class="commit">([^<]+)/);
-        if (c) document.getElementById('commit').textContent = c[1];
+      .then(m => {
+        document.getElementById('version').textContent = m.version || '?';
       })
       .catch(() => {
         document.getElementById('version').textContent = '?';
-        document.getElementById('commit').textContent = 'Dev server offline';
-        document.getElementById('download-btn').style.opacity = '0.4';
-        document.getElementById('download-btn').style.pointerEvents = 'none';
+      });
+    // Commit hash from dev API (optional — if server runs)
+    fetch('/dev-api/health')
+      .then(r => r.json())
+      .then(d => {
+        if (d.commit) document.getElementById('commit').textContent = d.commit;
+        else document.getElementById('commit').textContent = '';
+      })
+      .catch(() => {
+        document.getElementById('commit').textContent = '';
       });
   </script>
 </body>

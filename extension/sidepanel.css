@@ -238,11 +238,15 @@ body.layout-large .reply-ctx { font-size: 12px; }
 
 /* ---- Nickname setting ---- */
 
-.nickname-row {
+.save-row {
   display: flex;
-  gap: 6px;
+  justify-content: center;
+  margin-top: 8px;
 }
-.nickname-row input { flex: 1; }
+#input-username[readonly] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .btn-nick {
   background: var(--accent-gradient);
   color: #000;

@@ -23,31 +23,31 @@
       <summary>Kanály</summary>
       <div class="setting-row">
         <label for="input-channel">Twitch</label>
-        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false">
+        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false" autocomplete="off">
       </div>
       <div class="setting-row">
         <label for="input-kick-channel">Kick</label>
-        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false">
+        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false" autocomplete="off">
       </div>
       <div class="setting-row">
         <label for="input-yt-channel">YouTube</label>
-        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="robdiesalot nebo @robdiesalot" spellcheck="false">
+        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off">
       </div>
     </details>
     <div class="setting-row">
-      <label for="input-username">Tvoje username</label>
-      <input type="text" id="input-username" placeholder="Jouki728" spellcheck="false">
+      <label for="input-username">USERNAME (TWITCH)</label>
+      <input type="text" id="input-username" placeholder="Detekováno automaticky" spellcheck="false" autocomplete="off" readonly>
     </div>
     <div class="setting-row">
       <label for="input-nickname">UnityChat přezdívka</label>
-      <div class="nickname-row">
-        <input type="text" id="input-nickname" placeholder="Tvoje přezdívka" maxlength="30" spellcheck="false">
-        <button id="btn-nickname" class="btn-nick">Uložit</button>
-      </div>
+      <input type="text" id="input-nickname" placeholder="Vlastní přezdívka" maxlength="30" spellcheck="false" autocomplete="off">
       <label for="input-color-hex" class="color-label">Barva jména</label>
       <div class="color-row">
         <input type="color" id="input-color-picker" value="#ff8c00">
-        <input type="text" id="input-color-hex" placeholder="#ff8c00" maxlength="7" spellcheck="false">
+        <input type="text" id="input-color-hex" placeholder="#ff8c00" maxlength="7" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="save-row">
+        <button id="btn-nickname" class="btn-nick">Uložit</button>
       </div>
       <span id="nickname-status" class="nick-status"></span>
     </div>
@@ -99,7 +99,6 @@
       <span class="st" id="st-kick" title="Kick"><span class="dot"></span>KI</span>
     </div>
     <div id="filters">
-      <button class="fbtn active" data-platform="all">Vše</button>
       <button class="fbtn active" data-platform="twitch">TW</button>
       <button class="fbtn active" data-platform="youtube">YT</button>
       <button class="fbtn active" data-platform="kick">KI</button>
