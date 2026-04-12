@@ -1930,6 +1930,15 @@ class UnityChat {
     if (!this.config._platformColors) this.config._platformColors = {};
     this.config._platformColors[platform] = color;
     this._saveConfig();
+    // Retroactively apply to all visible messages from this user
+    const myName = this._platformUsernames[platform]?.toLowerCase();
+    if (myName) {
+      this.chatEl.querySelectorAll('.un').forEach((un) => {
+        if (un.dataset.platform === platform && un.dataset.username === myName && !un.style.color) {
+          un.style.color = color;
+        }
+      });
+    }
   }
 
   _setActivePlatform(platform) {
