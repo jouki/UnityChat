@@ -426,16 +426,35 @@ class EmoteManager {
   // ---- HTML helpers ----
 
   _toHtml(segments) {
-    return segments
-      .map((s) => {
-        if (s.type === 'emote') {
+    const out = [];
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      if (s.type !== 'emote') {
+        out.push(this._eh(s.value));
+        continue;
+      }
+      if (s.zw && out.length) {
+        // Zero-width emote: find the last regular emote in output and wrap together
+        const lastIdx = out.length - 1;
+        const last = out[lastIdx];
+        if (last.includes('class="emote"') && !last.includes('emote-stack')) {
+          // Wrap previous emote + this ZW emote in a stack container
           const alt = this._ea(s.value);
-          const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
-          return s.zw ? `<span class="emote-zw-wrap">${img}</span>` : img;
+          const zwImg = `<img class="emote emote-zw" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+          out[lastIdx] = `<span class="emote-stack">${last}${zwImg}</span>`;
+          continue;
+        } else if (last.includes('emote-stack')) {
+          // Already a stack — append inside
+          const alt = this._ea(s.value);
+          const zwImg = `<img class="emote emote-zw" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+          out[lastIdx] = last.replace('</span>', zwImg + '</span>');
+          continue;
         }
-        return this._eh(s.value);
-      })
-      .join('');
+      }
+      const alt = this._ea(s.value);
+      out.push(`<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`);
+    }
+    return out.join('');
   }
 
   _eh(s) {

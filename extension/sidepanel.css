@@ -692,15 +692,21 @@ body.layout-large .reply-ctx { font-size: 12px; }
   object-fit: contain;
 }
 
-.emote-zw-wrap {
+.emote-stack {
   display: inline-block;
-  width: 0;
-  overflow: visible;
+  position: relative;
   vertical-align: middle;
 }
-.emote-zw-wrap img.emote {
+.emote-stack img.emote:first-child {
   position: relative;
-  transform: translateX(-50%);
+}
+.emote-stack img.emote-zw {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   margin: 0;
 }
 
