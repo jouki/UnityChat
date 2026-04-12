@@ -169,6 +169,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'YT_GET_USERNAME' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: () => {
+        try {
+          const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
+          // Try external channel ID handle first, then display name
+          const externalId = gc('CHANNEL_HANDLE') || gc('LOGGED_IN_CHANNEL_HANDLE');
+          if (externalId) return { username: externalId.replace(/^@/, '') };
+          // Fallback: try DOM
+          const el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
+          if (el?.textContent?.trim()) return { username: el.textContent.trim().replace(/^@/, '') };
+          return { username: null };
+        } catch { return { username: null }; }
+      }
+    }).then(results => {
+      sendResponse(results?.[0]?.result || { username: null });
+    }).catch(() => sendResponse({ username: null }));
+    return true;
+  }
+
   if (msg.type === 'YT_SEND' && sender.tab?.id) {
     ytSend(sender.tab.id, msg.videoId, msg.text, msg.iframeParams)
       .then(sendResponse)

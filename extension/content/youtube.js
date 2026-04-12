@@ -13,23 +13,11 @@
         !!document.querySelector('ytd-live-chat-frame') ||
         window.location.href.includes('/live');
       if (hasLiveChat) {
-        // Username z YouTube profil menu — try multiple selectors
-        let username = null;
-        const selectors = [
-          'yt-formatted-string#channel-handle',
-          '#channel-handle',
-          '#account-name',
-          'ytd-active-account-header-renderer #channel-handle yt-formatted-string',
-          'ytd-active-account-header-renderer #account-name',
-        ];
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el?.textContent?.trim()) {
-            username = el.textContent.trim().replace(/^@/, '');
-            break;
-          }
-        }
-        sendResponse({ platform: 'youtube', username });
+        // Get YouTube username via background executeScript (MAIN world for ytcfg)
+        chrome.runtime.sendMessage({ type: 'YT_GET_USERNAME', tabId: null }, (resp) => {
+          sendResponse({ platform: 'youtube', username: resp?.username || null });
+        });
+        return true; // async sendResponse
       }
       return;
     }
