@@ -66,15 +66,94 @@
   // ---- Hide chat listener (main frame) ----
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
+    const UC_HIDE_CSS = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+
     window.addEventListener('message', (e) => {
       if (e.data?.type === 'UC_HIDE_CHAT') {
         const chatPanel = document.querySelector('ytd-live-chat-frame');
         if (chatPanel) {
-          chatPanel.style.cssText = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+          chatPanel.style.cssText = UC_HIDE_CSS;
           chatPanel.dataset.ucHidden = '1';
         }
       }
     });
+
+    // ---- UnityChat button on YouTube page ----
+    const UC_BTN_ID = 'uc-yt-open-btn';
+
+    function buildYtButton() {
+      const btn = document.createElement('button');
+      btn.id = UC_BTN_ID;
+      btn.title = 'Otevřít UnityChat';
+      Object.assign(btn.style, {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '36px', height: '36px', padding: '6px', margin: '0 4px',
+        background: 'transparent', border: '1px solid rgba(255,140,0,0.3)',
+        borderRadius: '50%', cursor: 'pointer', flexShrink: '0',
+        transition: 'background 0.15s, border-color 0.15s',
+      });
+      const img = document.createElement('img');
+      img.src = chrome.runtime.getURL('icons/icon48.png');
+      img.alt = 'UnityChat';
+      Object.assign(img.style, {
+        width: '22px', height: '22px', display: 'block',
+        filter: 'drop-shadow(0 0 4px rgba(255,140,0,0.5))', pointerEvents: 'none',
+      });
+      btn.appendChild(img);
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = 'rgba(255,140,0,0.15)';
+        btn.style.borderColor = 'rgba(255,140,0,0.6)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'transparent';
+        btn.style.borderColor = 'rgba(255,140,0,0.3)';
+      });
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // Open chat invisibly if closed
+        const chatPanel = document.querySelector('ytd-live-chat-frame');
+        if (chatPanel && chatPanel.offsetHeight < 100) {
+          const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button');
+          if (toggleBtn) toggleBtn.click();
+          await new Promise((r) => setTimeout(r, 2000));
+          chatPanel.style.cssText = UC_HIDE_CSS;
+          chatPanel.dataset.ucHidden = '1';
+        }
+        // Open UnityChat side panel
+        chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
+      });
+      return btn;
+    }
+
+    function injectYtButton() {
+      if (document.getElementById(UC_BTN_ID)) return;
+      // Place near the chat toggle area or the video actions bar
+      const targets = [
+        'ytd-live-chat-frame #show-hide-button',
+        '#chat-container',
+        '#below ytd-live-chat-frame',
+        '#panels',
+      ];
+      for (const sel of targets) {
+        const el = document.querySelector(sel);
+        if (el) {
+          const container = el.closest('ytd-live-chat-frame') || el.parentElement;
+          if (container) {
+            container.insertBefore(buildYtButton(), container.firstChild);
+            return;
+          }
+        }
+      }
+    }
+
+    // Inject when ready + MutationObserver for SPA navigation
+    function tryInject() {
+      if (document.querySelector('ytd-live-chat-frame')) injectYtButton();
+    }
+    tryInject();
+    const ytObs = new MutationObserver(tryInject);
+    ytObs.observe(document.body, { childList: true, subtree: true });
   }
 
   // Přímé odeslání v live_chat iframe
