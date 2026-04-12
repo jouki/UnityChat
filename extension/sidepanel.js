@@ -2938,19 +2938,22 @@ class UnityChat {
       this._msgCache = msgs;
 
       // Populate message history from cached user messages (for ArrowUp/Down)
-      const myName = (this.config.username || '').toLowerCase();
-      if (myName) {
-        for (const m of msgs) {
-          if (m.username?.toLowerCase() === myName && m.message) {
-            const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
-            if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
-              this._msgHistory.push(text);
-            }
+      // Match all known username variants + UC-marked messages
+      const myNames = new Set();
+      if (this.config.username) myNames.add(this.config.username.toLowerCase());
+      for (const name of Object.values(this._platformUsernames)) {
+        if (name) myNames.add(name.toLowerCase());
+      }
+      for (const m of msgs) {
+        const isOwn = (m.username && myNames.has(m.username.toLowerCase())) || m._uc;
+        if (isOwn && m.message) {
+          const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+          if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
+            this._msgHistory.push(text);
           }
         }
-        // Keep only last 50
-        if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
       }
+      if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
     } catch (e) {
       console.error('Cache load failed:', e);
       // DON'T reset _msgCache — keep whatever was there so beforeunload
