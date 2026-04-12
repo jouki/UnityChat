@@ -67,16 +67,17 @@
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
     function hideYtChat() {
+      // Hide right column elements
+      for (const sel of ['#chat', '#chat-container', '#secondary', '#secondary-inner']) {
+        const el = document.querySelector(sel);
+        if (el) el.style.cssText = 'display:none!important;';
+      }
+      // Switch to theater mode so YouTube recalculates layout natively
       const flexy = document.querySelector('ytd-watch-flexy');
-      if (!flexy) return;
-      // Use YouTube's native theater mode — it handles all layout
-      // calculations internally (player width, container sizing).
-      // Toggling the attribute triggers YouTube's own resize logic.
-      if (!flexy.hasAttribute('theater')) {
-        // Simulate theater mode toggle (same as clicking the theater button)
+      if (flexy) {
+        flexy.removeAttribute('is-two-columns_');
         flexy.setAttribute('theater', '');
         flexy.setAttribute('full-bleed-player', '');
-        // Dispatch resize so YouTube recalculates
         window.dispatchEvent(new Event('resize'));
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
