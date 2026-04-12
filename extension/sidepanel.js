@@ -2936,6 +2936,21 @@ class UnityChat {
       // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
       // Use the raw filtered messages as the authoritative cache
       this._msgCache = msgs;
+
+      // Populate message history from cached user messages (for ArrowUp/Down)
+      const myName = (this.config.username || '').toLowerCase();
+      if (myName) {
+        for (const m of msgs) {
+          if (m.username?.toLowerCase() === myName && m.message) {
+            const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+            if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
+              this._msgHistory.push(text);
+            }
+          }
+        }
+        // Keep only last 50
+        if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
+      }
     } catch (e) {
       console.error('Cache load failed:', e);
       // DON'T reset _msgCache — keep whatever was there so beforeunload
