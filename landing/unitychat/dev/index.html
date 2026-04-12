@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UnityChat DEV</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #08080a;
+      color: #f4f3ef;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #121018;
+      border: 1px solid rgba(255, 140, 0, 0.3);
+      border-radius: 16px;
+      padding: 3rem;
+      max-width: 480px;
+      width: 90%;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(255, 60, 60, 0.15);
+      border: 1px solid rgba(255, 60, 60, 0.4);
+      color: #ff6b6b;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 1.5rem;
+    }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    h1 span { color: #ff8c00; }
+    .version {
+      color: #a39f94;
+      font-size: 14px;
+      margin-bottom: 0.3rem;
+    }
+    .commit {
+      color: #5f5b52;
+      font-size: 12px;
+      font-family: monospace;
+      margin-bottom: 2rem;
+      min-height: 16px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 14px 32px;
+      background: linear-gradient(135deg, #ffc000, #ff7a00);
+      color: #1a0b00;
+      font-weight: 700;
+      font-size: 15px;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: transform 0.2s;
+    }
+    .btn:hover { transform: translateY(-2px); }
+    .warn {
+      margin-top: 1.5rem;
+      color: #5f5b52;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .warn a { color: #ff8c00; }
+    .features {
+      margin-top: 1.5rem;
+      text-align: left;
+      color: #a39f94;
+      font-size: 13px;
+      line-height: 1.8;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 1.2rem;
+    }
+    .features li::marker { color: #ff8c00; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">Development Build</div>
+    <h1>Unity<span>Chat</span></h1>
+    <div class="version">v<span id="version">...</span> &middot; branch: <span id="branch">dev</span></div>
+    <div class="commit" id="commit">...</div>
+    <a class="btn" id="download-btn" href="/dev-api/dev/download">Stáhnout DEV ZIP</a>
+    <ul class="features">
+      <li>Custom nicknamy (SSE real-time push)</li>
+      <li>Twitch chat header button</li>
+      <li>Vše z aktuální produkce +&nbsp;nedokončené features</li>
+    </ul>
+    <p class="warn">
+      Tohle je vývojová verze. Může obsahovat nedokončené funkce a bugy.<br>
+      Stabilní verze: <a href="/unitychat">jouki.cz/UnityChat</a>
+    </p>
+  </div>
+  <script>
+    fetch('/dev-api/health')
+      .then(r => r.json())
+      .then(d => {
+        // Dev API is running — fetch version info
+        return fetch('/dev-api/dev').then(r => r.text());
+      })
+      .then(html => {
+        // Extract version and commit from the dev API response
+        const m = html.match(/v([\d.]+)/);
+        if (m) document.getElementById('version').textContent = m[1];
+        const c = html.match(/class="commit">([^<]+)/);
+        if (c) document.getElementById('commit').textContent = c[1];
+      })
+      .catch(() => {
+        document.getElementById('version').textContent = '?';
+        document.getElementById('commit').textContent = 'Dev server offline';
+        document.getElementById('download-btn').style.opacity = '0.4';
+        document.getElementById('download-btn').style.pointerEvents = 'none';
+      });
+  </script>
+</body>
+</html>
