@@ -617,9 +617,15 @@ async function ytSend(tabId, videoId, text, iframeParams) {
           if (authHeader) headers['Authorization'] = authHeader;
 
           // Build context with channel delegation
+          // datasyncId format: "accountId||channelId" — use channelId part
+          const activeChannelId = datasyncId?.includes('||')
+            ? datasyncId.split('||')[1]
+            : delegatedSessionId;
+          log.push('activeChannel:' + (activeChannelId || 'none'));
+
           const context = { client: { clientName: 'WEB', clientVersion: cVer } };
-          if (delegatedSessionId) {
-            context.user = { delegatedSessionId };
+          if (activeChannelId) {
+            context.user = { delegatedSessionId: activeChannelId };
           }
 
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
