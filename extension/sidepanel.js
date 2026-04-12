@@ -524,7 +524,8 @@ class NicknameManager {
 
   get(platform, username) {
     if (!platform || !username) return null;
-    return this._map.get(`${platform}:${username.toLowerCase()}`) || null;
+    const name = username.toLowerCase().replace(/^@/, '');
+    return this._map.get(`${platform}:${name}`) || null;
   }
 
   getNickname(platform, username) {
@@ -536,15 +537,16 @@ class NicknameManager {
   }
 
   async save(platform, username, nickname, color) {
+    const cleanName = username.replace(/^@/, '');
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, username, nickname, color: color || null }),
+        body: JSON.stringify({ platform, username: cleanName, nickname, color: color || null }),
       });
       const data = await resp.json();
       if (data.ok) {
-        this._map.set(`${platform}:${username.toLowerCase()}`, { nickname, color: color || null });
+        this._map.set(`${platform}:${cleanName.toLowerCase()}`, { nickname, color: color || null });
         this._saveCache();
       }
       return data;
