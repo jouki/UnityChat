@@ -170,7 +170,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'YT_SEND' && sender.tab?.id) {
-    ytSend(sender.tab.id, msg.videoId, msg.text)
+    ytSend(sender.tab.id, msg.videoId, msg.text, msg.iframeParams)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -552,13 +552,13 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
   }
 }
 
-async function ytSend(tabId, videoId, text) {
-  ucLog('YT_SEND', 'tabId:', tabId, 'videoId:', videoId);
+async function ytSend(tabId, videoId, text, iframeParams) {
+  ucLog('YT_SEND', 'tabId:', tabId, 'videoId:', videoId, 'iframeParams:', !!iframeParams);
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: async (videoId, text) => {
+      func: async (videoId, text, iframeParams) => {
         const log = [];
         try {
           const gc = (k) =>
@@ -595,17 +595,22 @@ async function ytSend(tabId, videoId, text) {
             log.push('auth:none(no SAPISID cookie)');
           }
 
-          // Fetch live_chat page pro send params
-          const chatResp = await fetch('/live_chat?v=' + videoId, { credentials: 'include' });
-          if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
-          const chatHtml = await chatResp.text();
-          log.push('htmlLen:' + chatHtml.length);
-
-          // Zkusit více regex variant
-          let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
-          if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
-          if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
-          log.push('paramsLen:' + pm[1].length);
+          // Use iframe params if provided (correct channel), otherwise fetch
+          let sendParams = iframeParams;
+          if (sendParams) {
+            log.push('params:iframe');
+          } else {
+            const chatResp = await fetch('/live_chat?v=' + videoId, { credentials: 'include' });
+            if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
+            const chatHtml = await chatResp.text();
+            log.push('htmlLen:' + chatHtml.length);
+            let pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
+            if (!pm) pm = chatHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
+            if (!pm) return { ok: false, error: 'Send params nenalezeny - otevři YouTube chat', log };
+            sendParams = pm[1];
+            log.push('params:fetched');
+          }
+          log.push('paramsLen:' + sendParams.length);
 
           // Odeslat zprávu
           const headers = { 'Content-Type': 'application/json', 'X-Origin': origin };
@@ -623,7 +628,7 @@ async function ytSend(tabId, videoId, text) {
             headers,
             body: JSON.stringify({
               context,
-              params: pm[1],
+              params: sendParams,
               richMessage: { textSegments: [{ text }] }
             })
           });
@@ -637,7 +642,7 @@ async function ytSend(tabId, videoId, text) {
           return { ok: false, error: e.message, log };
         }
       },
-      args: [videoId, text]
+      args: [videoId, text, iframeParams]
     });
 
     const result = results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };

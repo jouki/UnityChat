@@ -51,8 +51,9 @@
 
   // Zkusí iframe DOM, pak API přes background
   async function sendSmart(text) {
-    // 1. Zkusit iframe DOM
     const frame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
+
+    // 1. Zkusit iframe DOM (přímé psaní do inputu)
     if (frame) {
       try {
         const doc = frame.contentDocument;
@@ -74,7 +75,33 @@
       } catch {}
     }
 
-    // 2. API přes background script (obchází YouTube CSP)
+    // 2. Zkusit extrahovat send params z iframe HTML (správný kanál!)
+    //    Iframe je same-origin → contentDocument přístupný.
+    //    Tyto params jsou vygenerované pro aktivní YouTube kanál.
+    if (frame) {
+      try {
+        const iframeHtml = frame.contentDocument?.documentElement?.innerHTML;
+        if (iframeHtml) {
+          let pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
+          if (!pm) pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
+          if (pm) {
+            const videoId = getVideoId();
+            if (videoId) {
+              const result = await chrome.runtime.sendMessage({
+                type: 'YT_SEND',
+                videoId,
+                text,
+                iframeParams: pm[1]  // params z iframe — správný kanál
+              });
+              if (result?.ok) return;
+              // Pokud selže, fallback na plný API path
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Fallback: API přes background (fetchne /live_chat fresh)
     const videoId = getVideoId();
     if (!videoId) throw new Error('Video ID nenalezeno');
 
