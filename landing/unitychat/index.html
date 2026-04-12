@@ -169,25 +169,48 @@
       50%      { opacity: 0.4; transform: scale(0.7); }
     }
 
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 1.6rem;
+      margin-bottom: 1.5rem;
+    }
+    .brand-logo {
+      width: clamp(88px, 11vw, 128px);
+      height: clamp(88px, 11vw, 128px);
+      flex: 0 0 auto;
+      filter:
+        drop-shadow(0 0 18px rgba(255, 140, 0, 0.35))
+        drop-shadow(0 0 44px rgba(255, 140, 0, 0.18));
+      image-rendering: -webkit-optimize-contrast;
+    }
     .wordmark {
       font-family: 'Orbitron', sans-serif;
       font-weight: 900;
-      font-size: clamp(3rem, 7.5vw, 6rem);
-      line-height: 0.95;
-      letter-spacing: 0.015em;
-      background: linear-gradient(180deg, #fff3cc 0%, #ffe29a 14%, #ffc800 34%, #ff8c00 62%, #d16200 88%, #a85a00 100%);
-      background-clip: text;
-      -webkit-background-clip: text;
-      color: transparent;
-      -webkit-text-fill-color: transparent;
-      filter: drop-shadow(0 0 28px rgba(255, 140, 0, 0.28)) drop-shadow(0 0 50px rgba(145, 70, 255, 0.16));
-      margin-bottom: 1.3rem;
+      font-size: clamp(2.4rem, 5.6vw, 4.4rem);
+      line-height: 0.92;
+      letter-spacing: 0.02em;
+      color: #f2efe8;
+      margin: 0;
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
     }
     .wordmark .accent {
-      background: linear-gradient(180deg, #e8d2ff 0%, #c084fc 25%, #9146ff 65%, #5a1fa3 100%);
-      background-clip: text;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      color: var(--orange);
+    }
+    .wordmark-sub {
+      display: block;
+      margin-top: 0.55rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text-2);
+    }
+    .wordmark-sub .dot-sep {
+      color: var(--orange);
+      margin: 0 0.55em;
+      opacity: 0.7;
     }
 
     .lede {
@@ -542,6 +565,10 @@
       .hero-text .status-pill, .hero-text .cta-row { margin-left: auto; margin-right: auto; }
       .hero-text .cta-row { align-items: center; }
       .lede { margin-left: auto; margin-right: auto; }
+      .brand { justify-content: center; }
+    }
+    @media (max-width: 520px) {
+      .brand { flex-direction: column; gap: 1rem; }
     }
     @media (max-width: 880px) {
       .install-grid, .info-grid { grid-template-columns: 1fr; gap: 2rem; }
@@ -576,9 +603,15 @@
       <div class="hero-text">
         <div class="status-pill">
           <span class="dot"></span>
-          UNITYCHAT <span class="sep">·</span> BROWSER EXTENSION
+          LIVE RELEASE <span class="sep">·</span> SELF-HOSTED BUILD
         </div>
-        <h1 class="wordmark">UNITY<span class="accent">CHAT</span></h1>
+        <div class="brand">
+          <img class="brand-logo" src="/unitychat/assets/icons/icon128.png" alt="UnityChat logo" width="128" height="128">
+          <div>
+            <h1 class="wordmark">UNITY<span class="accent">CHAT</span></h1>
+            <span class="wordmark-sub">Browser extension <span class="dot-sep">·</span> v<span id="version-brand">3.12</span></span>
+          </div>
+        </div>
         <p class="lede">
           Sjednocený live chat z <span class="tw">Twitch</span>, <span class="yt">YouTube</span>
           a <span class="ki">Kick</span> v jednom side panelu. 7TV / BTTV / FFZ emoty,
@@ -773,11 +806,11 @@
       .then((r) => r.json())
       .then((m) => {
         const v = m.version || '?';
-        document.querySelectorAll('#version, #version-body, #version-footer')
+        document.querySelectorAll('#version, #version-brand, #version-body, #version-footer')
           .forEach((el) => { el.textContent = v; });
       })
       .catch(() => {
-        document.querySelectorAll('#version, #version-body, #version-footer')
+        document.querySelectorAll('#version, #version-brand, #version-body, #version-footer')
           .forEach((el) => { el.textContent = '?'; });
       });
 

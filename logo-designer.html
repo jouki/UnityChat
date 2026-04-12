@@ -971,7 +971,12 @@ const variants = {
 };
 
 function buildSVG() {
-  return variants[state.variant]({ ...state });
+  const svg = variants[state.variant]({ ...state });
+  // Expand viewBox so feGaussianBlur output isn't clipped when rasterized.
+  // Shape stays at 0..128 in its own space; we just add symmetric breathing room.
+  const pad = Math.max(12, Math.ceil(state.glow * 2.5));
+  const vb = `${-pad} ${-pad} ${128 + 2 * pad} ${128 + 2 * pad}`;
+  return svg.replace('viewBox="0 0 128 128"', `viewBox="${vb}"`);
 }
 
 function inject(id, html) {
