@@ -127,20 +127,29 @@
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // 1. Click "Otevřít panel" to open vanilla chat (if closed)
-        const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
-        if (openPanelBtn && !openPanelBtn.disabled) {
-          openPanelBtn.click();
-          // 3. Watch for X button to appear → hide vanilla chat panel
-          const closeObs = new MutationObserver(() => {
-            const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
-            if (closeBtn) {
-              closeObs.disconnect();
-              hideYtChat();
-            }
-          });
-          closeObs.observe(document.body, { childList: true, subtree: true });
-          setTimeout(() => closeObs.disconnect(), 10000);
+        // 1. Check if chat is already open
+        const chatFrame = document.querySelector('ytd-live-chat-frame');
+        const iframe = chatFrame?.querySelector('#chatframe');
+        const chatIsOpen = iframe && iframe.offsetHeight > 100;
+
+        if (chatIsOpen) {
+          // Chat already open → hide it immediately
+          hideYtChat();
+        } else {
+          // Chat closed → click "Otevřít panel", wait for X, then hide
+          const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+          if (openPanelBtn && !openPanelBtn.disabled) {
+            openPanelBtn.click();
+            const closeObs = new MutationObserver(() => {
+              const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+              if (closeBtn) {
+                closeObs.disconnect();
+                hideYtChat();
+              }
+            });
+            closeObs.observe(document.body, { childList: true, subtree: true });
+            setTimeout(() => closeObs.disconnect(), 10000);
+          }
         }
         // 2. Open UnityChat side panel
         chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
