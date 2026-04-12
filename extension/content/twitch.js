@@ -21,23 +21,26 @@
     Object.assign(btn.style, {
       display: 'flex',
       alignItems: 'center',
-      gap: '4px',
-      padding: '2px 8px',
-      margin: '0 4px',
-      background: 'linear-gradient(135deg, #ffc000, #ff7a00)',
+      justifyContent: 'center',
+      width: '30px',
+      height: '30px',
+      minWidth: '30px',
+      padding: '0',
+      margin: '0 2px',
+      background: 'transparent',
       border: 'none',
       borderRadius: '4px',
       cursor: 'pointer',
       flexShrink: '0',
-      fontSize: '12px',
-      fontWeight: '700',
-      color: '#0a0a0d',
-      lineHeight: '1',
-      transition: 'filter 0.15s'
+      transition: 'background 0.15s ease'
     });
-    btn.textContent = 'UC';
-    btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.2)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
+    const img = document.createElement('img');
+    img.src = chrome.runtime.getURL('icons/icon48.png');
+    img.alt = 'UC';
+    Object.assign(img.style, { width: '20px', height: '20px', display: 'block', pointerEvents: 'none' });
+    btn.appendChild(img);
+    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,140,0,0.15)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
