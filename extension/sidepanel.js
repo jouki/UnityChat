@@ -2409,7 +2409,7 @@ class UnityChat {
       msg._uc = true; // zachovat pro cache
 
       // Auto-detekce username + track color
-      if (this._lastSentText && (msg.message === this._lastSentText || msg.message?.includes(this._lastSentText))) {
+      if (this._lastSentText && msg.message === this._lastSentText) {
         this._lastSentText = null;
         if (msg.color) this._lastUserColor = msg.color;
         if (msg.username && this.config.username !== msg.username) {
