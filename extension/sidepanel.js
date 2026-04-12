@@ -457,9 +457,10 @@ const UC_API = 'http://178.104.160.182:3001';
 
 class NicknameManager {
   constructor() {
-    this._map = new Map();       // "platform:username" → nickname
+    this._map = new Map();       // "platform:username" → { nickname, color }
     this._eventSource = null;
-    this.onChange = null;         // callback: ({ platform, username, nickname }) => void
+    this.onChange = null;         // callback: ({ platform, username, nickname, color }) => void
+    this.onLoad = null;          // callback after fetchAll completes
   }
 
   async loadCache() {
@@ -467,7 +468,8 @@ class NicknameManager {
       const s = await chrome.storage.local.get('uc_nicknames');
       if (s.uc_nicknames && typeof s.uc_nicknames === 'object') {
         for (const [k, v] of Object.entries(s.uc_nicknames)) {
-          this._map.set(k, v);
+          // Backward compat: old cache stored string, new stores {nickname, color}
+          this._map.set(k, typeof v === 'string' ? { nickname: v, color: null } : v);
         }
       }
     } catch {}
@@ -480,7 +482,10 @@ class NicknameManager {
       const data = await resp.json();
       this._map.clear();
       for (const n of data.nicknames) {
-        this._map.set(`${n.platform}:${n.username.toLowerCase()}`, n.nickname);
+        this._map.set(`${n.platform}:${n.username.toLowerCase()}`, {
+          nickname: n.nickname,
+          color: n.color || null,
+        });
       }
       this._saveCache();
       if (this.onLoad) this.onLoad();
@@ -495,13 +500,12 @@ class NicknameManager {
         try {
           const d = JSON.parse(e.data);
           const key = `${d.platform}:${d.username.toLowerCase()}`;
-          this._map.set(key, d.nickname);
+          this._map.set(key, { nickname: d.nickname, color: d.color || null });
           this._saveCache();
           if (this.onChange) this.onChange(d);
         } catch {}
       });
       this._eventSource.onerror = () => {
-        // EventSource auto-reconnects; if CLOSED, reconnect manually
         if (this._eventSource?.readyState === EventSource.CLOSED) {
           this._eventSource = null;
           setTimeout(() => this.connectSSE(), 5000);
@@ -522,16 +526,24 @@ class NicknameManager {
     return this._map.get(`${platform}:${username.toLowerCase()}`) || null;
   }
 
-  async setNickname(platform, username, nickname) {
+  getNickname(platform, username) {
+    return this.get(platform, username)?.nickname || null;
+  }
+
+  getColor(platform, username) {
+    return this.get(platform, username)?.color || null;
+  }
+
+  async save(platform, username, nickname, color) {
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, username, nickname }),
+        body: JSON.stringify({ platform, username, nickname, color: color || null }),
       });
       const data = await resp.json();
       if (data.ok) {
-        this._map.set(`${platform}:${username.toLowerCase()}`, nickname);
+        this._map.set(`${platform}:${username.toLowerCase()}`, { nickname, color: color || null });
         this._saveCache();
       }
       return data;
@@ -1262,13 +1274,19 @@ class UnityChat {
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
     this.nicknames.onLoad = () => {
-      // After API fetch, update nickname input if we now know our nick
       if (this.config.username) {
-        const el = document.getElementById('input-nickname');
-        if (el && !el.value) {
-          for (const p of ['twitch', 'youtube', 'kick']) {
-            const nick = this.nicknames.get(p, this.config.username);
-            if (nick) { el.value = nick; break; }
+        for (const p of ['twitch', 'youtube', 'kick']) {
+          const profile = this.nicknames.get(p, this.config.username);
+          if (profile) {
+            const nickEl = document.getElementById('input-nickname');
+            const colorEl = document.getElementById('input-color-hex');
+            const pickerEl = document.getElementById('input-color-picker');
+            if (nickEl && !nickEl.value) nickEl.value = profile.nickname;
+            if (colorEl && !colorEl.value && profile.color) {
+              colorEl.value = profile.color;
+              if (pickerEl) pickerEl.value = profile.color;
+            }
+            break;
           }
         }
       }
@@ -1333,11 +1351,18 @@ class UnityChat {
     $('input-channel').value = this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
-    // Pre-populate nickname from cache (any platform — user sees their nick)
+    // Pre-populate nickname + color from cache
     if (this.config.username) {
       for (const p of ['twitch', 'youtube', 'kick']) {
-        const nick = this.nicknames.get(p, this.config.username);
-        if (nick) { $('input-nickname').value = nick; break; }
+        const profile = this.nicknames.get(p, this.config.username);
+        if (profile) {
+          $('input-nickname').value = profile.nickname || '';
+          if (profile.color) {
+            $('input-color-hex').value = profile.color;
+            $('input-color-picker').value = profile.color;
+          }
+          break;
+        }
       }
     }
     $('input-layout').value = this.config.layout || 'small';
@@ -1386,6 +1411,7 @@ class UnityChat {
     // Nickname
     $('btn-nickname').addEventListener('click', async () => {
       const nick = $('input-nickname').value.trim();
+      const color = $('input-color-hex').value.trim() || null;
       const platform = this.activePlatform;
       const username = this.config.username;
       const statusEl = $('nickname-status');
@@ -1399,8 +1425,13 @@ class UnityChat {
         statusEl.className = 'nick-status error';
         return;
       }
+      if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) {
+        statusEl.textContent = 'Barva musí být #RRGGBB';
+        statusEl.className = 'nick-status error';
+        return;
+      }
       $('btn-nickname').disabled = true;
-      const result = await this.nicknames.setNickname(platform, username, nick);
+      const result = await this.nicknames.save(platform, username, nick, color);
       $('btn-nickname').disabled = false;
       if (result.ok) {
         statusEl.textContent = 'Přezdívka uložena!';
@@ -1413,6 +1444,15 @@ class UnityChat {
         statusEl.className = 'nick-status error';
       }
       setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'nick-status'; }, 4000);
+    });
+
+    // Sync color picker ↔ hex input
+    $('input-color-picker').addEventListener('input', () => {
+      $('input-color-hex').value = $('input-color-picker').value;
+    });
+    $('input-color-hex').addEventListener('input', () => {
+      const v = $('input-color-hex').value;
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) $('input-color-picker').value = v;
     });
 
     $('btn-connect').addEventListener('click', () => {
@@ -1955,13 +1995,12 @@ class UnityChat {
 
   // ---- Nickname live update ----
 
-  _onNicknameChange({ platform, username, nickname }) {
-    // Update all visible messages from this user
-    const key = `${platform}:${username.toLowerCase()}`;
+  _onNicknameChange({ platform, username, nickname, color }) {
     this.chatEl.querySelectorAll('.un').forEach((un) => {
       if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
         un.textContent = nickname;
         un.title = username;
+        if (color) un.style.color = color;
       }
     });
   }
@@ -2269,7 +2308,7 @@ class UnityChat {
     const myName = this.config.username?.toLowerCase();
     // Check nickname on the message's platform (not activePlatform —
     // that may be null when rendering cached messages at startup)
-    const myNick = myName ? this.nicknames.get(msg.platform, this.config.username)?.toLowerCase() : null;
+    const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
     const msgLower = msg.message?.toLowerCase() || '';
     const isMentioned = myName && (
       msgLower.includes(`@${myName}`) ||
@@ -2363,10 +2402,10 @@ class UnityChat {
     // Username (klik → otevře user card na platformě)
     const un = document.createElement('span');
     un.className = 'un';
-    un.style.color = msg.color;
-    const nick = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
-    un.textContent = nick || msg.username;
-    if (nick) un.title = msg.username; // tooltip shows real username
+    const ucProfile = isUC ? this.nicknames.get(msg.platform, msg.username) : null;
+    un.style.color = ucProfile?.color || msg.color;
+    un.textContent = ucProfile?.nickname || msg.username;
+    if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));

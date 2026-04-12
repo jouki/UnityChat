@@ -90,6 +90,7 @@ export const nicknames = pgTable(
     platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
     username: text('username').notNull(),
     nickname: text('nickname').notNull(),
+    color: text('color'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

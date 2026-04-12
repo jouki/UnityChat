@@ -6,10 +6,13 @@ import { nicknames } from '../db/schema.js';
 import { addClient, broadcast, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
 
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
 const PutBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
   username: z.string().min(1).max(50).transform((s) => s.trim()),
   nickname: z.string().min(1).max(30).transform((s) => s.trim()),
+  color: z.string().regex(HEX_COLOR).nullable().optional(),
 });
 
 export default async function nicknameRoutes(app: FastifyInstance) {
@@ -20,6 +23,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
         platform: nicknames.platform,
         username: nicknames.username,
         nickname: nicknames.nickname,
+        color: nicknames.color,
       })
       .from(nicknames);
 
@@ -35,7 +39,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
       return { ok: false, error: 'Invalid body', details: parsed.error.flatten() };
     }
 
-    const { platform, username, nickname } = parsed.data;
+    const { platform, username, nickname, color } = parsed.data;
     const rateLimitSecs = config.NICKNAME_RATE_LIMIT_SECS;
 
     // Check rate limit via updated_at
@@ -55,16 +59,17 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     // Upsert
+    const colorValue = color ?? null;
     await db
       .insert(nicknames)
-      .values({ platform, username, nickname })
+      .values({ platform, username, nickname, color: colorValue })
       .onConflictDoUpdate({
         target: [nicknames.platform, nicknames.username],
-        set: { nickname, updatedAt: sql`NOW()` },
+        set: { nickname, color: colorValue, updatedAt: sql`NOW()` },
       });
 
     // Broadcast to all SSE clients
-    broadcast('nickname-change', { platform, username, nickname });
+    broadcast('nickname-change', { platform, username, nickname, color: colorValue });
 
     return { ok: true };
   });
