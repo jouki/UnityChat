@@ -595,16 +595,8 @@ async function ytSend(tabId, videoId, text) {
             log.push('auth:none(no SAPISID cookie)');
           }
 
-          // Fetch live_chat page pro send params (with auth so YouTube
-          // returns params for the active channel, not the primary one)
-          const chatHeaders = {};
-          if (authHeader) chatHeaders['Authorization'] = authHeader;
-          if (authHeader) chatHeaders['X-Origin'] = origin;
-          if (delegatedSessionId) chatHeaders['X-Goog-PageId'] = delegatedSessionId;
-          const chatResp = await fetch('/live_chat?v=' + videoId, {
-            credentials: 'include',
-            headers: Object.keys(chatHeaders).length ? chatHeaders : undefined
-          });
+          // Fetch live_chat page pro send params
+          const chatResp = await fetch('/live_chat?v=' + videoId, { credentials: 'include' });
           if (!chatResp.ok) return { ok: false, error: 'live_chat fetch: ' + chatResp.status, log };
           const chatHtml = await chatResp.text();
           log.push('htmlLen:' + chatHtml.length);
@@ -619,22 +611,16 @@ async function ytSend(tabId, videoId, text) {
           const headers = { 'Content-Type': 'application/json', 'X-Origin': origin };
           if (authHeader) headers['Authorization'] = authHeader;
 
+          // Build context with channel delegation
           const context = { client: { clientName: 'WEB', clientVersion: cVer } };
-          // Multi-channel: tell YouTube which channel to send as
-          if (channelId) {
-            context.user = { onBehalfOfUser: channelId };
-          }
           if (delegatedSessionId) {
-            context.user = { ...(context.user || {}), delegatedSessionId };
+            context.user = { delegatedSessionId };
           }
-
-          const sendHeaders = { ...headers };
-          if (delegatedSessionId) sendHeaders['X-Goog-PageId'] = delegatedSessionId;
 
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
-            headers: sendHeaders,
+            headers,
             body: JSON.stringify({
               context,
               params: pm[1],
