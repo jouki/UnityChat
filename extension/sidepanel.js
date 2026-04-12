@@ -50,7 +50,7 @@ class EmoteManager {
         const url = this._build7tvUrl(emote);
         if (url) {
           this.global7tv.set(emote.name, url);
-          if ((emote.data?.flags || emote.flags || 0) & 1) this.zeroWidth.add(emote.name);
+          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
         }
       }
       this._globalLoaded = true;
@@ -74,7 +74,7 @@ class EmoteManager {
         const url = this._build7tvUrl(emote);
         if (url) {
           this.channel7tv.set(emote.name, url);
-          if ((emote.data?.flags || emote.flags || 0) & 1) this.zeroWidth.add(emote.name);
+          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
           count++;
         }
       }
@@ -2772,12 +2772,13 @@ class UnityChat {
     const copyBtn = document.createElement('button');
     copyBtn.className = 'msg-action-btn';
     copyBtn.title = 'Kopírovat zprávu';
-    copyBtn.innerHTML = '&#128203;'; // 📋
+    const copySvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+    copyBtn.innerHTML = copySvg;
     copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       navigator.clipboard.writeText((msg.message || '') + ' ').catch(() => {});
-      copyBtn.innerHTML = '&#10003;'; // ✓
-      setTimeout(() => { copyBtn.innerHTML = '&#128203;'; }, 1500);
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>';
+      setTimeout(() => { copyBtn.innerHTML = copySvg; }, 1500);
     });
     actions.appendChild(copyBtn);
 
