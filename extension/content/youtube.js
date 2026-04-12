@@ -22,7 +22,9 @@
     }
 
     if (msg.type === 'SEND_CHAT') {
-      if (isLiveChat) {
+      if (isLiveChat && isMainFrame) {
+        // Only handle in live_chat if it's a top-level popout window,
+        // NOT when embedded as iframe (main frame handles that via sendSmart)
         sendDirect(msg.text)
           .then(() => sendResponse({ ok: true }))
           .catch((e) => sendResponse({ ok: false, error: e.message }));
