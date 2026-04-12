@@ -58,17 +58,16 @@
   }
 
   function injectSidePanelButton() {
-    if (document.getElementById(UC_BTN_ID)) return;
-    const header = findChatHeader();
+    if (document.querySelectorAll('#' + UC_BTN_ID).length > 0) return;
+    const header = document.querySelector('.stream-chat-header');
     if (!header) return;
-    const btn = buildUcButton();
-    // Insert after first child (collapse toggle), flex order:1 keeps it there
-    if (header.children.length > 0) {
-      header.insertBefore(btn, header.children[1] || null);
-    } else {
-      header.appendChild(btn);
+    const label = header.querySelector('#chat-room-header-label');
+    if (!label) return;
+    // label is inside a wrapper div — insert button before that wrapper
+    const wrapper = label.parentElement;
+    if (wrapper && wrapper.parentElement === header) {
+      header.insertBefore(buildUcButton(), wrapper);
     }
-    console.log('[UC] Twitch button injected into header');
   }
 
   // Poll for header — Twitch re-mounts on navigation
