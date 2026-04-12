@@ -21,41 +21,23 @@
     Object.assign(btn.style, {
       display: 'flex',
       alignItems: 'center',
-      justifyContent: 'center',
-      width: '30px',
-      height: '30px',
-      minWidth: '30px',
-      padding: '0',
-      margin: '0',
-      background: 'transparent',
+      gap: '4px',
+      padding: '2px 8px',
+      margin: '0 4px',
+      background: 'linear-gradient(135deg, #ffc000, #ff7a00)',
       border: 'none',
       borderRadius: '4px',
       cursor: 'pointer',
       flexShrink: '0',
-      order: '1',
-      transition: 'background 0.15s ease'
+      fontSize: '12px',
+      fontWeight: '700',
+      color: '#0a0a0d',
+      lineHeight: '1',
+      transition: 'filter 0.15s'
     });
-
-    const img = document.createElement('img');
-    img.src = chrome.runtime.getURL('icons/icon48.png');
-    img.alt = 'UnityChat';
-    Object.assign(img.style, {
-      width: '22px',
-      height: '22px',
-      display: 'block',
-      filter: 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))',
-      pointerEvents: 'none'
-    });
-    btn.appendChild(img);
-
-    btn.addEventListener('mouseenter', () => {
-      btn.style.background = 'rgba(255, 140, 0, 0.12)';
-      img.style.filter = 'drop-shadow(0 0 10px rgba(255, 160, 20, 0.8))';
-    });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.background = 'transparent';
-      img.style.filter = 'drop-shadow(0 0 6px rgba(255, 140, 0, 0.55))';
-    });
+    btn.textContent = 'UC';
+    btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.2)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
