@@ -2236,7 +2236,7 @@ class UnityChat {
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || this._platformColors?.[platform] || null,
+      color: ucProfile?.color || this._chatUsers.get(username.toLowerCase())?.color || this._platformColors?.[platform] || null,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
