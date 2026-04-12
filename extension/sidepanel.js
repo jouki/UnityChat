@@ -2156,7 +2156,9 @@ class UnityChat {
       if (!tab) { this._sys('Žádný aktivní tab'); return; }
 
       let resp;
-      if (reply?.messageId && reply.platform === platform) {
+      // Native reply only on Twitch (GQL threading).
+      // YouTube/Kick don't support native reply → @mention prefix.
+      if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
           text: markedText,
@@ -2167,7 +2169,8 @@ class UnityChat {
       } else {
         let sendText = markedText;
         if (reply) {
-          const at = `@${reply.username}`;
+          const name = reply.username.replace(/^@/, '');
+          const at = `@${name}`;
           if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
         }
         resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
@@ -2427,7 +2430,7 @@ class UnityChat {
       ctx.className = 'reply-ctx';
       if (msg.replyTo.id) ctx.classList.add('clickable');
       ctx.innerHTML =
-        `&#8617; <span class="rctx-user">@${this.emotes._eh(msg.replyTo.username || '')}</span>` +
+        `&#8617; <span class="rctx-user">@${this.emotes._eh((msg.replyTo.username || '').replace(/^@/, ''))}</span>` +
         (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
