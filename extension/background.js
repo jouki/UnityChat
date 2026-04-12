@@ -642,7 +642,7 @@ async function ytSend(tabId, videoId, text, iframeParams) {
           return { ok: false, error: e.message, log };
         }
       },
-      args: [videoId, text, iframeParams]
+      args: [videoId, text, iframeParams || null]
     });
 
     const result = results?.[0]?.result || { ok: false, error: 'Žádný výsledek' };
