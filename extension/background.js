@@ -566,7 +566,11 @@ async function ytSend(tabId, videoId, text) {
           const apiKey =
             gc('INNERTUBE_API_KEY') || 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
           const cVer = gc('INNERTUBE_CLIENT_VERSION') || '2.20250401.00.00';
+          const delegatedSessionId = gc('DELEGATED_SESSION_ID') || null;
+          const datasyncId = gc('DATASYNC_ID') || null;
           log.push('apiKey:' + apiKey.substring(0, 10));
+          log.push('delegated:' + (delegatedSessionId ? delegatedSessionId.substring(0, 10) : 'none'));
+          log.push('datasync:' + (datasyncId ? datasyncId.substring(0, 10) : 'none'));
 
           // SAPISIDHASH auth — required for YouTube API when chat is closed
           const origin = 'https://www.youtube.com';
@@ -605,14 +609,20 @@ async function ytSend(tabId, videoId, text) {
           const headers = { 'Content-Type': 'application/json', 'X-Origin': origin };
           if (authHeader) headers['Authorization'] = authHeader;
 
+          const context = { client: { clientName: 'WEB', clientVersion: cVer } };
+          // Multi-channel: tell YouTube which channel to send as
+          if (delegatedSessionId) context.user = { delegatedSessionId };
+          if (datasyncId) context.request = { useSsl: true, consistencyTokenJars: [] };
+
           const r = await fetch('/youtubei/v1/live_chat/send_message?key=' + apiKey, {
             method: 'POST',
             credentials: 'include',
             headers,
             body: JSON.stringify({
-              context: { client: { clientName: 'WEB', clientVersion: cVer } },
+              context,
               params: pm[1],
-              richMessage: { textSegments: [{ text }] }
+              richMessage: { textSegments: [{ text }] },
+              ...(datasyncId ? { requestContext: { activeDatasyncIds: [datasyncId] } } : {})
             })
           });
 
