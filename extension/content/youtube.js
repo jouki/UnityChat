@@ -13,9 +13,22 @@
         !!document.querySelector('ytd-live-chat-frame') ||
         window.location.href.includes('/live');
       if (hasLiveChat) {
-        // Username z YouTube profil menu (@handle)
-        const handleEl = document.querySelector('yt-formatted-string#channel-handle');
-        const username = handleEl?.textContent?.trim()?.replace(/^@/, '') || null;
+        // Username z YouTube profil menu — try multiple selectors
+        let username = null;
+        const selectors = [
+          'yt-formatted-string#channel-handle',
+          '#channel-handle',
+          '#account-name',
+          'ytd-active-account-header-renderer #channel-handle yt-formatted-string',
+          'ytd-active-account-header-renderer #account-name',
+        ];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el?.textContent?.trim()) {
+            username = el.textContent.trim().replace(/^@/, '');
+            break;
+          }
+        }
         sendResponse({ platform: 'youtube', username });
       }
       return;

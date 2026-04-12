@@ -1917,9 +1917,8 @@ class UnityChat {
     // Update username field to show current platform's username
     const el = document.getElementById('input-username');
     const label = document.querySelector('label[for="input-username"]');
-    if (el && platform) {
-      const pName = this._platformUsernames[platform];
-      if (pName) el.value = pName;
+    if (el && platform && this._platformUsernames[platform]) {
+      el.value = this._platformUsernames[platform];
     }
     if (label) {
       const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
