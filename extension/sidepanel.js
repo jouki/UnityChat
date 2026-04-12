@@ -2106,6 +2106,13 @@ class UnityChat {
   }
 
   async _scrapeExistingChat() {
+    // Skip scrape if cache has recent messages (< 2 min old).
+    // After a reload the cache IS the backfill — scraping would just
+    // create incomplete duplicates (emotes are img tags in DOM, lost
+    // during text extraction → boundary detection fails).
+    const lastCached = this._msgCache[this._msgCache.length - 1];
+    if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
+
     try {
       const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
       for (const tab of tabs) {
@@ -2196,25 +2203,11 @@ class UnityChat {
       .replace(/[^a-z0-9\s]/g, '')
       .trim()
       .substring(0, 80);
-    const normUser = msg.username ? norm(msg.username) : null;
-    const normMsg = msg.message ? norm(msg.message) : null;
-    const contentKey = normUser && normMsg ? normUser + '|' + normMsg : null;
+    const contentKey = msg.username && msg.message
+      ? norm(msg.username) + '|' + norm(msg.message)
+      : null;
     if (contentKey) {
-      if (msg.scraped) {
-        // Scraped messages lose emotes (img tags) → text is often a prefix of
-        // the real message. Use prefix matching: if any existing key with the
-        // same username has a message part that starts with (or is started by)
-        // the scraped text, treat as duplicate.
-        for (const key of this._seenContentKeys) {
-          const pipe = key.indexOf('|');
-          if (pipe === -1) continue;
-          if (key.substring(0, pipe) !== normUser) continue;
-          const existMsg = key.substring(pipe + 1);
-          if (existMsg.startsWith(normMsg) || normMsg.startsWith(existMsg)) return;
-        }
-      } else if (this._seenContentKeys.has(contentKey)) {
-        // Non-scraped exact duplicate — shouldn't happen but guard anyway
-      }
+      if (msg.scraped && this._seenContentKeys.has(contentKey)) return;
       this._seenContentKeys.add(contentKey);
       if (this._seenContentKeys.size > 2000) {
         const arr = [...this._seenContentKeys];
