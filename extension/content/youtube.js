@@ -53,73 +53,54 @@
   async function sendSmart(text) {
     const frame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
 
-    // 1. Zkusit iframe DOM (přímé psaní do inputu) — ONLY if chat is
-    //    visually open. After force-load the iframe has content but DOM
-    //    send doesn't work (YouTube components aren't initialized).
+    // 1. If chat is closed, open it invisibly (click YouTube's toggle).
+    //    YouTube loads the iframe with correct channel session context.
+    //    Then hide the panel so user only sees UnityChat.
     const chatPanel = document.querySelector('ytd-live-chat-frame');
     const chatVisible = chatPanel && chatPanel.offsetHeight > 100;
-    if (frame && chatVisible) {
+
+    if (!chatVisible && chatPanel) {
+      // Find and click YouTube's show/hide chat button
+      const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button ytd-toggle-button-renderer, #show-hide-button');
+      if (toggleBtn) {
+        toggleBtn.click();
+        // Wait for iframe to load
+        await new Promise((r) => setTimeout(r, 2000));
+        // Hide the chat panel — YouTube thinks it's open, user doesn't see it
+        if (!chatPanel.dataset.ucHidden) {
+          chatPanel.style.cssText = 'position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;opacity:0!important;pointer-events:none!important;';
+          chatPanel.dataset.ucHidden = '1';
+        }
+        // Wait more for iframe content to fully initialize
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+
+    // 2. Try iframe DOM send (chat is now open — either visibly or hidden)
+    const activeFrame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
+    if (activeFrame) {
       try {
-        const doc = frame.contentDocument;
+        const doc = activeFrame.contentDocument;
         if (doc) {
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < 5; i++) {
             const input = findInput(doc);
             if (input) {
               input.focus();
               input.textContent = '';
-              frame.contentWindow.document.execCommand('insertText', false, text);
-              await new Promise((r) => setTimeout(r, 150));
+              activeFrame.contentWindow.document.execCommand('insertText', false, text);
+              await new Promise((r) => setTimeout(r, 200));
               const btn = findSendBtn(doc);
               if (btn) btn.click();
               return;
             }
-            await new Promise((r) => setTimeout(r, 300));
+            await new Promise((r) => setTimeout(r, 500));
           }
         }
       } catch {}
     }
 
-    // 2. Force-load iframe → extract params → API send (correct channel).
-    //    When chat is collapsed, #chatframe exists but is empty. Loading its
-    //    src populates it with YouTube's session context (correct channel).
-    //    We extract sendLiveChatMessageEndpoint params from the loaded HTML
-    //    and use them for the API call (DOM send is unreliable in force-loaded iframes).
+    // 3. Fallback: API přes background (may use wrong channel on multi-channel)
     const videoId = getVideoId();
-    if (frame && videoId) {
-      try {
-        const doc = frame.contentDocument;
-        const isEmpty = !doc || doc.documentElement.innerHTML.length < 1000;
-
-        if (isEmpty) {
-          const chatUrl = `https://www.youtube.com/live_chat?v=${videoId}&is_popout=0`;
-          frame.src = chatUrl;
-          await new Promise((resolve) => {
-            const onLoad = () => { frame.removeEventListener('load', onLoad); resolve(); };
-            frame.addEventListener('load', onLoad);
-            setTimeout(resolve, 8000);
-          });
-          await new Promise((r) => setTimeout(r, 500));
-        }
-
-        const loadedDoc = frame.contentDocument;
-        if (loadedDoc) {
-          const iframeHtml = loadedDoc.documentElement.innerHTML;
-          let pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[^}]*"params"\s*:\s*"([^"]+)"/);
-          if (!pm) pm = iframeHtml.match(/"sendLiveChatMessageEndpoint"\s*:\s*\{[\s\S]{0,500}?"params"\s*:\s*"([^"]+)"/);
-          if (pm) {
-            const result = await chrome.runtime.sendMessage({
-              type: 'YT_SEND',
-              videoId,
-              text,
-              iframeParams: pm[1]
-            });
-            if (result?.ok) return;
-          }
-        }
-      } catch {}
-    }
-
-    // 3. Fallback: API přes background (fetchne /live_chat fresh — may use wrong channel)
     if (!videoId) throw new Error('Video ID nenalezeno');
 
     const result = await chrome.runtime.sendMessage({
