@@ -2762,6 +2762,19 @@ class UnityChat {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-action-btn';
+    copyBtn.title = 'Kopírovat zprávu';
+    copyBtn.innerHTML = '&#128203;'; // 📋
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText((msg.message || '') + ' ').catch(() => {});
+      copyBtn.innerHTML = '&#10003;'; // ✓
+      setTimeout(() => { copyBtn.innerHTML = '&#128203;'; }, 1500);
+    });
+    actions.appendChild(copyBtn);
+
     // Pin button (jen Twitch zprávy - vyžaduje mod práva)
     if (msg.platform === 'twitch') {
       const pinBtn = document.createElement('button');
