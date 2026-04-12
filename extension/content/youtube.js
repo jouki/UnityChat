@@ -144,16 +144,13 @@
 
     function injectYtButton() {
       if (document.getElementById(UC_BTN_ID)) return;
-      // Place before the "Otevřít panel" button-view-model
-      const openPanelBtn = document.querySelector('ytd-live-chat-frame button-view-model.ytTextCarouselItemViewModelButton');
-      if (openPanelBtn) {
-        openPanelBtn.parentElement.insertBefore(buildYtButton(), openPanelBtn);
-        return;
-      }
-      // Fallback: next to #show-hide-button
-      const showHide = document.querySelector('ytd-live-chat-frame #show-hide-button');
-      if (showHide) {
-        showHide.parentElement.insertBefore(buildYtButton(), showHide.nextSibling);
+      // Find the "Otevřít panel" button by its text and insert before it
+      const allBtns = document.querySelectorAll('ytd-live-chat-frame button, ytd-live-chat-frame button-view-model');
+      for (const el of allBtns) {
+        if (el.textContent.trim().includes('Otevřít panel') || el.textContent.trim().includes('Show chat')) {
+          el.parentElement.insertBefore(buildYtButton(), el);
+          return;
+        }
       }
     }
 
