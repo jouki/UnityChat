@@ -1301,6 +1301,7 @@ class UnityChat {
     this._setupUI();
     this._setupProviders();
 
+    console.log('[UC] init: providers set up, detecting username...');
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
@@ -1317,9 +1318,12 @@ class UnityChat {
       } catch {}
     }
 
+    console.log('[UC] init: loading cache + connecting...');
     // Load cache + connect FIRST (instant), emotes in background
     await this._loadCachedMessages();
+    console.log('[UC] init: cache loaded, connecting all...');
     this._connectAll();
+    console.log('[UC] init: connected, starting detect loop');
     this._detectLoop();
 
     // Load emotes + badges in background (don't block the UI)
