@@ -192,54 +192,72 @@
 
   // Zkusí iframe DOM, pak API přes background
   async function sendSmart(text) {
+    // Quick path: if iframe already has content (from previous send/UC button),
+    // send directly — no toggle, no delay.
     const frame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
-
-    // 1. If chat is closed, open it invisibly (click YouTube's toggle).
-    //    YouTube loads the iframe with correct channel session context.
-    //    Then hide the panel so user only sees UnityChat.
-    const chatPanel = document.querySelector('ytd-live-chat-frame');
-    const chatVisible = chatPanel && chatPanel.offsetHeight > 100;
-
-    if (!chatVisible && chatPanel) {
-      const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button ytd-toggle-button-renderer, #show-hide-button');
-      if (toggleBtn) {
-        // First, restore #chat visibility so toggle button works
-        const chatContainer = document.querySelector('#chat, #chat-container');
-        if (chatContainer) chatContainer.style.cssText = '';
-        const flexy = document.querySelector('ytd-watch-flexy');
-        if (flexy) flexy.setAttribute('is-two-columns_', '');
-
-        toggleBtn.click();
-        await new Promise((r) => setTimeout(r, 2000));
-        hideYtChat();
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-    }
-
-    // 2. Try iframe DOM send (chat is now open — either visibly or hidden)
-    const activeFrame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
-    if (activeFrame) {
+    if (frame) {
       try {
-        const doc = activeFrame.contentDocument;
-        if (doc) {
-          for (let i = 0; i < 5; i++) {
-            const input = findInput(doc);
-            if (input) {
-              input.focus();
-              input.textContent = '';
-              activeFrame.contentWindow.document.execCommand('insertText', false, text);
-              await new Promise((r) => setTimeout(r, 200));
-              const btn = findSendBtn(doc);
-              if (btn) btn.click();
-              return;
-            }
-            await new Promise((r) => setTimeout(r, 500));
+        const doc = frame.contentDocument;
+        if (doc && doc.documentElement.innerHTML.length > 1000) {
+          const input = findInput(doc);
+          if (input) {
+            input.focus();
+            input.textContent = '';
+            frame.contentWindow.document.execCommand('insertText', false, text);
+            await new Promise((r) => setTimeout(r, 150));
+            const btn = findSendBtn(doc);
+            if (btn) btn.click();
+            return;
           }
         }
       } catch {}
     }
 
-    // 3. Fallback: API přes background (may use wrong channel on multi-channel)
+    // Slow path: chat not loaded yet — open it invisibly, then DOM send.
+    const chatPanel = document.querySelector('ytd-live-chat-frame');
+    if (chatPanel) {
+      const chatVisible = chatPanel.offsetHeight > 100;
+      if (!chatVisible) {
+        const toggleBtn = chatPanel.querySelector('#show-hide-button button, #show-hide-button ytd-toggle-button-renderer, #show-hide-button');
+        if (toggleBtn) {
+          const chatContainer = document.querySelector('#chat, #chat-container');
+          if (chatContainer) chatContainer.style.cssText = '';
+          const flexy = document.querySelector('ytd-watch-flexy');
+          if (flexy) flexy.setAttribute('is-two-columns_', '');
+          toggleBtn.click();
+          await new Promise((r) => setTimeout(r, 2500));
+          hideYtChat();
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      } else {
+        hideYtChat();
+      }
+
+      // Try DOM send in the now-loaded iframe
+      const loadedFrame = document.querySelector('#chatframe, iframe[src*="live_chat"]');
+      if (loadedFrame) {
+        try {
+          const doc = loadedFrame.contentDocument;
+          if (doc) {
+            for (let i = 0; i < 5; i++) {
+              const input = findInput(doc);
+              if (input) {
+                input.focus();
+                input.textContent = '';
+                loadedFrame.contentWindow.document.execCommand('insertText', false, text);
+                await new Promise((r) => setTimeout(r, 150));
+                const btn = findSendBtn(doc);
+                if (btn) btn.click();
+                return;
+              }
+              await new Promise((r) => setTimeout(r, 400));
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // Fallback: API přes background (may use wrong channel on multi-channel)
     const videoId = getVideoId();
     if (!videoId) throw new Error('Video ID nenalezeno');
 
