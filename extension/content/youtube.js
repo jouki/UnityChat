@@ -85,6 +85,37 @@
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
+    // Watch for YouTube closing chat and fix layout automatically.
+    // YouTube may toggle attributes/visibility when X is clicked —
+    // we detect that and collapse the layout.
+    const chatLayoutObs = new MutationObserver(() => {
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      if (!chatFrame) return;
+      // If chat was open (has iframe with content) but YouTube collapsed it
+      const iframe = chatFrame.querySelector('#chatframe');
+      const hasContent = iframe?.contentDocument?.documentElement?.innerHTML?.length > 1000;
+      const isCollapsed = chatFrame.getAttribute('collapsed') !== null
+        || chatFrame.offsetHeight < 100
+        || chatFrame.style.display === 'none';
+      if (hasContent && isCollapsed && !chatFrame.dataset.ucHidden) {
+        hideYtChat();
+      }
+    });
+    // Observe the chat frame container for attribute/style changes
+    const chatContainer = document.querySelector('#chat, #secondary');
+    if (chatContainer) {
+      chatLayoutObs.observe(chatContainer, { attributes: true, childList: true, subtree: true });
+    }
+    // Retry if container not found yet
+    const retryObs = new MutationObserver(() => {
+      const cc = document.querySelector('#chat, #secondary');
+      if (cc && !cc.dataset.ucObserved) {
+        cc.dataset.ucObserved = '1';
+        chatLayoutObs.observe(cc, { attributes: true, childList: true, subtree: true });
+      }
+    });
+    retryObs.observe(document.body, { childList: true, subtree: true });
+
     // ---- UnityChat button next to "Otevřít panel" ----
     const UC_BTN_ID = 'uc-yt-open-btn';
 
