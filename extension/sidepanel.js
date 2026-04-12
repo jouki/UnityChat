@@ -1731,11 +1731,20 @@ class UnityChat {
     let matches;
     if (partial.startsWith('@')) {
       // @username autocomplete (@ samotné = všichni uživatelé)
+      // Deduplicate by display name (map has both plain + platform:username keys)
       const prefix = partial.substring(1).toLowerCase();
-      matches = [...this._chatUsers.values()]
-        .filter(u => !prefix || u.name.toLowerCase().startsWith(prefix))
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map(u => '@' + u.name);
+      const seen = new Set();
+      matches = [...this._chatUsers.entries()]
+        .filter(([key, u]) => {
+          if (key.includes(':')) return false;
+          const name = u.name.replace(/^@/, '').toLowerCase();
+          if (seen.has(name)) return false;
+          if (prefix && !name.startsWith(prefix)) return false;
+          seen.add(name);
+          return true;
+        })
+        .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+        .map(([, u]) => '@' + u.name.replace(/^@/, ''));
     } else {
       // Emote autocomplete
       matches = this.emotes.findCompletions(partial);
@@ -2462,18 +2471,25 @@ class UnityChat {
       : null;
     if (contentKey) {
       if (this._seenContentKeys.has(contentKey)) {
-        if (msg._optimistic) return; // don't add duplicate optimistic
-        if (msg.scraped) return; // always drop scraped duplicates
-        // Real message (IRC echo) matching an optimistic message → upgrade in-place
-        const optId = this._optimisticKeys.get(contentKey);
-        if (optId) {
-          this._upgradeOptimistic(optId, msg);
-          this._optimisticKeys.delete(contentKey);
+        if (msg._optimistic) {
+          // Optimistic messages always pass through — user can send same text twice
+          // (e.g. "1", "k", "lol"). Update optimistic key to latest sent ID.
+          this._optimisticKeys.set(contentKey, msg.id);
+        } else if (msg.scraped) {
+          return; // always drop scraped duplicates
+        } else {
+          // Real message (IRC echo) matching an optimistic message → upgrade in-place
+          const optId = this._optimisticKeys.get(contentKey);
+          if (optId) {
+            this._upgradeOptimistic(optId, msg);
+            this._optimisticKeys.delete(contentKey);
+          }
+          return;
         }
-        return;
+      } else {
+        this._seenContentKeys.add(contentKey);
+        if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
       }
-      this._seenContentKeys.add(contentKey);
-      if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
       if (this._seenContentKeys.size > 2000) {
         const arr = [...this._seenContentKeys];
         this._seenContentKeys = new Set(arr.slice(-1000));
@@ -2551,10 +2567,14 @@ class UnityChat {
     // that may be null when rendering cached messages at startup)
     const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
     const msgLower = msg.message?.toLowerCase() || '';
+    const replyTarget = msg.replyTo?.username?.toLowerCase();
     const isMentioned = myName && (
       msgLower.includes(`@${myName}`) ||
       (myNick && msgLower.includes(`@${myNick}`)) ||
-      msg.replyTo?.username?.toLowerCase() === myName
+      replyTarget === myName ||
+      (myNick && replyTarget === myNick) ||
+      // Also match platform-specific username
+      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
     );
 
     const el = document.createElement('div');
@@ -2747,9 +2767,9 @@ class UnityChat {
       const [r, g, b] = m.color.match(/\d+/g);
       m.color = '#' + [r, g, b].map(c => (+c).toString(16).padStart(2, '0')).join('');
     }
-    // Slim replyTo: drop message text, keep id + username
+    // Slim replyTo: keep id, username and message
     if (m.replyTo && typeof m.replyTo === 'object') {
-      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username };
+      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username, message: m.replyTo.message || null };
     }
     return m;
   }

@@ -629,9 +629,6 @@ body.layout-large .reply-ctx { font-size: 12px; }
   font-size: 11px;
   color: var(--text-muted);
   padding: 1px 0 1px 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   opacity: 0.7;
 }
 
