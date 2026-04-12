@@ -2297,12 +2297,14 @@ class UnityChat {
       if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
     }
     this._lastSentText = text;
+    const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
     this._addMessage({
       id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || this._chatUsers.get(`${platform}:${username.toLowerCase()}`)?.color || this._platformColors?.[platform] || null,
+      color: ucProfile?.color || userEntry?.color || this._platformColors?.[platform] || null,
+      badgesRaw: userEntry?.badgesRaw || '',
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
@@ -2471,15 +2473,16 @@ class UnityChat {
   }
 
   _addMessage(msg) {
-    // Track color BEFORE dedup (echo gets deduped but we still want the color)
+    // Track color + badges BEFORE dedup (echo gets deduped but we still want the data)
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const prev = this._chatUsers.get(colorKey);
-      if (!prev || prev.color !== msg.color) {
-        this._chatUsers.set(colorKey, { name: msg.username, platform: msg.platform, color: msg.color });
+      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prev?.badgesRaw || '' };
+      if (!prev || prev.color !== msg.color || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
+        this._chatUsers.set(colorKey, entry);
       }
       // Also set plain username key for @autocomplete
-      this._chatUsers.set(msg.username.toLowerCase(), { name: msg.username, platform: msg.platform, color: msg.color });
+      this._chatUsers.set(msg.username.toLowerCase(), entry);
       // Only track platform color for the current user's OWN messages
       // (previously this ran for every message → _platformColors got overwritten
       // with other users' colors → optimistic messages got wrong color)
@@ -2563,7 +2566,8 @@ class UnityChat {
     if (msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const plainKey = msg.username.toLowerCase();
-      const entry = { name: msg.username, platform: msg.platform, color: msg.color };
+      const prevEntry = this._chatUsers.get(colorKey);
+      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prevEntry?.badgesRaw || '' };
       if (msg.color) {
         const prev = this._chatUsers.get(colorKey);
         this._chatUsers.set(colorKey, entry);
@@ -2932,6 +2936,21 @@ class UnityChat {
       // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
       // Use the raw filtered messages as the authoritative cache
       this._msgCache = msgs;
+
+      // Populate message history from cached user messages (for ArrowUp/Down)
+      const myName = (this.config.username || '').toLowerCase();
+      if (myName) {
+        for (const m of msgs) {
+          if (m.username?.toLowerCase() === myName && m.message) {
+            const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+            if (text && (!this._msgHistory.length || this._msgHistory[this._msgHistory.length - 1] !== text)) {
+              this._msgHistory.push(text);
+            }
+          }
+        }
+        // Keep only last 50
+        if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
+      }
     } catch (e) {
       console.error('Cache load failed:', e);
       // DON'T reset _msgCache — keep whatever was there so beforeunload
