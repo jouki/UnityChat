@@ -1639,10 +1639,10 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        const what = nick ? 'Přezdívka' : color ? 'Barva' : 'Přezdívka smazána';
-        statusEl.textContent = nick || color
+        const what = nick && color ? 'Přezdívka + barva' : nick ? 'Přezdívka' : color ? 'Barva' : null;
+        statusEl.textContent = what
           ? `${what} uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
-          : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
+          : `Smazáno pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
         statusEl.textContent = lastError || 'Nepodařilo se uložit';
