@@ -107,7 +107,6 @@
       <span class="st" id="st-kick"    title="Kick"><span class="dot"></span>KI</span>
     </div>
     <div id="filters">
-      <button class="fbtn active" data-platform="all">Vše</button>
       <button class="fbtn active" data-platform="twitch">TW</button>
       <button class="fbtn active" data-platform="youtube">YT</button>
       <button class="fbtn active" data-platform="kick">KI</button>
@@ -308,8 +307,6 @@
     });
 
     // Platform filter buttons — toggle visibility of messages by platform.
-    // "Vše" turns all platforms on. Individual TW/YT/KI buttons toggle
-    // that platform. The "active" class on the button reflects its state.
     (function () {
       const platformMap = { twitch: 'tw', youtube: 'yt', kick: 'ki' };
       const active = { tw: true, yt: true, ki: true };
@@ -330,22 +327,10 @@
 
       btns.forEach((btn) => {
         btn.addEventListener('click', () => {
-          const p = btn.dataset.platform;
-          if (p === 'all') {
-            // Turn all on
-            for (const k in active) active[k] = true;
-            btns.forEach((b) => b.classList.add('active'));
-          } else {
-            const cls = platformMap[p];
-            if (!cls) return;
-            active[cls] = !active[cls];
-            btn.classList.toggle('active', active[cls]);
-            // If all are now active, also light up "Vše"; otherwise deactivate it
-            const allOn = Object.values(active).every(Boolean);
-            btns.forEach((b) => {
-              if (b.dataset.platform === 'all') b.classList.toggle('active', allOn);
-            });
-          }
+          const cls = platformMap[btn.dataset.platform];
+          if (!cls) return;
+          active[cls] = !active[cls];
+          btn.classList.toggle('active', active[cls]);
           applyFilters();
         });
       });
