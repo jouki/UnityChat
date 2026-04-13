@@ -2062,11 +2062,29 @@ class UnityChat {
       // Track username per platform + persist
       if (resp?.username && resp?.platform) {
         const name = resp.username.replace(/^@/, '');
+        const prev = this._platformUsernames[resp.platform];
         this._platformUsernames[resp.platform] = name;
         if (!this.config._platformUsernames) this.config._platformUsernames = {};
         if (this.config._platformUsernames[resp.platform] !== name) {
           this.config._platformUsernames[resp.platform] = name;
           this._saveConfig();
+        }
+        // Update settings UI when username changes (or was missing on first detect)
+        if (prev !== name && resp.platform === this.activePlatform) {
+          const el = document.getElementById('input-username');
+          if (el) el.value = name;
+          const label = document.querySelector('label[for="input-username"]');
+          if (label) label.textContent = `Username (${resp.platform})`;
+          // Refresh nickname/color fields for new username
+          const nickEl = document.getElementById('input-nickname');
+          const colorHexEl = document.getElementById('input-color-hex');
+          const colorPickerEl = document.getElementById('input-color-picker');
+          if (nickEl) {
+            const profile = this.nicknames.get(resp.platform, name);
+            nickEl.value = profile?.nickname || '';
+            if (colorHexEl) colorHexEl.value = profile?.color || '';
+            if (colorPickerEl) colorPickerEl.value = profile?.color || '#ff8c00';
+          }
         }
       }
       // Auto-detekce username z platformy (hlavní config field)
