@@ -1,67 +1,53 @@
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'drizzle-orm';
-import { z } from 'zod';
 import { db } from '../db/index.js';
-import { seenUsers } from '../db/schema.js';
-
-const SeenBody = z.object({
-  platform: z.enum(['twitch', 'youtube', 'kick']),
-  username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
-});
+import { nicknames } from '../db/schema.js';
 
 export default async function userRoutes(app: FastifyInstance) {
-  // Record a seen user (upsert: increment count + update last_seen)
-  app.post('/users/seen', async (req, reply) => {
-    const parsed = SeenBody.safeParse(req.body);
-    if (!parsed.success) {
-      reply.code(400);
-      return { ok: false, error: 'Invalid body' };
-    }
-
-    const { platform, username } = parsed.data;
-
-    await db
-      .insert(seenUsers)
-      .values({ platform, username })
-      .onConflictDoUpdate({
-        target: [seenUsers.platform, seenUsers.username],
-        set: {
-          lastSeenAt: sql`now()`,
-          seenCount: sql`${seenUsers.seenCount} + 1`,
-        },
-      });
-
-    return { ok: true };
-  });
-
-  // Get all seen users
+  // Derive unique UnityChat users from nicknames table
+  // Anyone who saved a nickname/color is a confirmed UC user
   app.get('/users', async (_req, reply) => {
     const rows = await db
       .select({
-        platform: seenUsers.platform,
-        username: seenUsers.username,
-        firstSeenAt: seenUsers.firstSeenAt,
-        lastSeenAt: seenUsers.lastSeenAt,
-        seenCount: seenUsers.seenCount,
+        platform: nicknames.platform,
+        username: nicknames.username,
+        nickname: nicknames.nickname,
+        color: nicknames.color,
+        updatedAt: nicknames.updatedAt,
       })
-      .from(seenUsers);
+      .from(nicknames);
 
     // Group by username across platforms
-    const byUser = new Map<string, { platforms: Record<string, { firstSeen: string; lastSeen: string; count: number }>}>();
+    const byUser = new Map<string, {
+      nickname: string;
+      color: string | null;
+      platforms: string[];
+      lastSeen: string;
+    }>();
+
     for (const row of rows) {
-      const key = row.username;
-      if (!byUser.has(key)) byUser.set(key, { platforms: {} });
-      byUser.get(key)!.platforms[row.platform] = {
-        firstSeen: row.firstSeenAt.toISOString(),
-        lastSeen: row.lastSeenAt.toISOString(),
-        count: row.seenCount,
-      };
+      const existing = byUser.get(row.username);
+      if (existing) {
+        if (!existing.platforms.includes(row.platform)) {
+          existing.platforms.push(row.platform);
+        }
+        if (row.updatedAt.toISOString() > existing.lastSeen) {
+          existing.lastSeen = row.updatedAt.toISOString();
+          existing.nickname = row.nickname;
+          if (row.color) existing.color = row.color;
+        }
+      } else {
+        byUser.set(row.username, {
+          nickname: row.nickname,
+          color: row.color,
+          platforms: [row.platform],
+          lastSeen: row.updatedAt.toISOString(),
+        });
+      }
     }
 
     reply.header('Cache-Control', 'no-cache');
     return {
       uniqueUsers: byUser.size,
-      totalRecords: rows.length,
       users: Object.fromEntries(byUser),
     };
   });

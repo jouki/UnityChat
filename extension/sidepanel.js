@@ -1372,10 +1372,6 @@ class UnityChat {
     await this._loadConfig();
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
-      // Report known usernames on startup
-      for (const [p, name] of Object.entries(this._platformUsernames)) {
-        if (name) this._reportSeenUser(p, name);
-      }
     }
     if (this.config._platformColors) {
       this._platformColors = { ...this.config._platformColors };
@@ -2072,8 +2068,6 @@ class UnityChat {
         if (this.config._platformUsernames[resp.platform] !== name) {
           this.config._platformUsernames[resp.platform] = name;
           this._saveConfig();
-          // Report seen user to backend
-          this._reportSeenUser(resp.platform, name);
         }
         // Update settings UI when username changes (or was missing on first detect)
         if (prev !== name && resp.platform === this.activePlatform) {
@@ -2116,14 +2110,6 @@ class UnityChat {
         files: [file]
       });
     } catch {}
-  }
-
-  _reportSeenUser(platform, username) {
-    fetch(`${UC_API}/users/seen`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, username }),
-    }).catch(() => {});
   }
 
   _savePlatformColor(platform, color) {
