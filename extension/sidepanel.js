@@ -1639,9 +1639,8 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        const what = nick && color ? 'Přezdívka + barva' : nick ? 'Přezdívka' : color ? 'Barva' : null;
-        statusEl.textContent = what
-          ? `${what} uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+        statusEl.textContent = nick || color
+          ? `Uloženo pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
           : `Smazáno pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
