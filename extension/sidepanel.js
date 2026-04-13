@@ -1640,20 +1640,27 @@ class UnityChat {
       $('btn-nickname').disabled = false;
       if (saved > 0) {
         // Retroactively update all visible messages from this user
+        let activeColor = null;
         for (const p of platforms) {
           const uname = this._platformUsernames[p] || this.config.username;
           if (!uname) continue;
           const profile = this.nicknames.get(p, uname);
-          const newColor = profile?.color || this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || null;
+          const fallbackColor = this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || '';
+          const resolvedColor = profile?.color || fallbackColor;
           const newNick = profile?.nickname || null;
           this.chatEl.querySelectorAll('.un').forEach((un) => {
             if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
-              if (newColor) un.style.color = newColor;
-              else un.style.color = this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || '';
+              un.style.color = resolvedColor;
               if (newNick) { un.textContent = newNick; un.title = uname; }
               else { un.textContent = uname; un.title = ''; }
             }
           });
+          if (p === this.activePlatform) activeColor = resolvedColor;
+        }
+        // Update color picker to show the resolved color (platform fallback after clearing)
+        if (activeColor && !color) {
+          $('input-color-hex').value = '';
+          $('input-color-picker').value = activeColor;
         }
         statusEl.textContent = nick || color
           ? `Uloženo pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
