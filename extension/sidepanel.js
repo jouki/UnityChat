@@ -1639,10 +1639,32 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
-        const what = nick ? 'Přezdívka' : color ? 'Barva' : 'Přezdívka smazána';
+        // Retroactively update all visible messages from this user
+        let activeColor = null;
+        for (const p of platforms) {
+          const uname = this._platformUsernames[p] || this.config.username;
+          if (!uname) continue;
+          const profile = this.nicknames.get(p, uname);
+          const fallbackColor = this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || '';
+          const resolvedColor = profile?.color || fallbackColor;
+          const newNick = profile?.nickname || null;
+          this.chatEl.querySelectorAll('.un').forEach((un) => {
+            if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
+              un.style.color = resolvedColor;
+              if (newNick) { un.textContent = newNick; un.title = uname; }
+              else { un.textContent = uname; un.title = ''; }
+            }
+          });
+          if (p === this.activePlatform) activeColor = resolvedColor;
+        }
+        // Update color picker to show the resolved color (platform fallback after clearing)
+        if (activeColor && !color) {
+          $('input-color-hex').value = '';
+          $('input-color-picker').value = activeColor;
+        }
         statusEl.textContent = nick || color
-          ? `${what} uložena pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
-          : `Přezdívka smazána pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
+          ? `Uloženo pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
+          : `Smazáno pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
         statusEl.className = 'nick-status success';
       } else {
         statusEl.textContent = lastError || 'Nepodařilo se uložit';

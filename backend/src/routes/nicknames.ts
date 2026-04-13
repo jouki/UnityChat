@@ -10,7 +10,7 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 const PutBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
-  username: z.string().min(1).max(50).transform((s) => s.trim()),
+  username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
   nickname: z.string().min(1).max(30).transform((s) => s.trim()),
   color: z.string().regex(HEX_COLOR).nullable().optional(),
 });
@@ -78,7 +78,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
   app.delete('/nicknames', async (req, reply) => {
     const parsed = z.object({
       platform: z.enum(['twitch', 'youtube', 'kick']),
-      username: z.string().min(1).max(50).transform((s) => s.trim()),
+      username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
     }).safeParse(req.body);
 
     if (!parsed.success) {
