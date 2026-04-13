@@ -121,14 +121,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (HAS_SIDE_PANEL && tabId != null) {
       if (wantClose) {
-        // Close by disabling, then re-enabling (Chrome has no sidePanel.close())
-        chrome.sidePanel.setOptions({ tabId, enabled: false })
-          .then(() => {
-            // Re-enable so it can be opened again next click
-            chrome.sidePanel.setOptions({ tabId, enabled: true }).catch(() => {});
-            sendResponse({ ok: true, action: 'closed' });
-          })
-          .catch((e) => sendResponse({ ok: false, error: e.message }));
+        // Tell the side panel to close itself via port message
+        if (_panelPort) {
+          _panelPort.postMessage({ type: 'CLOSE' });
+          sendResponse({ ok: true, action: 'closed' });
+        } else {
+          sendResponse({ ok: false, error: 'Panel port not connected' });
+        }
       } else {
         chrome.sidePanel.open({ tabId })
           .then(() => sendResponse({ ok: true, action: 'opened' }))

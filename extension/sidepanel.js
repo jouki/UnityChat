@@ -1326,7 +1326,10 @@ class UnityChat {
 
     // Connect port to background — tracks panel open/close state
     // Port auto-disconnects when panel closes (background detects via onDisconnect)
-    chrome.runtime.connect({ name: 'sidepanel' });
+    const _port = chrome.runtime.connect({ name: 'sidepanel' });
+    _port.onMessage.addListener((msg) => {
+      if (msg.type === 'CLOSE') window.close();
+    });
 
     // Uložit cache při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
