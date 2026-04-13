@@ -1395,17 +1395,13 @@ class UnityChat {
           const profile = this.nicknames.get(p, this.config.username);
           if (profile) {
             const nickEl = document.getElementById('input-nickname');
-            const colorEl = document.getElementById('input-color-hex');
-            const pickerEl = document.getElementById('input-color-picker');
             if (nickEl && !nickEl.value) nickEl.value = profile.nickname;
-            if (colorEl && !colorEl.value && profile.color) {
-              colorEl.value = profile.color;
-              if (pickerEl) pickerEl.value = profile.color;
-            }
             break;
           }
         }
       }
+      // Refresh color for active platform (or first available)
+      this._refreshColorUI(this.activePlatform || 'twitch');
     };
     this._setupUI();
     this._setupProviders();
@@ -1477,20 +1473,17 @@ class UnityChat {
     $('input-kick-channel').value = this.config.kickChannel || this.config.channel;
     $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
     $('input-username').value = this.config.username || '';
-    // Pre-populate nickname + color from cache
+    // Pre-populate nickname from cache
     if (this.config.username) {
       for (const p of ['twitch', 'youtube', 'kick']) {
         const profile = this.nicknames.get(p, this.config.username);
-        if (profile) {
-          $('input-nickname').value = profile.nickname || '';
-          if (profile.color) {
-            $('input-color-hex').value = profile.color;
-            $('input-color-picker').value = profile.color;
-          }
+        if (profile?.nickname) {
+          $('input-nickname').value = profile.nickname;
           break;
         }
       }
     }
+    // Color UI will be refreshed by _refreshColorUI after platform detection
     $('input-layout').value = this.config.layout || 'small';
     this._applyLayout();
     $('input-layout').addEventListener('change', () => {
@@ -1667,11 +1660,8 @@ class UnityChat {
           });
           if (p === this.activePlatform) activeColor = resolvedColor;
         }
-        // Update color picker to show the resolved color (platform fallback after clearing)
-        if (activeColor && !color) {
-          $('input-color-hex').value = '';
-          $('input-color-picker').value = activeColor;
-        }
+        // Refresh color UI to reflect saved/cleared state
+        this._refreshColorUI(this.activePlatform);
         statusEl.textContent = nick || color
           ? `Uloženo pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
           : `Smazáno pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
@@ -2084,17 +2074,15 @@ class UnityChat {
           const el = document.getElementById('input-username');
           if (el) el.value = name;
           const label = document.querySelector('label[for="input-username"]');
-          if (label) label.textContent = `Username (${resp.platform})`;
+          const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
+          if (label) label.textContent = `Username (${names[resp.platform] || resp.platform})`;
           // Refresh nickname/color fields for new username
           const nickEl = document.getElementById('input-nickname');
-          const colorHexEl = document.getElementById('input-color-hex');
-          const colorPickerEl = document.getElementById('input-color-picker');
           if (nickEl) {
             const profile = this.nicknames.get(resp.platform, name);
             nickEl.value = profile?.nickname || '';
-            if (colorHexEl) colorHexEl.value = profile?.color || '';
-            if (colorPickerEl) colorPickerEl.value = profile?.color || '#ff8c00';
           }
+          this._refreshColorUI(resp.platform);
         }
       }
       // Auto-detekce username z platformy (hlavní config field)
@@ -2180,22 +2168,59 @@ class UnityChat {
         this._platformUsernames[platform] = pName;
       }
     }
-    // Update nickname + color fields from cache for this platform's username
+    // Update nickname field
     const nickEl = document.getElementById('input-nickname');
-    const colorHexEl = document.getElementById('input-color-hex');
-    const colorPickerEl = document.getElementById('input-color-picker');
     if (nickEl && platform) {
       const pName = this._platformUsernames[platform] || this.config.username;
       const profile = pName ? this.nicknames.get(platform, pName) : null;
       nickEl.value = profile?.nickname || '';
-      if (profile?.color) {
-        if (colorHexEl) colorHexEl.value = profile.color;
-        if (colorPickerEl) colorPickerEl.value = profile.color;
-      }
     }
+    // Update color + username labels
+    this._refreshColorUI(platform);
     if (label) {
       const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
-      label.textContent = platform ? `USERNAME (${(names[platform] || platform).toUpperCase()})` : 'USERNAME';
+      label.textContent = platform ? `Username (${names[platform] || platform})` : 'Username';
+    }
+  }
+
+  // Default fallback color per platform (when no custom color is set)
+  _platformDefaultColor(platform) {
+    if (platform === 'youtube') return '#ff0000';
+    // Twitch/Kick: use last known IRC/platform color, fallback orange
+    const pName = this._platformUsernames[platform] || this.config.username;
+    const ircColor = pName ? this._chatUsers.get(`${platform}:${pName.toLowerCase()}`)?.color : null;
+    return ircColor || this._platformColors[platform] || '#ff8c00';
+  }
+
+  // Refresh color field, picker, placeholder, and label for the given platform
+  _refreshColorUI(platform) {
+    const colorHexEl = document.getElementById('input-color-hex');
+    const colorPickerEl = document.getElementById('input-color-picker');
+    const colorLabel = document.querySelector('label[for="input-color-hex"]');
+    if (!colorHexEl) return;
+
+    const names = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
+    if (colorLabel) {
+      colorLabel.textContent = platform ? `Barva jména (${names[platform] || platform})` : 'Barva jména';
+    }
+
+    if (!platform) return;
+
+    const pName = this._platformUsernames[platform] || this.config.username;
+    const profile = pName ? this.nicknames.get(platform, pName) : null;
+    const customColor = profile?.color || null;
+    const fallback = this._platformDefaultColor(platform);
+
+    if (customColor) {
+      // Custom color set → show in field and picker
+      colorHexEl.value = customColor;
+      colorHexEl.placeholder = customColor;
+      if (colorPickerEl) colorPickerEl.value = customColor;
+    } else {
+      // No custom color → empty field, placeholder shows fallback, picker shows fallback
+      colorHexEl.value = '';
+      colorHexEl.placeholder = fallback;
+      if (colorPickerEl) colorPickerEl.value = fallback;
     }
   }
 
