@@ -88,19 +88,9 @@
     }
 
     function showYtChat() {
-      const chat = document.querySelector('#chat');
-      if (chat) chat.style.cssText = '';
-      const pfbc = document.querySelector('#panels-full-bleed-container');
-      if (pfbc) pfbc.style.cssText = '';
-      const flexy = document.querySelector('ytd-watch-flexy');
-      if (flexy) {
-        flexy.setAttribute('is-two-columns_', '');
-        flexy.removeAttribute('theater');
-        flexy.removeAttribute('full-bleed-player');
-        window.dispatchEvent(new Event('resize'));
-      }
-      const chatPanel = document.querySelector('ytd-live-chat-frame');
-      if (chatPanel) delete chatPanel.dataset.ucHidden;
+      // Simplest reliable restore: reload the page
+      // (YouTube's dynamic attributes are too fragile to restore manually)
+      window.location.reload();
     }
 
     window.addEventListener('message', (e) => {
