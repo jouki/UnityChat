@@ -1524,9 +1524,26 @@ class UnityChat {
         } else {
           this._acHide();
         }
+      } else if (text.startsWith('/uc ') && ws === 4) {
+        // /uc subcommand autocomplete
+        const prefix = partial.toLowerCase();
+        const cmds = ['raid', 'raider', 'first', 'sus'];
+        const matches = cmds.filter(c => c.startsWith(prefix)).map(c => '/uc ' + c);
+        if (matches.length) {
+          this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (text === '/uc ' && partial === '' && pos === 4) {
+        // Just typed "/uc " — show all subcommands
+        const cmds = ['raid', 'raider', 'first', 'sus'];
+        const matches = cmds.map(c => '/uc ' + c);
+        this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
+        this._acRender();
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
-        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!'))) this._acHide();
+        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
       }
     });
 
@@ -1875,6 +1892,7 @@ class UnityChat {
 
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
+    if (name.startsWith('/uc ')) return 'UC';
     if (name.startsWith('@')) {
       const u = this._chatUsers.get(name.substring(1).toLowerCase());
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
@@ -1918,7 +1936,10 @@ class UnityChat {
       const sel = i === idx ? ' selected' : '';
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('@')) {
+      if (name.startsWith('/uc ')) {
+        // UC command: oranžová tečka
+        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+      } else if (name.startsWith('@')) {
         // Username: barevná tečka
         const u = this._chatUsers.get(name.substring(1).toLowerCase());
         const col = u?.color || '#ccc';
