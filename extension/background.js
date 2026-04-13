@@ -193,30 +193,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: () => {
+      func: async () => {
         try {
+          // 1) Try ytcfg keys first
           const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
-          const hasYtcfg = typeof ytcfg !== 'undefined' && !!ytcfg.get;
-          const channelHandle = gc('CHANNEL_HANDLE');
-          const loggedInHandle = gc('LOGGED_IN_CHANNEL_HANDLE');
-          const externalId = channelHandle || loggedInHandle;
-          console.log('[UC-BG-MAIN] ytcfg exists=' + hasYtcfg + ' CHANNEL_HANDLE=' + channelHandle + ' LOGGED_IN=' + loggedInHandle);
-          if (externalId) return { username: externalId.replace(/^@/, ''), _debug: { hasYtcfg, channelHandle, loggedInHandle, method: 'ytcfg' } };
-          const el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
-          const domText = el?.textContent?.trim() || null;
-          console.log('[UC-BG-MAIN] DOM fallback: #channel-handle=' + domText);
-          if (domText) return { username: domText.replace(/^@/, ''), _debug: { hasYtcfg, domText, method: 'dom' } };
-          return { username: null, _debug: { hasYtcfg, channelHandle, loggedInHandle, domText, method: 'none' } };
-        } catch (e) { return { username: null, _debug: { error: e.message } }; }
+          const externalId = gc('CHANNEL_HANDLE') || gc('LOGGED_IN_CHANNEL_HANDLE');
+          if (externalId) return { username: externalId.replace(/^@/, '') };
+
+          // 2) Check if #channel-handle already in DOM (menu was opened before)
+          let el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
+          if (el?.textContent?.trim()) return { username: el.textContent.trim().replace(/^@/, '') };
+
+          // 3) Open avatar menu to force render, read username, close menu
+          const avatarBtn = document.querySelector('button#avatar-btn, ytd-topbar-menu-button-renderer:last-child button');
+          if (!avatarBtn) return { username: null };
+
+          avatarBtn.click();
+          // Wait for menu to render
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 100));
+            el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
+            if (el?.textContent?.trim()) break;
+          }
+          const name = el?.textContent?.trim() || null;
+          // Close menu — Escape key
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+          if (name) return { username: name.replace(/^@/, '') };
+          return { username: null };
+        } catch { return { username: null }; }
       }
     }).then(results => {
-      const r = results?.[0]?.result || { username: null };
-      ucLog('[BG] YT_GET_USERNAME result: ' + JSON.stringify(r));
-      sendResponse(r);
-    }).catch((e) => {
-      ucLog('[BG] YT_GET_USERNAME error: ' + e.message);
-      sendResponse({ username: null });
-    });
+      sendResponse(results?.[0]?.result || { username: null });
+    }).catch(() => sendResponse({ username: null }));
     return true;
   }
 

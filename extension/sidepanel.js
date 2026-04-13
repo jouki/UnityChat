@@ -2050,13 +2050,11 @@ class UnityChat {
       if (!tab) { this._setActivePlatform(null); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
-      this._log('[DETECT] tab=' + (tab.url || '').substring(0, 60) + ' PING resp=' + JSON.stringify(resp));
 
       // Pokud content script neodpovídá, zkusit ho injektovat on-demand
       if (!resp) {
         await this._injectContentScript(tab);
         resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
-        this._log('[DETECT] after inject resp=' + JSON.stringify(resp));
       }
 
       this._setActivePlatform(resp?.platform || null);

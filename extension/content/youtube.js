@@ -6,22 +6,25 @@
   window._ucYoutube = true;
   const isLiveChat = window.location.pathname.startsWith('/live_chat');
   const isMainFrame = window === window.top;
+  let _cachedYtUsername = null;
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING' && isMainFrame) {
       const chatFrame = document.querySelector('ytd-live-chat-frame');
       const urlHasLive = window.location.href.includes('/live');
       const hasLiveChat = !!chatFrame || urlHasLive;
-      console.log('[UC-YT] PING: isMainFrame=' + isMainFrame + ' chatFrame=' + !!chatFrame + ' urlHasLive=' + urlHasLive + ' hasLiveChat=' + hasLiveChat);
       if (hasLiveChat) {
-        // Get YouTube username via background executeScript (MAIN world for ytcfg)
+        // Return cached username if already detected (avoid repeated avatar clicks)
+        if (_cachedYtUsername) {
+          sendResponse({ platform: 'youtube', username: _cachedYtUsername });
+          return;
+        }
         chrome.runtime.sendMessage({ type: 'YT_GET_USERNAME', tabId: null }, (resp) => {
-          console.log('[UC-YT] YT_GET_USERNAME response:', resp);
+          if (resp?.username) _cachedYtUsername = resp.username;
           sendResponse({ platform: 'youtube', username: resp?.username || null });
         });
         return true; // async sendResponse
       }
-      console.log('[UC-YT] PING: no live chat detected, not responding');
       return;
     }
 
