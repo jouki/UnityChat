@@ -3166,10 +3166,14 @@ class UnityChat {
     if (el && realMsg.id) el.dataset.msgId = realMsg.id;
     if (realMsg.id) this._seenMsgIds.add(realMsg.id);
 
-    // Update username color
-    if (el && realMsg.color) {
-      const un = el.querySelector('.un');
-      if (un) un.style.color = realMsg.color;
+    // Update username color — prefer UnityChat custom color over IRC color
+    if (el) {
+      const ucColor = this.nicknames.getColor(realMsg.platform, realMsg.username);
+      const resolvedColor = ucColor || realMsg.color;
+      if (resolvedColor) {
+        const un = el.querySelector('.un');
+        if (un) un.style.color = resolvedColor;
+      }
     }
 
     // Add badges if the optimistic message didn't have them
@@ -3197,7 +3201,8 @@ class UnityChat {
     if (cacheIdx !== -1) {
       const cached = this._msgCache[cacheIdx];
       if (realMsg.id) cached.id = realMsg.id;
-      if (realMsg.color) cached.color = realMsg.color;
+      const ucColor = this.nicknames.getColor(realMsg.platform, realMsg.username);
+      cached.color = ucColor || realMsg.color || cached.color;
       if (realMsg.badgesRaw) cached.badgesRaw = realMsg.badgesRaw;
       if (realMsg.twitchEmotes) cached.twitchEmotes = realMsg.twitchEmotes;
       delete cached._optimistic;
