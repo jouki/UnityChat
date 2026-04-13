@@ -2212,14 +2212,14 @@ class UnityChat {
     const fallback = this._platformDefaultColor(platform);
 
     if (customColor) {
-      // Custom color set → show in field and picker
-      colorHexEl.value = customColor;
-      colorHexEl.placeholder = customColor;
+      // Custom color set (saved via UnityChat) → real value in field + picker
+      colorHexEl.value = customColor.toUpperCase();
+      colorHexEl.placeholder = '';
       if (colorPickerEl) colorPickerEl.value = customColor;
     } else {
-      // No custom color → empty field, placeholder shows fallback, picker shows fallback
+      // No custom color → empty field, placeholder shows platform default, picker shows it
       colorHexEl.value = '';
-      colorHexEl.placeholder = fallback;
+      colorHexEl.placeholder = fallback.toUpperCase();
       if (colorPickerEl) colorPickerEl.value = fallback;
     }
   }
