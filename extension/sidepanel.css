@@ -332,7 +332,7 @@ body.layout-large .reply-ctx { font-size: 12px; }
 
 /* ---- Dev tools ---- */
 
-.dev-mode-row { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
+.dev-mode-row { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; margin-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
 .dev-mode-row label { font-size: 10px; color: var(--text-muted); opacity: 0.4; }
 .dev-mode-row label:hover { opacity: 0.7; }
 .kofi-link { font-size: 10px; color: var(--text-muted); opacity: 0.4; text-decoration: none; transition: opacity 0.15s; }
