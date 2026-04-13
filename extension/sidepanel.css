@@ -921,10 +921,19 @@ body.layout-large .reply-ctx { font-size: 12px; }
 }
 
 #active-badge {
-  min-width: 24px;
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: #fff;
   text-align: center;
   flex-shrink: 0;
+  letter-spacing: 0.3px;
 }
+#active-badge.tw { background: var(--tw); }
+#active-badge.yt { background: var(--yt); }
+#active-badge.ki { background: var(--ki); color: #000; }
 
 #msg-input {
   flex: 1;
