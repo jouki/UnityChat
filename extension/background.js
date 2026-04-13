@@ -229,6 +229,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'KICK_SEND' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: async (slug, text) => {
+        try {
+          const ch = await (await fetch('/api/v2/channels/' + encodeURIComponent(slug))).json();
+          const cid = ch?.chatroom?.id;
+          if (!cid) return { ok: false, error: 'Chatroom nenalezen' };
+          const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||'');
+          const r = await fetch('/api/v2/messages/send/' + cid, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
+            body: JSON.stringify({ content: text, type: 'message' })
+          });
+          if (r.ok) return { ok: true };
+          if (r.status === 403) return { ok: false, error: 'Nejsi přihlášen na Kick' };
+          return { ok: false, error: 'HTTP ' + r.status };
+        } catch (e) { return { ok: false, error: e.message }; }
+      },
+      args: [msg.slug, msg.text]
+    }).then(results => {
+      sendResponse(results?.[0]?.result || { ok: false, error: 'executeScript failed' });
+    }).catch(e => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
   if (msg.type === 'YT_SEND' && sender.tab?.id) {
     ytSend(sender.tab.id, msg.videoId, msg.text, msg.iframeParams)
       .then(sendResponse)
@@ -368,11 +395,14 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
       if (cookie?.value) gqlH.Authorization = 'OAuth ' + cookie.value;
 
       const r = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: gqlH,
-        body: JSON.stringify({ query: `{ user(login: "${username.toLowerCase()}") {
+        body: JSON.stringify({
+          query: `query ($login: String!${broadcasterId ? ', $targetId: ID!' : ''}) { user(login: $login) {
           id login displayName profileImageURL(width: 70) createdAt
           roles { isAffiliate isPartner }
-          ${broadcasterId ? `relationship(targetUserID: "${broadcasterId}") { followedAt }` : ''}
-        }}`})
+          ${broadcasterId ? 'relationship(targetUserID: $targetId) { followedAt }' : ''}
+        }}`,
+          variables: { login: username.toLowerCase(), ...(broadcasterId ? { targetId: broadcasterId } : {}) }
+        })
       });
       const user = (await r.json()).data?.user;
       if (!user) { ucLog('UserCard', 'User not found via GQL'); return; }
@@ -388,23 +418,30 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
           const followed = user.relationship?.followedAt ? fmt(user.relationship.followedAt) : '';
           const role = user.roles?.isPartner ? 'Partner' : user.roles?.isAffiliate ? 'Affiliate' : '';
 
-          const card = document.createElement('div');
+          const el = (tag, style, parent) => { const e = document.createElement(tag); if (style) e.style.cssText = style; if (parent) parent.appendChild(e); return e; };
+          const txt = (tag, text, style, parent) => { const e = el(tag, style, parent); e.textContent = text; return e; };
+
+          const card = el('div');
           card.className = 'uc-card';
           card.style.cssText = 'position:fixed;right:80px;top:80px;width:320px;background:#18181b;border:1px solid #3a3a3d;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.8);z-index:99999;font-family:Inter,-apple-system,sans-serif;overflow:hidden;';
-          card.innerHTML = `
-            <div style="padding:16px;display:flex;align-items:center;gap:12px;background:#0e0e10;cursor:grab;" class="uc-hdr">
-              <img src="${user.profileImageURL}" style="width:56px;height:56px;border-radius:50%;border:2px solid #9146ff;">
-              <div style="flex:1;min-width:0;">
-                <div style="font-weight:700;font-size:16px;color:#efeff1;">${user.displayName}</div>
-                ${role ? `<div style="font-size:11px;color:#bf94ff;margin-top:2px;">${role}</div>` : ''}
-              </div>
-              <a href="https://www.twitch.tv/${user.login}" target="_blank" style="color:#adadb8;font-size:16px;text-decoration:none;padding:4px;" title="Profil">↗</a>
-              <button class="uc-x" style="background:none;border:none;color:#adadb8;font-size:18px;cursor:pointer;padding:4px;">✕</button>
-            </div>
-            <div style="padding:12px 16px;display:flex;flex-direction:column;gap:6px;font-size:13px;color:#dedee3;">
-              ${created ? `<div>📅 Založení účtu ${created}</div>` : ''}
-              ${followed ? `<div>💜 Sleduje od ${followed}</div>` : '<div style="color:#666;">Nesleduje kanál</div>'}
-            </div>`;
+
+          const hdr = el('div', 'padding:16px;display:flex;align-items:center;gap:12px;background:#0e0e10;cursor:grab;', card);
+          hdr.className = 'uc-hdr';
+          const img = el('img', 'width:56px;height:56px;border-radius:50%;border:2px solid #9146ff;', hdr);
+          img.src = user.profileImageURL;
+          const nameCol = el('div', 'flex:1;min-width:0;', hdr);
+          txt('div', user.displayName, 'font-weight:700;font-size:16px;color:#efeff1;', nameCol);
+          if (role) txt('div', role, 'font-size:11px;color:#bf94ff;margin-top:2px;', nameCol);
+          const link = el('a', 'color:#adadb8;font-size:16px;text-decoration:none;padding:4px;', hdr);
+          link.href = 'https://www.twitch.tv/' + encodeURIComponent(user.login);
+          link.target = '_blank'; link.title = 'Profil'; link.textContent = '↗';
+          const closeBtn = txt('button', '✕', 'background:none;border:none;color:#adadb8;font-size:18px;cursor:pointer;padding:4px;', hdr);
+          closeBtn.className = 'uc-x';
+
+          const body = el('div', 'padding:12px 16px;display:flex;flex-direction:column;gap:6px;font-size:13px;color:#dedee3;', card);
+          if (created) txt('div', '📅 Založení účtu ' + created, null, body);
+          if (followed) txt('div', '💜 Sleduje od ' + followed, null, body);
+          else txt('div', 'Nesleduje kanál', 'color:#666;', body);
           card.querySelector('.uc-x').onclick = () => card.remove();
           let d=false,dx,dy;const h=card.querySelector('.uc-hdr');
           h.onmousedown=(e)=>{if(e.target.closest('button,a'))return;d=true;dx=e.clientX-card.offsetLeft;dy=e.clientY-card.offsetTop;h.style.cursor='grabbing';};
@@ -442,13 +479,14 @@ async function checkPin(channel, pinIdOrMsgId) {
     const r = await fetch('https://gql.twitch.tv/gql', {
       method: 'POST', headers,
       body: JSON.stringify({
-        query: `{
-          channel(name: "${channel}") {
+        query: `query ($name: String!) {
+          channel(name: $name) {
             pinnedChatMessages {
               edges { node { id } }
             }
           }
-        }`
+        }`,
+        variables: { name: channel }
       })
     });
 
@@ -528,7 +566,8 @@ async function pinMessage(messageId, broadcasterId, durationSecs) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          query: `{ channelByID: channel(id: "${broadcasterId}") { pinnedChatMessages { edges { node { id } } } } }`
+          query: `query ($id: ID!) { channelByID: channel(id: $id) { pinnedChatMessages { edges { node { id } } } } }`,
+          variables: { id: broadcasterId }
         })
       });
       if (lr.ok) {
@@ -569,7 +608,8 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            query: `query { user(login: "${ch}") { id } }`
+            query: `query ($login: String!) { user(login: $login) { id } }`,
+            variables: { login: ch }
           })
         });
         if (r.ok) channelId = (await r.json()).data?.user?.id;

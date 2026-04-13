@@ -95,44 +95,11 @@
     const slug = window.location.pathname.replace(/^\//, '').split(/[/?#]/)[0];
     if (!slug) throw new Error('Kick kanál nenalezen v URL');
 
-    // Inject fetch do page kontextu (pro přístup k session cookies + XSRF)
-    const reqId = 'uc_' + Date.now();
-
     return new Promise((resolve, reject) => {
-      const handler = (e) => {
-        if (e.detail?.id !== reqId) return;
-        document.removeEventListener('uc-kick-result', handler);
-        if (e.detail.ok) resolve();
-        else reject(new Error(e.detail.error || 'Odeslání selhalo'));
-      };
-      document.addEventListener('uc-kick-result', handler);
-      setTimeout(() => {
-        document.removeEventListener('uc-kick-result', handler);
-        reject(new Error('Kick API timeout'));
-      }, 10000);
-
-      const safeText = JSON.stringify(text);
-      const script = document.createElement('script');
-      script.textContent = `(async()=>{
-        const id=${JSON.stringify(reqId)};
-        const done=(ok,error)=>document.dispatchEvent(new CustomEvent("uc-kick-result",{detail:{id,ok,error}}));
-        try{
-          const ch=await(await fetch("/api/v2/channels/${slug}")).json();
-          const cid=ch?.chatroom?.id;
-          if(!cid){done(false,"Chatroom nenalezen");return}
-          const xsrf=decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||"");
-          const r=await fetch("/api/v2/messages/send/"+cid,{
-            method:"POST",
-            headers:{"Content-Type":"application/json","X-XSRF-TOKEN":xsrf},
-            body:JSON.stringify({content:${safeText},type:"message"})
-          });
-          if(r.ok)done(true);
-          else if(r.status===403)done(false,"Nejsi přihlášen na Kick");
-          else done(false,"HTTP "+r.status);
-        }catch(e){done(false,e.message)}
-      })()`;
-      document.head.appendChild(script);
-      script.remove();
+      chrome.runtime.sendMessage({ type: 'KICK_SEND', slug, text }, (resp) => {
+        if (resp?.ok) resolve();
+        else reject(new Error(resp?.error || 'Odeslání selhalo'));
+      });
     });
   }
 })();

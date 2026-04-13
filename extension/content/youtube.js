@@ -80,7 +80,7 @@
           e.stopPropagation();
           e.stopImmediatePropagation();
           // Tell main frame to hide (not close) the chat panel
-          window.parent.postMessage({ type: 'UC_HIDE_CHAT' }, '*');
+          window.parent.postMessage({ type: 'UC_HIDE_CHAT' }, 'https://www.youtube.com');
         }, true); // capture phase — fires before YouTube's handler
       }
     }
@@ -130,6 +130,7 @@
     }
 
     window.addEventListener('message', (e) => {
+      if (e.origin !== 'https://www.youtube.com') return;
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 

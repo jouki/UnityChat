@@ -92,9 +92,10 @@
 
     if (msg.type === 'OPEN_USER_CARD') {
       const name = msg.username.toLowerCase();
+      const safeName = CSS.escape(name);
       // Hledat všechny klikatelné username elementy v Twitch chatu
       const selectors = [
-        `[data-a-user="${name}"]`,
+        `[data-a-user="${safeName}"]`,
         '.chat-author__display-name',
         '[data-a-target="chat-message-username"]',
         'button.chat-line__username',

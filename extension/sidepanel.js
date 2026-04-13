@@ -485,6 +485,16 @@ class EmoteManager {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
   }
+
+  // Sanitize color for use in HTML style attributes
+  _sc(c) {
+    if (!c || typeof c !== 'string') return '';
+    // Allow: #hex, rgb(), rgba(), named colors (single word)
+    if (/^#[0-9a-fA-F]{3,8}$/.test(c)) return c;
+    if (/^rgba?\(\s*[\d\s,./%]+\)$/.test(c)) return c;
+    if (/^[a-zA-Z]{1,20}$/.test(c)) return c;
+    return '';
+  }
 }
 
 // =============================================================
@@ -1977,7 +1987,7 @@ class UnityChat {
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
         const u = this._chatUsers.get(name.substring(1).toLowerCase());
-        const col = u?.color || '#ccc';
+        const col = this.emotes._sc(u?.color) || '#ccc';
         html += `<span class="es-dot" style="background:${col}"></span>`;
       } else {
         // Emote: obrázek
@@ -2300,7 +2310,7 @@ class UnityChat {
       </div>
       <div class="pin-content">
         <span class="pin-time">${time}</span>
-        <span class="pin-user" style="color:${msg.color}">${this.emotes._eh(msg.username)}:</span>
+        <span class="pin-user" style="color:${this.emotes._sc(msg.color)}">${this.emotes._eh(msg.username)}:</span>
         <span class="pin-text">${body}</span>
       </div>
       <button class="pin-close" title="Odepnout">&times;</button>
