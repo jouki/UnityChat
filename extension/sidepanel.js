@@ -1324,12 +1324,12 @@ class UnityChat {
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
     this._msgHistoryDraft = '';    // unsent text before browsing history
 
-    // Notify background that panel is open
-    chrome.runtime.sendMessage({ type: 'PANEL_OPENED' }).catch(() => {});
+    // Connect port to background — tracks panel open/close state
+    // Port auto-disconnects when panel closes (background detects via onDisconnect)
+    chrome.runtime.connect({ name: 'sidepanel' });
 
-    // Uložit cache + notify close při zavření/reloadu panelu
+    // Uložit cache při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
-      chrome.runtime.sendMessage({ type: 'PANEL_CLOSED' }).catch(() => {});
       if (this._msgCache.length > 0) {
         chrome.storage.local.set({ [this._cacheKey]: this._msgCache });
       }
