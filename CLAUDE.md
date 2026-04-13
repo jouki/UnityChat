@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.21.3
+# UnityChat - Chrome/Opera Extension + Backend v3.21.6
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -379,7 +379,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.12.5**
+- Aktuální: **v3.21.6**
 
 ## Známé limitace / gotchas
 
@@ -491,7 +491,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.1.0)
+## Backend (v0.2.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -503,10 +503,18 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 | `messages` | Všechny chat zprávy s UC marker detekcí, reply context, raw segmenty |
 | `events` | Stream events: raidy, piny, first-time chatters, bany, timeouty |
 
-### Endpoints (v0.1.0)
+### Endpoints (v0.2.0)
 - `GET /` — service info
-- `GET /health` — liveness, uptime
+- `GET /health` — liveness, uptime, SSE client count
 - `GET /health/db` — DB connectivity (503 pokud down)
+- `GET /nicknames` — bulk fetch all nicknames
+- `PUT /nicknames` — set/update nickname + color (rate limit 10s)
+- `DELETE /nicknames` — delete nickname
+- `GET /nicknames/stream` — SSE stream pro real-time nickname changes
+- `GET /dev/manifest.json` — dev branch extension manifest (dev mode only)
+- `GET /dev` — dev download page HTML (dev mode only)
+- `GET /dev/download` — dev branch extension ZIP (dev mode only)
+- `POST /webhook/deploy` — GitHub webhook → git pull + signal file
 
 ### Dev
 ```bash
@@ -560,7 +568,9 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.20.2** - IRC ACTION (/me) parsing — kurzíva + barva usernamu
 - **v3.21.0** - Right-side message tags (Replying to you, Mentions you, First, Raid, Raider, Sus), /uc mock commands
 - **v3.21.2** - Scraper DOM walker — extrahuje emote alt text pro správný content dedup
-- **v3.21.3** - Aktuální verze
+- **v3.21.4** - Raider tag color: yellow-green (#b2e63d)
+- **v3.21.5** - Raider background+border shift to yellow-green
+- **v3.21.6** - `/uc` command autocomplete (raid, raider, first, sus), aktuální verze
 
 ## Release workflow
 
@@ -570,6 +580,9 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - Push na `dev` → VPS dev API servíruje dev ZIP + manifest (jouki.cz/UnityChat/dev)
 - Push/merge na `master` → Coolify auto-deploy produkce (jouki.cz/UnityChat)
 - `update.bat` v extension složce — one-click updater pro uživatele
+- Auto-sync: webhook-driven (`/webhook/deploy` → VPS `git pull` + touch signal → PC `inotifywait` + `git pull`)
+- `scripts/auto-sync.ps1` — systray ikona, balloon notifikace, spouští se automaticky při přihlášení
+- `gh` CLI autentizovaný na VPS i PC — oba mohou vytvářet PR
 
 ## Nové features (v3.13+)
 
