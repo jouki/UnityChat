@@ -493,7 +493,7 @@ class EmoteManager {
 // =============================================================
 
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
-const UC_API = 'http://178.104.160.182:3001';
+const UC_API = 'https://api.jouki.cz';
 
 class NicknameManager {
   constructor() {
