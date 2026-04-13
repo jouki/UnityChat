@@ -46,14 +46,12 @@
       e.stopPropagation();
       chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
         if (!resp) return;
-        const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
         if (resp.action === 'opened') {
-          // Collapse vanilla Twitch chat when opening UC
-          if (collapseBtn) collapseBtn.click();
-        } else if (resp.action === 'closed') {
-          // Expand vanilla Twitch chat when closing UC
+          // Opening UC → collapse vanilla Twitch chat
+          const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
           if (collapseBtn) collapseBtn.click();
         }
+        // Closing UC → leave vanilla chat as-is
       });
     });
     return btn;
