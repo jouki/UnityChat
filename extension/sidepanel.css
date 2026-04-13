@@ -632,12 +632,12 @@ body.layout-large .reply-ctx { font-size: 12px; }
 
 /* Raider (came from raid) */
 .msg.raider-msg {
-  background: rgba(0, 230, 118, 0.1);
-  border-left: 2px solid #00e676;
+  background: rgba(178, 230, 61, 0.12);
+  border-left: 2px solid #b2e63d;
   padding-left: 8px;
 }
 .msg.raider-msg:hover {
-  background: rgba(0, 230, 118, 0.2);
+  background: rgba(178, 230, 61, 0.22);
 }
 
 /* Suspicious user */
