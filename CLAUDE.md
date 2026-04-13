@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.12.5
+# UnityChat - Chrome/Opera Extension + Backend v3.21.3
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -13,7 +13,10 @@ UnityChat/
 │   ├── background.js           # Service worker s runtime feature-detection
 │   ├── sidepanel.html          # UI
 │   ├── sidepanel.css           # Dark theme styling
-│   ├── sidepanel.js            # ~2000 řádků - UI/messaging logika
+│   ├── sidepanel.js            # ~3000 řádků - UI/messaging logika
+│   ├── update.bat              # One-click updater (stáhne ZIP, přepíše soubory)
+│   ├── audio/
+│   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
 │   │   ├── twitch.js           # Twitch DOM (Slate editor) + scrape + reply
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
@@ -543,3 +546,68 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.12.3** - Platform badge tooltip přepsán na JS-positioned `.uc-tooltip` s viewport clamping (fix pro ořez u okrajů side panelu).
 - **v3.12.4** - Opera native sidebar support přes `sidebar_action` manifest key. Opera users si teď mohou připnout UnityChat přímo do Opera levého sidebaru (vedle Messenger/Twitch/atd.). Chrome ignoruje unknown key, používá dál `side_panel`. Popup window fallback zůstává pro Operu jako sekundární entry point.
 - **v3.12.5** - Twitch chat header button (UnityChat logo v chatu, klik otevře side panel), `OPEN_SIDE_PANEL` background handler s user-gesture propagací, `web_accessible_resources` pro ikony. jouki.cz/UnityChat install page: hero s 512px brand logem, funkční platform filtry v preview mockupu, click-to-play audio na StreamElements zprávě, animované FAQ, click-to-copy chrome:// URL.
+- **v3.13–v3.18** - Nickname system (SSE real-time push, DB), per-channel cache (72h TTL), dev mode, @username auto-suggest, per-platform username tracking, YouTube username detekce, optimistic messages, UC button na YouTube, per-platform colors
+- **v3.18.26** - Optimistic → real message upgrade (`_upgradeOptimistic`), `_savePlatformColor` jen pro vlastní zprávy, emotes+badges load PŘED cache
+- **v3.18.29** - Settings UI: merged save button pro nickname+color, readonly username (dev mode), depersonalizované placeholdery, autocomplete=off, status dot tooltipy, odstraněn "Vše" filtr
+- **v3.18.35** - Twitch display-name z IRC (ne login cookie), color save fix, backend rate limit 10s
+- **v3.18.38** - Nickname lookup pro VŠECHNY zprávy (ne jen UC-marked)
+- **v3.19.0** - Message history (ArrowUp/Down jako terminal, max 50, draft preserved)
+- **v3.19.1** - Optimistic badges z posledních známých badges uživatele
+- **v3.19.6** - Copy button (SVG clipboard ikona, trailing space pro emote stacking)
+- **v3.19.7–v3.19.14** - 7TV zero-width emote layering (CSS grid stacking, lookahead pro whitespace)
+- **v3.20.0** - StreamElements !command autocomplete (SE public API), bulgarians easter egg (click-to-play audio)
+- **v3.20.1** - Tab autocomplete: první TAB potvrdí výběr, pak cykluje
+- **v3.20.2** - IRC ACTION (/me) parsing — kurzíva + barva usernamu
+- **v3.21.0** - Right-side message tags (Replying to you, Mentions you, First, Raid, Raider, Sus), /uc mock commands
+- **v3.21.2** - Scraper DOM walker — extrahuje emote alt text pro správný content dedup
+- **v3.21.3** - Aktuální verze
+
+## Release workflow
+
+- **`dev`** = vývojová branch, vývoj probíhá zde
+- **`master`** = production branch, release přes PR `dev → master`
+- Dev branch se NIKDY nemaže při merge
+- Push na `dev` → VPS dev API servíruje dev ZIP + manifest (jouki.cz/UnityChat/dev)
+- Push/merge na `master` → Coolify auto-deploy produkce (jouki.cz/UnityChat)
+- `update.bat` v extension složce — one-click updater pro uživatele
+
+## Nové features (v3.13+)
+
+### Optimistic message upgrade
+- Při odeslání zprávy se okamžitě zobrazí optimistická zpráva (barva, badges z posledních známých)
+- Když dorazí IRC echo, `_upgradeOptimistic()` aktualizuje barvu, badges, ID a cache entry
+- Content dedup: optimistické zprávy vždy projdou, scraped se zahazují, IRC echo upgraduje
+
+### Message history (ArrowUp/Down)
+- `_msgHistory` array (max 50 zpráv)
+- ArrowUp/Down listuje historii (jako terminal/CMD)
+- Draft text se uloží při vstupu do historie, obnoví se při ArrowDown za konec
+- Po reloadu se historie naplní z cached zpráv (matchuje username varianty)
+
+### 7TV Zero-width emote stacking
+- `emote.flags & 1` detekuje zero-width emoty při loadingu 7TV API
+- Base emote + ZW overlays se zabalí do `<span class="emote-stack">` (CSS grid, `grid-area: 1/1`)
+- Šířku containeru určuje nejširší emote, všechny vycentrované
+- Lookahead: whitespace mezi base a ZW emotem neuzavírá stack
+
+### StreamElements integration
+- `GET /kappa/v2/channels/{channel}` → SE channel ID
+- `GET /kappa/v2/bot/commands/{seId}` → seznam bot commands (veřejné, bez auth)
+- `!` autocomplete na začátku zprávy
+- Easter egg: "Bulgarians a pojedeš..." zpráva je klikatelná → přehraje audio
+
+### IRC ACTION (/me) parsing
+- `\x01ACTION text\x01` detekován v IRC PRIVMSG
+- Text renderován kurzívou v barvě usernamu (`.msg.action .tx { font-style: italic }`)
+
+### Right-side message tags
+- `.msg-tag-line` div s right-aligned tagy nad obsahem zprávy
+- Typy: Replying to you, Mentions you, First message, Raid, Raider, Suspicious
+- `/uc` mock commands pro testování (raid, raider, first, sus)
+
+### Settings UI (v3.18.29+)
+- Username field readonly (editovatelný v Dev mode)
+- Merged save button pro nickname + color (vycentrovaný)
+- `autocomplete="off"` na všech inputech, depersonalizované placeholdery
+- Status dot tooltipy: "Twitch - Connected/Connecting.../Disconnected"
+- Odstraněn "Vše" filtr button

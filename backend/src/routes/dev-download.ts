@@ -176,8 +176,8 @@ export default async function devDownloadRoutes(app: FastifyInstance) {
       return { ok: true, skipped: true, reason: 'Not dev branch' };
     }
 
-    // Git pull in background (don't block the response)
-    exec(`cd "${REPO_ROOT}" && git pull origin dev --ff-only`, (err, stdout, stderr) => {
+    // Git pull + touch signal file so PC auto-sync picks it up
+    exec(`cd "${REPO_ROOT}" && git pull origin dev --ff-only && touch /tmp/uc-deploy-signal`, (err, stdout, stderr) => {
       if (err) console.error('Deploy pull failed:', stderr);
       else console.log('Deploy pull:', stdout.trim());
     });

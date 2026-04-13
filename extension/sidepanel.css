@@ -595,14 +595,27 @@ body.layout-large .reply-ctx { font-size: 12px; }
   background: rgba(145, 70, 255, 0.22);
 }
 
-.first-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent);
-  padding: 1px 0 1px 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+/* (first-label removed — replaced by right-side .msg-tag system) */
+
+/* Right-aligned tag line above message content */
+.msg-tag-line {
+  text-align: right;
+  padding: 1px 4px 0 18px;
+  line-height: 4pt;
 }
+.msg-tag {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+.msg-tag.tag-reply { color: #cc3333; }
+.msg-tag.tag-mention { color: #cc3333; }
+.msg-tag.tag-first { color: #9146ff; }
+.msg-tag.tag-raid { color: #ff6b6b; }
+.msg-tag.tag-raider { color: #b2e63d; }
+.msg-tag.tag-sus { color: #ffc107; }
 
 /* Raid */
 .msg.raid {
@@ -615,13 +628,26 @@ body.layout-large .reply-ctx { font-size: 12px; }
   background: rgba(255, 107, 107, 0.2);
 }
 
-.raid-label {
-  font-size: 10px;
-  font-weight: 800;
-  color: #ff6b6b;
-  padding: 1px 0 1px 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+/* (raid-label removed — replaced by right-side .msg-tag system) */
+
+/* Raider (came from raid) */
+.msg.raider-msg {
+  background: rgba(178, 230, 61, 0.12);
+  border-left: 2px solid #b2e63d;
+  padding-left: 8px;
+}
+.msg.raider-msg:hover {
+  background: rgba(178, 230, 61, 0.22);
+}
+
+/* Suspicious user */
+.msg.sus-msg {
+  background: rgba(255, 193, 7, 0.1);
+  border-left: 2px solid #ffc107;
+  padding-left: 8px;
+}
+.msg.sus-msg:hover {
+  background: rgba(255, 193, 7, 0.2);
 }
 
 /* Reply context */
@@ -691,6 +717,9 @@ body.layout-large .reply-ctx { font-size: 12px; }
   margin: -3px 1px;
   object-fit: contain;
 }
+
+/* /me (ACTION) messages — italic text in username color */
+.msg.action .tx { font-style: italic; }
 
 /* Click-to-play audio easter egg (StreamElements Bulgarians) */
 .msg.msg-audio { cursor: pointer; position: relative; }

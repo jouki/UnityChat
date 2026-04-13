@@ -177,12 +177,26 @@
       const colorEl = line.querySelector('.seventv-chat-user, [data-a-user]') || userEl;
       const color = colorEl?.style?.color || '#9146ff';
 
-      // Body - zkusit více selektorů
+      // Body - zkusit více selektorů, include emote alt text
       const bodyEl = line.querySelector(
         '.seventv-message-body, .text-fragment, [data-a-target="chat-message-text"], ' +
         '[class*="message-body"], [class*="message-content"]'
       );
-      let text = (bodyEl?.textContent || '').trim();
+      let text = '';
+      if (bodyEl) {
+        // Walk DOM to include img alt text (emotes are <img> with alt=emoteName)
+        const walk = (node) => {
+          if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.tagName === 'IMG') return ' ' + (node.alt || '') + ' ';
+            let t = '';
+            for (const c of node.childNodes) t += walk(c);
+            return t;
+          }
+          return '';
+        };
+        text = walk(bodyEl).replace(/\s+/g, ' ').trim();
+      }
 
       // Fallback - vzít celý text linky a odečíst username
       if (!text) {

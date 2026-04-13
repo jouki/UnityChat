@@ -707,9 +707,16 @@ class TwitchProvider {
     const ci = after.indexOf(':');
     if (ci === -1) return;
 
-    const message = after.substring(ci + 1);
+    let message = after.substring(ci + 1);
     const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
     const color = tags.color || '#9146ff';
+
+    // Detect /me (CTCP ACTION): \x01ACTION text\x01
+    let isAction = false;
+    if (message.startsWith('\x01ACTION ') && message.endsWith('\x01')) {
+      message = message.substring(8, message.length - 1);
+      isAction = true;
+    }
 
     // Surový badges string pro image rendering (parsuje se v _addMessage)
     const badgesRaw = tags.badges || '';
@@ -749,7 +756,8 @@ class TwitchProvider {
       badgesRaw,
       twitchEmotes: tags.emotes || null,
       replyTo,
-      firstMsg: tags['first-msg'] === '1'
+      firstMsg: tags['first-msg'] === '1',
+      isAction
     });
   }
 
@@ -1516,9 +1524,26 @@ class UnityChat {
         } else {
           this._acHide();
         }
+      } else if (text.startsWith('/uc ') && ws === 4) {
+        // /uc subcommand autocomplete
+        const prefix = partial.toLowerCase();
+        const cmds = ['raid', 'raider', 'first', 'sus'];
+        const matches = cmds.filter(c => c.startsWith(prefix)).map(c => '/uc ' + c);
+        if (matches.length) {
+          this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (text === '/uc ' && partial === '' && pos === 4) {
+        // Just typed "/uc " — show all subcommands
+        const cmds = ['raid', 'raider', 'first', 'sus'];
+        const matches = cmds.map(c => '/uc ' + c);
+        this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
+        this._acRender();
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
-        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!'))) this._acHide();
+        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
       }
     });
 
@@ -1806,6 +1831,11 @@ class UnityChat {
 
     // Cycling - opakovaný Tab / Shift+Tab
     if (this._ac && this._ac.end === pos) {
+      if (!this._ac.applied) {
+        // First TAB after input-triggered suggest → confirm current selection
+        this._acApply();
+        return;
+      }
       const len = this._ac.matches.length;
       this._ac.index = (this._ac.index + dir + len) % len;
       this._acApply();
@@ -1855,12 +1885,14 @@ class UnityChat {
     const after = text.substring(ac.end);
     input.value = before + match + ' ' + after;
     ac.end = ac.start + match.length + 1;
+    ac.applied = true;
     input.setSelectionRange(ac.end, ac.end);
     this._acRender();
   }
 
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
+    if (name.startsWith('/uc ')) return 'UC';
     if (name.startsWith('@')) {
       const u = this._chatUsers.get(name.substring(1).toLowerCase());
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
@@ -1904,7 +1936,10 @@ class UnityChat {
       const sel = i === idx ? ' selected' : '';
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('@')) {
+      if (name.startsWith('/uc ')) {
+        // UC command: oranžová tečka
+        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+      } else if (name.startsWith('@')) {
         // Username: barevná tečka
         const u = this._chatUsers.get(name.substring(1).toLowerCase());
         const col = u?.color || '#ccc';
@@ -2345,6 +2380,14 @@ class UnityChat {
     const text = this.msgInput.value.trim();
     if (!text || !this.activePlatform) return;
 
+    // /uc commands — local mock messages for testing (mod/broadcaster only)
+    if (text.startsWith('/uc ')) {
+      this.msgInput.value = '';
+      this.msgInput.style.height = 'auto';
+      this._handleUcCommand(text.substring(4).trim());
+      return;
+    }
+
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
@@ -2419,6 +2462,41 @@ class UnityChat {
   }
 
   // ---- Providers ----
+
+  _handleUcCommand(args) {
+    const parts = args.split(/\s+/);
+    const cmd = parts[0]?.toLowerCase();
+    const text = parts.slice(1).join(' ') || 'test message';
+    const platform = this.activePlatform || 'twitch';
+    const now = Date.now();
+    const mockUser = 'MockUser';
+
+    const base = {
+      platform,
+      username: mockUser,
+      message: text,
+      color: '#9146ff',
+      timestamp: now,
+      id: `uc-mock-${now}`,
+    };
+
+    switch (cmd) {
+      case 'raid':
+        this._addMessage({ ...base, username: mockUser, message: `${text} přichází s raidem!`, isRaid: true, color: '#ff6b6b' });
+        break;
+      case 'raider':
+        this._addMessage({ ...base, isRaider: true, color: '#00e676' });
+        break;
+      case 'first':
+        this._addMessage({ ...base, firstMsg: true, color: '#9146ff' });
+        break;
+      case 'sus':
+        this._addMessage({ ...base, isSus: true, color: '#ffc107' });
+        break;
+      default:
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus`);
+    }
+  }
 
   _setupProviders() {
     this.twitch.onMessage = (m) => this._addMessage(m);
@@ -2721,23 +2799,16 @@ class UnityChat {
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
     if (msg.isRaid) el.classList.add('raid');
+    if (msg.isRaider) el.classList.add('raider-msg');
+    if (msg.isSus) el.classList.add('sus-msg');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
 
-    // First-time chatter label
-    if (msg.firstMsg) {
-      const fl = document.createElement('div');
-      fl.className = 'first-label';
-      fl.textContent = 'První zpráva';
-      el.appendChild(fl);
-    }
-
-    // Raid label
-    if (msg.isRaid) {
-      const rl = document.createElement('div');
-      rl.className = 'raid-label';
-      rl.textContent = 'RAID';
-      el.appendChild(rl);
-    }
+    // Determine if reply is TO the current user (not just any reply)
+    const isReplyToMe = msg.replyTo && (
+      replyTarget === myName ||
+      (myNick && replyTarget === myNick) ||
+      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
+    );
 
     // Reply context (Twitch reply-parent tagy)
     if (msg.replyTo) {
@@ -2758,6 +2829,28 @@ class UnityChat {
         });
       }
       el.appendChild(ctx);
+    }
+
+    // Tag line (right-aligned, above message content)
+    const tagText =
+      isReplyToMe ? 'Replying to you' :
+      isMentioned ? 'Mentions you' :
+      msg.isRaid ? 'Raid' :
+      msg.isRaider ? 'Raider' :
+      msg.firstMsg ? 'First message' :
+      msg.isSus ? 'Suspicious' : null;
+    if (tagText) {
+      const tagLine = document.createElement('div');
+      tagLine.className = 'msg-tag-line';
+      const tagCls =
+        isReplyToMe ? 'tag-reply' :
+        isMentioned ? 'tag-mention' :
+        msg.isRaid ? 'tag-raid' :
+        msg.isRaider ? 'tag-raider' :
+        msg.firstMsg ? 'tag-first' :
+        'tag-sus';
+      tagLine.innerHTML = `<span class="msg-tag ${tagCls}">${tagText}</span>`;
+      el.appendChild(tagLine);
     }
 
     // Platform badge
@@ -2817,6 +2910,11 @@ class UnityChat {
     // Zpráva s emoty - platform-specifický rendering
     const tx = document.createElement('span');
     tx.className = 'tx';
+    // /me (ACTION) messages — text has username color, italic
+    if (msg.isAction) {
+      el.classList.add('action');
+      tx.style.color = un.style.color;
+    }
 
     if (msg.platform === 'twitch') {
       // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
