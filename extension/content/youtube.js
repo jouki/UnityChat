@@ -6,15 +6,40 @@
   window._ucYoutube = true;
   const isLiveChat = window.location.pathname.startsWith('/live_chat');
   const isMainFrame = window === window.top;
+  let _cachedYtUsername = null;
+  let _cachedForUrl = null;
+
+  // YouTube is SPA — watch for URL changes to invalidate cached username
+  if (isMainFrame) {
+    let _lastUrl = window.location.href;
+    const _urlObserver = new MutationObserver(() => {
+      if (window.location.href !== _lastUrl) {
+        _lastUrl = window.location.href;
+        _cachedYtUsername = null;
+        _cachedForUrl = null;
+      }
+    });
+    _urlObserver.observe(document.body, { childList: true, subtree: true });
+    // Also catch popstate (back/forward)
+    window.addEventListener('popstate', () => { _cachedYtUsername = null; _cachedForUrl = null; });
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING' && isMainFrame) {
-      const hasLiveChat =
-        !!document.querySelector('ytd-live-chat-frame') ||
-        window.location.href.includes('/live');
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      const urlHasLive = window.location.href.includes('/live');
+      const hasLiveChat = !!chatFrame || urlHasLive;
       if (hasLiveChat) {
-        // Get YouTube username via background executeScript (MAIN world for ytcfg)
+        // Return cached username if already detected for this URL
+        if (_cachedYtUsername && _cachedForUrl === window.location.href) {
+          sendResponse({ platform: 'youtube', username: _cachedYtUsername });
+          return;
+        }
         chrome.runtime.sendMessage({ type: 'YT_GET_USERNAME', tabId: null }, (resp) => {
+          if (resp?.username) {
+            _cachedYtUsername = resp.username;
+            _cachedForUrl = window.location.href;
+          }
           sendResponse({ platform: 'youtube', username: resp?.username || null });
         });
         return true; // async sendResponse
