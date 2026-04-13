@@ -109,3 +109,20 @@ export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type PlatformIdentity = typeof platformIdentities.$inferSelect;
 export type NewPlatformIdentity = typeof platformIdentities.$inferInsert;
+
+export const seenUsers = pgTable(
+  'seen_users',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    username: text('username').notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    seenCount: bigint('seen_count', { mode: 'number' }).notNull().default(1),
+  },
+  (t) => ({
+    platformUsernameUnique: uniqueIndex('seen_users_platform_username_unique').on(t.platform, t.username),
+  }),
+);
+
+export type SeenUser = typeof seenUsers.$inferSelect;

@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import { config } from './config.js';
 import { pingDb, closeDb } from './db/index.js';
 import nicknameRoutes from './routes/nicknames.js';
+import userRoutes from './routes/users.js';
 import devDownloadRoutes from './routes/dev-download.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 
@@ -41,6 +42,7 @@ app.get('/health', async () => ({
 }));
 
 await app.register(nicknameRoutes);
+await app.register(userRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
