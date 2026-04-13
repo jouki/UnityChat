@@ -601,6 +601,7 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .msg-tag-line {
   text-align: right;
   padding: 1px 4px 0 18px;
+  line-height: 4pt;
 }
 .msg-tag {
   font-size: 9px;
