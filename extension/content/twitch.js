@@ -44,11 +44,17 @@
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      // Collapse vanilla Twitch chat
-      const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-      if (collapseBtn) collapseBtn.click();
-      // Open UnityChat side panel
-      chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
+        if (!resp) return;
+        const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+        if (resp.action === 'opened') {
+          // Collapse vanilla Twitch chat when opening UC
+          if (collapseBtn) collapseBtn.click();
+        } else if (resp.action === 'closed') {
+          // Expand vanilla Twitch chat when closing UC
+          if (collapseBtn) collapseBtn.click();
+        }
+      });
     });
     return btn;
   }

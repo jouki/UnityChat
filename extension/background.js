@@ -17,6 +17,8 @@
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
 
+let _panelOpen = false;
+
 if (HAS_SIDE_PANEL) {
   // Chrome path: clicking the toolbar action opens the native side panel.
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -102,34 +104,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Open side panel from a content script (e.g. the Twitch chat button).
-  // Chrome requires sidePanel.open() to run inside the user gesture — the
-  // gesture propagates through onMessage, so we must call it synchronously
-  // here (no awaits before the open call).
-  if (msg.type === 'OPEN_SIDE_PANEL') {
+  // Side panel state tracking
+  if (msg.type === 'PANEL_OPENED') {
+    _panelOpen = true;
+    return;
+  }
+  if (msg.type === 'PANEL_CLOSED') {
+    _panelOpen = false;
+    return;
+  }
+
+  // Toggle side panel from content script (UC button in Twitch/YouTube).
+  // Chrome requires sidePanel.open() to run inside the user gesture chain.
+  if (msg.type === 'TOGGLE_SIDE_PANEL' || msg.type === 'OPEN_SIDE_PANEL') {
     const tabId = sender.tab?.id;
     const windowId = sender.tab?.windowId;
+    const wantClose = msg.type === 'TOGGLE_SIDE_PANEL' && _panelOpen;
+
     if (HAS_SIDE_PANEL && tabId != null) {
-      chrome.sidePanel.open({ tabId })
-        .then(() => sendResponse({ ok: true }))
-        .catch((e) => {
-          if (windowId != null) {
-            chrome.sidePanel.open({ windowId })
-              .then(() => sendResponse({ ok: true }))
-              .catch((err) => sendResponse({ ok: false, error: err.message }));
-          } else {
-            sendResponse({ ok: false, error: e.message });
-          }
-        });
+      if (wantClose) {
+        // Close by disabling, then re-enabling (Chrome has no sidePanel.close())
+        chrome.sidePanel.setOptions({ tabId, enabled: false })
+          .then(() => {
+            _panelOpen = false;
+            // Re-enable so it can be opened again next click
+            chrome.sidePanel.setOptions({ tabId, enabled: true }).catch(() => {});
+            sendResponse({ ok: true, action: 'closed' });
+          })
+          .catch((e) => sendResponse({ ok: false, error: e.message }));
+      } else {
+        chrome.sidePanel.open({ tabId })
+          .then(() => { _panelOpen = true; sendResponse({ ok: true, action: 'opened' }); })
+          .catch((e) => {
+            if (windowId != null) {
+              chrome.sidePanel.open({ windowId })
+                .then(() => { _panelOpen = true; sendResponse({ ok: true, action: 'opened' }); })
+                .catch((err) => sendResponse({ ok: false, error: err.message }));
+            } else {
+              sendResponse({ ok: false, error: e.message });
+            }
+          });
+      }
       return true;
     }
-    // Opera (no sidePanel API) → popup window fallback
+    // Opera (no sidePanel API) → popup window fallback (no toggle, just open)
     chrome.windows.create({
       url: 'sidepanel.html',
       type: 'popup',
       width: 420,
       height: 720
-    }).then(() => sendResponse({ ok: true }))
+    }).then(() => sendResponse({ ok: true, action: 'opened' }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

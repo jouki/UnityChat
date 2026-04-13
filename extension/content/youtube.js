@@ -87,6 +87,22 @@
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
     }
 
+    function showYtChat() {
+      const chat = document.querySelector('#chat');
+      if (chat) chat.style.cssText = '';
+      const pfbc = document.querySelector('#panels-full-bleed-container');
+      if (pfbc) pfbc.style.cssText = '';
+      const flexy = document.querySelector('ytd-watch-flexy');
+      if (flexy) {
+        flexy.setAttribute('is-two-columns_', '');
+        flexy.removeAttribute('theater');
+        flexy.removeAttribute('full-bleed-player');
+        window.dispatchEvent(new Event('resize'));
+      }
+      const chatPanel = document.querySelector('ytd-live-chat-frame');
+      if (chatPanel) delete chatPanel.dataset.ucHidden;
+    }
+
     window.addEventListener('message', (e) => {
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
@@ -130,32 +146,33 @@
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // 1. Check if chat is already open
-        const chatFrame = document.querySelector('ytd-live-chat-frame');
-        const iframe = chatFrame?.querySelector('#chatframe');
-        const chatIsOpen = iframe && iframe.offsetHeight > 100;
-
-        if (chatIsOpen) {
-          // Chat already open → hide it immediately
-          hideYtChat();
-        } else {
-          // Chat closed → click "Otevřít panel", wait for X, then hide
-          const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
-          if (openPanelBtn && !openPanelBtn.disabled) {
-            openPanelBtn.click();
-            const closeObs = new MutationObserver(() => {
-              const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
-              if (closeBtn) {
-                closeObs.disconnect();
-                hideYtChat();
+        chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
+          if (!resp) return;
+          if (resp.action === 'opened') {
+            // Opening UC → hide vanilla YouTube chat
+            const chatFrame = document.querySelector('ytd-live-chat-frame');
+            const iframe = chatFrame?.querySelector('#chatframe');
+            const chatIsOpen = iframe && iframe.offsetHeight > 100;
+            if (chatIsOpen) {
+              hideYtChat();
+            } else {
+              // Chat closed → click "Otevřít panel", wait, then hide
+              const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+              if (openPanelBtn && !openPanelBtn.disabled) {
+                openPanelBtn.click();
+                const closeObs = new MutationObserver(() => {
+                  const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+                  if (closeBtn) { closeObs.disconnect(); hideYtChat(); }
+                });
+                closeObs.observe(document.body, { childList: true, subtree: true });
+                setTimeout(() => closeObs.disconnect(), 10000);
               }
-            });
-            closeObs.observe(document.body, { childList: true, subtree: true });
-            setTimeout(() => closeObs.disconnect(), 10000);
+            }
+          } else if (resp.action === 'closed') {
+            // Closing UC → show vanilla YouTube chat back
+            showYtChat();
           }
-        }
-        // 2. Open UnityChat side panel
-        chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
+        });
       });
       return btn;
     }
