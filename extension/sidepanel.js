@@ -1441,6 +1441,34 @@ class UnityChat {
     this._connectAll();
     console.log('[UC] init: connected, starting detect loop');
     this._detectLoop();
+    // Detect usernames from ALL platform tabs (not just active one)
+    this._detectAllPlatformUsernames();
+  }
+
+  async _detectAllPlatformUsernames() {
+    const patterns = [
+      { platform: 'twitch', url: '*://*.twitch.tv/*' },
+      { platform: 'youtube', url: '*://*.youtube.com/*' },
+      { platform: 'kick', url: '*://*.kick.com/*' }
+    ];
+    for (const { platform, url } of patterns) {
+      if (this._platformUsernames[platform]) continue;
+      try {
+        const tabs = await chrome.tabs.query({ url });
+        for (const tab of tabs) {
+          await this._injectContentScript(tab);
+          const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+          if (resp?.username) {
+            const name = resp.username.replace(/^@/, '');
+            this._platformUsernames[platform] = name;
+            if (!this.config._platformUsernames) this.config._platformUsernames = {};
+            this.config._platformUsernames[platform] = name;
+            this._saveConfig();
+            break;
+          }
+        }
+      } catch {}
+    }
   }
 
   // ---- Config ----
