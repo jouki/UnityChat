@@ -69,29 +69,19 @@
   // ---- Hide chat listener (main frame) ----
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
-    let _savedFlexyState = null;
+    let _ucEnteredTheater = false;
 
     function hideYtChat() {
-      // Save original flexy state before modification
-      const flexy = document.querySelector('ytd-watch-flexy');
-      if (flexy && !_savedFlexyState) {
-        _savedFlexyState = {
-          isTwoColumns: flexy.hasAttribute('is-two-columns_'),
-          theater: flexy.hasAttribute('theater'),
-          fullBleed: flexy.hasAttribute('full-bleed-player'),
-        };
-      }
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = 'display:none!important;';
-      // Theater mode for correct player sizing
-      if (flexy) {
-        flexy.removeAttribute('is-two-columns_');
-        flexy.setAttribute('theater', '');
-        flexy.setAttribute('full-bleed-player', '');
-        window.dispatchEvent(new Event('resize'));
+      // Enter theater mode via native button (YouTube handles player resize properly)
+      const flexy = document.querySelector('ytd-watch-flexy');
+      if (flexy && !flexy.hasAttribute('theater')) {
+        const theaterBtn = document.querySelector('.ytp-size-button');
+        if (theaterBtn) { theaterBtn.click(); _ucEnteredTheater = true; }
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
@@ -104,21 +94,11 @@
       // Restore #panels-full-bleed-container
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = '';
-      // Restore flexy attributes to saved state
-      const flexy = document.querySelector('ytd-watch-flexy');
-      if (flexy) {
-        if (_savedFlexyState) {
-          if (_savedFlexyState.isTwoColumns) flexy.setAttribute('is-two-columns_', '');
-          else flexy.removeAttribute('is-two-columns_');
-          if (!_savedFlexyState.theater) flexy.removeAttribute('theater');
-          if (!_savedFlexyState.fullBleed) flexy.removeAttribute('full-bleed-player');
-          _savedFlexyState = null;
-        } else {
-          // No saved state — best effort: remove what we added
-          flexy.removeAttribute('theater');
-          flexy.removeAttribute('full-bleed-player');
-        }
-        window.dispatchEvent(new Event('resize'));
+      // Exit theater mode via native button (if we entered it)
+      if (_ucEnteredTheater) {
+        const theaterBtn = document.querySelector('.ytp-size-button');
+        if (theaterBtn) theaterBtn.click();
+        _ucEnteredTheater = false;
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) delete chatPanel.dataset.ucHidden;
