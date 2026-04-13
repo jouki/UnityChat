@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.21.6
+# UnityChat - Chrome/Opera Extension + Backend v3.23.1
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -379,7 +379,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.21.6**
+- Aktuální: **v3.23.1**
 
 ## Známé limitace / gotchas
 
@@ -570,7 +570,10 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.21.2** - Scraper DOM walker — extrahuje emote alt text pro správný content dedup
 - **v3.21.4** - Raider tag color: yellow-green (#b2e63d)
 - **v3.21.5** - Raider background+border shift to yellow-green
-- **v3.21.6** - `/uc` command autocomplete (raid, raider, first, sus), aktuální verze
+- **v3.21.6** - `/uc` command autocomplete (raid, raider, first, sus)
+- **v3.22.0–v3.22.5** - UC button toggle (open/close side panel), YouTube native theater button, port-based panel state tracking, window.close() via port
+- **v3.23.0** - UnityChat custom emotes (`ucEmotes` Map, first: CaneBear), preview Fremaner message
+- **v3.23.1** - Retroactive color update po save, Ko-fi link, active-badge styling, nickname API normalizace, aktuální verze
 
 ## Release workflow
 
