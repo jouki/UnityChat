@@ -9,16 +9,19 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING' && isMainFrame) {
-      const hasLiveChat =
-        !!document.querySelector('ytd-live-chat-frame') ||
-        window.location.href.includes('/live');
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      const urlHasLive = window.location.href.includes('/live');
+      const hasLiveChat = !!chatFrame || urlHasLive;
+      console.log('[UC-YT] PING: isMainFrame=' + isMainFrame + ' chatFrame=' + !!chatFrame + ' urlHasLive=' + urlHasLive + ' hasLiveChat=' + hasLiveChat);
       if (hasLiveChat) {
         // Get YouTube username via background executeScript (MAIN world for ytcfg)
         chrome.runtime.sendMessage({ type: 'YT_GET_USERNAME', tabId: null }, (resp) => {
+          console.log('[UC-YT] YT_GET_USERNAME response:', resp);
           sendResponse({ platform: 'youtube', username: resp?.username || null });
         });
         return true; // async sendResponse
       }
+      console.log('[UC-YT] PING: no live chat detected, not responding');
       return;
     }
 

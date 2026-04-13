@@ -196,18 +196,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       func: () => {
         try {
           const gc = (k) => typeof ytcfg !== 'undefined' && ytcfg.get ? ytcfg.get(k) : null;
-          // Try external channel ID handle first, then display name
-          const externalId = gc('CHANNEL_HANDLE') || gc('LOGGED_IN_CHANNEL_HANDLE');
-          if (externalId) return { username: externalId.replace(/^@/, '') };
-          // Fallback: try DOM
+          const hasYtcfg = typeof ytcfg !== 'undefined' && !!ytcfg.get;
+          const channelHandle = gc('CHANNEL_HANDLE');
+          const loggedInHandle = gc('LOGGED_IN_CHANNEL_HANDLE');
+          const externalId = channelHandle || loggedInHandle;
+          console.log('[UC-BG-MAIN] ytcfg exists=' + hasYtcfg + ' CHANNEL_HANDLE=' + channelHandle + ' LOGGED_IN=' + loggedInHandle);
+          if (externalId) return { username: externalId.replace(/^@/, ''), _debug: { hasYtcfg, channelHandle, loggedInHandle, method: 'ytcfg' } };
           const el = document.querySelector('yt-formatted-string#channel-handle, #channel-handle');
-          if (el?.textContent?.trim()) return { username: el.textContent.trim().replace(/^@/, '') };
-          return { username: null };
-        } catch { return { username: null }; }
+          const domText = el?.textContent?.trim() || null;
+          console.log('[UC-BG-MAIN] DOM fallback: #channel-handle=' + domText);
+          if (domText) return { username: domText.replace(/^@/, ''), _debug: { hasYtcfg, domText, method: 'dom' } };
+          return { username: null, _debug: { hasYtcfg, channelHandle, loggedInHandle, domText, method: 'none' } };
+        } catch (e) { return { username: null, _debug: { error: e.message } }; }
       }
     }).then(results => {
-      sendResponse(results?.[0]?.result || { username: null });
-    }).catch(() => sendResponse({ username: null }));
+      const r = results?.[0]?.result || { username: null };
+      ucLog('[BG] YT_GET_USERNAME result: ' + JSON.stringify(r));
+      sendResponse(r);
+    }).catch((e) => {
+      ucLog('[BG] YT_GET_USERNAME error: ' + e.message);
+      sendResponse({ username: null });
+    });
     return true;
   }
 
