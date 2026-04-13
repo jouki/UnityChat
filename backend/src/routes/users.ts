@@ -1,47 +1,104 @@
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { db } from '../db/index.js';
-import { nicknames } from '../db/schema.js';
+import { nicknames, seenUsers } from '../db/schema.js';
+
+const SeenBody = z.object({
+  platform: z.enum(['twitch', 'youtube', 'kick']),
+  username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
+});
 
 export default async function userRoutes(app: FastifyInstance) {
-  // Derive unique UnityChat users from nicknames table
-  // Anyone who saved a nickname/color is a confirmed UC user
+  // Register a seen user — insert if new, ignore if exists
+  app.post('/users/seen', async (req, reply) => {
+    const parsed = SeenBody.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { ok: false, error: 'Invalid body' };
+    }
+
+    const { platform, username } = parsed.data;
+
+    await db
+      .insert(seenUsers)
+      .values({ platform, username })
+      .onConflictDoNothing();
+
+    return { ok: true };
+  });
+
+  // Get all unique users (from seen_users + nicknames)
   app.get('/users', async (_req, reply) => {
-    const rows = await db
-      .select({
+    // Merge both sources for complete picture
+    const [seen, nicks] = await Promise.all([
+      db.select({
+        platform: seenUsers.platform,
+        username: seenUsers.username,
+        firstSeenAt: seenUsers.firstSeenAt,
+      }).from(seenUsers),
+      db.select({
         platform: nicknames.platform,
         username: nicknames.username,
         nickname: nicknames.nickname,
         color: nicknames.color,
-        updatedAt: nicknames.updatedAt,
-      })
-      .from(nicknames);
+      }).from(nicknames),
+    ]);
 
-    // Group by username across platforms
+    // Build nickname lookup
+    const nickLookup = new Map<string, { nickname: string; color: string | null }>();
+    for (const n of nicks) {
+      nickLookup.set(`${n.platform}:${n.username}`, { nickname: n.nickname, color: n.color });
+    }
+
+    // Group by username
     const byUser = new Map<string, {
-      nickname: string;
+      nickname: string | null;
       color: string | null;
       platforms: string[];
-      lastSeen: string;
+      firstSeen: string | null;
     }>();
 
-    for (const row of rows) {
+    // Add all seen users
+    for (const row of seen) {
       const existing = byUser.get(row.username);
+      const nick = nickLookup.get(`${row.platform}:${row.username}`);
       if (existing) {
-        if (!existing.platforms.includes(row.platform)) {
-          existing.platforms.push(row.platform);
-        }
-        if (row.updatedAt.toISOString() > existing.lastSeen) {
-          existing.lastSeen = row.updatedAt.toISOString();
-          existing.nickname = row.nickname;
-          if (row.color) existing.color = row.color;
+        if (!existing.platforms.includes(row.platform)) existing.platforms.push(row.platform);
+        if (nick?.nickname && !existing.nickname) existing.nickname = nick.nickname;
+        if (nick?.color && !existing.color) existing.color = nick.color;
+        if (row.firstSeenAt.toISOString() < (existing.firstSeen || '')) {
+          existing.firstSeen = row.firstSeenAt.toISOString();
         }
       } else {
         byUser.set(row.username, {
-          nickname: row.nickname,
-          color: row.color,
+          nickname: nick?.nickname || null,
+          color: nick?.color || null,
           platforms: [row.platform],
-          lastSeen: row.updatedAt.toISOString(),
+          firstSeen: row.firstSeenAt.toISOString(),
         });
+      }
+    }
+
+    // Add nickname-only users (who saved nickname but weren't in seen_users)
+    for (const n of nicks) {
+      if (!byUser.has(n.username)) {
+        const existing = byUser.get(n.username);
+        if (existing) {
+          if (!existing.platforms.includes(n.platform)) existing.platforms.push(n.platform);
+        } else {
+          byUser.set(n.username, {
+            nickname: n.nickname,
+            color: n.color,
+            platforms: [n.platform],
+            firstSeen: null,
+          });
+        }
+      } else {
+        const existing = byUser.get(n.username)!;
+        if (!existing.platforms.includes(n.platform)) existing.platforms.push(n.platform);
+        if (!existing.nickname) existing.nickname = n.nickname;
+        if (!existing.color) existing.color = n.color;
       }
     }
 

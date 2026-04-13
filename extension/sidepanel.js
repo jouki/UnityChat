@@ -1334,6 +1334,7 @@ class UnityChat {
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._platformColors = {};    // per-platform user color (from IRC/API)
+    this._syncedProfiles = new Set(); // platform:username pairs already synced with API
     this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
     this._msgHistory = [];         // sent message history (newest last)
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
@@ -1376,6 +1377,11 @@ class UnityChat {
     if (this.config._platformColors) {
       this._platformColors = { ...this.config._platformColors };
     }
+    try {
+      const r = await chrome.storage.local.get('uc_synced');
+      if (Array.isArray(r.uc_synced)) this._syncedProfiles = new Set(r.uc_synced);
+    } catch {}
+
     // Load persisted user colors
     try {
       const d = await chrome.storage.local.get('uc_user_colors');
@@ -2069,6 +2075,7 @@ class UnityChat {
           this.config._platformUsernames[resp.platform] = name;
           this._saveConfig();
         }
+        this._syncProfile(resp.platform, name);
         // Update settings UI when username changes (or was missing on first detect)
         if (prev !== name && resp.platform === this.activePlatform) {
           const el = document.getElementById('input-username');
@@ -2110,6 +2117,21 @@ class UnityChat {
         files: [file]
       });
     } catch {}
+  }
+
+  _syncProfile(platform, username) {
+    const key = `${platform}:${username.toLowerCase()}`;
+    if (this._syncedProfiles.has(key)) return;
+    this._syncedProfiles.add(key);
+    chrome.storage.local.set({ uc_synced: [...this._syncedProfiles] }).catch(() => {});
+    fetch(`${UC_API}/users/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, username }),
+    }).catch(() => {
+      this._syncedProfiles.delete(key);
+      chrome.storage.local.set({ uc_synced: [...this._syncedProfiles] }).catch(() => {});
+    });
   }
 
   _savePlatformColor(platform, color) {
