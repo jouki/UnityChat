@@ -1639,6 +1639,22 @@ class UnityChat {
 
       $('btn-nickname').disabled = false;
       if (saved > 0) {
+        // Retroactively update all visible messages from this user
+        for (const p of platforms) {
+          const uname = this._platformUsernames[p] || this.config.username;
+          if (!uname) continue;
+          const profile = this.nicknames.get(p, uname);
+          const newColor = profile?.color || this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || null;
+          const newNick = profile?.nickname || null;
+          this.chatEl.querySelectorAll('.un').forEach((un) => {
+            if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
+              if (newColor) un.style.color = newColor;
+              else un.style.color = this._chatUsers.get(`${p}:${uname.toLowerCase()}`)?.color || '';
+              if (newNick) { un.textContent = newNick; un.title = uname; }
+              else { un.textContent = uname; un.title = ''; }
+            }
+          });
+        }
         statusEl.textContent = nick || color
           ? `Uloženo pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}!`
           : `Smazáno pro ${saved} ${saved === 1 ? 'platformu' : 'platformy'}`;
