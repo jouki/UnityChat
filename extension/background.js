@@ -17,6 +17,15 @@
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
 
+// Track side panel state via persistent port connection (survives SW restarts)
+let _panelPort = null;
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'sidepanel') {
+    _panelPort = port;
+    port.onDisconnect.addListener(() => { _panelPort = null; });
+  }
+});
+
 if (HAS_SIDE_PANEL) {
   // Chrome path: clicking the toolbar action opens the native side panel.
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
@@ -102,34 +111,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  // Open side panel from a content script (e.g. the Twitch chat button).
-  // Chrome requires sidePanel.open() to run inside the user gesture — the
-  // gesture propagates through onMessage, so we must call it synchronously
-  // here (no awaits before the open call).
-  if (msg.type === 'OPEN_SIDE_PANEL') {
+  // Toggle side panel from content script (UC button in Twitch/YouTube).
+  // Chrome requires sidePanel.open() to run inside the user gesture chain.
+  if (msg.type === 'TOGGLE_SIDE_PANEL' || msg.type === 'OPEN_SIDE_PANEL') {
     const tabId = sender.tab?.id;
     const windowId = sender.tab?.windowId;
+    const panelIsOpen = _panelPort !== null;
+    const wantClose = msg.type === 'TOGGLE_SIDE_PANEL' && panelIsOpen;
+
     if (HAS_SIDE_PANEL && tabId != null) {
-      chrome.sidePanel.open({ tabId })
-        .then(() => sendResponse({ ok: true }))
-        .catch((e) => {
-          if (windowId != null) {
-            chrome.sidePanel.open({ windowId })
-              .then(() => sendResponse({ ok: true }))
-              .catch((err) => sendResponse({ ok: false, error: err.message }));
-          } else {
-            sendResponse({ ok: false, error: e.message });
-          }
-        });
+      if (wantClose) {
+        // Tell the side panel to close itself via port message
+        if (_panelPort) {
+          _panelPort.postMessage({ type: 'CLOSE' });
+          sendResponse({ ok: true, action: 'closed' });
+        } else {
+          sendResponse({ ok: false, error: 'Panel port not connected' });
+        }
+      } else {
+        chrome.sidePanel.open({ tabId })
+          .then(() => sendResponse({ ok: true, action: 'opened' }))
+          .catch((e) => {
+            if (windowId != null) {
+              chrome.sidePanel.open({ windowId })
+                .then(() => sendResponse({ ok: true, action: 'opened' }))
+                .catch((err) => sendResponse({ ok: false, error: err.message }));
+            } else {
+              sendResponse({ ok: false, error: e.message });
+            }
+          });
+      }
       return true;
     }
-    // Opera (no sidePanel API) → popup window fallback
+    // Opera (no sidePanel API) → popup window fallback (no toggle, just open)
     chrome.windows.create({
       url: 'sidepanel.html',
       type: 'popup',
       width: 420,
       height: 720
-    }).then(() => sendResponse({ ok: true }))
+    }).then(() => sendResponse({ ok: true, action: 'opened' }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

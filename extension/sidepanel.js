@@ -33,8 +33,12 @@ class EmoteManager {
     this.ffzEmotes = new Map();    // name -> url (FFZ global + channel)
     this.twitchNative = new Map(); // name -> url (naučené z IRC)
     this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
+    this.ucEmotes = new Map();     // name -> url (UnityChat custom emotes)
     this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
     this._globalLoaded = false;
+
+    // UnityChat custom emotes (bundled in extension/emotes/)
+    this.ucEmotes.set('CaneBear', chrome.runtime.getURL('emotes/canebear.webp'));
   }
 
   // ---- Loading ----
@@ -161,7 +165,8 @@ class EmoteManager {
 
   _get7tv(word) {
     return this.channel7tv.get(word) || this.global7tv.get(word)
-      || this.bttvEmotes.get(word) || this.ffzEmotes.get(word) || null;
+      || this.bttvEmotes.get(word) || this.ffzEmotes.get(word)
+      || this.ucEmotes.get(word) || null;
   }
 
   /** Vrátí URL emotu z jakéhokoliv zdroje (pro autocomplete preview). */
@@ -169,7 +174,7 @@ class EmoteManager {
     return this.channel7tv.get(name) || this.global7tv.get(name)
       || this.bttvEmotes.get(name) || this.ffzEmotes.get(name)
       || this.twitchNative.get(name) || this.kickNative.get(name)
-      || null;
+      || this.ucEmotes.get(name) || null;
   }
 
   // ---- Učení nativních emotes z příchozích zpráv ----
@@ -215,7 +220,7 @@ class EmoteManager {
     const seen = new Set();
 
     // Pořadí: 7TV channel → 7TV global → BTTV → FFZ → Twitch → Kick
-    const maps = [this.channel7tv, this.global7tv, this.bttvEmotes, this.ffzEmotes, this.twitchNative, this.kickNative];
+    const maps = [this.channel7tv, this.global7tv, this.bttvEmotes, this.ffzEmotes, this.twitchNative, this.kickNative, this.ucEmotes];
     for (const map of maps) {
       for (const name of map.keys()) {
         if (name.toLowerCase().startsWith(lower) && !seen.has(name)) {
@@ -1324,7 +1329,14 @@ class UnityChat {
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
     this._msgHistoryDraft = '';    // unsent text before browsing history
 
-    // Uložit cache okamžitě při zavření/reloadu panelu
+    // Connect port to background — tracks panel open/close state
+    // Port auto-disconnects when panel closes (background detects via onDisconnect)
+    const _port = chrome.runtime.connect({ name: 'sidepanel' });
+    _port.onMessage.addListener((msg) => {
+      if (msg.type === 'CLOSE') window.close();
+    });
+
+    // Uložit cache při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
       if (this._msgCache.length > 0) {
         chrome.storage.local.set({ [this._cacheKey]: this._msgCache });
@@ -1903,6 +1915,7 @@ class UnityChat {
     if (this.emotes.ffzEmotes.has(name)) return 'FFZ';
     if (this.emotes.twitchNative.has(name)) return 'Twitch';
     if (this.emotes.kickNative.has(name)) return 'Kick';
+    if (this.emotes.ucEmotes.has(name)) return 'UChat';
     return '';
   }
 

@@ -69,22 +69,39 @@
   // ---- Hide chat listener (main frame) ----
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
+    let _ucEnteredTheater = false;
+
     function hideYtChat() {
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = 'display:none!important;';
-      // Theater mode for correct player sizing
+      // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
-      if (flexy) {
-        flexy.removeAttribute('is-two-columns_');
-        flexy.setAttribute('theater', '');
-        flexy.setAttribute('full-bleed-player', '');
-        window.dispatchEvent(new Event('resize'));
+      if (flexy && !flexy.hasAttribute('theater')) {
+        const theaterBtn = document.querySelector('.ytp-size-button');
+        if (theaterBtn) { theaterBtn.click(); _ucEnteredTheater = true; }
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
+    }
+
+    function showYtChat() {
+      // Restore #chat
+      const chat = document.querySelector('#chat');
+      if (chat) chat.style.cssText = '';
+      // Restore #panels-full-bleed-container
+      const pfbc = document.querySelector('#panels-full-bleed-container');
+      if (pfbc) pfbc.style.cssText = '';
+      // Exit theater mode via native button (if we entered it)
+      if (_ucEnteredTheater) {
+        const theaterBtn = document.querySelector('.ytp-size-button');
+        if (theaterBtn) theaterBtn.click();
+        _ucEnteredTheater = false;
+      }
+      const chatPanel = document.querySelector('ytd-live-chat-frame');
+      if (chatPanel) delete chatPanel.dataset.ucHidden;
     }
 
     window.addEventListener('message', (e) => {
@@ -130,32 +147,33 @@
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        // 1. Check if chat is already open
-        const chatFrame = document.querySelector('ytd-live-chat-frame');
-        const iframe = chatFrame?.querySelector('#chatframe');
-        const chatIsOpen = iframe && iframe.offsetHeight > 100;
-
-        if (chatIsOpen) {
-          // Chat already open → hide it immediately
-          hideYtChat();
-        } else {
-          // Chat closed → click "Otevřít panel", wait for X, then hide
-          const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
-          if (openPanelBtn && !openPanelBtn.disabled) {
-            openPanelBtn.click();
-            const closeObs = new MutationObserver(() => {
-              const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
-              if (closeBtn) {
-                closeObs.disconnect();
-                hideYtChat();
+        chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
+          if (!resp) return;
+          if (resp.action === 'opened') {
+            // Opening UC → hide vanilla YouTube chat
+            const chatFrame = document.querySelector('ytd-live-chat-frame');
+            const iframe = chatFrame?.querySelector('#chatframe');
+            const chatIsOpen = iframe && iframe.offsetHeight > 100;
+            if (chatIsOpen) {
+              hideYtChat();
+            } else {
+              // Chat closed → click "Otevřít panel", wait, then hide
+              const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+              if (openPanelBtn && !openPanelBtn.disabled) {
+                openPanelBtn.click();
+                const closeObs = new MutationObserver(() => {
+                  const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+                  if (closeBtn) { closeObs.disconnect(); hideYtChat(); }
+                });
+                closeObs.observe(document.body, { childList: true, subtree: true });
+                setTimeout(() => closeObs.disconnect(), 10000);
               }
-            });
-            closeObs.observe(document.body, { childList: true, subtree: true });
-            setTimeout(() => closeObs.disconnect(), 10000);
+            }
+          } else if (resp.action === 'closed') {
+            // Closing UC → show vanilla YouTube chat back
+            showYtChat();
           }
-        }
-        // 2. Open UnityChat side panel
-        chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
+        });
       });
       return btn;
     }
