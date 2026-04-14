@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { streamers } from '../db/schema.js';
+import { streamers, streamerTokens } from '../db/schema.js';
 import { requireExtensionOrigin } from '../lib/extensionOrigin.js';
 import { resolvePlatformHandle, type Platform } from '../lib/platformApi.js';
+import { requireSession } from '../lib/sessionAuth.js';
+import { deleteSession } from '../lib/session.js';
 
 const LookupQuery = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
@@ -207,6 +209,65 @@ export default async function streamerRoutes(app: FastifyInstance) {
       req.log.warn({ err }, 'streamer stub insert race — ignored');
       return { ok: true, created: false };
     }
+  });
+
+  // --- Session-authenticated account endpoints --------------------------
+  // All /streamers/me/* require a valid X-UC-Session header.
+
+  // GET /streamers/me — returns the authed streamer's public profile.
+  app.get('/streamers/me', { preHandler: requireSession }, async (req, reply) => {
+    const streamerId = req.streamerId!;
+    const rows = await db.select(publicFields()).from(streamers).where(eq(streamers.id, streamerId)).limit(1);
+    if (rows.length === 0) {
+      reply.code(404);
+      return { ok: false, error: 'Streamer not found' };
+    }
+    return { ok: true, streamer: rows[0] };
+  });
+
+  // DELETE /streamers/me/platforms/:platform — unlink a platform.
+  // Clears platform-specific columns on the streamer row and deletes the
+  // encrypted token row.
+  app.delete<{ Params: { platform: string } }>(
+    '/streamers/me/platforms/:platform',
+    { preHandler: requireSession },
+    async (req, reply) => {
+      const platform = req.params.platform;
+      if (platform !== 'twitch' && platform !== 'youtube' && platform !== 'kick') {
+        reply.code(400);
+        return { ok: false, error: 'Invalid platform' };
+      }
+      const streamerId = req.streamerId!;
+      const clearFields: Record<string, unknown> = { updatedAt: new Date() };
+      if (platform === 'twitch') {
+        clearFields.twitchLogin = null;
+        clearFields.twitchUserId = null;
+        clearFields.twitchDisplayName = null;
+        clearFields.twitchAvatarUrl = null;
+      } else if (platform === 'youtube') {
+        clearFields.youtubeHandle = null;
+        clearFields.youtubeChannelId = null;
+        clearFields.youtubeTitle = null;
+        clearFields.youtubeAvatarUrl = null;
+      } else {
+        clearFields.kickSlug = null;
+        clearFields.kickUserId = null;
+        clearFields.kickDisplayName = null;
+        clearFields.kickAvatarUrl = null;
+      }
+      await db.update(streamers).set(clearFields).where(eq(streamers.id, streamerId));
+      await db
+        .delete(streamerTokens)
+        .where(and(eq(streamerTokens.streamerId, streamerId), eq(streamerTokens.platform, platform)));
+      return { ok: true };
+    },
+  );
+
+  // POST /streamers/me/logout — invalidate the session.
+  app.post('/streamers/me/logout', { preHandler: requireSession }, async (req) => {
+    const raw = req.headers['x-uc-session'];
+    if (typeof raw === 'string') await deleteSession(raw.trim());
+    return { ok: true };
   });
 }
 

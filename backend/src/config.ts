@@ -13,6 +13,12 @@ const EnvSchema = z.object({
   // Comma-separated list of Chrome extension IDs allowed to hit /streamers/*.
   // e.g. "jkmnofccpdedfjbkglldhenmedbhclhj,devextensionid..."
   ALLOWED_EXTENSION_IDS: z.string().default(''),
+  // Public base URL the extension uses to reach this backend (for OAuth callback
+  // URIs registered with providers). Example: https://api.jouki.cz
+  PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
+  // Twitch OAuth app credentials (register at https://dev.twitch.tv/console/apps)
+  TWITCH_CLIENT_ID: z.string().default(''),
+  TWITCH_CLIENT_SECRET: z.string().default(''),
 });
 
 export const config = EnvSchema.parse(process.env);

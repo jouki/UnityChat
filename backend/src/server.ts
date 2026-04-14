@@ -6,6 +6,7 @@ import nicknameRoutes from './routes/nicknames.js';
 import userRoutes from './routes/users.js';
 import devDownloadRoutes from './routes/dev-download.js';
 import streamerRoutes from './routes/streamers.js';
+import oauthRoutes from './routes/oauth.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 
 const startedAt = Date.now();
@@ -45,6 +46,7 @@ app.get('/health', async () => ({
 await app.register(nicknameRoutes);
 await app.register(userRoutes);
 await app.register(streamerRoutes);
+await app.register(oauthRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
