@@ -236,6 +236,36 @@ body.layout-large .reply-ctx { font-size: 12px; }
   filter: brightness(1.1);
 }
 
+/* "Jsem streamer" button — matches UC button style on YouTube/Twitch */
+.btn-streamer {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--accent-gradient);
+  color: #000;
+  font-weight: 700;
+  font-size: 14px;
+  border: none;
+  border-radius: 6px;
+  box-shadow: var(--accent-glow);
+  cursor: pointer;
+  letter-spacing: 0.3px;
+}
+.btn-streamer:hover { filter: brightness(1.1); }
+.btn-streamer:active { transform: translateY(1px); }
+
+/* Auto-switch loading banner (shown during reconnect to new streamer) */
+.switch-banner {
+  padding: 8px 14px;
+  background: var(--accent-gradient);
+  color: #000;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.switch-banner.hidden { display: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
 /* ---- Nickname setting ---- */
 
 .save-row {
@@ -688,6 +718,11 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .rctx-body {
   color: var(--text-muted);
 }
+.rctx-body img.emote {
+  height: 1.2em;
+  vertical-align: middle;
+  margin: -2px 1px;
+}
 
 .msg .un {
   cursor: pointer;
@@ -711,6 +746,12 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .msg .tx {
   color: var(--text-primary);
 }
+.msg .tx a {
+  color: #e8b84b;
+  text-decoration: none;
+  word-break: break-all;
+}
+.msg .tx a:hover { text-decoration: underline; }
 
 .msg .tx img.emote {
   display: inline-block;

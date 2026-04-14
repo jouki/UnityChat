@@ -233,23 +233,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: async (slug, text) => {
+      func: async (slug, text, replyMeta) => {
         try {
           const ch = await (await fetch('/api/v2/channels/' + encodeURIComponent(slug))).json();
           const cid = ch?.chatroom?.id;
           if (!cid) return { ok: false, error: 'Chatroom nenalezen' };
           const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||'');
+          const body = replyMeta
+            ? {
+                content: text,
+                type: 'reply',
+                metadata: {
+                  original_message: { id: replyMeta.messageId, content: replyMeta.message || '' }
+                }
+              }
+            : { content: text, type: 'message' };
           const r = await fetch('/api/v2/messages/send/' + cid, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
-            body: JSON.stringify({ content: text, type: 'message' })
+            body: JSON.stringify(body)
           });
           if (r.ok) return { ok: true };
           if (r.status === 403) return { ok: false, error: 'Nejsi přihlášen na Kick' };
-          return { ok: false, error: 'HTTP ' + r.status };
+          const bodyText = await r.text().catch(() => '');
+          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}` };
         } catch (e) { return { ok: false, error: e.message }; }
       },
-      args: [msg.slug, msg.text]
+      args: [msg.slug, msg.text, msg.replyMeta || null]
     }).then(results => {
       sendResponse(results?.[0]?.result || { ok: false, error: 'executeScript failed' });
     }).catch(e => sendResponse({ ok: false, error: e.message }));

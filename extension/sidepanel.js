@@ -117,6 +117,71 @@ class EmoteManager {
     return count;
   }
 
+  loadTwitchGlobals() {
+    // Popular Twitch global emotes (ID → token). Pre-populated for autocomplete.
+    const globals = {
+      '25': 'Kappa', '354': '4Head', '86': 'BibleThump', '1902': 'Keepo',
+      '425618': 'LUL', '41': 'Kreygasm', '305954156': 'PogChamp', '88': 'PogChamp',
+      '52': 'SMOrc', '360': 'FailFish', '245': 'ResidentSleeper',
+      '64138': 'SeemsGood', '65': 'FrankerZ', '148793': 'BlessRNG',
+      '171104': 'TriHard', '28087': 'WutFace', '58765': 'NotLikeThis',
+      '81274': 'VoHiYo', '55339': 'KappaHD', '55338': 'KappaPride',
+      '30259': 'HeyGuys', '90076': 'PJSalt', '4339': 'EleGiggle',
+      '114836': 'Jebaited', '115234': 'OpieOP', '68856': 'MingLee',
+      '74510': 'OMGScoots', '307609315': 'Prayge', '196892': 'TwitchUnity',
+      '160394': 'PunchTrees', '120232': 'MrDestructoid', '69': 'PJSugar',
+      '33': 'DansGame', '9803': 'CoolCat', '34': 'GingerPower',
+      '56': 'BatChest', '57': 'SwiftRage', '58': 'StoneLightning',
+      '59': 'TheRinger', '80': 'OpieOP', '81': 'DBstyle',
+      '112290': 'TheTarFu', '90': 'HassanChop', '305954156': 'PogChamp'
+    };
+    for (const [id, name] of Object.entries(globals)) {
+      if (!this.twitchNative.has(name)) {
+        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+      }
+    }
+  }
+
+  async loadTwitchChannel(channelLogin) {
+    let count = 0;
+    try {
+      const resp = await fetch('https://gql.twitch.tv/gql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+        },
+        body: JSON.stringify({
+          query: `query($login: String!) {
+            user(login: $login) {
+              subscriptionProducts {
+                emotes { id token }
+              }
+            }
+          }`,
+          variables: { login: channelLogin }
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const products = data.data?.user?.subscriptionProducts || [];
+        for (const product of products) {
+          for (const e of (product.emotes || [])) {
+            if (e.token && !this.twitchNative.has(e.token)) {
+              this.twitchNative.set(e.token,
+                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`);
+              count++;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Twitch] Channel emotes error:', err);
+    }
+    console.log(`[Twitch] ${count} channel emotes loaded`);
+    return count;
+  }
+
   async loadFFZ(twitchUserId) {
     let count = 0;
     const parseSet = (sets) => {
@@ -250,13 +315,21 @@ class EmoteManager {
     const out = [];
     for (const seg of segments) {
       if (seg.type === 'emote') {
-        out.push(seg);
+        // 3rd party (7TV/BTTV/FFZ) overrides platform emotes
+        const thirdParty = this.channel7tv.get(seg.value) || this.global7tv.get(seg.value)
+          || this.bttvEmotes.get(seg.value) || this.ffzEmotes.get(seg.value);
+        if (thirdParty) {
+          out.push({ type: 'emote', value: seg.value, url: thirdParty, zw: this.zeroWidth.has(seg.value) });
+        } else {
+          out.push(seg);
+        }
         continue;
       }
-      // Rozdělit text na slova, zachovat mezery
+      // Text: 7TV/BTTV/FFZ → platform native → UC custom
       const parts = seg.value.split(/(\s+)/);
       for (const part of parts) {
-        const url = this._get7tv(part);
+        const url = this._get7tv(part)
+          || this.twitchNative.get(part) || this.kickNative.get(part);
         if (url) {
           out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
@@ -452,7 +525,7 @@ class EmoteManager {
         // Whitespace between base and ZW emote — skip (don't close stack)
         if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        out.push(this._eh(s.value));
+        out.push(this._linkify(s.value));
         continue;
       }
       const alt = this._ea(s.value);
@@ -476,6 +549,23 @@ class EmoteManager {
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+  }
+
+  _linkify(s) {
+    const urlRe = /https?:\/\/[^\s<>'")\]]+/g;
+    let last = 0;
+    let out = '';
+    let m;
+    while ((m = urlRe.exec(s)) !== null) {
+      if (m.index > last) out += this._eh(s.substring(last, m.index));
+      const url = m[0].replace(/[.,;:!?]+$/, '');
+      urlRe.lastIndex = m.index + url.length;
+      out += `<a href="${this._ea(url)}" target="_blank" rel="noopener">${this._eh(url)}</a>`;
+      last = m.index + url.length;
+    }
+    if (last === 0) return this._eh(s);
+    if (last < s.length) out += this._eh(s.substring(last));
+    return out;
   }
 
   _ea(s) {
@@ -908,8 +998,28 @@ class KickProvider {
       if (data.type !== 'message' && data.type !== 'reply') return;
 
       const username = data.sender?.username || 'Unknown';
+      const senderId = data.sender?.id || null;
       const color = data.sender?.identity?.color || '#53fc18';
-      const content = data.content || '';
+      let content = data.content || '';
+
+      // Parse native Kick reply metadata
+      let replyTo = null;
+      if (data.type === 'reply' && data.metadata) {
+        const origMsg = data.metadata.original_message;
+        const origSender = data.metadata.original_sender;
+        if (origMsg && origSender) {
+          replyTo = {
+            id: origMsg.id,
+            username: origSender.username,
+            message: origMsg.content || null,
+            platform: 'kick'
+          };
+          // Strip leading @username prefix if Kick added one
+          const at = `@${origSender.username}`;
+          if (content.startsWith(at + ' ')) content = content.substring(at.length + 1);
+          else if (content.startsWith(at)) content = content.substring(at.length);
+        }
+      }
 
       const badges = [];
       if (data.sender?.is_broadcaster) badges.push('\uD83C\uDFA4');
@@ -919,12 +1029,14 @@ class KickProvider {
       this.onMessage?.({
         platform: 'kick',
         username,
+        senderId,
         kickContent: content, // surový HTML obsah pro EmoteManager
         message: this._textOnly(content), // plain text fallback
         color,
         badges,
         timestamp: Date.now(),
-        id: data.id || crypto.randomUUID()
+        id: data.id || crypto.randomUUID(),
+        replyTo
       });
     } catch {}
   }
@@ -1433,12 +1545,14 @@ class UnityChat {
     // Load emotes + badges FIRST so cached messages render with correct emotes/badges.
     // Use Promise.allSettled — one failing source shouldn't block the rest.
     try {
+      this.emotes.loadTwitchGlobals();
       await this.emotes.loadGlobal();
       if (this.config._roomId) {
         await Promise.allSettled([
           this.emotes.loadChannel('twitch', this.config._roomId),
           this.emotes.loadBTTV(this.config._roomId),
           this.emotes.loadFFZ(this.config._roomId),
+          this.emotes.loadTwitchChannel(this.config.channel),
           this._loadTwitchBadges(this.config._roomId)
         ]);
       }
@@ -1708,6 +1822,14 @@ class UnityChat {
       this.msgCount = 0;
     });
 
+    // "Jsem streamer" button — opens streamer.html in a new tab
+    const imStreamerBtn = $('btn-im-streamer');
+    if (imStreamerBtn) {
+      imStreamerBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
+      });
+    }
+
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {
       const on = $('chk-devmode').checked;
@@ -1803,16 +1925,21 @@ class UnityChat {
       }
       // Message history (ArrowUp/Down when no autocomplete is active)
       if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
-        e.preventDefault();
-        if (this._msgHistoryIdx === -1) {
-          // Start browsing — save current draft
+        if (this._msgHistoryIdx !== -1) {
+          e.preventDefault();
+          if (this._msgHistoryIdx > 0) this._msgHistoryIdx--;
+          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+          this.msgInput.setSelectionRange(0, 0);
+          return;
+        }
+        if (this._isCursorOnFirstLine()) {
+          e.preventDefault();
           this._msgHistoryDraft = this.msgInput.value;
           this._msgHistoryIdx = this._msgHistory.length - 1;
-        } else if (this._msgHistoryIdx > 0) {
-          this._msgHistoryIdx--;
+          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+          this.msgInput.setSelectionRange(0, 0);
+          return;
         }
-        this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-        return;
       }
       if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
         e.preventDefault();
@@ -1820,10 +1947,11 @@ class UnityChat {
           this._msgHistoryIdx++;
           this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
         } else {
-          // Past the end — restore draft
           this._msgHistoryIdx = -1;
           this.msgInput.value = this._msgHistoryDraft;
         }
+        const len = this.msgInput.value.length;
+        this.msgInput.setSelectionRange(len, len);
         return;
       }
       if (e.key === 'Escape') {
@@ -2030,6 +2158,30 @@ class UnityChat {
     if (el) el.classList.add('hidden');
   }
 
+  // ---- Cursor line detection ----
+
+  _isCursorOnFirstLine() {
+    const ta = this.msgInput;
+    if (ta.selectionStart === 0) return true;
+    if (!ta.value) return true;
+    if (!this._lineMirror) {
+      this._lineMirror = document.createElement('div');
+      this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
+      document.body.appendChild(this._lineMirror);
+    }
+    const m = this._lineMirror;
+    const cs = getComputedStyle(ta);
+    m.style.width = ta.clientWidth + 'px';
+    m.style.font = cs.font;
+    m.style.padding = cs.padding;
+    m.style.boxSizing = cs.boxSizing;
+    m.style.letterSpacing = cs.letterSpacing;
+    m.textContent = 'X';
+    const lineH = m.offsetHeight;
+    m.textContent = ta.value.substring(0, ta.selectionStart);
+    return m.offsetHeight <= lineH;
+  }
+
   // ---- Odesílání zpráv ----
 
   async _detectLoop() {
@@ -2099,9 +2251,177 @@ class UnityChat {
         if (el) el.value = resp.username;
         this._saveConfig();
       }
+
+      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano
+      if (resp?.platform && tab.url) {
+        this._checkAutoSwitch(resp.platform, tab.url).catch(() => {});
+      }
     } catch {
       this._setActivePlatform(null);
     }
+  }
+
+  // ---- Auto-switch: detect current stream from tab URL, look up in
+  // streamer directory, re-point UnityChat to all 3 channels if known. ----
+
+  _parseChannelFromUrl(url, platform) {
+    try {
+      const u = new URL(url);
+      const parts = u.pathname.toLowerCase().split('/').filter(Boolean);
+      if (platform === 'twitch' && u.hostname.includes('twitch.tv')) {
+        // Accept /{channel}, /popout/{channel}/..., skip directory/videos/etc.
+        const excluded = new Set(['directory', 'videos', 'search', 'p', 'turbo', 'prime', 'downloads', 'subscriptions', 'settings']);
+        if (parts[0] === 'popout' && parts[1]) return parts[1];
+        if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_]+$/.test(parts[0])) return parts[0];
+      }
+      if (platform === 'kick' && u.hostname.includes('kick.com')) {
+        const excluded = new Set(['categories', 'category', 'browse', 'following', 'subscriptions', 'search', 'dashboard']);
+        if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_-]+$/.test(parts[0])) return parts[0];
+      }
+      if (platform === 'youtube' && (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be'))) {
+        // Only @handle pages for now — /watch pages need content-script resolution.
+        if (parts[0]?.startsWith('@')) return parts[0].substring(1);
+      }
+    } catch {}
+    return null;
+  }
+
+  async _lookupStreamer(platform, handle) {
+    if (!this._streamerCache) this._streamerCache = new Map();
+    const key = `${platform}:${handle}`;
+    if (this._streamerCache.has(key)) return this._streamerCache.get(key);
+    try {
+      const resp = await fetch(`${UC_API}/streamers/lookup?platform=${platform}&handle=${encodeURIComponent(handle)}`);
+      if (resp.status === 404) {
+        this._streamerCache.set(key, null);
+        this._trimStreamerCache();
+        return null;
+      }
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const streamer = data.found ? data.streamer : null;
+      this._streamerCache.set(key, streamer);
+      this._trimStreamerCache();
+      return streamer;
+    } catch {
+      return null;
+    }
+  }
+
+  _trimStreamerCache() {
+    if (this._streamerCache.size > 20) {
+      const firstKey = this._streamerCache.keys().next().value;
+      this._streamerCache.delete(firstKey);
+    }
+  }
+
+  _sendSeenPing(platform, handle) {
+    // Fire-and-forget. Chat activation signal that creates a stub in DB.
+    fetch(`${UC_API}/streamers/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, handle }),
+    }).catch(() => {});
+  }
+
+  async _checkAutoSwitch(platform, tabUrl) {
+    if (!platform || !tabUrl) return;
+    const handle = this._parseChannelFromUrl(tabUrl, platform);
+    if (!handle) return;
+
+    // Skip if the handle already matches our current config for this platform.
+    const currentConfigHandle = this._getConfiguredHandle(platform);
+    if (currentConfigHandle === handle && this._autoSwitchedTo === handle) return;
+
+    // Cancel any in-flight switch: a new URL change trumps older work.
+    this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
+    const mySeq = this._autoSwitchSeq;
+
+    const streamer = await this._lookupStreamer(platform, handle);
+    if (mySeq !== this._autoSwitchSeq) return; // newer switch in progress, abort
+
+    if (streamer) {
+      // Known streamer — switch all three chats.
+      await this._performAutoSwitch(streamer, mySeq);
+      // Fire seen ping so DB gets viewer activity (helps with handle backfill).
+      this._sendSeenPing(platform, handle);
+    } else {
+      // Unknown streamer — fire seen ping (creates stub). Don't re-map channels:
+      // only the current platform is "known" (from URL), others stay as-is.
+      this._sendSeenPing(platform, handle);
+    }
+  }
+
+  _getConfiguredHandle(platform) {
+    if (platform === 'twitch') return (this.config.channel || '').toLowerCase();
+    if (platform === 'youtube') return (this.config.ytChannel || '').toLowerCase().replace(/^@/, '');
+    if (platform === 'kick') return (this.config.kickChannel || this.config.channel || '').toLowerCase();
+    return '';
+  }
+
+  async _performAutoSwitch(streamer, mySeq) {
+    const newTwitch = streamer.twitchLogin || '';
+    const newYoutube = streamer.youtubeHandle || '';
+    const newKick = streamer.kickSlug || '';
+
+    // Determine primary "channel" (used in places that expect a single channel name).
+    const primary = newTwitch || newKick || newYoutube;
+    if (!primary) return;
+
+    const changed =
+      (this.config.channel || '').toLowerCase() !== newTwitch.toLowerCase() ||
+      (this.config.ytChannel || '').toLowerCase() !== newYoutube.toLowerCase() ||
+      (this.config.kickChannel || '').toLowerCase() !== newKick.toLowerCase();
+    if (!changed) {
+      this._autoSwitchedTo = primary;
+      return;
+    }
+
+    this._showSwitchBanner(streamer);
+
+    this.config.channel = newTwitch || primary;
+    this.config.ytChannel = newYoutube || '';
+    this.config.kickChannel = newKick || '';
+    this._saveConfig();
+    this._refreshSettingsInputs();
+
+    // Disconnect current, reconnect with new channels. Mid-switch aborts
+    // by returning early if mySeq is stale.
+    this._disconnectAll();
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+    this._connectAll();
+
+    this._autoSwitchedTo = primary;
+    setTimeout(() => {
+      if (this._autoSwitchSeq === mySeq) this._hideSwitchBanner();
+    }, 1500);
+  }
+
+  _refreshSettingsInputs() {
+    const map = { 'input-channel': this.config.channel, 'input-yt-channel': this.config.ytChannel, 'input-kick-channel': this.config.kickChannel };
+    for (const [id, val] of Object.entries(map)) {
+      const el = document.getElementById(id);
+      if (el) el.value = val || '';
+    }
+  }
+
+  _showSwitchBanner(streamer) {
+    let banner = document.getElementById('switch-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'switch-banner';
+      banner.className = 'switch-banner';
+      const container = document.getElementById('chat') || document.body;
+      container.parentNode.insertBefore(banner, container);
+    }
+    const name = streamer.twitchDisplayName || streamer.twitchLogin || streamer.youtubeTitle || streamer.kickDisplayName || streamer.kickSlug || '?';
+    banner.textContent = `Připojuji se k streamerovi ${name}...`;
+    banner.classList.remove('hidden');
+  }
+
+  _hideSwitchBanner() {
+    const banner = document.getElementById('switch-banner');
+    if (banner) banner.classList.add('hidden');
   }
 
   async _injectContentScript(tab) {
@@ -2457,8 +2777,8 @@ class UnityChat {
 
   // ---- Odpovědi na zprávy ----
 
-  _setReply(platform, username, messageId, message) {
-    this._reply = { platform, username, messageId, message };
+  _setReply(platform, username, messageId, message, senderId) {
+    this._reply = { platform, username, messageId, message, senderId };
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -2498,6 +2818,21 @@ class UnityChat {
       return;
     }
 
+    // Send protection: if the active tab's channel differs from the configured
+    // channel for this platform, refuse to send. Auto-switch should normally
+    // fix this transparently — this is a safety net for the transient window.
+    try {
+      const tab = await this._getActiveBrowserTab();
+      if (tab?.url) {
+        const tabHandle = this._parseChannelFromUrl(tab.url, this.activePlatform);
+        const configured = this._getConfiguredHandle(this.activePlatform);
+        if (tabHandle && configured && tabHandle !== configured) {
+          this._sys(`Nelze odeslat: jsi na kanálu ${tabHandle}, UnityChat je nastaven pro ${configured}.`);
+          return;
+        }
+      }
+    } catch {}
+
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
@@ -2514,12 +2849,16 @@ class UnityChat {
     this.msgInput.style.height = 'auto';
     this._clearReply();
 
-    // Optimistic UI: show message instantly (include @mention for cross-platform reply)
+    // Optimistic UI: show message instantly
+    // Native reply support: Twitch (GQL) + Kick (API reply metadata).
+    // For cross-platform or YouTube → fallback to @mention prefix.
     const username = this._platformUsernames[platform] || this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
+    const hasNativeReply = reply && reply.platform === platform
+      && (platform === 'twitch' || platform === 'kick');
     let displayText = text;
-    if (reply && reply.platform !== platform) {
-      const at = `@${reply.username}`;
+    if (reply && !hasNativeReply) {
+      const at = reply.username.startsWith('@') ? reply.username : `@${reply.username}`;
       if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
     }
     this._lastSentText = text;
@@ -2543,8 +2882,8 @@ class UnityChat {
       if (!tab) { this._sys('Žádný aktivní tab'); return; }
 
       let resp;
-      // Native reply only on Twitch (GQL threading).
-      // YouTube/Kick don't support native reply → @mention prefix.
+      // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
+      // YouTube → @mention prefix fallback.
       if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
@@ -2552,6 +2891,15 @@ class UnityChat {
           parentMsgId: reply.messageId,
           username: reply.username,
           broadcasterId: this.config._roomId || null
+        });
+      } else if (reply?.messageId && reply.platform === platform && platform === 'kick') {
+        resp = await chrome.tabs.sendMessage(tab.id, {
+          type: 'SEND_CHAT',
+          text: markedText,
+          replyMeta: {
+            messageId: reply.messageId,
+            message: reply.message || ''
+          }
         });
       } else {
         let sendText = markedText;
@@ -2617,6 +2965,7 @@ class UnityChat {
       this.emotes.loadChannel('twitch', id);
       this.emotes.loadBTTV(id);
       this.emotes.loadFFZ(id);
+      this.emotes.loadTwitchChannel(this.config.channel);
       this._loadTwitchBadges(id);
     };
 
@@ -2653,9 +3002,24 @@ class UnityChat {
     const lastCached = this._msgCache[this._msgCache.length - 1];
     if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
 
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) return;
+
     try {
+      // Only scrape tabs that match the configured channel — otherwise we'd
+      // import messages from an unrelated Twitch stream the user happens to have open.
       const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
       for (const tab of tabs) {
+        // Path-based match (case-insensitive — Twitch handles are not case-sensitive).
+        // Accept: /{channel}, /{channel}/..., /popout/{channel}/...
+        let isChannelTab = false;
+        try {
+          const parts = new URL(tab.url || '').pathname.toLowerCase().split('/').filter(Boolean);
+          isChannelTab = parts[0] === channel
+            || (parts[0] === 'popout' && parts[1] === channel);
+        } catch {}
+        if (!isChannelTab) continue;
+
         const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
         if (!resp?.ok || !resp.messages?.length) continue;
 
@@ -2929,9 +3293,23 @@ class UnityChat {
       const replyRawName = (msg.replyTo.username || '').replace(/^@/, '');
       const replyProfile = this.nicknames.get(msg.platform, replyRawName);
       const replyDisplayName = replyProfile?.nickname || replyRawName;
+      let replyBodyHtml = '';
+      if (msg.replyTo.message) {
+        // Render emotes in reply context using platform-specific parser.
+        // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
+        let body;
+        if (msg.platform === 'kick') {
+          body = this.emotes.renderKick(msg.replyTo.message);
+        } else if (msg.platform === 'twitch') {
+          body = this.emotes.renderTwitch(msg.replyTo.message, null);
+        } else {
+          body = this.emotes.renderPlain(msg.replyTo.message);
+        }
+        replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
+      }
       ctx.innerHTML =
         `&#8617; <span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` +
-        (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
+        replyBodyHtml;
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -3106,7 +3484,7 @@ class UnityChat {
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._setReply(msg.platform, msg.username, msg.id, msg.message);
+      this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
@@ -3216,6 +3594,17 @@ class UnityChat {
         }
       }
       if (bdg.children.length && un) el.insertBefore(bdg, un);
+    }
+
+    // Re-render message text with emotes from IRC echo
+    if (el && realMsg.platform === 'twitch' && realMsg.twitchEmotes) {
+      const tx = el.querySelector('.tx');
+      if (tx) {
+        // Learn new emotes first so renderSegments can find them
+        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
+        const emotesTag = realMsg.replyTo ? null : realMsg.twitchEmotes;
+        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag);
+      }
     }
 
     // Update cache entry: replace optimistic data with real data

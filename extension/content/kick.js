@@ -33,7 +33,7 @@
     }
 
     if (msg.type === 'SEND_CHAT') {
-      sendChat(msg.text)
+      sendChat(msg.text, msg.replyMeta || null)
         .then(() => sendResponse({ ok: true }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
@@ -56,13 +56,15 @@
     return null;
   }
 
-  async function sendChat(text) {
+  async function sendChat(text, replyMeta) {
+    // Native Kick replies vždy přes API (DOM send neumí reply metadata).
+    if (replyMeta) return sendViaAPI(text, replyMeta);
     const input = findInput();
     if (input) {
       return sendViaDOM(input, text);
     }
     // Chat zavřený → odeslat přes Kick API (bez otevírání panelu)
-    return sendViaAPI(text);
+    return sendViaAPI(text, null);
   }
 
   async function sendViaDOM(input, text) {
@@ -91,12 +93,12 @@
     }));
   }
 
-  async function sendViaAPI(text) {
+  async function sendViaAPI(text, replyMeta) {
     const slug = window.location.pathname.replace(/^\//, '').split(/[/?#]/)[0];
     if (!slug) throw new Error('Kick kanál nenalezen v URL');
 
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: 'KICK_SEND', slug, text }, (resp) => {
+      chrome.runtime.sendMessage({ type: 'KICK_SEND', slug, text, replyMeta }, (resp) => {
         if (resp?.ok) resolve();
         else reject(new Error(resp?.error || 'Odeslání selhalo'));
       });
