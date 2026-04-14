@@ -181,7 +181,23 @@ async function completeCallback(
     reply.type('text/html');
     return errorPage('Extension ID není v allowlistu.');
   }
-  return reply.redirect(`${returnUrl}#session=${encodeURIComponent(sessionId)}`);
+  // Some ad-blockers and Chrome security policies drop HTTP 302 redirects to
+  // chrome-extension://. Render a tiny HTML page that performs a JS navigation
+  // + provides a manual fallback link in case that's blocked too.
+  const target = `${returnUrl}#session=${encodeURIComponent(sessionId)}`;
+  const safeTarget = target.replace(/[<>&"']/g, (c) =>
+    ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c] || c),
+  );
+  reply.type('text/html');
+  return `<!doctype html><meta charset="utf-8"><title>UnityChat — hotovo</title>
+<style>body{font-family:system-ui;padding:40px;max-width:600px;margin:auto;color:#eee;background:#1a1a1a;text-align:center}
+h1{color:#ff8c00}a{color:#ffc800}</style>
+<h1>UnityChat — přihlášení proběhlo</h1>
+<p>Vracíme vás zpátky do extension…</p>
+<p>Pokud se stránka neotevře automaticky, <a id="lnk" href="${safeTarget}">klikněte sem</a>.</p>
+<script>
+try { location.replace(${JSON.stringify(target)}); } catch (e) { document.getElementById('lnk').click(); }
+</script>`;
 }
 
 export default async function oauthRoutes(app: FastifyInstance) {
