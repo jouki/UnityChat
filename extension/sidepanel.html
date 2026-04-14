@@ -11,6 +11,32 @@
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
     <div id="header-actions">
+      <div id="update-wrap" class="hidden">
+        <button id="btn-update" title="Nová verze k dispozici" aria-label="Nová verze">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d="M12 2v10l4-4 1.41 1.41L12 14.83 6.59 9.41 8 8l4 4V2h0zM20 18v2H4v-2h16z"/>
+          </svg>
+          <span class="update-dot" aria-hidden="true"></span>
+        </button>
+        <div id="update-tooltip" class="update-tooltip">
+          <div class="ut-title">Nová verze k dispozici</div>
+          <div class="ut-version">v<span id="ut-version-num">?</span></div>
+          <div class="ut-text">
+            Můžeš updatovat pomocí <code>update.bat</code> ve složce extensionu,
+            nebo si stáhni <a id="ut-download-link" href="https://jouki.cz/download/unitychat.zip" target="_blank" rel="noopener">novou verzi</a>.
+          </div>
+          <div class="ut-explorer" aria-hidden="true">
+            <div class="ut-exp-path">&#128193; extension</div>
+            <ul class="ut-exp-list">
+              <li>&#128196; background.js</li>
+              <li>&#128196; sidepanel.html</li>
+              <li>&#128196; sidepanel.js</li>
+              <li>&#128196; manifest.json</li>
+              <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
       <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
       <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
       <button id="btn-settings" title="Nastavení">&#9881;</button>
@@ -20,21 +46,21 @@
   <!-- Settings Panel -->
   <div id="settings" class="hidden">
     <details class="settings-section" id="channels-section">
-      <summary>Kanály</summary>
+      <summary>
+        <span>Kanály</span>
+        <button id="btn-im-streamer" class="btn-streamer-inline" title="Otevřít stránku pro přihlášení streamera">Jsem streamer</button>
+      </summary>
       <div class="setting-row">
         <label for="input-channel">Twitch</label>
-        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false" autocomplete="off">
+        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
       </div>
       <div class="setting-row">
         <label for="input-kick-channel">Kick</label>
-        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false" autocomplete="off">
+        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
       </div>
       <div class="setting-row">
         <label for="input-yt-channel">YouTube</label>
-        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off">
-      </div>
-      <div class="setting-row">
-        <button id="btn-im-streamer" class="btn-streamer" title="Otevřít stránku pro přihlášení streamera">Jsem streamer</button>
+        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
       </div>
     </details>
     <div class="setting-row">
@@ -62,22 +88,8 @@
         <option value="large">Velká</option>
       </select>
     </div>
-    <div class="setting-row platforms">
-      <label class="platform-check">
-        <input type="checkbox" id="chk-twitch" checked>
-        <span class="badge tw">TW</span> Twitch
-      </label>
-      <label class="platform-check">
-        <input type="checkbox" id="chk-youtube" checked>
-        <span class="badge yt">YT</span> YouTube
-      </label>
-      <label class="platform-check">
-        <input type="checkbox" id="chk-kick" checked>
-        <span class="badge ki">KI</span> Kick
-      </label>
-    </div>
     <div class="setting-row actions">
-      <button id="btn-connect" class="btn-primary">Připojit</button>
+      <button id="btn-connect" class="btn-primary" title="Znovu se připojit ke všem dostupným chatům aktuálního streamera">Připojit</button>
       <button id="btn-disconnect">Odpojit</button>
       <button id="btn-clear">Vyčistit chat</button>
     </div>
@@ -86,7 +98,12 @@
         <input type="checkbox" id="chk-devmode">
         Dev mode
       </label>
-      <a href="https://ko-fi.com/jouki" target="_blank" rel="noopener" class="kofi-link" title="Support on Ko-fi">☕ Kup mi Ko-fičko</a>
+      <div class="author-stack">
+        <a href="https://jouki.cz" target="_blank" rel="noopener" class="author-link" title="Autor: Jouki — jouki.cz">
+          <span class="author-by">by</span> <span class="author-name">Jouki</span>
+        </a>
+        <a href="https://ko-fi.com/jouki" target="_blank" rel="noopener" class="kofi-link" title="Support on Ko-fi">☕ Kup mi Ko-fičko</a>
+      </div>
     </div>
     <div id="dev-tools" class="setting-row dev-tools hidden">
       <button id="btn-dump-cache">Stáhnout message cache</button>

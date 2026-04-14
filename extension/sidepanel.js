@@ -1445,6 +1445,7 @@ class UnityChat {
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
+    this._isModOnChannel = false; // viewer has moderator/broadcaster badge on current Twitch channel
     this._platformColors = {};    // per-platform user color (from IRC/API)
     this._syncedProfiles = new Set(); // platform:username pairs already synced with API
     this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
@@ -1567,6 +1568,38 @@ class UnityChat {
     this._connectAll();
     console.log('[UC] init: connected, starting detect loop');
     this._detectLoop();
+    // Fire-and-forget update check against the public landing page manifest.
+    this._checkForUpdate().catch(() => {});
+  }
+
+  async _checkForUpdate() {
+    try {
+      const current = chrome.runtime.getManifest().version;
+      const resp = await fetch('https://jouki.cz/download/manifest.json', { cache: 'no-store' });
+      if (!resp.ok) return;
+      const remote = await resp.json();
+      const latest = remote?.version;
+      if (!latest || !this._isNewerVersion(latest, current)) return;
+      // Show update indicator
+      const wrap = document.getElementById('update-wrap');
+      const num = document.getElementById('ut-version-num');
+      if (wrap) wrap.classList.remove('hidden');
+      if (num) num.textContent = latest;
+    } catch {}
+  }
+
+  _isNewerVersion(remote, current) {
+    const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const a = parse(remote);
+    const b = parse(current);
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
   }
 
   // ---- Config ----
@@ -1589,9 +1622,9 @@ class UnityChat {
   _setupUI() {
     const $ = (id) => document.getElementById(id);
 
-    $('input-channel').value = this.config.channel;
-    $('input-kick-channel').value = this.config.kickChannel || this.config.channel;
-    $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
+    $('input-channel').value = this.config.channel || '';
+    $('input-kick-channel').value = this.config.kickChannel || '';
+    $('input-yt-channel').value = this.config.ytChannel || '';
     $('input-username').value = this.config.username || '';
     // Pre-populate nickname from cache
     if (this.config.username) {
@@ -1694,9 +1727,11 @@ class UnityChat {
       }
       this._saveConfig();
     });
-    $('chk-twitch').checked = this.config.twitch;
-    $('chk-youtube').checked = this.config.youtube;
-    $('chk-kick').checked = this.config.kick;
+    // Platform checkboxes were removed — force all three on so cached configs
+    // with stale `false` values don't silently disable a platform.
+    this.config.twitch = true;
+    this.config.youtube = true;
+    this.config.kick = true;
 
     $('btn-popout').addEventListener('click', () => {
       chrome.windows.create({
@@ -1803,13 +1838,10 @@ class UnityChat {
     });
 
     $('btn-connect').addEventListener('click', () => {
-      this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
-      this.config.kickChannel = $('input-kick-channel').value.trim() || this.config.channel;
-      this.config.ytChannel = $('input-yt-channel').value.trim() || this.config.channel;
+      this.config.channel = $('input-channel').value.trim();
+      this.config.kickChannel = $('input-kick-channel').value.trim();
+      this.config.ytChannel = $('input-yt-channel').value.trim();
       this.config.username = $('input-username').value.trim();
-      this.config.twitch = $('chk-twitch').checked;
-      this.config.youtube = $('chk-youtube').checked;
-      this.config.kick = $('chk-kick').checked;
       this._saveConfig();
       this._disconnectAll();
       this.emotes.channel7tv.clear();
@@ -1822,10 +1854,13 @@ class UnityChat {
       this.msgCount = 0;
     });
 
-    // "Jsem streamer" button — opens streamer.html in a new tab
+    // "Jsem streamer" button — opens streamer.html in a new tab.
+    // Stop propagation so click doesn't toggle the <details> section.
     const imStreamerBtn = $('btn-im-streamer');
     if (imStreamerBtn) {
-      imStreamerBtn.addEventListener('click', () => {
+      imStreamerBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
       });
     }
@@ -2252,9 +2287,12 @@ class UnityChat {
         this._saveConfig();
       }
 
-      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano
-      if (resp?.platform && tab.url) {
-        this._checkAutoSwitch(resp.platform, tab.url).catch(() => {});
+      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano.
+      // Pokud content script nereaguje, detekujeme platformu z URL — auto-switch
+      // má fungovat i bez funkčního content scriptu.
+      if (tab.url) {
+        const p = resp?.platform || this._detectPlatformFromUrl(tab.url);
+        if (p) this._checkAutoSwitch(p, tab.url).catch(() => {});
       }
     } catch {
       this._setActivePlatform(null);
@@ -2267,18 +2305,32 @@ class UnityChat {
   _parseChannelFromUrl(url, platform) {
     try {
       const u = new URL(url);
+      const host = u.hostname.toLowerCase();
       const parts = u.pathname.toLowerCase().split('/').filter(Boolean);
-      if (platform === 'twitch' && u.hostname.includes('twitch.tv')) {
-        // Accept /{channel}, /popout/{channel}/..., skip directory/videos/etc.
-        const excluded = new Set(['directory', 'videos', 'search', 'p', 'turbo', 'prime', 'downloads', 'subscriptions', 'settings']);
-        if (parts[0] === 'popout' && parts[1]) return parts[1];
+      if (platform === 'twitch') {
+        // Only main www.twitch.tv / m.twitch.tv — skip dev.twitch.tv, id.twitch.tv,
+        // api.twitch.tv, help.twitch.tv, etc. (those have non-channel paths that
+        // would leak false-positive stub records into the directory).
+        if (host !== 'www.twitch.tv' && host !== 'm.twitch.tv' && host !== 'twitch.tv') return null;
+        const excluded = new Set([
+          'directory', 'videos', 'search', 'p', 'turbo', 'prime', 'downloads',
+          'subscriptions', 'settings', 'login', 'signup', 'logout', 'friends',
+          'wallet', 'inventory', 'drops', 'moderator', 'user', 'videoproducer',
+        ]);
+        if (parts[0] === 'popout' && parts[1] && /^[a-z0-9_]+$/.test(parts[1])) return parts[1];
         if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_]+$/.test(parts[0])) return parts[0];
       }
-      if (platform === 'kick' && u.hostname.includes('kick.com')) {
-        const excluded = new Set(['categories', 'category', 'browse', 'following', 'subscriptions', 'search', 'dashboard']);
+      if (platform === 'kick') {
+        if (host !== 'kick.com' && host !== 'www.kick.com') return null;
+        const excluded = new Set([
+          'categories', 'category', 'browse', 'following', 'subscriptions',
+          'search', 'dashboard', 'settings', 'login', 'signup', 'help',
+          'community-guidelines', 'careers', 'about', 'terms', 'privacy',
+        ]);
         if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_-]+$/.test(parts[0])) return parts[0];
       }
-      if (platform === 'youtube' && (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be'))) {
+      if (platform === 'youtube') {
+        if (!host.endsWith('youtube.com') && host !== 'youtu.be') return null;
         // Only @handle pages for now — /watch pages need content-script resolution.
         if (parts[0]?.startsWith('@')) return parts[0].substring(1);
       }
@@ -2324,6 +2376,16 @@ class UnityChat {
     }).catch(() => {});
   }
 
+  _detectPlatformFromUrl(url) {
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes('twitch.tv')) return 'twitch';
+      if (u.hostname.includes('kick.com')) return 'kick';
+      if (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be')) return 'youtube';
+    } catch {}
+    return null;
+  }
+
   async _checkAutoSwitch(platform, tabUrl) {
     if (!platform || !tabUrl) return;
     const handle = this._parseChannelFromUrl(tabUrl, platform);
@@ -2338,60 +2400,106 @@ class UnityChat {
     const mySeq = this._autoSwitchSeq;
 
     const streamer = await this._lookupStreamer(platform, handle);
-    if (mySeq !== this._autoSwitchSeq) return; // newer switch in progress, abort
+    if (mySeq !== this._autoSwitchSeq) return;
 
-    if (streamer) {
-      // Known streamer — switch all three chats.
-      await this._performAutoSwitch(streamer, mySeq);
-      // Fire seen ping so DB gets viewer activity (helps with handle backfill).
-      this._sendSeenPing(platform, handle);
-    } else {
-      // Unknown streamer — fire seen ping (creates stub). Don't re-map channels:
-      // only the current platform is "known" (from URL), others stay as-is.
-      this._sendSeenPing(platform, handle);
-    }
+    // Known streamer → full cross-platform map. Unknown streamer → only the
+    // current platform's channel is set; others cleared (per design — we don't
+    // guess cross-platform handles for unregistered streamers).
+    const target = streamer || {
+      twitchLogin: platform === 'twitch' ? handle : null,
+      youtubeHandle: platform === 'youtube' ? handle : null,
+      kickSlug: platform === 'kick' ? handle : null,
+    };
+
+    await this._performAutoSwitch(target, mySeq, handle);
+    this._sendSeenPing(platform, handle);
   }
 
   _getConfiguredHandle(platform) {
     if (platform === 'twitch') return (this.config.channel || '').toLowerCase();
     if (platform === 'youtube') return (this.config.ytChannel || '').toLowerCase().replace(/^@/, '');
-    if (platform === 'kick') return (this.config.kickChannel || this.config.channel || '').toLowerCase();
+    if (platform === 'kick') return (this.config.kickChannel || '').toLowerCase();
     return '';
   }
 
-  async _performAutoSwitch(streamer, mySeq) {
+  async _performAutoSwitch(streamer, mySeq, sourceHandle) {
     const newTwitch = streamer.twitchLogin || '';
     const newYoutube = streamer.youtubeHandle || '';
     const newKick = streamer.kickSlug || '';
 
-    // Determine primary "channel" (used in places that expect a single channel name).
-    const primary = newTwitch || newKick || newYoutube;
-    if (!primary) return;
+    // Need at least one platform to switch TO.
+    if (!newTwitch && !newYoutube && !newKick) return;
 
     const changed =
       (this.config.channel || '').toLowerCase() !== newTwitch.toLowerCase() ||
       (this.config.ytChannel || '').toLowerCase() !== newYoutube.toLowerCase() ||
       (this.config.kickChannel || '').toLowerCase() !== newKick.toLowerCase();
     if (!changed) {
-      this._autoSwitchedTo = primary;
+      this._autoSwitchedTo = sourceHandle;
       return;
     }
 
     this._showSwitchBanner(streamer);
 
-    this.config.channel = newTwitch || primary;
-    this.config.ytChannel = newYoutube || '';
-    this.config.kickChannel = newKick || '';
+    // Persist pending messages to OLD channel's cache before switching.
+    if (this._msgCache.length > 0) {
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+
+    // Each platform's channel is strictly its own — never fall back cross-platform.
+    this.config.channel = newTwitch;
+    this.config.ytChannel = newYoutube;
+    this.config.kickChannel = newKick;
     this._saveConfig();
     this._refreshSettingsInputs();
 
-    // Disconnect current, reconnect with new channels. Mid-switch aborts
-    // by returning early if mySeq is stale.
+    // Clear on-screen chat + in-memory dedup — new streamer has its own history.
+    this.chatEl.innerHTML = '';
+    this.msgCount = 0;
+    this._msgCache = [];
+    this._seenMsgIds = new Set();
+    this._seenContentKeys = new Set();
+    this._optimisticKeys = new Map();
+    this._isModOnChannel = false; // re-detect from badges on new channel
+    // Clear channel-specific emote + badge caches (belong to old streamer)
+    this.emotes.channel7tv.clear();
+    this.emotes.bttvEmotes.clear();
+    this.emotes.ffzEmotes.clear();
+    this.emotes.twitchNative.clear();
+    this._twitchBadges = {};
+    this.emotes.loadTwitchGlobals();
+
     this._disconnectAll();
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
+    // Pre-load channel emotes + badges BEFORE rendering cached messages —
+    // otherwise cached messages render as plain text (no emote/badge resolve).
+    // We use user_ids from the streamer lookup result (known) or stub (null);
+    // unknown streamers without user_id get filled-in progressively once IRC
+    // onRoomId arrives from reconnect.
+    if (streamer.twitchUserId) {
+      await Promise.allSettled([
+        this.emotes.loadChannel('twitch', streamer.twitchUserId),
+        this.emotes.loadBTTV(streamer.twitchUserId),
+        this.emotes.loadFFZ(streamer.twitchUserId),
+        streamer.twitchLogin ? this.emotes.loadTwitchChannel(streamer.twitchLogin) : Promise.resolve(),
+        this._loadTwitchBadges(streamer.twitchUserId),
+      ]);
+      // Persist roomId for the new channel so future reloads short-circuit the IRC-wait.
+      this.config._roomId = streamer.twitchUserId;
+      this._saveConfig();
+    } else {
+      // Unknown streamer — clear stale roomId so onRoomId refreshes when IRC connects.
+      this.config._roomId = null;
+    }
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
+    await this._loadCachedMessages();
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
     this._connectAll();
 
-    this._autoSwitchedTo = primary;
+    this._autoSwitchedTo = sourceHandle;
     setTimeout(() => {
       if (this._autoSwitchSeq === mySeq) this._hideSwitchBanner();
     }, 1500);
@@ -2985,9 +3093,12 @@ class UnityChat {
   _connectAll() {
     this._updateDisabled();
     const connecting = [];
-    if (this.config.twitch) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
-    if (this.config.kick) { this.kick.connect(this.config.kickChannel || this.config.channel); connecting.push('Kick'); }
-    if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
+    // Only connect to platforms that have an explicit channel configured.
+    // Auto-switch clears fields for platforms the streamer isn't registered on,
+    // so we must NOT fall back to twitch channel as a cross-platform guess.
+    if (this.config.twitch && this.config.channel) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
+    if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
+    if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
     // Doparsovat existující zprávy z Twitch tabu (pokud existuje)
@@ -3208,6 +3319,17 @@ class UnityChat {
       } else if (!this._chatUsers.has(colorKey)) {
         this._chatUsers.set(colorKey, entry);
         if (!this._chatUsers.has(plainKey)) this._chatUsers.set(plainKey, entry);
+      }
+    }
+
+    // Detect if viewer is moderator/broadcaster on current Twitch channel.
+    // We see our own username in IRC echoes; the badges tag carries the role.
+    if (msg.platform === 'twitch' && !this._isModOnChannel && msg.badgesRaw && msg.username) {
+      const mine = (this._platformUsernames.twitch || this.config.username || '').toLowerCase();
+      if (mine && msg.username.toLowerCase() === mine) {
+        if (/(^|,)(moderator|broadcaster)\//.test(msg.badgesRaw)) {
+          this._isModOnChannel = true;
+        }
       }
     }
 
@@ -3461,11 +3583,13 @@ class UnityChat {
     });
     actions.appendChild(copyBtn);
 
-    // Pin button (jen Twitch zprávy - vyžaduje mod práva)
-    if (msg.platform === 'twitch') {
+    // Pin button (jen Twitch zprávy; jen pokud viewer je mod/broadcaster).
+    // Mod status se detekuje z IRC badge na vlastní zprávě — takže button se
+    // objeví až poté co viewer pošle alespoň jednu zprávu (nebo dorazí echo).
+    if (msg.platform === 'twitch' && this._isModOnChannel) {
       const pinBtn = document.createElement('button');
       pinBtn.className = 'msg-action-btn';
-      pinBtn.title = 'Připnout zprávu (pouze mod)';
+      pinBtn.title = 'Připnout zprávu';
       pinBtn.innerHTML =
         '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">' +
         '<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>' +

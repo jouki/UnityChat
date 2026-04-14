@@ -6,14 +6,34 @@
   window._ucKick = true;
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
-      // Username z Kick session dat (cookie nebo meta)
+      // Viewer's own Kick username. Kick is a Next.js app — the logged-in
+      // user data is streamed in <script> tags as __next_f.push payloads.
+      // We parse those rather than guessing from DOM (chat user spans would
+      // return a random chatter) or relying on a specific API endpoint.
       let username = null;
       try {
-        const m = document.cookie.match(/(?:^|;\s*)kick_session[^=]*=([^;]*)/);
-        if (!m) {
-          // Fallback: hledej v DOM
-          const el = document.querySelector('[class*="username"], [class*="profile-name"]');
-          username = el?.textContent?.trim() || null;
+        // Strategy 1: __next_f payload contains {"username":"...","slug":"..."}
+        // alongside "session" / "authenticated" markers for the logged-in user.
+        for (const s of document.querySelectorAll('script')) {
+          const txt = s.textContent;
+          if (!txt || !txt.includes('__next_f.push')) continue;
+          // Match username key near session/authenticated context only (avoid
+          // picking up streamer names from other parts of the payload).
+          const m = txt.match(/"session"[^{}]{0,100}"user"\s*:\s*\{[^}]*?"username"\s*:\s*"([^"]+)"/);
+          if (m) { username = m[1]; break; }
+        }
+        // Strategy 2: avatar image alt attribute in header/navbar.
+        if (!username) {
+          const avatars = document.querySelectorAll(
+            'header img[alt], nav img[alt], [class*="navbar"] img[alt], [class*="avatar"] img[alt]'
+          );
+          for (const img of avatars) {
+            const alt = img.getAttribute('alt')?.trim();
+            if (alt && /^[a-z0-9_-]+$/i.test(alt) && alt.toLowerCase() !== 'kick') {
+              username = alt;
+              break;
+            }
+          }
         }
       } catch {}
       sendResponse({ platform: 'kick', username });

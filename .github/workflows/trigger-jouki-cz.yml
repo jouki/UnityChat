@@ -1,0 +1,25 @@
+name: Trigger jouki.cz rebuild
+# Whenever extension / install-page-relevant content changes on master or dev,
+# nudge Coolify to rebuild the jouki.cz container so its bundled ZIPs +
+# displayed version numbers stay in sync with the source.
+on:
+  push:
+    branches: [master, dev]
+  workflow_dispatch:
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify redeploy of jouki-landing
+        env:
+          # Token = "<tokenId>|<raw>" from Coolify (stored in repo secrets).
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          # UUID of the jouki-landing Coolify application.
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+        run: |
+          if [ -z "$COOLIFY_TOKEN" ] || [ -z "$COOLIFY_APP_UUID" ]; then
+            echo "COOLIFY_TOKEN or COOLIFY_APP_UUID secret not set — skipping."; exit 0
+          fi
+          curl -fsS -X GET \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            "https://coolify.jouki.cz/api/v1/deploy?uuid=$COOLIFY_APP_UUID&force=0"
