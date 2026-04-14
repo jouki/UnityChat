@@ -1,0 +1,185 @@
+import type { FastifyInstance } from 'fastify';
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { db } from '../db/index.js';
+import { streamers } from '../db/schema.js';
+import { requireExtensionOrigin } from '../lib/extensionOrigin.js';
+import { resolvePlatformHandle, type Platform } from '../lib/platformApi.js';
+
+const LookupQuery = z.object({
+  platform: z.enum(['twitch', 'youtube', 'kick']),
+  handle: z.string().min(1).max(100).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
+});
+
+const SeenBody = z.object({
+  platform: z.enum(['twitch', 'youtube', 'kick']),
+  handle: z.string().min(1).max(100).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
+});
+
+// Columns in streamers table that are safe to return via public API.
+// Explicit whitelist — never accidentally include encrypted token fields
+// (they live in streamer_tokens, but defense in depth).
+function publicFields() {
+  return {
+    id: streamers.id,
+    canonicalHandle: streamers.canonicalHandle,
+    twitchLogin: streamers.twitchLogin,
+    twitchUserId: streamers.twitchUserId,
+    twitchDisplayName: streamers.twitchDisplayName,
+    twitchAvatarUrl: streamers.twitchAvatarUrl,
+    youtubeHandle: streamers.youtubeHandle,
+    youtubeChannelId: streamers.youtubeChannelId,
+    youtubeTitle: streamers.youtubeTitle,
+    youtubeAvatarUrl: streamers.youtubeAvatarUrl,
+    kickSlug: streamers.kickSlug,
+    kickUserId: streamers.kickUserId,
+    kickDisplayName: streamers.kickDisplayName,
+    kickAvatarUrl: streamers.kickAvatarUrl,
+    verified: streamers.verified,
+  };
+}
+
+function handleColumn(platform: Platform) {
+  if (platform === 'twitch') return streamers.twitchLogin;
+  if (platform === 'youtube') return streamers.youtubeHandle;
+  return streamers.kickSlug;
+}
+
+function userIdColumn(platform: Platform) {
+  if (platform === 'twitch') return streamers.twitchUserId;
+  if (platform === 'youtube') return streamers.youtubeChannelId;
+  return streamers.kickUserId;
+}
+
+export default async function streamerRoutes(app: FastifyInstance) {
+  // Extension-origin guard for everything in this route file.
+  app.addHook('preHandler', requireExtensionOrigin);
+
+  // Public lookup — returns only safe fields. Never tokens.
+  app.get('/streamers/lookup', async (req, reply) => {
+    const parsed = LookupQuery.safeParse(req.query);
+    if (!parsed.success) {
+      reply.code(400);
+      return { ok: false, error: 'Invalid query' };
+    }
+    const { platform, handle } = parsed.data;
+
+    const handleCol = handleColumn(platform);
+    const hit = await db.select(publicFields()).from(streamers).where(eq(handleCol, handle)).limit(1);
+
+    if (hit.length > 0) {
+      return { ok: true, found: true, streamer: hit[0] };
+    }
+
+    // Miss — try to self-heal: resolve handle → user_id, see if we know that user_id
+    // under a different handle (rename detection).
+    const resolved = await resolvePlatformHandle(platform, handle);
+    if (resolved) {
+      const userIdCol = userIdColumn(platform);
+      const byUserId = await db
+        .select(publicFields())
+        .from(streamers)
+        .where(eq(userIdCol, resolved.userId))
+        .limit(1);
+
+      if (byUserId.length > 0) {
+        // Rename detected — update handle (+ display_name/avatar if newer data).
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (platform === 'twitch') {
+          updates.twitchLogin = resolved.handleCanonical;
+          if (resolved.displayName) updates.twitchDisplayName = resolved.displayName;
+          if (resolved.avatarUrl) updates.twitchAvatarUrl = resolved.avatarUrl;
+        } else if (platform === 'youtube') {
+          updates.youtubeHandle = resolved.handleCanonical;
+          if (resolved.displayName) updates.youtubeTitle = resolved.displayName;
+          if (resolved.avatarUrl) updates.youtubeAvatarUrl = resolved.avatarUrl;
+        } else {
+          updates.kickSlug = resolved.handleCanonical;
+          if (resolved.displayName) updates.kickDisplayName = resolved.displayName;
+          if (resolved.avatarUrl) updates.kickAvatarUrl = resolved.avatarUrl;
+        }
+        await db.update(streamers).set(updates).where(eq(streamers.id, byUserId[0].id));
+        req.log.info(
+          { platform, newHandle: resolved.handleCanonical, streamerId: byUserId[0].id },
+          'streamer handle rename detected — self-healed',
+        );
+        const refreshed = await db
+          .select(publicFields())
+          .from(streamers)
+          .where(eq(streamers.id, byUserId[0].id))
+          .limit(1);
+        return { ok: true, found: true, streamer: refreshed[0], selfHealed: true };
+      }
+    }
+
+    reply.code(404);
+    return { ok: false, found: false };
+  });
+
+  // Viewer ping when activating chat on a channel. Creates a stub record if
+  // the streamer is unknown so we can merge when they later OAuth. This is
+  // the ONLY non-OAuth path that can insert into streamers.
+  app.post('/streamers/seen', async (req, reply) => {
+    const parsed = SeenBody.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { ok: false, error: 'Invalid body' };
+    }
+    const { platform, handle } = parsed.data;
+    const handleCol = handleColumn(platform);
+
+    // Fast path: already exists by handle → nothing to do.
+    const existing = await db.select({ id: streamers.id }).from(streamers).where(eq(handleCol, handle)).limit(1);
+    if (existing.length > 0) {
+      return { ok: true, created: false };
+    }
+
+    // Try to resolve handle → user_id and see if it matches an existing row (rename).
+    const resolved = await resolvePlatformHandle(platform, handle);
+    if (resolved) {
+      const userIdCol = userIdColumn(platform);
+      const byUserId = await db.select({ id: streamers.id }).from(streamers).where(eq(userIdCol, resolved.userId)).limit(1);
+      if (byUserId.length > 0) {
+        // Existing record with old handle — self-heal (same logic as lookup).
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (platform === 'twitch') updates.twitchLogin = resolved.handleCanonical;
+        else if (platform === 'youtube') updates.youtubeHandle = resolved.handleCanonical;
+        else updates.kickSlug = resolved.handleCanonical;
+        await db.update(streamers).set(updates).where(eq(streamers.id, byUserId[0].id));
+        return { ok: true, created: false, selfHealed: true };
+      }
+    }
+
+    // Create a stub (unverified). Canonical handle defaults to the handle we saw.
+    const fields: Record<string, unknown> = {
+      canonicalHandle: handle,
+      verified: false,
+    };
+    if (platform === 'twitch') {
+      fields.twitchLogin = handle;
+      if (resolved?.userId) fields.twitchUserId = resolved.userId;
+      if (resolved?.displayName) fields.twitchDisplayName = resolved.displayName;
+      if (resolved?.avatarUrl) fields.twitchAvatarUrl = resolved.avatarUrl;
+    } else if (platform === 'youtube') {
+      fields.youtubeHandle = handle;
+      if (resolved?.userId) fields.youtubeChannelId = resolved.userId;
+      if (resolved?.displayName) fields.youtubeTitle = resolved.displayName;
+      if (resolved?.avatarUrl) fields.youtubeAvatarUrl = resolved.avatarUrl;
+    } else {
+      fields.kickSlug = handle;
+      if (resolved?.userId) fields.kickUserId = resolved.userId;
+      if (resolved?.displayName) fields.kickDisplayName = resolved.displayName;
+      if (resolved?.avatarUrl) fields.kickAvatarUrl = resolved.avatarUrl;
+    }
+
+    try {
+      await db.insert(streamers).values(fields as typeof streamers.$inferInsert);
+      return { ok: true, created: true };
+    } catch (err) {
+      // Race: another request inserted in the meantime. Not fatal.
+      req.log.warn({ err }, 'streamer stub insert race — ignored');
+      return { ok: true, created: false };
+    }
+  });
+}
+
