@@ -89,7 +89,8 @@ async function resolveTwitch(login: string): Promise<ResolvedIdentity | null> {
 }
 
 // YouTube — scrape channel page to get channel_id from handle.
-// The /@handle URL returns HTML containing "channelId":"UCxxx".
+// The /@handle URL returns HTML containing /channel/UCxxx links (stable even
+// as YouTube tweaks their initial data schema).
 async function resolveYoutube(handle: string): Promise<ResolvedIdentity | null> {
   const resp = await fetch(`https://www.youtube.com/@${encodeURIComponent(handle)}`, {
     signal: AbortSignal.timeout(5000),
@@ -97,15 +98,15 @@ async function resolveYoutube(handle: string): Promise<ResolvedIdentity | null> 
   });
   if (!resp.ok) return null;
   const html = await resp.text();
-  const channelIdMatch = html.match(/"channelId":"(UC[A-Za-z0-9_-]{22})"/);
+  const channelIdMatch = html.match(/channel\/(UC[A-Za-z0-9_-]{22})/);
   if (!channelIdMatch) return null;
   const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
-  const avatarMatch = html.match(/"avatar":\{"thumbnails":\[\{"url":"([^"]+)"/);
+  const avatarMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
   return {
     userId: channelIdMatch[1],
     handleCanonical: handle.toLowerCase(),
     displayName: titleMatch?.[1],
-    avatarUrl: avatarMatch?.[1]?.replace(/\\u0026/g, '&'),
+    avatarUrl: avatarMatch?.[1],
   };
 }
 
