@@ -22,7 +22,6 @@ const SeenBody = z.object({
 function publicFields() {
   return {
     id: streamers.id,
-    canonicalHandle: streamers.canonicalHandle,
     twitchLogin: streamers.twitchLogin,
     twitchUserId: streamers.twitchUserId,
     twitchDisplayName: streamers.twitchDisplayName,
@@ -179,9 +178,8 @@ export default async function streamerRoutes(app: FastifyInstance) {
       }
     }
 
-    // Create a stub (unverified). Canonical handle defaults to the handle we saw.
+    // Create a stub (unverified).
     const fields: Record<string, unknown> = {
-      canonicalHandle: handle,
       verified: false,
     };
     if (platform === 'twitch') {

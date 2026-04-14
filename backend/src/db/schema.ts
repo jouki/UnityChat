@@ -142,7 +142,6 @@ export const streamers = pgTable(
   'streamers',
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
-    canonicalHandle: text('canonical_handle').notNull(),
 
     twitchLogin: text('twitch_login').unique(),
     twitchUserId: text('twitch_user_id').unique(),
