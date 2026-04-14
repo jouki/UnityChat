@@ -1,36 +1,26 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { streamers, streamerTokens } from '../db/schema.js';
 import { requireExtensionOrigin, parseAllowedExtensionIds } from '../lib/extensionOrigin.js';
-import { signState, verifyState, createSession, validateSession } from '../lib/session.js';
+import { signState, verifyState, createSession, validateSession, type StateInput } from '../lib/session.js';
 import { encryptToken, isCryptoReady } from '../lib/crypto.js';
-import {
-  buildAuthorizeUrl as twitchAuthUrl,
-  exchangeCode as twitchExchange,
-  fetchUser as twitchFetchUser,
-  twitchConfigured,
-} from '../lib/oauthTwitch.js';
+import * as twitch from '../lib/oauthTwitch.js';
+import * as youtube from '../lib/oauthYoutube.js';
+import * as kick from '../lib/oauthKick.js';
 
-// POST /streamers/oauth/:platform/start
-// Requires extension origin. Optional X-UC-Session to link a platform to an
-// existing streamer. Returns { url } that extension opens in a new tab.
 const StartParams = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
 
-// Build a redirect URL back into the extension after successful OAuth.
-// Validates the requested extension ID against allowlist (defense in depth).
+// Build chrome-extension:// return URL. Validates extension ID against allowlist.
 function extensionRedirectUrl(extId: string, query: Record<string, string>): string | null {
   const allowed = parseAllowedExtensionIds();
-  // Dev mode: no allowlist → accept any chrome-extension id format.
   if (allowed.size > 0 && !allowed.has(extId)) return null;
   if (!/^[a-p]{32}$/.test(extId)) return null;
   const qs = new URLSearchParams(query).toString();
   return `chrome-extension://${extId}/streamer.html?${qs}`;
 }
 
-// HTML page that renders an error-only view when OAuth fails or we can't
-// reach the extension. Plain text, no sensitive data.
 function errorPage(message: string): string {
   const safe = message.replace(/[<>&"']/g, (c) =>
     ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c] || c),
@@ -43,9 +33,160 @@ h1{color:#ff8c00}</style>
 <p>Vraťte se zpátky do extension a zkuste to znovu.</p>`;
 }
 
+// Composite state token: "{extensionId}.{signedState}". Callback parses apart.
+function wrapState(extensionId: string, signed: string): string {
+  return encodeURIComponent(`${extensionId}.${signed}`);
+}
+function unwrapState(composite: string): { extensionId: string; signed: string } | null {
+  const dot = composite.indexOf('.');
+  if (dot === -1) return null;
+  return { extensionId: composite.substring(0, dot), signed: composite.substring(dot + 1) };
+}
+
+// Per-platform field updates when completing OAuth. Column name → value.
+type Platform = 'twitch' | 'youtube' | 'kick';
+
+interface IdentityResult {
+  /** stable platform user id */
+  userId: string;
+  /** handle used for lookup by viewer (lowercase, no @) */
+  handle: string;
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+function buildStreamerUpdates(platform: Platform, id: IdentityResult): Record<string, unknown> {
+  const base: Record<string, unknown> = { verified: true, updatedAt: new Date() };
+  // Handles are nullable — empty (e.g. old YouTube channel without @handle)
+  // would collide on UNIQUE. user_id is always set.
+  const handle = id.handle?.trim() || null;
+  if (platform === 'twitch') {
+    base.twitchLogin = handle;
+    base.twitchUserId = id.userId;
+    base.twitchDisplayName = id.displayName || null;
+    base.twitchAvatarUrl = id.avatarUrl || null;
+  } else if (platform === 'youtube') {
+    base.youtubeHandle = handle;
+    base.youtubeChannelId = id.userId;
+    base.youtubeTitle = id.displayName || null;
+    base.youtubeAvatarUrl = id.avatarUrl || null;
+  } else {
+    base.kickSlug = handle;
+    base.kickUserId = id.userId;
+    base.kickDisplayName = id.displayName || null;
+    base.kickAvatarUrl = id.avatarUrl || null;
+  }
+  return base;
+}
+
+function userIdCol(platform: Platform) {
+  if (platform === 'twitch') return streamers.twitchUserId;
+  if (platform === 'youtube') return streamers.youtubeChannelId;
+  return streamers.kickUserId;
+}
+function handleCol(platform: Platform) {
+  if (platform === 'twitch') return streamers.twitchLogin;
+  if (platform === 'youtube') return streamers.youtubeHandle;
+  return streamers.kickSlug;
+}
+
+// Shared callback body: given platform + identity + raw tokens, upsert streamer,
+// encrypt and store tokens, create/reuse session, and redirect back to extension.
+async function completeCallback(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  platform: Platform,
+  extensionId: string,
+  payloadSessionId: string | undefined,
+  identity: IdentityResult,
+  tokens: { accessToken: string; refreshToken?: string; expiresIn: number; scopes: string[] },
+) {
+  // Resolve target streamer id: session > existing by user_id > existing by handle > new.
+  let streamerId: number | null = null;
+
+  if (payloadSessionId) {
+    streamerId = await validateSession(payloadSessionId);
+  }
+
+  if (streamerId === null) {
+    const byUserId = await db
+      .select({ id: streamers.id })
+      .from(streamers)
+      .where(eq(userIdCol(platform), identity.userId))
+      .limit(1);
+    if (byUserId.length > 0) streamerId = byUserId[0].id;
+  }
+
+  if (streamerId === null && identity.handle) {
+    const byHandle = await db
+      .select({ id: streamers.id })
+      .from(streamers)
+      .where(eq(handleCol(platform), identity.handle))
+      .limit(1);
+    if (byHandle.length > 0) streamerId = byHandle[0].id;
+  }
+
+  const updates = buildStreamerUpdates(platform, identity);
+
+  if (streamerId !== null) {
+    await db.update(streamers).set(updates).where(eq(streamers.id, streamerId));
+  } else {
+    const inserted = await db.insert(streamers).values(updates).returning({ id: streamers.id });
+    streamerId = inserted[0].id;
+  }
+
+  const accessEnc = encryptToken(tokens.accessToken);
+  const refreshEnc = tokens.refreshToken ? encryptToken(tokens.refreshToken) : null;
+  const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000);
+
+  await db
+    .insert(streamerTokens)
+    .values({
+      streamerId,
+      platform,
+      accessTokenEncrypted: accessEnc.ciphertext,
+      refreshTokenEncrypted: refreshEnc?.ciphertext || null,
+      tokenIv: accessEnc.iv,
+      tokenAuthTag: accessEnc.authTag,
+      refreshIv: refreshEnc?.iv || null,
+      refreshAuthTag: refreshEnc?.authTag || null,
+      expiresAt,
+      scopes: tokens.scopes,
+      keyVersion: accessEnc.keyVersion,
+    })
+    .onConflictDoUpdate({
+      target: [streamerTokens.streamerId, streamerTokens.platform],
+      set: {
+        accessTokenEncrypted: accessEnc.ciphertext,
+        refreshTokenEncrypted: refreshEnc?.ciphertext || null,
+        tokenIv: accessEnc.iv,
+        tokenAuthTag: accessEnc.authTag,
+        refreshIv: refreshEnc?.iv || null,
+        refreshAuthTag: refreshEnc?.authTag || null,
+        expiresAt,
+        scopes: tokens.scopes,
+        keyVersion: accessEnc.keyVersion,
+        updatedAt: new Date(),
+      },
+    });
+
+  const sessionId = payloadSessionId || (await createSession(streamerId!));
+  req.log.info(
+    { platform, streamerId, handle: identity.handle, linked: !!payloadSessionId },
+    'streamer OAuth completed',
+  );
+
+  const returnUrl = extensionRedirectUrl(extensionId, { success: platform, handle: identity.handle });
+  if (!returnUrl) {
+    reply.type('text/html');
+    return errorPage('Extension ID není v allowlistu.');
+  }
+  return reply.redirect(`${returnUrl}#session=${encodeURIComponent(sessionId)}`);
+}
+
 export default async function oauthRoutes(app: FastifyInstance) {
-  // START endpoint — requires extension origin.
-  app.post<{ Params: { platform: string }; Body: { extensionId?: string } }>(
+  // ---- START endpoint (all platforms) ----
+  app.post<{ Params: { platform: string } }>(
     '/streamers/oauth/:platform/start',
     { preHandler: requireExtensionOrigin },
     async (req, reply) => {
@@ -60,7 +201,6 @@ export default async function oauthRoutes(app: FastifyInstance) {
         return { ok: false, error: 'OAuth not configured on server' };
       }
 
-      // Pick up extension ID from Origin header to include in return URL.
       const originMatch = (req.headers.origin || '').match(/^chrome-extension:\/\/([a-p]{32})/);
       const extensionId = originMatch?.[1];
       if (!extensionId) {
@@ -68,8 +208,6 @@ export default async function oauthRoutes(app: FastifyInstance) {
         return { ok: false, error: 'Cannot determine extension ID' };
       }
 
-      // If caller is already authed, propagate sessionId so callback links
-      // new platform to existing streamer instead of creating a new record.
       let existingSessionId: string | undefined;
       const sessHdr = req.headers['x-uc-session'];
       if (typeof sessHdr === 'string' && sessHdr.trim()) {
@@ -77,177 +215,129 @@ export default async function oauthRoutes(app: FastifyInstance) {
         if (streamerId !== null) existingSessionId = sessHdr.trim();
       }
 
+      const stateInput: StateInput = { platform, sessionId: existingSessionId };
+
       if (platform === 'twitch') {
-        if (!twitchConfigured()) {
+        if (!twitch.twitchConfigured()) {
           reply.code(503);
           return { ok: false, error: 'Twitch OAuth not configured' };
         }
-        const state = signState({ platform: 'twitch', sessionId: existingSessionId });
-        // Encode extension ID + state into a single state token for the callback.
-        const composedState = encodeURIComponent(`${extensionId}.${state}`);
-        return { ok: true, url: twitchAuthUrl(composedState) };
+        const state = wrapState(extensionId, signState(stateInput));
+        return { ok: true, url: twitch.buildAuthorizeUrl(state) };
       }
 
-      reply.code(501);
-      return { ok: false, error: `${platform} OAuth not implemented yet` };
+      if (platform === 'youtube') {
+        if (!youtube.youtubeConfigured()) {
+          reply.code(503);
+          return { ok: false, error: 'YouTube OAuth not configured' };
+        }
+        const state = wrapState(extensionId, signState(stateInput));
+        return { ok: true, url: youtube.buildAuthorizeUrl(state) };
+      }
+
+      // Kick (PKCE required)
+      if (!kick.kickConfigured()) {
+        reply.code(503);
+        return { ok: false, error: 'Kick OAuth not configured' };
+      }
+      const pkce = kick.generatePkcePair();
+      const state = wrapState(extensionId, signState({ ...stateInput, codeVerifier: pkce.verifier }));
+      return { ok: true, url: kick.buildAuthorizeUrl(state, pkce.challenge) };
     },
   );
 
-  // CALLBACK endpoint for Twitch — NOT behind extension origin check
-  // (the provider redirects here, not the extension). Origin is whatever
-  // the provider's browser sent (usually no Origin header at all for
-  // top-level navigations).
-  app.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>(
-    '/streamers/oauth/twitch/callback',
-    async (req, reply) => {
+  // ---- Platform-specific callbacks ----
+  const makeCallback = (platform: Platform) =>
+    async (
+      req: FastifyRequest<{
+        Querystring: { code?: string; state?: string; error?: string; error_description?: string };
+      }>,
+      reply: FastifyReply,
+    ) => {
       const { code, state, error, error_description } = req.query;
-
       if (error) {
         reply.type('text/html');
-        return errorPage(`Twitch: ${error_description || error}`);
+        return errorPage(`${platform}: ${error_description || error}`);
       }
       if (!code || !state) {
         reply.type('text/html');
         return errorPage('Chybí code nebo state parametr.');
       }
-
-      // Parse composed state: "{extensionId}.{signedState}"
-      const dot = state.indexOf('.');
-      if (dot === -1) {
+      const unwrapped = unwrapState(state);
+      if (!unwrapped) {
         reply.type('text/html');
         return errorPage('Neplatný state parametr.');
       }
-      const extensionId = state.substring(0, dot);
-      const signedState = state.substring(dot + 1);
-
-      const payload = verifyState(signedState);
-      if (!payload || payload.platform !== 'twitch') {
+      const payload = verifyState(unwrapped.signed);
+      if (!payload || payload.platform !== platform) {
         reply.type('text/html');
         return errorPage('State je neplatný nebo expiroval. Zkuste přihlášení znovu.');
       }
 
-      // Exchange code → token
-      let tokenResp;
       try {
-        tokenResp = await twitchExchange(code);
+        let identity: IdentityResult;
+        let tokens: { accessToken: string; refreshToken?: string; expiresIn: number; scopes: string[] };
+
+        if (platform === 'twitch') {
+          const tr = await twitch.exchangeCode(code);
+          const u = await twitch.fetchUser(tr.access_token);
+          identity = {
+            userId: u.id,
+            handle: u.login,
+            displayName: u.display_name,
+            avatarUrl: u.profile_image_url,
+          };
+          tokens = {
+            accessToken: tr.access_token,
+            refreshToken: tr.refresh_token,
+            expiresIn: tr.expires_in,
+            scopes: tr.scope,
+          };
+        } else if (platform === 'youtube') {
+          const tr = await youtube.exchangeCode(code);
+          const ch = await youtube.fetchChannel(tr.access_token);
+          identity = {
+            userId: ch.channelId,
+            handle: ch.handle,
+            displayName: ch.title,
+            avatarUrl: ch.avatarUrl,
+          };
+          tokens = {
+            accessToken: tr.access_token,
+            refreshToken: tr.refresh_token,
+            expiresIn: tr.expires_in,
+            scopes: tr.scope.split(' ').filter(Boolean),
+          };
+        } else {
+          if (!payload.codeVerifier) {
+            reply.type('text/html');
+            return errorPage('Kick: chybí PKCE verifier ve state.');
+          }
+          const tr = await kick.exchangeCode(code, payload.codeVerifier);
+          const u = await kick.fetchUser(tr.access_token);
+          identity = {
+            userId: u.userId,
+            handle: u.name.toLowerCase(),
+            displayName: u.name,
+            avatarUrl: u.avatarUrl,
+          };
+          tokens = {
+            accessToken: tr.access_token,
+            refreshToken: tr.refresh_token,
+            expiresIn: tr.expires_in,
+            scopes: tr.scope.split(' ').filter(Boolean),
+          };
+        }
+
+        return completeCallback(req, reply, platform, unwrapped.extensionId, payload.sessionId, identity, tokens);
       } catch (err) {
-        req.log.error({ err: (err as Error).message }, 'Twitch token exchange failed');
+        req.log.error({ err: (err as Error).message, platform }, 'OAuth callback failed');
         reply.type('text/html');
-        return errorPage('Výměna code za token selhala. Zkuste přihlášení znovu.');
+        return errorPage(`${platform}: autentizace selhala. Zkuste to znovu.`);
       }
+    };
 
-      // Fetch user info
-      let user;
-      try {
-        user = await twitchFetchUser(tokenResp.access_token);
-      } catch (err) {
-        req.log.error({ err: (err as Error).message }, 'Twitch /users failed');
-        reply.type('text/html');
-        return errorPage('Nelze načíst uživatele z Twitche.');
-      }
-
-      // Determine target streamer:
-      // 1. If session from state → use that streamerId (linking platform to existing streamer)
-      // 2. Else if row with twitch_user_id exists → reuse it (re-auth)
-      // 3. Else if row with twitch_login exists → upgrade stub
-      // 4. Else → create new row
-      let streamerId: number | null = null;
-
-      if (payload.sessionId) {
-        streamerId = await validateSession(payload.sessionId);
-      }
-
-      if (streamerId === null) {
-        const byUserId = await db
-          .select({ id: streamers.id })
-          .from(streamers)
-          .where(eq(streamers.twitchUserId, user.id))
-          .limit(1);
-        if (byUserId.length > 0) streamerId = byUserId[0].id;
-      }
-
-      if (streamerId === null) {
-        const byLogin = await db
-          .select({ id: streamers.id })
-          .from(streamers)
-          .where(eq(streamers.twitchLogin, user.login))
-          .limit(1);
-        if (byLogin.length > 0) streamerId = byLogin[0].id;
-      }
-
-      // Build updates for streamers row
-      const updates = {
-        twitchLogin: user.login,
-        twitchUserId: user.id,
-        twitchDisplayName: user.display_name,
-        twitchAvatarUrl: user.profile_image_url || null,
-        verified: true,
-        updatedAt: new Date(),
-      };
-
-      if (streamerId !== null) {
-        await db.update(streamers).set(updates).where(eq(streamers.id, streamerId));
-      } else {
-        const inserted = await db
-          .insert(streamers)
-          .values(updates)
-          .returning({ id: streamers.id });
-        streamerId = inserted[0].id;
-      }
-
-      // Encrypt + store token
-      const accessEnc = encryptToken(tokenResp.access_token);
-      const refreshEnc = tokenResp.refresh_token ? encryptToken(tokenResp.refresh_token) : null;
-      const expiresAt = new Date(Date.now() + tokenResp.expires_in * 1000);
-
-      await db
-        .insert(streamerTokens)
-        .values({
-          streamerId: streamerId!,
-          platform: 'twitch',
-          accessTokenEncrypted: accessEnc.ciphertext,
-          refreshTokenEncrypted: refreshEnc?.ciphertext || null,
-          tokenIv: accessEnc.iv,
-          tokenAuthTag: accessEnc.authTag,
-          refreshIv: refreshEnc?.iv || null,
-          refreshAuthTag: refreshEnc?.authTag || null,
-          expiresAt,
-          scopes: tokenResp.scope,
-          keyVersion: accessEnc.keyVersion,
-        })
-        .onConflictDoUpdate({
-          target: [streamerTokens.streamerId, streamerTokens.platform],
-          set: {
-            accessTokenEncrypted: accessEnc.ciphertext,
-            refreshTokenEncrypted: refreshEnc?.ciphertext || null,
-            tokenIv: accessEnc.iv,
-            tokenAuthTag: accessEnc.authTag,
-            refreshIv: refreshEnc?.iv || null,
-            refreshAuthTag: refreshEnc?.authTag || null,
-            expiresAt,
-            scopes: tokenResp.scope,
-            keyVersion: accessEnc.keyVersion,
-            updatedAt: new Date(),
-          },
-        });
-
-      // Create (or reuse) session. If state had sessionId we keep it, else new.
-      const sessionId = payload.sessionId || (await createSession(streamerId!));
-      req.log.info(
-        { platform: 'twitch', streamerId, twitchLogin: user.login, linked: !!payload.sessionId },
-        'streamer OAuth completed',
-      );
-
-      // Redirect back to extension with success. Session goes via URL fragment
-      // so it's not sent to server logs / referer headers.
-      const returnUrl = extensionRedirectUrl(extensionId, { success: 'twitch', handle: user.login });
-      if (!returnUrl) {
-        reply.type('text/html');
-        return errorPage('Extension ID není v allowlistu.');
-      }
-      // Fragment carries the session (not sent to any server afterward).
-      const redirectTarget = `${returnUrl}#session=${encodeURIComponent(sessionId)}`;
-      return reply.redirect(redirectTarget);
-    },
-  );
+  app.get('/streamers/oauth/twitch/callback', makeCallback('twitch'));
+  app.get('/streamers/oauth/youtube/callback', makeCallback('youtube'));
+  app.get('/streamers/oauth/kick/callback', makeCallback('kick'));
 }

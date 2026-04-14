@@ -62,6 +62,7 @@ interface StatePayload {
   platform: 'twitch' | 'youtube' | 'kick';
   nonce: string;
   sessionId?: string;    // optional — present when streamer is linking another platform to existing session
+  codeVerifier?: string; // optional — PKCE verifier (Kick OAuth 2.1 requires)
   createdAt: number;
 }
 
@@ -73,7 +74,9 @@ function getStateKey(): Buffer {
   return Buffer.from(raw, 'base64');
 }
 
-export function signState(payload: Omit<StatePayload, 'createdAt' | 'nonce'>): string {
+export type StateInput = Omit<StatePayload, 'createdAt' | 'nonce'>;
+
+export function signState(payload: StateInput): string {
   const full: StatePayload = {
     ...payload,
     nonce: randomBytes(8).toString('hex'),

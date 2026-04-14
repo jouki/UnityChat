@@ -19,6 +19,12 @@ const EnvSchema = z.object({
   // Twitch OAuth app credentials (register at https://dev.twitch.tv/console/apps)
   TWITCH_CLIENT_ID: z.string().default(''),
   TWITCH_CLIENT_SECRET: z.string().default(''),
+  // Google OAuth credentials for YouTube (https://console.cloud.google.com/apis/credentials)
+  GOOGLE_CLIENT_ID: z.string().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().default(''),
+  // Kick OAuth credentials (https://kick.com/settings/developer)
+  KICK_CLIENT_ID: z.string().default(''),
+  KICK_CLIENT_SECRET: z.string().default(''),
 });
 
 export const config = EnvSchema.parse(process.env);
