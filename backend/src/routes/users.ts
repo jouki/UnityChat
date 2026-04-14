@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { nicknames, seenUsers } from '../db/schema.js';
