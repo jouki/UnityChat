@@ -10,6 +10,7 @@ import {
   customType,
   uniqueIndex,
   index,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 
 const bytea = customType<{ data: Buffer; default: false }>({
@@ -196,7 +197,7 @@ export const streamerTokens = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    pk: uniqueIndex('streamer_tokens_pk').on(t.streamerId, t.platform),
+    pk: primaryKey({ columns: [t.streamerId, t.platform], name: 'streamer_tokens_pk' }),
   }),
 );
 
