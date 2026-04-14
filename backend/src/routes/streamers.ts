@@ -128,9 +128,38 @@ export default async function streamerRoutes(app: FastifyInstance) {
     const { platform, handle } = parsed.data;
     const handleCol = handleColumn(platform);
 
-    // Fast path: already exists by handle → nothing to do.
-    const existing = await db.select({ id: streamers.id }).from(streamers).where(eq(handleCol, handle)).limit(1);
+    // Fast path: already exists by handle. If the stub is missing user_id /
+    // display_name / avatar, try to backfill (resolver may have started
+    // failing earlier, e.g. Kick CF block, and now works).
+    const existing = await db.select(publicFields()).from(streamers).where(eq(handleCol, handle)).limit(1);
     if (existing.length > 0) {
+      const row = existing[0];
+      const needsBackfill =
+        (platform === 'twitch' && (!row.twitchUserId || !row.twitchDisplayName || !row.twitchAvatarUrl)) ||
+        (platform === 'youtube' && (!row.youtubeChannelId || !row.youtubeTitle || !row.youtubeAvatarUrl)) ||
+        (platform === 'kick' && (!row.kickUserId || !row.kickDisplayName || !row.kickAvatarUrl));
+      if (needsBackfill) {
+        const resolved = await resolvePlatformHandle(platform, handle);
+        if (resolved) {
+          const updates: Record<string, unknown> = { updatedAt: new Date() };
+          if (platform === 'twitch') {
+            if (!row.twitchUserId && resolved.userId) updates.twitchUserId = resolved.userId;
+            if (!row.twitchDisplayName && resolved.displayName) updates.twitchDisplayName = resolved.displayName;
+            if (!row.twitchAvatarUrl && resolved.avatarUrl) updates.twitchAvatarUrl = resolved.avatarUrl;
+          } else if (platform === 'youtube') {
+            if (!row.youtubeChannelId && resolved.userId) updates.youtubeChannelId = resolved.userId;
+            if (!row.youtubeTitle && resolved.displayName) updates.youtubeTitle = resolved.displayName;
+            if (!row.youtubeAvatarUrl && resolved.avatarUrl) updates.youtubeAvatarUrl = resolved.avatarUrl;
+          } else {
+            if (!row.kickUserId && resolved.userId) updates.kickUserId = resolved.userId;
+            if (!row.kickDisplayName && resolved.displayName) updates.kickDisplayName = resolved.displayName;
+            if (!row.kickAvatarUrl && resolved.avatarUrl) updates.kickAvatarUrl = resolved.avatarUrl;
+          }
+          if (Object.keys(updates).length > 1) {
+            await db.update(streamers).set(updates).where(eq(streamers.id, row.id));
+          }
+        }
+      }
       return { ok: true, created: false };
     }
 
