@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.23.1
+# UnityChat - Chrome/Opera Extension + Backend v3.23.13
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -14,6 +14,8 @@ UnityChat/
 │   ├── sidepanel.html          # UI
 │   ├── sidepanel.css           # Dark theme styling
 │   ├── sidepanel.js            # ~3000 řádků - UI/messaging logika
+│   ├── backup.html             # Export/import extension data (sync + local storage)
+│   ├── backup.js               # Backup logic (external JS, MV3 CSP blocks inline)
 │   ├── update.bat              # One-click updater (stáhne ZIP, přepíše soubory)
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
@@ -40,9 +42,11 @@ UnityChat/
 │   ├── src/
 │   │   ├── server.ts           # Fastify entry point + health endpoints
 │   │   ├── config.ts           # Zod env validation
+│   │   ├── routes/
+│   │   │   └── users.ts        # /users endpoints (merged seen_users + nicknames)
 │   │   └── db/
 │   │       ├── index.ts        # Drizzle client + pingDb
-│   │       └── schema.ts       # users, platform_identities, messages, events
+│   │       └── schema.ts       # users, platform_identities, messages, events, seen_users
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── Dockerfile              # Multi-stage Node 22 alpine, user 'app', healthcheck
@@ -201,7 +205,9 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Před cache renderem: ping aktivního tabu
 - Twitch: `document.cookie.match('login=...')` 
 - Kick: navbar profile selectory
-- YouTube: `yt-formatted-string#channel-handle`
+- YouTube: `yt-formatted-string#channel-handle` + avatar menu click fallback (v3.23.4–v3.23.6): klikne avatar button, přečte `#channel-handle`, zavře menu přes Escape
+- Content script cache: výsledek se kešuje per URL, `MutationObserver` + `popstate` invalidují při SPA navigaci
+- Settings UI se refreshne když platform username dorazí asynchronně
 
 **Message cache:**
 - `chrome.storage.local`, klíč `uc_messages`
@@ -328,7 +334,7 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 
 ### content/kick.js
 1. **DOM** (chat otevřený): `#message-input`, React setter / execCommand
-2. **Kick API** (chat zavřený): inject `<script>` do page kontextu (Kick CSP povoluje inline) → `POST /api/v2/messages/send/{chatroomId}` s XSRF-TOKEN z cookies
+2. **Kick API** (chat zavřený): `KICK_SEND` message do background → `chrome.scripting.executeScript({ world: 'MAIN' })` → `POST /api/v2/messages/send/{chatroomId}` s XSRF-TOKEN z cookies (v3.23.7: migrace z inline `<script>` injection na background executeScript)
 
 ### content script auto-injection
 - `background.js` `chrome.runtime.onInstalled` → injektuje do otevřených tabů
@@ -340,14 +346,23 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 
 **Service worker handlers:**
 - `chrome.runtime.onInstalled` → auto-inject content scriptů
-- `OPEN_USER_CARD` → executeScript MAIN world (klikání na DOM)
-- `TW_REPLY` → GQL mutace `SendChatMessage` s reply ID
+- `OPEN_USER_CARD` → executeScript MAIN world (klikání na DOM, CSS.escape pro username selektory)
+- `TW_REPLY` → GQL mutace `SendChatMessage` s reply ID (parameterized variables)
 - `YT_SEND` → executeScript MAIN world (CSP bypass pro YouTube)
+- `KICK_SEND` → executeScript MAIN world (Kick API send, v3.23.7 migrace z inline script injection)
 - `LOAD_BADGES` → IVR API fetch (Twitch badge images)
-- `PIN_MESSAGE` → GQL mutace `PinChatMessage` + follow-up dotaz pro pin entity ID
-- `CHECK_PIN` → GQL `channel.pinnedChatMessages` polling
+- `PIN_MESSAGE` → GQL mutace `PinChatMessage` + follow-up dotaz pro pin entity ID (parameterized variables)
+- `CHECK_PIN` → GQL `channel.pinnedChatMessages` polling (parameterized variables)
 - `DUMP_LOGS` → uloží `_logs` array do `Downloads/unitychat-debug.log` přes `chrome.downloads`
 - `UC_LOG` → relay log zpráva ze side panelu
+
+**Security (v3.23.7):**
+- Všechny GQL queries používají parameterized variables (ne string interpolation)
+- Floating user card v MAIN world: createElement/textContent místo innerHTML
+- YouTube postMessage: specifický origin `'https://www.youtube.com'` místo wildcard `'*'`, origin validace na receiveru
+- Color values sanitizovány přes `_sc()` před HTML interpolací
+- UC_API endpoint: `https://api.jouki.cz` (dříve raw IP `http://178.104.160.182:3001`)
+- `http://178.104.160.182:*` odstraněno z manifest host_permissions
 
 **ucLog systém:**
 - In-memory `_logs[]` array (max 500 → ořezává na 300)
@@ -369,6 +384,7 @@ wss://irc-ws.chat.twitch.tv                                       # Twitch IRC
 api.twitch.tv, gql.twitch.tv                                      # Twitch GQL/Helix
 badges.twitch.tv (deprecated, fallback IVR)                       # Badge API
 api.ivr.fi                                                         # Twitch badge images (veřejné API)
+api.jouki.cz                                                       # UnityChat backend API (v3.23.7+)
 7tv.io, cdn.7tv.app                                               # 7TV API + CDN
 static-cdn.jtvnw.net                                              # Twitch emote CDN
 files.kick.com                                                    # Kick emote CDN
@@ -379,7 +395,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.23.1**
+- Aktuální: **v3.23.13**
 
 ## Známé limitace / gotchas
 
@@ -502,6 +518,7 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 | `platform_identities` | Vazba uživatele na Twitch/YouTube/Kick handle (many-to-one) |
 | `messages` | Všechny chat zprávy s UC marker detekcí, reply context, raw segmenty |
 | `events` | Stream events: raidy, piny, first-time chatters, bany, timeouty |
+| `seen_users` | Unikátní uživatelé viděni přes UnityChat (platform, username, first/last_seen_at, seen_count) |
 
 ### Endpoints (v0.2.0)
 - `GET /` — service info
@@ -511,6 +528,8 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 - `PUT /nicknames` — set/update nickname + color (rate limit 10s)
 - `DELETE /nicknames` — delete nickname
 - `GET /nicknames/stream` — SSE stream pro real-time nickname changes
+- `POST /users/seen` — upsert uživatele do `seen_users` (insert if new, ignore if exists)
+- `GET /users` — merged view ze `seen_users` + `nicknames` tabulek
 - `GET /dev/manifest.json` — dev branch extension manifest (dev mode only)
 - `GET /dev` — dev download page HTML (dev mode only)
 - `GET /dev/download` — dev branch extension ZIP (dev mode only)
@@ -573,10 +592,18 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.21.6** - `/uc` command autocomplete (raid, raider, first, sus)
 - **v3.22.0–v3.22.5** - UC button toggle (open/close side panel), YouTube native theater button, port-based panel state tracking, window.close() via port
 - **v3.23.0** - UnityChat custom emotes (`ucEmotes` Map, first: CaneBear), preview Fremaner message
-- **v3.23.1** - Retroactive color update po save, Ko-fi link, active-badge styling, nickname API normalizace, aktuální verze
+- **v3.23.1** - Retroactive color update po save, Ko-fi link, active-badge styling, nickname API normalizace
+- **v3.23.2–v3.23.3** - Profile sync (`_syncProfile`), `seen_users` tabulka + `POST /users/seen` endpoint, `_syncedProfiles` Set s local dedup (`uc_synced` v chrome.storage.local)
+- **v3.23.4–v3.23.6** - YouTube username detekce: avatar menu click fallback (klik avatar → `#channel-handle` → Escape), content script cache per URL s `MutationObserver` + `popstate` invalidací, settings UI refresh při async příchodu platform username
+- **v3.23.7** - Security hardening: GQL parameterized variables, createElement/textContent místo innerHTML, Kick send přes background `KICK_SEND` + executeScript (ne inline `<script>`), YouTube postMessage se specifickým origin, `CSS.escape()` pro username selektory, `_sc()` sanitizace barev, UC_API na `https://api.jouki.cz`, odstranění raw IP z host_permissions
+- **v3.23.8–v3.23.10** - Color UI: "Barva jména (platform)" label, `_refreshColorUI(platform)`, `_platformDefaultColor(platform)` (YT default #ff0000), custom color → real value / no custom → placeholder s default hex, `_upgradeOptimistic` zachovává UC custom color
+- **v3.23.11** - `GET /users` merged endpoint (seen_users + nicknames), `backend/src/routes/users.ts`
+- **v3.23.12** - Backup utility (`extension/backup.html` + `backup.js`): export/import chrome.storage sync+local, external JS (MV3 CSP), export přes chrome.downloads API (saveAs dialog)
+- **v3.23.13** - Profile sync s local dedup + merged users endpoint, repo public, aktuální verze
 
 ## Release workflow
 
+- **Repo je veřejný** (public na GitHubu)
 - **`dev`** = vývojová branch, vývoj probíhá zde
 - **`master`** = production branch, release přes PR `dev → master`
 - Dev branch se NIKDY nemaže při merge
@@ -592,6 +619,7 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 ### Optimistic message upgrade
 - Při odeslání zprávy se okamžitě zobrazí optimistická zpráva (barva, badges z posledních známých)
 - Když dorazí IRC echo, `_upgradeOptimistic()` aktualizuje barvu, badges, ID a cache entry
+- `_upgradeOptimistic` zachovává UnityChat custom color přes IRC echo color (v3.23.10)
 - Content dedup: optimistické zprávy vždy projdou, scraped se zahazují, IRC echo upgraduje
 
 ### Message history (ArrowUp/Down)
@@ -627,3 +655,21 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - `autocomplete="off"` na všech inputech, depersonalizované placeholdery
 - Status dot tooltipy: "Twitch - Connected/Connecting.../Disconnected"
 - Odstraněn "Vše" filtr button
+
+### Color UI (v3.23.8–v3.23.10)
+- "Barva jména" label zobrazuje platformu v závorce: "Barva jména (Twitch)" / "(YouTube)" / "(Kick)"
+- `_refreshColorUI(platform)` — unified logika pro aktualizaci color UI
+- `_platformDefaultColor(platform)` — YouTube default `#ff0000`, Twitch/Kick = IRC color
+- Custom color (z UnityChat profilu) → reálná hodnota v poli (bílý text)
+- Bez custom color → prázdné pole, placeholder s default hex (šedý), picker reflektuje default
+- Settings UI se refreshne když platform username dorazí asynchronně
+
+### Profile sync (v3.23.2+)
+- `_syncProfile(platform, username)` — odesílá nové usernames na backend (`POST /users/seen`)
+- `_syncedProfiles` Set + `uc_synced` v `chrome.storage.local` pro local dedup
+- Odesílá jen usernames co nejsou v lokálním seznamu; při selhání odstraní z lokální sady pro retry
+
+### Backup utility (v3.23.12)
+- `extension/backup.html` + `extension/backup.js` — export/import veškerých extension dat (`chrome.storage.sync` + `local`)
+- External JS soubor (MV3 CSP blokuje inline skripty)
+- Export přes `chrome.downloads` API (saveAs dialog)
