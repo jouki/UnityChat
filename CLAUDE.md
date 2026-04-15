@@ -605,7 +605,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.25** - **Proactive DOM highlight scan (boot latency fix)**: `SCAN_HIGHLIGHTS_NOW` handler + `_kickDomHighlightScan` na boot/tick/visibility.
 - **v3.38.26** - **Fix emote downgrade po polling tick**: `_rerenderHighlights` už neposílá GQL pins v msg.cards; GQL se merguje separately. `isRerender` guard. **Pin flow uzamčen jako stable.**
 - **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: fancy gold gradient, pulsing icon, readable author, pill timestamp.
-- **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + `.hl-pin-author` ellipsis truncation + `flex-shrink: 0` na timestamp pill → badges, author name, timestamp sedí na jednom řádku. Extrémně dlouhé nicky získají ellipsis. **Aktuální verze**
+- **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + ellipsis na author + `flex-shrink: 0` na timestamp.
+- **v3.38.29** - **Pin body využívá plnou šířku (no ellipsis)**: body padding-left `42px → 14px` — zrušeno odsazení pod pin ikonou co se nepoužívalo. Author name teď bez ellipsis (`nowrap + flex-shrink: 0`) — rozložení rostoucí podle obsahu, využívá plnou šířku karty. **Aktuální verze**
 
 ## Release workflow
 

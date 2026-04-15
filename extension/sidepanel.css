@@ -1421,7 +1421,7 @@ body.no-timestamps .msg .ts { display: none; }
 .hl-pin-chev { transition: transform 0.22s cubic-bezier(.4,.0,.2,1); transform-origin: 12px 12px; }
 .hl-pin-wrap.collapsed .hl-pin-chev { transform: rotate(-90deg); }
 .hl-pin-body {
-  padding: 4px 14px 12px 42px;
+  padding: 4px 14px 12px 14px;
   overflow: hidden;
   max-height: 600px;
   transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.15s ease;
@@ -1476,12 +1476,8 @@ body.no-timestamps .msg .ts { display: none; }
   position: relative;
 }
 .hl-pin-author {
-  /* Truncate with ellipsis if the name is very long so the timestamp
-     pill stays on the same row as badges + name. */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .hl-pin-time {
   flex-shrink: 0;
