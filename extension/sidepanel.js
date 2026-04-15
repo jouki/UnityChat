@@ -2466,6 +2466,12 @@ class UnityChat {
     this._seenContentKeys = new Set();
     this._optimisticKeys = new Map();
     this._isModOnChannel = false; // re-detect from badges on new channel
+    // Clear @mention autocomplete — old streamer's chatters should not show up
+    // as suggestions on the new channel. Keep "platform:username" keys so the
+    // color cache survives (users who chat across streams keep their color).
+    for (const key of this._chatUsers.keys()) {
+      if (!key.includes(':')) this._chatUsers.delete(key);
+    }
     // Clear channel-specific emote + badge caches (belong to old streamer)
     this.emotes.channel7tv.clear();
     this.emotes.bttvEmotes.clear();
