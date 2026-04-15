@@ -5572,6 +5572,18 @@ class UnityChat {
   }
 
   _addMessage(msg) {
+    // Defensive drop: a regular chat message with no body is just a
+    // "username:" line with empty text — these were showing up in
+    // production (confirmed in debug logs) from scraped system lines
+    // or IRC edge cases. System events (raid/sub/announcement/gift/
+    // redeem/highlight/cleared/action) have their own renderers that
+    // don't need a body, so we let those through.
+    const textEmpty = !msg?.message || !String(msg.message).trim();
+    const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
+      || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
+      || msg?.isHighlight || msg?._cleared || msg?.isAction;
+    if (textEmpty && !isSystem) return;
+
     // First real message dropping in — chat is "live" enough, hide spinner.
     if (!this._loadingClearedByMsg && msg.username) {
       this._loadingClearedByMsg = true;
