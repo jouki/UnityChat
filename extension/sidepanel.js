@@ -4687,6 +4687,64 @@ class UnityChat {
     if (!wrap) return;
     const bitsPill = wrap.querySelector('.tc-bits');
     const pointsPill = wrap.querySelector('.tc-points');
+    const claimPill = wrap.querySelector('.tc-claim');
+    // One-time wire: clicking a pill focuses the Twitch tab and clicks the
+    // matching summary button there so Twitch's own popover (bits/rewards
+    // center) opens. We don't try to mirror the popover content into UC
+    // — its DOM is huge and dynamic; opening the real one is the simpler
+    // contract.
+    if (!wrap.dataset.wired) {
+      wrap.dataset.wired = '1';
+      const openOnTwitch = async (which) => {
+        try {
+          const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+          const ch = (this.config.channel || '').toLowerCase();
+          const target = tabs.find((t) => {
+            try {
+              const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+              return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+            } catch { return false; }
+          }) || tabs[0];
+          if (!target?.id) return;
+          await chrome.tabs.update(target.id, { active: true });
+          await chrome.windows.update(target.windowId, { focused: true });
+          await chrome.scripting.executeScript({
+            target: { tabId: target.id },
+            world: 'MAIN',
+            func: () => {
+              const btn = document.querySelector('[data-test-selector="community-points-summary"] button')
+                || document.querySelector('.community-points-summary button')
+                || document.querySelector('[aria-label*="bit" i][aria-label*="bod" i]');
+              if (btn) btn.click();
+            },
+          });
+        } catch {}
+      };
+      bitsPill.style.cursor = 'pointer';
+      pointsPill.style.cursor = 'pointer';
+      bitsPill.addEventListener('click', () => openOnTwitch('bits'));
+      pointsPill.addEventListener('click', () => openOnTwitch('points'));
+      // Claim bonus: dispatch TW_CLAIM_BONUS to the matching Twitch tab.
+      // Content script finds the .claimable-bonus__icon button, real-event
+      // clicks it. We DON'T focus the tab — claiming should be silent.
+      claimPill.style.cursor = 'pointer';
+      claimPill.addEventListener('click', async () => {
+        try {
+          const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+          const ch = (this.config.channel || '').toLowerCase();
+          const target = tabs.find((t) => {
+            try {
+              const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+              return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+            } catch { return false; }
+          }) || tabs[0];
+          if (!target?.id) return;
+          await chrome.tabs.sendMessage(target.id, { type: 'TW_CLAIM_BONUS' }).catch(() => {});
+          // Optimistic hide — observer will re-show if claim didn't fire
+          claimPill.classList.add('hidden');
+        } catch {}
+      });
+    }
     const bitsVal = wrap.querySelector('.tc-bits-val');
     const pointsVal = wrap.querySelector('.tc-points-val');
     const pointsIcon = wrap.querySelector('.tc-points-icon');
@@ -4709,6 +4767,12 @@ class UnityChat {
       anyShown = true;
     } else {
       pointsPill.classList.add('hidden');
+    }
+    if (data.claimAvailable) {
+      claimPill.classList.remove('hidden');
+      anyShown = true;
+    } else {
+      claimPill.classList.add('hidden');
     }
     wrap.classList.toggle('hidden', !anyShown);
   }

@@ -494,12 +494,31 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
             return r.width > 0 && r.height > 0 && el.offsetParent !== null;
           };
 
+          // 7TV uses Vue.js — synthetic .click() is ignored. Real pointer
+          // event sequence (pointerdown → pointerup → click) at the
+          // element's center is what its handlers actually listen for.
+          const realClick = (el) => {
+            const r = el.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height / 2;
+            const opts = (extra = {}) => ({
+              bubbles: true, cancelable: true, composed: true,
+              clientX: x, clientY: y, view: window, button: 0, buttons: 1,
+              ...extra,
+            });
+            try { el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts() })); } catch {}
+            try { el.dispatchEvent(new MouseEvent('mousedown', opts())); } catch {}
+            try { el.dispatchEvent(new PointerEvent('pointerup',   { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts({ buttons: 0 }) })); } catch {}
+            try { el.dispatchEvent(new MouseEvent('mouseup',   opts({ buttons: 0 }))); } catch {}
+            try { el.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
+            try { el.click(); } catch {}
+          };
+
           // 0. Preferred path for 7TV: click the .seventv-chat-user wrapper
           //    (7TV attaches its card-opening click handler to the wrapper,
           //    not the .seventv-chat-user-username text span). Iterate
           //    bottom-up so the most recent message wins → its message
-          //    context is visible in the card. Also check 7TV viewer list
-          //    container is excluded (we want chat-line wrappers only).
+          //    context is visible in the card.
           const stvWrappers = document.querySelectorAll('.seventv-chat-user');
           log.push(`stv-wrappers: ${stvWrappers.length}`);
           let stvMatched = 0;
@@ -514,7 +533,11 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
               continue;
             }
             log.push(`stv click: ${snippet(wrap, 120)}`);
-            wrap.click();
+            // Try the inner username span first — that's where 7TV's
+            // delegated listener is mounted in newer builds. Fall through
+            // to wrapper if needed (kept second click as a safety net).
+            const target = wrap.querySelector('.seventv-chat-user-username') || wrap;
+            realClick(target);
             return 'clicked:stv-wrap|' + log.join(' | ');
           }
           if (stvMatched) log.push(`stv matches but none visible (${stvMatched})`);

@@ -1877,6 +1877,23 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 }
 .tc-points { color: #ffd9c2; }
 .tc-bits   { color: #ffeaa1; }
+/* Claim bonus — green, pulsing to draw the eye when bonus is ready. */
+.tc-claim {
+  background: linear-gradient(90deg, rgba(0, 219, 132, 0.32), rgba(0, 219, 132, 0.18));
+  color: #003a20;
+  font-weight: 700;
+  padding: 3px 10px;
+  box-shadow: 0 0 10px rgba(0, 219, 132, 0.4);
+  animation: tc-claim-pulse 1.6s ease-in-out infinite;
+}
+.tc-claim svg { color: #003a20; }
+.tc-claim:hover {
+  background: linear-gradient(90deg, rgba(0, 219, 132, 0.5), rgba(0, 219, 132, 0.28));
+}
+@keyframes tc-claim-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(0, 219, 132, 0.32); }
+  50%      { box-shadow: 0 0 14px rgba(0, 219, 132, 0.7); }
+}
 
 /* ---- Input Area ---- */
 

@@ -321,6 +321,37 @@
       return true;
     }
 
+    if (msg.type === 'TW_CLAIM_BONUS') {
+      try {
+        let target = null;
+        const iconEl = document.querySelector('.claimable-bonus__icon');
+        if (iconEl) target = iconEl.closest('button, [role="button"]');
+        if (!target) {
+          for (const b of document.querySelectorAll('[aria-label*="bonus" i], [aria-label*="claim" i], [aria-label*="vyzv" i]')) {
+            const al = (b.getAttribute('aria-label') || '').toLowerCase();
+            if (!/claim|bonus|vyzv/i.test(al)) continue;
+            const r = b.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) { target = b; break; }
+          }
+        }
+        if (!target) { sendResponse({ ok: false, error: 'no_claim_btn' }); return; }
+        const r = target.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const opts = (extra = {}) => ({
+          bubbles: true, cancelable: true, composed: true,
+          clientX: x, clientY: y, view: window, button: 0, buttons: 1, ...extra,
+        });
+        try { target.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts() })); } catch {}
+        try { target.dispatchEvent(new MouseEvent('mousedown', opts())); } catch {}
+        try { target.dispatchEvent(new PointerEvent('pointerup',   { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts({ buttons: 0 }) })); } catch {}
+        try { target.dispatchEvent(new MouseEvent('mouseup',   opts({ buttons: 0 }))); } catch {}
+        try { target.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
+        try { target.click(); } catch {}
+        sendResponse({ ok: true });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'GET_DOM_COLORS') {
       try {
         sendResponse({ ok: true, colors: getDomColors(msg.usernames || []) });
@@ -838,17 +869,44 @@
     const bitsEl = summary.querySelector('[data-test-selector="bits-balance-string"]');
     const pointsEl = summary.querySelector('[data-test-selector="copo-balance-string"]');
     const iconEl = summary.querySelector('img.image--D5HXC, img[src*="channel-points-icons"]');
+    // Claim-bonus button: appears periodically as a visible button near
+    // the points summary with aria-label like "Claim Bonus" / "Vyzvédněte
+    // si bonus" depending on locale, or a [data-test-selector*="claim"].
+    // We just look for an interactive element whose label matches.
+    const claimBtn = (() => {
+      // Most reliable signal: the .claimable-bonus__icon class lives
+      // inside the actual claim button. Walk up from there to its
+      // nearest button ancestor.
+      const iconEl = document.querySelector('.claimable-bonus__icon');
+      if (iconEl) {
+        const btn = iconEl.closest('button, [role="button"]');
+        if (btn) {
+          const r = btn.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return btn;
+        }
+      }
+      // Fallback: aria-label match in EN/CZ on any visible button.
+      const cands = document.querySelectorAll('[aria-label*="bonus" i], [aria-label*="claim" i], [aria-label*="vyzv" i]');
+      for (const b of cands) {
+        const al = (b.getAttribute('aria-label') || '').toLowerCase();
+        if (!/claim|bonus|vyzv/i.test(al)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return b;
+      }
+      return null;
+    })();
     return {
       bits: bitsEl ? (bitsEl.textContent || '').trim() : null,
       points: pointsEl ? (pointsEl.textContent || '').trim() : null,
       pointsIcon: iconEl?.src || null,
+      claimAvailable: !!claimBtn,
       channel: currentTwitchChannel(),
     };
   }
   function relayCredits() {
     const snap = snapshotCredits();
     if (!snap) return;
-    const hash = `${snap.bits || ''}|${snap.points || ''}|${snap.pointsIcon || ''}|${snap.channel || ''}`;
+    const hash = `${snap.bits || ''}|${snap.points || ''}|${snap.pointsIcon || ''}|${snap.claimAvailable ? '1' : '0'}|${snap.channel || ''}`;
     if (hash === lastCreditsHash) return;
     lastCreditsHash = hash;
     try { chrome.runtime.sendMessage({ type: 'TW_CREDITS', data: snap }); } catch {}
