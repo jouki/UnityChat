@@ -5009,10 +5009,24 @@ class UnityChat {
       pointsPill.classList.add('hidden');
     }
     if (data.claimAvailable) {
+      // Cancel any pending hide — bonus re-appeared (Twitch sometimes
+      // transiently detaches .claimable-bonus__icon during the +10
+      // animation even though the bonus is still claimable).
+      if (this._claimHideT) { clearTimeout(this._claimHideT); this._claimHideT = null; }
       claimPill.classList.remove('hidden');
       anyShown = true;
-    } else {
-      claimPill.classList.add('hidden');
+    } else if (!claimPill.classList.contains('hidden')) {
+      // Hysteresis: don't yank the button on a single false snapshot.
+      // Give the DOM ~2s to stabilise; if the claim icon is still gone
+      // then, it was really clicked/expired.
+      anyShown = true; // keep row visible during hide delay
+      if (!this._claimHideT) {
+        this._claimHideT = setTimeout(() => {
+          this._claimHideT = null;
+          const p = document.getElementById('tw-credits')?.querySelector('.tc-claim');
+          if (p) p.classList.add('hidden');
+        }, 2000);
+      }
     }
     wrap.classList.toggle('hidden', !anyShown);
   }
