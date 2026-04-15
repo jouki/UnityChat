@@ -3928,6 +3928,12 @@ class UnityChat {
       case 'prime':
         this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: 'Prime', subMonths: 13, subStreak: 2 });
         break;
+      case 'sub2':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '2000', subMonths: 4, subStreak: 4 });
+        break;
+      case 'sub3':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '3000', subMonths: 9, subStreak: 9 });
+        break;
       case 'subgift':
         this._addMessage({ ...base, message: '', isSubGift: true, giftPlan: '1000', giftRecipient: text === 'test message' ? 'RecipientUser' : text });
         break;
@@ -3958,7 +3964,7 @@ class UnityChat {
         this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
         break;
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
     }
   }
 
@@ -4759,6 +4765,8 @@ class UnityChat {
   _renderSubEvent(el, msg) {
     const isPrime = String(msg.subPlan || '').toLowerCase() === 'prime';
     if (isPrime) el.classList.add('prime');
+    else if (msg.subPlan === '2000') el.classList.add('tier-2');
+    else if (msg.subPlan === '3000') el.classList.add('tier-3');
     const icon = document.createElement('span');
     icon.className = 'sub-icon';
     icon.setAttribute('aria-hidden', 'true');

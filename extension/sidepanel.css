@@ -1379,26 +1379,77 @@ body.no-timestamps .msg .ts { display: none; }
 }
 
 /* ==== Subscribe / Resubscribe events ==== */
+/* Match the prominence of Announcements / Raids — bilateral accent
+   borders, gentle gradient background, glow, and a tier label that
+   color-codes Tier 1/2/3 (purple/blue/gold) and Prime (cyan). */
 .msg.sub-event {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 8px 10px;
-  margin: 3px 0;
-  background: rgba(145, 70, 255, 0.08);
-  border-left: 3px solid #9146ff;
-  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: linear-gradient(180deg, rgba(145, 70, 255, 0.18), rgba(145, 70, 255, 0.06));
+  border-style: solid;
+  border-color: #9146ff;
+  border-width: 0 5px 0 5px;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(145, 70, 255, 0.25);
+}
+.msg.sub-event:hover {
+  background: linear-gradient(180deg, rgba(145, 70, 255, 0.26), rgba(145, 70, 255, 0.1));
 }
 /* Prime sub gets the Twitch-Prime cyan/blue accent + crown icon so it
    reads instantly different from a paid Tier 1/2/3 sub. */
+.msg.sub-event.tier-2 {
+  background: linear-gradient(180deg, rgba(0, 215, 236, 0.16), rgba(0, 215, 236, 0.06));
+  border-color: #00d7ec;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 215, 236, 0.25);
+}
+.msg.sub-event.tier-2 .sub-icon { color: #00d7ec; filter: drop-shadow(0 0 4px rgba(0, 215, 236, 0.55)); }
+.msg.sub-event.tier-2 .sub-tier {
+  background: linear-gradient(90deg, #5ce0ee, #00d7ec, #009ec0);
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
+.msg.sub-event.tier-3 {
+  background: linear-gradient(180deg, rgba(255, 179, 30, 0.18), rgba(255, 179, 30, 0.06));
+  border-color: #ffb31e;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(255, 179, 30, 0.3);
+}
+.msg.sub-event.tier-3 .sub-icon { color: #ffd93d; filter: drop-shadow(0 0 4px rgba(255, 179, 30, 0.6)); }
+.msg.sub-event.tier-3 .sub-tier {
+  background: linear-gradient(90deg, #ffe57a, #ffd93d, #ffaf14);
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
 .msg.sub-event.prime {
-  background: linear-gradient(180deg, rgba(0, 173, 239, 0.16), rgba(0, 173, 239, 0.06));
-  border-left-color: #00adef;
-  box-shadow: 0 0 14px rgba(0, 173, 239, 0.18);
+  background: linear-gradient(180deg, rgba(0, 173, 239, 0.18), rgba(0, 173, 239, 0.06));
+  border-color: #00adef;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 173, 239, 0.28);
+}
+.msg.sub-event.prime:hover {
+  background: linear-gradient(180deg, rgba(0, 173, 239, 0.28), rgba(0, 173, 239, 0.1));
 }
 .msg.sub-event.prime .sub-icon {
   color: #00adef;
   filter: drop-shadow(0 0 4px rgba(0, 173, 239, 0.55));
+}
+.sub-tier {
+  background: linear-gradient(90deg, #b78cff, #9146ff, #7a3ce6);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
 }
 .sub-tier-prime {
   background: linear-gradient(90deg, #00d7ec, #00adef, #0091ff);
@@ -1415,6 +1466,7 @@ body.no-timestamps .msg .ts { display: none; }
   align-items: center;
   justify-content: center;
   color: #b78cff;
+  filter: drop-shadow(0 0 4px rgba(145, 70, 255, 0.5));
   flex-shrink: 0;
   margin-top: 1px;
 }
