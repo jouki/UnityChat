@@ -825,7 +825,6 @@ async function fetchPins(channel) {
                         text
                         content {
                           __typename
-                          ... on Emote { emoteID }
                         }
                       }
                     }
@@ -858,13 +857,14 @@ async function fetchPins(channel) {
       const sender = pm.sender || {};
       const fragments = pm.content?.fragments || [];
       const segments = fragments.map((f) => {
+        // Emote ID (c.emoteID) is Client-Integrity-gated in GQL — our
+        // anonymous fetch can only see __typename. Flag emote fragments
+        // and let the sidepanel resolve the URL from its Twitch/BTTV/
+        // FFZ/7TV emote library by name. Unknown emote names render as
+        // plain text which is at least readable.
         const c = f.content;
-        if (c?.__typename === 'Emote' && c.emoteID) {
-          return {
-            type: 'emote',
-            url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.emoteID}/default/dark/2.0`,
-            alt: f.text || '',
-          };
+        if (c?.__typename === 'Emote' && f.text) {
+          return { type: 'emote', alt: f.text };
         }
         return { type: 'text', value: f.text || '' };
       });

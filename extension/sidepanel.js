@@ -5267,7 +5267,25 @@ class UnityChat {
                   return url ? { url, alt: title } : null;
                 }).filter(Boolean),
               bodySegments: (p.segments || []).map((s) => {
-                if (s.type === 'emote') return { type: 'emote', url: s.url, alt: s.alt };
+                if (s.type === 'emote') {
+                  // Emote arrived WITHOUT a URL (GQL emoteID gated by
+                  // Client-Integrity). Resolve by name against our local
+                  // emote maps — Twitch native, 7TV global+channel, BTTV,
+                  // FFZ. Channel-specific custom emotes hit first since
+                  // pin content typically references the streamer's own.
+                  const name = s.alt || '';
+                  const em = this.emotes;
+                  const entry =
+                    em?.twitchNative?.get(name)
+                    || em?.channel7tv?.get(name)
+                    || em?.global7tv?.get(name)
+                    || em?.bttvEmotes?.get(name)
+                    || em?.ffzEmotes?.get(name);
+                  if (entry?.url) return { type: 'emote', url: entry.url, alt: name };
+                  // Unknown emote — render as readable text with brackets
+                  // so it's still visible as reference.
+                  return { type: 'text', value: name };
+                }
                 return { type: 'text', value: s.value || '' };
               }),
               timeText: ts
@@ -5283,7 +5301,14 @@ class UnityChat {
       } catch {}
     };
     tick();
-    this._pinPollT = setInterval(tick, 8000);
+    // 4s interval — fast enough to catch new pins promptly without
+    // hammering GQL. Plus on every sidepanel focus (visibilitychange
+    // → visible) kick an immediate tick so coming back from another
+    // tab shows an up-to-date pin right away.
+    this._pinPollT = setInterval(tick, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') tick();
+    });
   }
 
   // Merge DOM-mirror and GQL pin cards and re-render the highlights banner.
