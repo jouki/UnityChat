@@ -476,10 +476,19 @@
           attempts++;
           const dlg = document.querySelector(dialogSel);
           if (dlg) {
-            const info = portalIfNeeded(dlg);
-            log('post-click-dialog', { attempts, phase: 1, x: info.rr.left, y: info.rr.top, w: info.rr.width, h: info.rr.height, portaled: info.portaled });
-            wireDismiss(dlg);
-            return;
+            // Twitch mounts the dialog element before laying it out;
+            // an initial getBoundingClientRect yields zeros. Keep
+            // polling until it has real dimensions so we can portal
+            // to the right coords.
+            const rr0 = dlg.getBoundingClientRect();
+            if (rr0.width < 4 || rr0.height < 4) {
+              if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
+            } else {
+              const info = portalIfNeeded(dlg);
+              log('post-click-dialog', { attempts, phase: 1, x: info.rr.left, y: info.rr.top, w: info.rr.width, h: info.rr.height, portaled: info.portaled });
+              wireDismiss(dlg);
+              return;
+            }
           }
           if (retryAt.has(attempts)) { log('phase1-reclick', { attempts }); rec(); }
           if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
@@ -512,6 +521,10 @@
             attempts2++;
             const dlg = document.querySelector(dialogSel);
             if (dlg) {
+              const rr0 = dlg.getBoundingClientRect();
+              if (rr0.width < 4 || rr0.height < 4) {
+                if (attempts2 < 20) { setTimeout(checkDialog2, 50); return; }
+              }
               const info = portalIfNeeded(dlg);
               log('post-click-dialog', { attempts: attempts2, phase: 2, x: info.rr.left, y: info.rr.top, w: info.rr.width, h: info.rr.height, portaled: info.portaled });
               if (wasHidden) {
