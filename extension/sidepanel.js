@@ -4088,7 +4088,7 @@ class UnityChat {
               } catch { return false; }
             }) || tabs[0];
             if (target?.id) {
-              const r = await chrome.tabs.sendMessage(target.id, { type: 'GET_CHANNEL_AVATAR' }).catch(() => null);
+              const r = await chrome.tabs.sendMessage(target.id, { type: 'GET_CHANNEL_AVATAR', channel: this.config.channel }).catch(() => null);
               if (r?.ok && r.avatar) avatar = r.avatar;
             }
           } catch {}
@@ -5155,18 +5155,45 @@ class UnityChat {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(av, 0, 0, 24, 24);
           const { data } = ctx.getImageData(0, 0, 24, 24);
-          let r = 0, g = 0, b = 0, n = 0;
-          // Average non-transparent, non-near-white/black pixels —
-          // keeps the hue away from washed-out highlights.
+          // Histogram of quantised hues + chroma — picks the DOMINANT
+          // colour instead of averaging (averaging yellow+blue yields
+          // teal which bears no resemblance to either input).
+          const buckets = new Map();
           for (let i = 0; i < data.length; i += 4) {
             const pr = data[i], pg = data[i + 1], pb = data[i + 2], pa = data[i + 3];
             if (pa < 180) continue;
+            const max = Math.max(pr, pg, pb), min = Math.min(pr, pg, pb);
+            const chroma = max - min;
+            if (chroma < 30) continue; // skip grey / near-grey pixels
             const sum = pr + pg + pb;
             if (sum < 90 || sum > 680) continue;
-            r += pr; g += pg; b += pb; n++;
+            // Quantise to 6×6×6 RGB cube (216 buckets)
+            const key = ((pr >> 5) * 64) + ((pg >> 5) * 8) + (pb >> 5);
+            const cur = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0, chroma: 0 };
+            cur.r += pr; cur.g += pg; cur.b += pb; cur.n++; cur.chroma += chroma;
+            buckets.set(key, cur);
           }
-          if (n > 20) {
-            r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+          // Pick bucket with highest (count × avgChroma) — emphasises
+          // a saturated dominant colour over a large grey backdrop.
+          let best = null, bestScore = 0;
+          for (const b of buckets.values()) {
+            const score = b.n * (b.chroma / b.n);
+            if (score > bestScore) { bestScore = score; best = b; }
+          }
+          if (best) {
+            let r = Math.round(best.r / best.n);
+            let g = Math.round(best.g / best.n);
+            let b = Math.round(best.b / best.n);
+            // Raid-specific warmth bias: blend sampled colour 60/40
+            // with raid-red base so cool avatars don't turn the raid
+            // banner into a cold teal callout. Keeps the avatar's
+            // hue recognisable but anchors the palette to "raid".
+            if (c.kind === 'raid') {
+              const RAID_R = 255, RAID_G = 80, RAID_B = 30;
+              r = Math.round(r * 0.6 + RAID_R * 0.4);
+              g = Math.round(g * 0.6 + RAID_G * 0.4);
+              b = Math.round(b * 0.6 + RAID_B * 0.4);
+            }
             const card = av.closest('.hl-card');
             if (card) {
               card.style.setProperty('--hl-accent-r', r);

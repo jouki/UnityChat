@@ -599,15 +599,45 @@
 
     if (msg.type === 'GET_CHANNEL_AVATAR') {
       try {
-        const imgs = document.querySelectorAll('img[src*="jtv_user_pictures"], img[src*="profile_image"], [class*="channel-info"] img, [data-a-target*="avatar"] img, .channel-info-content img');
+        const wantLogin = (msg.channel || currentTwitchChannel() || '').toLowerCase();
+        // Ordered priority — channel header (about the streamer
+        // currently being watched), NOT the logged-in viewer's own
+        // avatar in the top nav, NOT sidebar followed-channel
+        // thumbnails.
+        const selectors = [
+          '[data-a-target="watch-channel-avatar"] img',
+          '[data-test-selector="watch-channel-avatar"] img',
+          '.channel-info-content img[src*="profile_image"]',
+          '.metadata-layout__profile-link img',
+          '.tw-channel-info img',
+          'a[href="/' + wantLogin + '"] img[src*="profile_image"]',
+          'a[href="/' + wantLogin + '/about"] img[src*="profile_image"]',
+        ];
         let pick = null;
-        for (const img of imgs) {
+        for (const sel of selectors) {
+          const img = document.querySelector(sel);
+          if (!img?.src) continue;
           const r = img.getBoundingClientRect();
-          if (r.width >= 28 && r.width <= 300 && Math.abs(r.width - r.height) < 4 && img.src) {
+          if (r.width >= 28 && r.width <= 300 && Math.abs(r.width - r.height) < 4) {
             pick = img.src; break;
           }
         }
-        sendResponse({ ok: true, avatar: pick });
+        // Fallback: walk all profile-style images and pick one whose
+        // alt / closest link text matches the desired login — still
+        // avoids the logged-in user's top-nav avatar because their
+        // alt/href matches THEIR login, not the target channel.
+        if (!pick && wantLogin) {
+          for (const img of document.querySelectorAll('img[src*="jtv_user_pictures"][src*="profile_image"]')) {
+            const r = img.getBoundingClientRect();
+            if (r.width < 28 || r.width > 300 || Math.abs(r.width - r.height) >= 4) continue;
+            const alt = (img.alt || '').toLowerCase();
+            const link = img.closest('a')?.getAttribute('href') || '';
+            if (alt === wantLogin || link === '/' + wantLogin || link.startsWith('/' + wantLogin + '/')) {
+              pick = img.src; break;
+            }
+          }
+        }
+        sendResponse({ ok: true, avatar: pick, matchedChannel: wantLogin });
       } catch (e) { sendResponse({ ok: false, error: e.message }); }
       return;
     }
