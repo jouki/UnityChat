@@ -1249,49 +1249,87 @@
       bodySegments: [],
       timeText: null,
     };
-    // 1. Pinned-by: Twitch's pin layout puts the pinner name in a span
-    //    right after the "Připnuto uživatelem" label. Walking the DOM is
-    //    more reliable than regex over textContent — newlines inside the
-    //    card get stripped, so `\S+` can swallow e.g. "MeewileDONO:" when
-    //    the body starts on a new line without whitespace in between.
     const allText = (card.textContent || '').trim();
-    // Primary: find the label span, take next non-empty sibling/descendant text.
     const labelRe = /P[řr]ipnuto uživatelem/i;
-    for (const el of card.querySelectorAll('span, p')) {
+
+    // 1. Pinned-by: scan for a SHORT leaf-ish element whose trimmed text
+    //    matches exactly "Připnuto uživatelem <name>". Using a leaf with
+    //    short text dodges the textContent-concatenation trap where body
+    //    text ("DONO:") gets glued to the pinner name without whitespace.
+    //    Example flat-text: "Připnuto uživatelem MeewileDONO:" — here
+    //    every long ancestor contains the body too; only the pure header
+    //    element has short text like "Připnuto uživatelem Meewile".
+    for (const el of card.querySelectorAll('span, p, div, a')) {
       const t = (el.textContent || '').trim();
       if (!labelRe.test(t)) continue;
-      // Look for the username span — usually it's either a child with
-      // a chat-username class or the next element sibling.
-      const nameEl = el.querySelector('.chat-author__display-name, .seventv-chat-user-username, [data-a-user]')
-        || (el.nextElementSibling && /chat-user|username|display-name|author/i.test(el.nextElementSibling.className) ? el.nextElementSibling : null);
-      if (nameEl) {
-        const name = (nameEl.textContent || '').trim();
-        if (name && name.length <= 40) { out.pinnedBy = name; break; }
+      if (t.length > 60) continue; // short = header only
+      const m = t.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_-]+)/iu);
+      if (m && m[1].length >= 2 && m[1].length <= 30) {
+        out.pinnedBy = m[1];
+        break;
       }
     }
-    // Fallback: regex but tight — only word chars (Unicode-aware). Strips
-    // anything like "DONO:" that got fused in from the body paragraph.
+    // Fallback: whole-card regex (tight word-char capture).
     if (!out.pinnedBy) {
-      const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_]+)/iu);
-      if (pbMatch) out.pinnedBy = pbMatch[1];
+      const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_-]+)/iu);
+      if (pbMatch && pbMatch[1].length >= 2 && pbMatch[1].length <= 30) {
+        out.pinnedBy = pbMatch[1];
+      }
     }
 
-    // 2. Author — search for chat-user / seventv-chat-user spans within
-    //    the card. Last match is usually the message author in pin footer.
-    //    If there are none, fall back to ANY username-looking span not
-    //    equal to the pinner.
+    // 2. Author — pin footer has the message author as a separate span
+    //    with a colored display name. Strategy: find username-class
+    //    elements first; if none, scan all leaf spans with short text
+    //    (< 40 chars, not "Připnuto", not the time line) and pick the
+    //    one whose text is NOT equal to pinnedBy (or the second hit
+    //    if pinnedBy and author share a name — skipping the first).
     const authorCandidates = [
       ...card.querySelectorAll('.seventv-chat-user'),
       ...card.querySelectorAll('[data-a-user]'),
       ...card.querySelectorAll('.chat-author__display-name'),
     ];
-    let authorEl = authorCandidates[authorCandidates.length - 1] || null;
-    // Reject the candidate if it's actually the pinner label (same name
-    // and no badges/color hints — means DOM only has one username total).
-    if (authorEl) {
-      const txt = (authorEl.textContent || '').trim();
-      if (out.pinnedBy && txt === out.pinnedBy && authorCandidates.length === 1) {
-        authorEl = null; // nothing meaningful
+    let authorEl = null;
+    if (authorCandidates.length) {
+      // Pick the last one — pin footer is at the bottom of the card.
+      authorEl = authorCandidates[authorCandidates.length - 1];
+      // If the only candidate's text matches pinnedBy AND there's only
+      // one candidate, discard it (would mean DOM has just the header
+      // username exposed, no separate author).
+      if (out.pinnedBy && authorCandidates.length === 1) {
+        const txt = (authorEl.textContent || '').trim();
+        if (txt === out.pinnedBy) authorEl = null;
+      }
+    }
+    // Secondary heuristic: walk every colored span; pick the bottom-most
+    // one that sits near "odesláno v" in the DOM order.
+    if (!authorEl) {
+      const timeRe = /odesl[áa]no v|sent at/i;
+      const allSpans = Array.from(card.querySelectorAll('span, a'));
+      // Find an element whose text matches "odesláno v ..." — author
+      // should be its preceding sibling or close ancestor's child.
+      let timeEl = null;
+      for (const el of allSpans) {
+        const t = (el.textContent || '').trim();
+        if (timeRe.test(t) && t.length < 40) { timeEl = el; break; }
+      }
+      if (timeEl) {
+        // Walk backwards from timeEl looking for a short colored username.
+        const container = timeEl.parentElement || card;
+        const sibs = Array.from(container.querySelectorAll('span, a'));
+        const idx = sibs.indexOf(timeEl);
+        for (let i = idx - 1; i >= 0; i--) {
+          const s = sibs[i];
+          const t = (s.textContent || '').trim();
+          if (!t || t.length > 30) continue;
+          if (labelRe.test(t)) continue;
+          if (timeRe.test(t)) continue;
+          // Prefer spans with inline color style or username-ish classes.
+          const styled = !!s.style?.color || /user|author|username|display/i.test(s.className || '');
+          if (styled || /^[\p{L}\p{N}_-]+$/u.test(t)) {
+            authorEl = s;
+            break;
+          }
+        }
       }
     }
     if (authorEl) {
@@ -1301,13 +1339,12 @@
       out.authorColor = authorEl.style?.color || userTextEl.style?.color || null;
     }
 
-    // 3. Author badges — scan imgs in the bottom half of the card.
-    //    Previous version looked inside authorEl.closest() which returned
-    //    the whole card on community-highlight pins, picking up stray
-    //    imgs. Scope to the row containing the author text.
+    // 3. Author badges — imgs in the SAME row as author. Walk up until
+    //    we find a flex/grid container, then scan that row's badge imgs.
+    //    Fallback: all badge-looking imgs in the last third of the card
+    //    (pin footer is always at bottom).
     if (authorEl) {
       let authorRow = authorEl.parentElement;
-      // Walk up until we hit a layout container (flex row / grid row).
       while (authorRow && authorRow !== card) {
         const cs = getComputedStyle(authorRow);
         if (cs.display === 'flex' || cs.display === 'grid') break;
@@ -1319,6 +1356,30 @@
         if (/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) {
           out.authorBadges.push({ url: src, alt: img.alt || '' });
         }
+      }
+    }
+    // Fallback: if we found an author but no badges, scan for badges
+    // positioned directly before the author element in DOM order.
+    if (out.author && !out.authorBadges.length && authorEl) {
+      // Look at preceding siblings of authorEl (or its ancestors).
+      let cur = authorEl;
+      for (let hops = 0; hops < 4 && cur; hops++) {
+        let sib = cur.previousElementSibling;
+        while (sib) {
+          for (const img of sib.querySelectorAll ? sib.querySelectorAll('img[src]') : []) {
+            const src = img.src;
+            if (/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) {
+              out.authorBadges.unshift({ url: src, alt: img.alt || '' });
+            }
+          }
+          if (sib.tagName === 'IMG' && sib.src
+              && /badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(sib.src)) {
+            out.authorBadges.unshift({ url: sib.src, alt: sib.alt || '' });
+          }
+          sib = sib.previousElementSibling;
+        }
+        if (out.authorBadges.length) break;
+        cur = cur.parentElement;
       }
     }
 
