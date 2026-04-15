@@ -602,7 +602,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.22** - **Pin duplication fixes (2 bugy)**: (1) stacking cache duplicity → `_lastDomHighlightCards` filtruje pins out. (2) Mod badge 2× → `authorRow = authorEl.closest('p')` strict scope.
 - **v3.38.23** - **Idempotent pin rerender + collapsed state persistence**: hash visible data + skip re-mount + per-pin collapsed preserve.
 - **v3.38.24** - **Pin merge per-field (no more downgrades)**: `_mergePinCard(dom, gql)` per-field picker, `_lastGoodPinCache` pro sticky expanded data.
-- **v3.38.25** - **Proactive DOM highlight scan (boot latency fix)**: "full pin (Render 2) trvá než se objeví". DOM scrape čekal na MutationObserver tick → pár sekund latence než pin dorazí z content scriptu. Fix: `SCAN_HIGHLIGHTS_NOW` handler v content script Twitch tabu + sidepanel `_kickDomHighlightScan` volá ho na boot, každý 4s pin poll tick, a na visibility change. Busts content script hash dedup (`lastHighlightHash = ''`) aby scan vždy emitne. Round-trip ~10-30ms vs. několik-sekundový wait. **Aktuální verze**
+- **v3.38.25** - **Proactive DOM highlight scan (boot latency fix)**: `SCAN_HIGHLIGHTS_NOW` handler + `_kickDomHighlightScan` na boot/tick/visibility.
+- **v3.38.26** - **Fix emote downgrade po polling tick**: user reported "emoty probliknou a hned zmiznou". Root cause: `_rerenderHighlights` pushoval `_gqlPinCards` do `msg.cards`. `_handleHighlights` pak filtroval `kind: 'pin'` a dostal **GQL pin card jako kdyby byl DOM** — merge(gql, gql) → DOM body pick byl plaintext z GQL, cache se ignorovala. Fix: `_rerenderHighlights` posílá jen non-pin cards; GQL pin se merguje vždy separate z `_gqlPinCards[0]`. Plus `isRerender` guard v `_handleHighlights` prevent overwrite `_lastDomHighlightCards` během rerender tick. Fresh DOM body URLs teď vydrží napříč 4s tick cyklem bez downgradu. **Aktuální verze**
 
 ## Release workflow
 

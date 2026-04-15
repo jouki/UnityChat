@@ -5369,12 +5369,16 @@ class UnityChat {
     return { kind: 'pin', text, pin };
   }
 
-  // Merge cached non-pin DOM cards with whatever pin source wins
-  // (DOM if recent, otherwise GQL) and re-render the highlights banner.
+  // Trigger a re-render of the highlights banner using cached non-pin
+  // DOM cards only — pin data is merged inside _handleHighlights from
+  // _gqlPinCards + _lastGoodPinCache. Pushing GQL pins into msg.cards
+  // here (previous behaviour) caused the merge to read GQL body
+  // segments as if they were DOM, clobbering the real emote URLs with
+  // plaintext emote names.
   _rerenderHighlights() {
     const msg = {
       channel: this.config.channel,
-      cards: [...(this._lastDomHighlightCards || []), ...(this._gqlPinCards || [])],
+      cards: [...(this._lastDomHighlightCards || [])],
     };
     this._rerenderTag = msg;
     this._handleHighlights(msg);
@@ -5388,19 +5392,17 @@ class UnityChat {
     // the _rerenderTag identity). Splits pin cards out from the rest so
     // that re-renders never accidentally re-inject stale pins from the
     // cache (which caused 4x duplicate "Připnuto uživatelem …" banners).
-    if (msg.cards && msg !== this._rerenderTag) {
+    // Caching + pin merge. DOM-sourced TW_HIGHLIGHTS message carries
+    // fresh DOM pin data in msg.cards; our own _rerenderHighlights
+    // carries only non-pin cards. Either way we merge per-field with
+    // GQL + cache and produce a single best-of pin card.
+    const isRerender = msg === this._rerenderTag;
+    if (msg.cards) {
       const domCards = msg.cards;
-      const domPins = domCards.filter((c) => c?.kind === 'pin');
-      this._lastDomHighlightCards = domCards.filter((c) => c?.kind !== 'pin');
-      // Pin merge strategy: DOM and GQL each have strengths/weaknesses.
-      //   DOM expanded  → author + badges + time + real emote URLs
-      //   DOM collapsed → pinner + body text only (author row unmounted)
-      //   GQL           → pinner + author + color + badges + time, BUT
-      //                   emotes as name-only (Client-Integrity gate)
-      // Twitch auto-toggles DOM pin between expanded/collapsed every
-      // few seconds, which used to downgrade the banner each time.
-      // Now we merge per-field, keeping the last non-empty value for
-      // each so once expanded data is seen, it sticks.
+      const domPins = isRerender ? [] : domCards.filter((c) => c?.kind === 'pin');
+      if (!isRerender) {
+        this._lastDomHighlightCards = domCards.filter((c) => c?.kind !== 'pin');
+      }
       const gqlPin = (this._gqlPinCards || [])[0];
       const domPin = domPins[0];
       const mergedPin = this._mergePinCard(domPin, gqlPin);
