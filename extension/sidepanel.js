@@ -4386,6 +4386,39 @@ class UnityChat {
       const first = this._domRedeemSeen.values().next().value;
       this._domRedeemSeen.delete(first);
     }
+
+    // Merge path: if IRC already rendered a redeem (with the "Channel Points
+    // Reward" placeholder because IRC doesn't expose reward names) for the
+    // same user in the last ~10s, upgrade its name + cost in place instead
+    // of emitting a duplicate message.
+    const uname = data.username.toLowerCase();
+    const now = data.timestamp || Date.now();
+    const recent = this.chatEl.querySelectorAll('.msg.redeem[data-platform="twitch"]');
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const el = recent[i];
+      const un = el.querySelector('.un');
+      if (!un || un.dataset.username !== uname) continue;
+      const mid = el.dataset.msgId;
+      const cached = mid ? this._msgCache.find((m) => m.id === mid) : null;
+      const ts = cached?.timestamp || 0;
+      if (Math.abs(now - ts) > 10000) continue;
+      // Upgrade reward name and append cost pill
+      const nameEl = el.querySelector('.redeem-body strong');
+      if (nameEl && data.rewardName) nameEl.textContent = data.rewardName;
+      if (data.rewardCost != null && !el.querySelector('.redeem-cost')) {
+        const cost = document.createElement('span');
+        cost.className = 'redeem-cost';
+        cost.textContent = `\u25CE ${data.rewardCost}`;
+        el.appendChild(cost);
+      }
+      if (cached) {
+        if (data.rewardName) cached.rewardName = data.rewardName;
+        if (data.rewardCost != null) cached.rewardCost = data.rewardCost;
+        chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+      }
+      return;
+    }
+
     this._addMessage({
       platform: 'twitch',
       username: data.username,

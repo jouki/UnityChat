@@ -506,7 +506,6 @@
     if (REDEEM_SEEN.has(node)) return null;
 
     const cls = (node.className && typeof node.className === 'string') ? node.className : '';
-    const lookup = (node.querySelector || (() => null));
     const deep = (node.textContent || '').trim();
     if (!deep) return null;
 
@@ -517,6 +516,30 @@
     const hasRedeemedWord = / redeemed /i.test(deep);
 
     if (!isRedeemClass && !hasRedeemedWord) return null;
+
+    // Reject container nodes that wrap multiple chat lines — otherwise our
+    // textContent grabs reward header + cost + following chat message all
+    // jammed together and the reward name ends up as
+    //   "Send Cult follower message2000mojma98: Veru Veru..."
+    const childChatLines = node.querySelectorAll
+      ? node.querySelectorAll('.chat-line__message, [class*="chat-line"]').length
+      : 0;
+    if (childChatLines > 1) return null;
+
+    // Reject lines that have an embedded chat message body — those come
+    // through IRC as PRIVMSG with custom-reward-id, which the sidepanel
+    // already renders as a proper redeem. Emitting DOM for them would
+    // duplicate (and mangle) the event.
+    const hasInlineMessage = node.querySelector
+      && (node.querySelector('[data-a-target="chat-line-message-body"]')
+        || node.querySelector('.seventv-message-body')
+        || node.querySelector('[class*="message-body"]'));
+    if (hasInlineMessage) return null;
+
+    // Reject if text contains ":" after "redeemed" (chat message smuggled
+    // into the snapshot via sibling DOM nesting).
+    const redeemedAt = deep.search(/ redeemed /i);
+    if (redeemedAt !== -1 && /:\s/.test(deep.substring(redeemedAt))) return null;
 
     // Try to extract username
     const userEl = node.querySelector && (
