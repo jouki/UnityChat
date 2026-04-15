@@ -6862,19 +6862,22 @@ class UnityChat {
     const spinner = document.createElement('div');
     spinner.className = 'hydrate-spinner';
     spinner.innerHTML = '<span class="hs-ring" aria-hidden="true"></span><span class="hs-label">Načítání starších zpráv…</span>';
-    this.chatEl.insertBefore(spinner, this.chatEl.firstChild);
-    // Capture scroll metrics AFTER spinner is in DOM but BEFORE messages are
-    // prepended, so the scrollTop jump accounts for the spinner already being
-    // in the layout (we subtract its height in the final restore).
     const realChat = this.chatEl;
-    const prevHeight = realChat.scrollHeight;
-    const prevTop = realChat.scrollTop;
+    realChat.insertBefore(spinner, realChat.firstChild);
 
     try {
       // One-frame delay so the spinner paints before we start the (cheaper,
       // but still non-trivial) render work. Without this the user sees a
       // scroll jump with no indicator of what happened.
       await new Promise((r) => requestAnimationFrame(() => r()));
+      // Capture scroll metrics AFTER the rAF yield, not before — the user
+      // may have scrolled further up during the frame gap. Using a stale
+      // prevTop would mis-place the viewport after prepend and make the
+      // chat look like messages skipped out of order. This snapshot runs
+      // synchronously on the same tick as the work below, so no scroll
+      // event can sneak between capture and restore.
+      const prevHeight = realChat.scrollHeight;
+      const prevTop = realChat.scrollTop;
 
       const batch = 150;
       const startIdx = Math.max(0, this._hydratedIdx - batch);
