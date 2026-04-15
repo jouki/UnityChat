@@ -4836,6 +4836,12 @@ class UnityChat {
           await chrome.tabs.sendMessage(target.id, { type: 'TW_CLAIM_BONUS' }).catch(() => {});
           // Optimistic hide — observer will re-show if claim didn't fire
           claimPill.classList.add('hidden');
+          // Optimistic flash so user gets feedback even when the post-
+          // claim balance round-trips to the same abbreviation (delta
+          // detector wouldn't fire). 50 is Twitch's standard claim
+          // bonus; if the actual amount differs the next snapshot
+          // delta will show the correction.
+          this._flashPointsDelta(50);
         } catch {}
       });
     }
@@ -4843,10 +4849,19 @@ class UnityChat {
     const pointsVal = wrap.querySelector('.tc-points-val');
     const pointsIcon = wrap.querySelector('.tc-points-icon');
 
+    // Keep-last-shown: Twitch's points-balance subtree briefly drops the
+    // bits/points text spans during the +10 watch-reward animation. If
+    // we hide the pill on every transient null, the whole row keeps
+    // flashing in/out. Only update when we have a real value; only
+    // hide when the pill has never been shown.
     let anyShown = false;
+    const bitsShown = !bitsPill.classList.contains('hidden');
     if (data.bits != null && data.bits !== '') {
       bitsVal.textContent = data.bits;
       bitsPill.classList.remove('hidden');
+      anyShown = true;
+    } else if (bitsShown) {
+      // Keep prior bits visible — don't hide on transient missing data
       anyShown = true;
     } else {
       bitsPill.classList.add('hidden');
@@ -4874,10 +4889,18 @@ class UnityChat {
       }
       pointsPill.classList.remove('hidden');
       anyShown = true;
-      if (prevNum != null && newNum != null && newNum > prevNum && data.points !== prevText) {
+      // Numerical delta only — text-equality guard would suppress
+      // flashes when both pre/post values round to the same abbreviation
+      // ("1,5 tis." → +10 → still "1,5 tis." but parseTwitchNum sees
+      // 1500 → 1510 if we have higher precision).
+      if (prevNum != null && newNum != null && newNum > prevNum) {
         this._flashPointsDelta(newNum - prevNum);
       }
       if (newNum != null) this._lastPointsNum = newNum;
+    } else if (!pointsPill.classList.contains('hidden')) {
+      // Keep prior points visible — don't hide on transient missing
+      // data (e.g. during +10 reward animation Twitch swaps spans).
+      anyShown = true;
     } else {
       pointsPill.classList.add('hidden');
     }
