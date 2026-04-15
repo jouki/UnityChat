@@ -1249,30 +1249,71 @@
       bodySegments: [],
       timeText: null,
     };
-    // 1. Pinned-by: find element whose text starts with "Připnuto
-    //    uživatelem" and grab the username span that follows.
+    // 1. Pinned-by: Twitch's pin layout puts the pinner name in a span
+    //    right after the "Připnuto uživatelem" label. Walking the DOM is
+    //    more reliable than regex over textContent — newlines inside the
+    //    card get stripped, so `\S+` can swallow e.g. "MeewileDONO:" when
+    //    the body starts on a new line without whitespace in between.
     const allText = (card.textContent || '').trim();
-    const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+(\S+)/i);
-    if (pbMatch) out.pinnedBy = pbMatch[1];
-    // 2. Author — look for the LAST .seventv-chat-user / [data-a-user]
-    //    / .chat-author__display-name in the card (message author shows
-    //    at the bottom in the pin layout).
+    // Primary: find the label span, take next non-empty sibling/descendant text.
+    const labelRe = /P[řr]ipnuto uživatelem/i;
+    for (const el of card.querySelectorAll('span, p')) {
+      const t = (el.textContent || '').trim();
+      if (!labelRe.test(t)) continue;
+      // Look for the username span — usually it's either a child with
+      // a chat-username class or the next element sibling.
+      const nameEl = el.querySelector('.chat-author__display-name, .seventv-chat-user-username, [data-a-user]')
+        || (el.nextElementSibling && /chat-user|username|display-name|author/i.test(el.nextElementSibling.className) ? el.nextElementSibling : null);
+      if (nameEl) {
+        const name = (nameEl.textContent || '').trim();
+        if (name && name.length <= 40) { out.pinnedBy = name; break; }
+      }
+    }
+    // Fallback: regex but tight — only word chars (Unicode-aware). Strips
+    // anything like "DONO:" that got fused in from the body paragraph.
+    if (!out.pinnedBy) {
+      const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_]+)/iu);
+      if (pbMatch) out.pinnedBy = pbMatch[1];
+    }
+
+    // 2. Author — search for chat-user / seventv-chat-user spans within
+    //    the card. Last match is usually the message author in pin footer.
+    //    If there are none, fall back to ANY username-looking span not
+    //    equal to the pinner.
     const authorCandidates = [
       ...card.querySelectorAll('.seventv-chat-user'),
       ...card.querySelectorAll('[data-a-user]'),
       ...card.querySelectorAll('.chat-author__display-name'),
     ];
-    const authorEl = authorCandidates[authorCandidates.length - 1];
+    let authorEl = authorCandidates[authorCandidates.length - 1] || null;
+    // Reject the candidate if it's actually the pinner label (same name
+    // and no badges/color hints — means DOM only has one username total).
+    if (authorEl) {
+      const txt = (authorEl.textContent || '').trim();
+      if (out.pinnedBy && txt === out.pinnedBy && authorCandidates.length === 1) {
+        authorEl = null; // nothing meaningful
+      }
+    }
     if (authorEl) {
       const userTextEl = authorEl.querySelector('.seventv-chat-user-username, .chat-author__display-name')
         || authorEl;
       out.author = (userTextEl.textContent || '').trim();
       out.authorColor = authorEl.style?.color || userTextEl.style?.color || null;
     }
-    // 3. Author badges — all <img> siblings before the author name
-    //    inside the pin card bottom row that look like badge imgs.
+
+    // 3. Author badges — scan imgs in the bottom half of the card.
+    //    Previous version looked inside authorEl.closest() which returned
+    //    the whole card on community-highlight pins, picking up stray
+    //    imgs. Scope to the row containing the author text.
     if (authorEl) {
-      const authorRow = authorEl.closest('[class*="Layout"], div') || card;
+      let authorRow = authorEl.parentElement;
+      // Walk up until we hit a layout container (flex row / grid row).
+      while (authorRow && authorRow !== card) {
+        const cs = getComputedStyle(authorRow);
+        if (cs.display === 'flex' || cs.display === 'grid') break;
+        authorRow = authorRow.parentElement;
+      }
+      authorRow = authorRow || authorEl.parentElement || card;
       for (const img of authorRow.querySelectorAll('img[src]')) {
         const src = img.src;
         if (/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) {
@@ -1280,16 +1321,19 @@
         }
       }
     }
-    // 4. Body — find the bold/large message text container. Pinned
-    //    messages use a distinct container separate from the pin header.
-    //    Walk candidate selectors that match Twitch's pin-body classes;
-    //    fallback to the largest text container that ISN'T the header.
+
+    // 4. Body — find the message body. Previous fallback picked whatever
+    //    element had the longest text and didn't start with "Připnuto",
+    //    but if the card's structure has a wrapper that contains BOTH
+    //    the header AND the body, the header text is included (trim
+    //    doesn't remove mid-text). New rule: the body element's full
+    //    trimmed text must NOT contain the label anywhere — only pure
+    //    body content qualifies.
     const bodySelectors = [
       '[data-test-selector="pinned-chat-message-body"]',
       '[class*="pinned-chat-message"] [class*="message-body"]',
       '.pinned-chat-message__body',
       '[class*="PinnedChatMessage"] [class*="body"]',
-      '[class*="pinned"] p',
     ];
     let bodyEl = null;
     for (const sel of bodySelectors) {
@@ -1299,16 +1343,23 @@
       }
     }
     if (!bodyEl) {
-      // Fallback: paragraph / span with the longest text that's not the
-      // pin header ("Připnuto uživatelem …").
+      // Fallback: element with the longest text that does NOT contain the
+      // pin-header label anywhere (stricter than previous "doesn't start
+      // with Připnuto" check), doesn't contain the pinner name alone,
+      // and isn't just the time-string.
       let best = null, bestLen = 0;
+      const timeRe = /^odesl[áa]no v|^sent at/i;
       for (const el of card.querySelectorAll('p, span, div')) {
         const t = (el.textContent || '').trim();
         if (t.length < 5) continue;
-        if (/^P[řr]ipnuto/i.test(t)) continue;
-        if (el.childElementCount === 0 || el.querySelectorAll('img').length > 0) {
-          if (t.length > bestLen) { best = el; bestLen = t.length; }
-        }
+        if (labelRe.test(t)) continue; // contains header label anywhere
+        if (out.pinnedBy && t === out.pinnedBy) continue;
+        if (timeRe.test(t)) continue;
+        // Prefer leaf-ish nodes (no child divs) or nodes with emote imgs.
+        const hasImg = el.querySelectorAll('img').length > 0;
+        const hasChildBlocks = el.querySelector('div, p') !== null;
+        if (hasChildBlocks && !hasImg) continue;
+        if (t.length > bestLen) { best = el; bestLen = t.length; }
       }
       bodyEl = best;
     }
@@ -1395,6 +1446,30 @@
       let pinDetails = null;
       if (kind === 'pin') {
         pinDetails = extractPinDetails(el);
+        // Diagnostic log (once per unique pin) so we can see what Twitch
+        // rendered and what extractPinDetails returned. Trimmed HTML keeps
+        // log size manageable. Captured as Pin tag so it surfaces in DIAG
+        // dumps. Only fires when something's off (missing author or empty
+        // body) to avoid log spam on normal pins.
+        const missing = [];
+        if (!pinDetails.author) missing.push('author');
+        if (!pinDetails.bodySegments?.length) missing.push('body');
+        if (!pinDetails.pinnedBy) missing.push('pinnedBy');
+        if (missing.length) {
+          const html = (el.outerHTML || '').slice(0, 4000);
+          const extracted = JSON.stringify({
+            pinnedBy: pinDetails.pinnedBy,
+            author: pinDetails.author,
+            authorColor: pinDetails.authorColor,
+            authorBadges: pinDetails.authorBadges?.length || 0,
+            bodySegs: pinDetails.bodySegments?.length || 0,
+            timeText: pinDetails.timeText,
+          });
+          try {
+            chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Pin',
+              text: `extract missing=${missing.join(',')} got=${extracted} html=${html}` }).catch(() => {});
+          } catch {}
+        }
       }
       // Pull the first channel-style avatar image out of the card if
       // present — raid notices embed the raider's profile pic.
