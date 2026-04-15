@@ -4272,9 +4272,9 @@ class UnityChat {
             else segs.push({ type: 'text', value: token });
             continue;
           }
-          const entry = resolveEmote(token);
-          if (entry?.url) {
-            segs.push({ type: 'emote', url: entry.url, alt: token });
+          const url = resolveEmote(token);
+          if (typeof url === 'string' && url) {
+            segs.push({ type: 'emote', url, alt: token });
           } else {
             const last = segs[segs.length - 1];
             if (last && last.type === 'text') last.value += token;
@@ -5587,6 +5587,8 @@ class UnityChat {
     // emote library, falling back to linkified text. Plus strip the UC
     // marker (Braille blank) so it doesn't leak as visible whitespace.
     const em = this.emotes;
+    // Each emote map stores URL strings directly (not {url: ...} objects),
+    // so the lookup result IS the URL — must not access .url on it.
     const resolveEmote = (name) =>
       em?.twitchNative?.get(name)
       || em?.channel7tv?.get(name)
@@ -5602,9 +5604,9 @@ class UnityChat {
       return parts.map((tok) => {
         if (!tok) return '';
         if (/^\s+$/.test(tok)) return em._eh(tok);
-        const entry = resolveEmote(tok);
-        if (entry?.url) {
-          return `<img class="emote" src="${em._ea(entry.url)}" alt="${em._eh(tok)}">`;
+        const url = resolveEmote(tok);
+        if (typeof url === 'string' && url) {
+          return `<img class="emote" src="${em._ea(url)}" alt="${em._eh(tok)}">`;
         }
         return em._linkify(tok);
       }).join('');

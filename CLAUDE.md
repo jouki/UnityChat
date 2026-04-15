@@ -613,7 +613,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.33** - **Mock pin sticky 30s** (přechodný): `_mockPinUntil` flag suppress real GQL poll. Nahrazeno v3.38.34 aby mock mohl coexistovat s real pinem.
 - **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards`, oba pin sources renderovány vedle sebe.
 - **v3.38.35** - **DOM pin extract iter 3 — direct text nodes + body selector fix**: scan přímých text nodes pro pinner, `.pinned-chat__message` selector pro body.
-- **v3.38.36** - **Pin emote resolve in body + rounded corners fix**: (1) **Emote resolve**: 7TV/BTTV/FFZ emoty v Twitch pin DOM přijdou jako plain `text-fragment` (Twitch UI Vue replacer neběží uvnitř pin subtree). `_buildPinCard` teď tokenizuje text segmenty na words a resolve každý token proti full emote library (Twitch native, 7TV channel/global, BTTV, FFZ, Kick, UC). Plus strip UC marker `⠀` (Braille blank) z body. (2) **Ostré rohy**: `border-image` v Chrome **ignoruje `border-radius`** (spec implementation-defined). Nahrazeno solid amber border + multi-layer box-shadow (gradient ring effect přes shadow vrstvy). Rohy teď zaoblené 10px jak design říká. **Aktuální verze**
+- **v3.38.36** - **Pin emote resolve + rounded corners**: tokenize text body for emote lookup (bug: použil `entry?.url` ale maps drží URL string). Border-image → solid border + box-shadow.
+- **v3.38.37** - **Emote map value type fix**: emote maps (`channel7tv`, `global7tv`, `bttvEmotes`, `ffzEmotes`, `twitchNative`, `kickNative`, `ucEmotes`) ukládají **URL string přímo**, ne `{url}` objekt. Můj `entry?.url` v3.38.36 vracel `undefined` → resolve always failed → emote text. Fix: `const url = resolveEmote(name)` + check `typeof url === 'string'`. Stejný fix v `/uc pin` mocku. **Aktuální verze**
 
 ## Release workflow
 
