@@ -593,7 +593,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.13** - **Hide strategie — (reverted)**: pokus `position: fixed; right: -9999px` vedl k tomu, že Twitch highlight stack byl úplně unmountovaný (log `HighlightDiag` ukázal jen chat-list + wysiwyg, žádný highlight root). Twitch pravděpodobně používá IntersectionObserver a out-of-viewport = unmount.
 - **v3.38.14** - **GQL pin fallback — pin fetch přes Twitch API, nezávislý na DOM**: background `FETCH_PINS` + sidepanel `_startPinPoll()` + merge DOM/GQL cards. Hide CSS zpět na stabilní `width: 0`.
 - **v3.38.15** - **GQL schema fix #1 pro FETCH_PINS** (špatný guess — `message` také neexistuje).
-- **v3.38.16** - **GQL introspection pro PinnedChatMessage**: log z v3.38.15 ukázal že ani `message` field na `PinnedChatMessage` neexistuje. Místo dalšího guess-work teď posíláme GQL introspection query — background jednou per session dotazuje `__type(name: "PinnedChatMessage") { fields { name type { ... } } }` a loguje skutečné schema. Minimal query teď pulluje jen confirmed fields (id, startsAt, endsAt, pinnedBy). Sender + content fields se doplní v další iteraci po přečtení introspection logu. **Aktuální verze**
+- **v3.38.16** - **GQL introspection pro PinnedChatMessage** — introspection však Twitch disabled, vrátila `{"data":{}}`.
+- **v3.38.17** - **GQL field probing — zkoušíme kandidáty naslepo**: introspection nedostupná. Probe loop iteruje 18 candidate field names (`text`, `body`, `sender`, `user`, `messageID`, `fragments`, atd.), každý jako samostatný query. Pole co selže s "Cannot query field" neexistuje, ostatní se logují jako `PROBE fieldName: EXISTS` + sample data. Runs once per session. Výsledky → dostaneme skutečná pole a v další iteraci postavíme správnou query. **Aktuální verze**
 
 ## Release workflow
 

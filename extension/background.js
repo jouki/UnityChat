@@ -794,23 +794,38 @@ async function fetchPins(channel) {
     // to CDN URLs), pin timestamp and duration. Schema is reasonably
     // stable but Twitch occasionally renames fields — errors surface in
     // the Pin log for re-tuning.
-    // Run an introspection query alongside the main one so we can see
-    // what PinnedChatMessage actually exposes. Results go to the Pin log
-    // (once per fetchPins call, cheap). After we learn the schema we can
-    // lock the query down.
-    if (!fetchPins._introspected) {
-      fetchPins._introspected = true;
-      try {
-        const ir = await fetch('https://gql.twitch.tv/gql', {
-          method: 'POST', headers,
-          body: JSON.stringify({
-            query: `{ __type(name: "PinnedChatMessage") { name fields { name type { kind name ofType { kind name } } } } }`,
-          }),
-        });
-        const idata = await ir.json();
-        ucLog('Pin', 'PinnedChatMessage introspection:', JSON.stringify(idata?.data?.__type || idata));
-      } catch (ie) {
-        ucLog('Pin', 'introspection failed:', ie.message);
+    // Twitch disabled introspection on their public GQL endpoint (prev
+    // attempt returned empty __type). Fallback: probe candidate fields
+    // one at a time. Each failing field generates a GQL error we can
+    // identify; fields that don't error are real. Runs once per session.
+    if (!fetchPins._probed) {
+      fetchPins._probed = true;
+      const candidates = [
+        'type', 'text', 'body', 'contentText', 'rawText', 'html',
+        'messageID', 'messageId', 'pinnedMessageID', 'chatMessageID',
+        'sender', 'user', 'author', 'fromUser', 'sourceUser',
+        'fragments', 'emotes',
+      ];
+      for (const field of candidates) {
+        try {
+          const pr = await fetch('https://gql.twitch.tv/gql', {
+            method: 'POST', headers,
+            body: JSON.stringify({
+              query: `query($n:String!){channel(name:$n){pinnedChatMessages{edges{node{${field}}}}}}`,
+              variables: { name: channel }
+            }),
+          });
+          const pdata = await pr.json();
+          const err = pdata?.errors?.[0]?.message;
+          if (err && /Cannot query field/.test(err)) {
+            // field is NOT on PinnedChatMessage
+          } else if (err) {
+            // other error — field might exist but needs subselection
+            ucLog('Pin', `PROBE ${field}: may exist (err: ${err.slice(0, 120)})`);
+          } else {
+            ucLog('Pin', `PROBE ${field}: EXISTS — data=${JSON.stringify(pdata?.data?.channel?.pinnedChatMessages?.edges?.[0]?.node || null)}`);
+          }
+        } catch (pe) { /* ignore */ }
       }
     }
     // Minimal working query (id/startsAt/endsAt/pinnedBy confirmed in
