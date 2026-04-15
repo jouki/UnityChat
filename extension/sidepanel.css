@@ -153,34 +153,46 @@ body.layout-large #settings details summary { font-size: 15px; }
 body.layout-medium .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.1; }
 body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22; }
 
-/* Speech-bubble arrow pointing up to the logo. Two stacked triangles so
-   we get a bordered wedge matching the tooltip's 1px border. */
+/* Speech-bubble arrow pointing up to the logo. Two stacked triangles
+   (outer=border color, inner=panel fill) positioned between logo and
+   tooltip. Rendered as direct children of .hdr-logo-wrap (not inside
+   .update-tooltip) so the tooltip's overflow:hidden doesn't clip them. */
 .hdr-logo-wrap.has-update .ut-arrow-outer,
 .hdr-logo-wrap.has-update .ut-arrow-inner {
   position: absolute;
   width: 0;
   height: 0;
   pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s, transform 0.18s;
+  transform: translateY(-4px);
+  z-index: 201;
 }
 .hdr-logo-wrap.has-update .ut-arrow-outer {
-  top: -10px;
-  left: 14px;
-  border-left: 11px solid transparent;
-  border-right: 11px solid transparent;
-  border-bottom: 11px solid rgba(255, 140, 0, 0.45);
+  top: calc(100% + 2px);
+  left: 4px;
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-bottom: 12px solid rgba(255, 140, 0, 0.55);
+  filter: drop-shadow(0 -1px 0 rgba(255, 140, 0, 0.25));
 }
 .hdr-logo-wrap.has-update .ut-arrow-inner {
-  top: -9px;
-  left: 15px;
-  border-left: 10px solid transparent;
-  border-right: 10px solid transparent;
-  border-bottom: 10px solid #151518;
+  top: calc(100% + 4px);
+  left: 5px;
+  border-left: 11px solid transparent;
+  border-right: 11px solid transparent;
+  border-bottom: 11px solid #151518;
 }
 
-/* Show tooltip on hover/focus OR while auto-reveal class is active. */
-.hdr-logo-wrap.has-update:hover .update-tooltip,
-.hdr-logo-wrap.has-update:focus-within .update-tooltip,
-.hdr-logo-wrap.has-update.auto-reveal .update-tooltip {
+/* Show tooltip + arrow on JS-controlled hover-intent OR during auto-reveal.
+   JS toggles .is-hovering with a 250ms hide delay, so the cursor can cross
+   the pixel gap between logo and tooltip without losing visibility. */
+.hdr-logo-wrap.has-update.is-hovering .update-tooltip,
+.hdr-logo-wrap.has-update.is-hovering .ut-arrow-outer,
+.hdr-logo-wrap.has-update.is-hovering .ut-arrow-inner,
+.hdr-logo-wrap.has-update.auto-reveal .update-tooltip,
+.hdr-logo-wrap.has-update.auto-reveal .ut-arrow-outer,
+.hdr-logo-wrap.has-update.auto-reveal .ut-arrow-inner {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);

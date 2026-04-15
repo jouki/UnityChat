@@ -1702,6 +1702,25 @@ class UnityChat {
     const logoWrap = document.getElementById('hdr-logo-wrap');
     if (tpl && logoWrap) {
       logoWrap.appendChild(tpl.content.cloneNode(true));
+      // Hover-intent: 250ms hide delay covers the pixel gap between the logo
+      // and the tooltip card (CSS-only :hover would drop as soon as the
+      // cursor left the logo, killing the "move down to click the link" UX).
+      const tip = logoWrap.querySelector('.update-tooltip');
+      let hideT = null;
+      const show = () => {
+        clearTimeout(hideT);
+        logoWrap.classList.add('is-hovering');
+      };
+      const hide = () => {
+        clearTimeout(hideT);
+        hideT = setTimeout(() => logoWrap.classList.remove('is-hovering'), 250);
+      };
+      logoWrap.addEventListener('mouseenter', show);
+      logoWrap.addEventListener('mouseleave', hide);
+      if (tip) {
+        tip.addEventListener('mouseenter', show);
+        tip.addEventListener('mouseleave', hide);
+      }
     }
 
     await this._loadConfig();

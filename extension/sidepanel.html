@@ -14,12 +14,13 @@
          #hdr-logo-wrap (built at init time) so the dot and tooltip hang
          off the UnityChat logo on the left of the header. -->
     <template id="update-tooltip-tpl">
+      <!-- Speech-bubble arrow pointing up to the logo. Outer wedge is the
+           border color, inner wedge is the panel fill. Kept as siblings
+           of .update-tooltip (not children) so tooltip's overflow:hidden
+           doesn't clip them. -->
+      <span class="ut-arrow-outer" aria-hidden="true"></span>
+      <span class="ut-arrow-inner" aria-hidden="true"></span>
       <div class="update-tooltip">
-        <!-- Speech-bubble arrow pointing up to the logo. Outer wedge is the
-             border color, inner wedge is the panel fill, stacked to create
-             a bordered triangle. -->
-        <span class="ut-arrow-outer" aria-hidden="true"></span>
-        <span class="ut-arrow-inner" aria-hidden="true"></span>
         <div class="ut-title">Nová verze k dispozici</div>
         <div class="ut-version">v<span id="ut-version-num">?</span></div>
         <div class="ut-text">
