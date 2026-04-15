@@ -5640,7 +5640,15 @@ class UnityChat {
       });
     }
 
-    // Hover akce
+    // Hover akce — skip for system events (raid, sub, gift, redeem,
+    // announcement). They aren't user messages: copying their body text
+    // is meaningless and Twitch IRC won't accept a reply to them.
+    const isSystemEvent = msg.isRaid || msg.isAnnouncement
+      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem;
+    if (isSystemEvent) {
+      // Skip the entire actions cluster but keep the closing brace structure
+      // (we still need to fall through to the unread/append/scroll/cache).
+    } else {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
@@ -5688,6 +5696,7 @@ class UnityChat {
     actions.appendChild(replyBtn);
     el.appendChild(actions);
     }
+    } // end isSystemEvent guard
 
     // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu)
     if (!this.autoScroll) {
