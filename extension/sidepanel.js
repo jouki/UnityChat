@@ -887,6 +887,9 @@ class TwitchProvider {
     this.onMessage = null;
     this.onStatus = null;
     this.onRoomId = null;
+    // Mod actions: timeout/ban (CLEARCHAT) + single-message delete (CLEARMSG)
+    this.onClear = null;
+    this.onClearMsg = null;
   }
 
   connect(channel) {
@@ -922,6 +925,10 @@ class TwitchProvider {
             this._parse(line);
           } else if (line.includes('USERNOTICE')) {
             this._parseNotice(line);
+          } else if (line.includes('CLEARCHAT')) {
+            this._parseClearChat(line);
+          } else if (line.includes('CLEARMSG')) {
+            this._parseClearMsg(line);
           }
         }
       };
@@ -1074,6 +1081,48 @@ class TwitchProvider {
         announcementColor: ann,
       });
     }
+  }
+
+  // CLEARCHAT — `:tmi.twitch.tv CLEARCHAT #channel :targetuser`
+  // Tags: ban-duration=N (timeout, N seconds) — absent = permanent ban.
+  // No target after the colon = chat-wide clear (we don't act on those).
+  _parseClearChat(raw) {
+    let tags = {};
+    let rest = raw;
+    if (raw.startsWith('@')) {
+      const si = raw.indexOf(' ');
+      for (const t of raw.substring(1, si).split(';')) {
+        const eq = t.indexOf('=');
+        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
+      }
+      rest = raw.substring(si + 1);
+    }
+    const ci = rest.indexOf('CLEARCHAT');
+    if (ci === -1) return;
+    const after = rest.substring(ci + 9);
+    const colonIdx = after.indexOf(':');
+    if (colonIdx === -1) return; // chat-wide clear, skip
+    const targetUser = after.substring(colonIdx + 1).trim();
+    if (!targetUser) return;
+    const banDuration = tags['ban-duration']
+      ? parseInt(tags['ban-duration'], 10) || null
+      : null;
+    this.onClear?.({ user: targetUser, banDuration });
+  }
+
+  // CLEARMSG — single message deletion. Tags: target-msg-id, login.
+  _parseClearMsg(raw) {
+    let tags = {};
+    if (raw.startsWith('@')) {
+      const si = raw.indexOf(' ');
+      for (const t of raw.substring(1, si).split(';')) {
+        const eq = t.indexOf('=');
+        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
+      }
+    }
+    const id = tags['target-msg-id'];
+    if (!id) return;
+    this.onClearMsg?.({ id, login: tags.login || null });
   }
 
   _reconnect() {
@@ -3572,6 +3621,8 @@ class UnityChat {
   _setupProviders() {
     this.twitch.onMessage = (m) => this._addMessage(m);
     this.twitch.onStatus = (s, d) => this._status('twitch', s, d);
+    this.twitch.onClear = (e) => this._applyTwitchClear(e.user, e.banDuration);
+    this.twitch.onClearMsg = (e) => this._applyTwitchClearMsg(e.id);
     this.twitch.onRoomId = (id) => {
       this.config._roomId = id;
       this._saveConfig();
@@ -3706,6 +3757,75 @@ class UnityChat {
     }
     // Mirror to loading-overlay pills so the user sees connection progress.
     this._updateLoadingPill(platform, status);
+  }
+
+  // ---- Mod actions: timeout / ban / single-message delete ---------------
+
+  _fmtBanDuration(seconds) {
+    if (!seconds) return '';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    return `${Math.floor(seconds / 86400)}d`;
+  }
+
+  // Mark every Twitch message from `username` as cleared (greyed) with a
+  // small label noting the action. Vanilla Twitch keeps the messages
+  // visible; we mirror that. Also persists into _msgCache so the cleared
+  // state survives reload / scroll-back.
+  _applyTwitchClear(username, banDuration) {
+    if (!username) return;
+    const u = String(username).toLowerCase();
+    const note = banDuration
+      ? `Timeout (${this._fmtBanDuration(banDuration)})`
+      : 'Permanently banned';
+    // DOM
+    const sel = `.msg[data-platform="twitch"] .un[data-username="${CSS.escape(u)}"]`;
+    for (const un of this.chatEl.querySelectorAll(sel)) {
+      const msgEl = un.closest('.msg');
+      if (!msgEl) continue;
+      this._markMessageCleared(msgEl, note);
+    }
+    // Cache (so reload preserves)
+    let cacheDirty = false;
+    for (const m of this._msgCache) {
+      if (m.platform === 'twitch' && m.username && m.username.toLowerCase() === u) {
+        if (m._cleared !== note) {
+          m._cleared = note;
+          cacheDirty = true;
+        }
+      }
+    }
+    if (cacheDirty) {
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+  }
+
+  // Single message delete (CLEARMSG). Just one DOM node + cache entry.
+  _applyTwitchClearMsg(msgId) {
+    if (!msgId) return;
+    const note = 'Deleted by mod';
+    const msgEl = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
+    if (msgEl) this._markMessageCleared(msgEl, note);
+    const cached = this._msgCache.find((m) => m.id === msgId);
+    if (cached && cached._cleared !== note) {
+      cached._cleared = note;
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+  }
+
+  // Apply the .cleared class + append (or update) the inline mod-action
+  // note. Idempotent — repeated calls just refresh the label text.
+  _markMessageCleared(msgEl, label) {
+    if (!msgEl) return;
+    msgEl.classList.add('cleared');
+    let note = msgEl.querySelector('.cleared-note');
+    if (!note) {
+      note = document.createElement('span');
+      note.className = 'cleared-note';
+      msgEl.appendChild(note);
+    }
+    note.textContent = label;
   }
 
   // ---- Loading overlay ---------------------------------------------------
@@ -4395,6 +4515,18 @@ class UnityChat {
       el.appendChild(header);
     }
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
+    // Cached message that was cleared (timeout/ban/delete) in a previous
+    // session — re-apply the visual on render. Live clears go through
+    // _markMessageCleared after the message is already in the DOM.
+    if (msg._cleared) {
+      el.classList.add('cleared');
+      const cn = document.createElement('span');
+      cn.className = 'cleared-note';
+      cn.textContent = msg._cleared;
+      // Append at end after the rest of the message renders below.
+      // Defer with microtask so it lands as the last child.
+      Promise.resolve().then(() => el.appendChild(cn));
+    }
 
     // Determine if reply is TO the current user (not just any reply)
     const isReplyToMe = msg.replyTo && (

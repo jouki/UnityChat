@@ -740,6 +740,38 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 #chat::-webkit-scrollbar-thumb:hover { background: #555; }
 
+/* ---- Cleared messages (timeout / ban / single delete) ----
+   Mirrors vanilla Twitch: the message stays visible but greyed + line-
+   through, with a small inline label noting the moderator action. Live
+   clears (CLEARCHAT/CLEARMSG over IRC) and cached _cleared field both
+   feed the same .cleared class so reload preserves history. */
+.msg.cleared {
+  opacity: 0.55;
+}
+.msg.cleared .tx,
+.msg.cleared .reply-ctx {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+  text-decoration-thickness: 1px;
+  font-style: italic;
+}
+.cleared-note {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: rgba(229, 72, 77, 0.15);
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  color: #ff9a9d;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 /* ---- Loading overlay ---- */
 .loading-overlay {
   position: absolute;
