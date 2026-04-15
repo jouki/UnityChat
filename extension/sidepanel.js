@@ -4698,16 +4698,18 @@ class UnityChat {
       const badgeCount = Object.keys(this._twitchBadges).length;
       for (const badge of msg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const url = this._twitchBadges[badge];
+        const entry = this._twitchBadges[badge];
+        const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (!url && badgeCount > 0) {
           console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
         }
         if (url) {
+          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
           const img = document.createElement('img');
           img.className = 'bdg-img';
           img.src = url;
-          img.alt = badge.split('/')[0];
-          img.title = badge.split('/')[0];
+          img.alt = title;
+          img.setAttribute('data-tooltip', title);
           bdg.appendChild(img);
         }
       }
@@ -4940,13 +4942,15 @@ class UnityChat {
       bdg.className = 'bdg';
       for (const badge of realMsg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const url = this._twitchBadges[badge];
+        const entry = this._twitchBadges[badge];
+        const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (url) {
+          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
           const img = document.createElement('img');
           img.className = 'bdg-img';
           img.src = url;
-          img.alt = badge.split('/')[0];
-          img.title = badge.split('/')[0];
+          img.alt = title;
+          img.setAttribute('data-tooltip', title);
           bdg.appendChild(img);
         }
       }
@@ -5099,7 +5103,7 @@ function _initPlatformBadgeTooltip() {
   }
 
   document.body.addEventListener('mouseover', (e) => {
-    const badge = e.target.closest('.pi[data-tooltip]');
+    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip]');
     if (!badge || badge === currentBadge) return;
     show(badge);
   });
