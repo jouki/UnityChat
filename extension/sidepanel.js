@@ -4750,6 +4750,11 @@ class UnityChat {
       isSubEvent: !!m.isSubEvent,
       isGiftBundle: !!m.isGiftBundle,
       isSubGift: !!m.isSubGift,
+      isAction: !!m.isAction,
+      scraped: !!m.scraped,
+      optimistic: !!m._optimistic,
+      cleared: m._cleared || null,
+      msgLen: (m.message || '').length,
       msgPreview: (m.message || '').slice(0, 80),
     }));
     push('Last 30 cached messages (slim)', recent);
@@ -5582,7 +5587,30 @@ class UnityChat {
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
-    if (textEmpty && !isSystem) return;
+    if (textEmpty && !isSystem) {
+      // Log root-cause clues — which source produced an empty message.
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'EmptyMsg',
+          args: [JSON.stringify({
+            platform: msg?.platform,
+            username: msg?.username,
+            id: msg?.id,
+            scraped: !!msg?.scraped,
+            optimistic: !!msg?._optimistic,
+            isAction: !!msg?.isAction,
+            firstMsg: !!msg?.firstMsg,
+            hasReplyTo: !!msg?.replyTo,
+            twitchEmotes: msg?.twitchEmotes,
+            badgesRaw: msg?.badgesRaw,
+            rawType: typeof msg?.message,
+            rawLen: (msg?.message || '').length,
+            rawCodes: [...String(msg?.message || '').slice(0, 16)].map((c) => c.charCodeAt(0)),
+          })],
+        });
+      } catch {}
+      return;
+    }
 
     // First real message dropping in — chat is "live" enough, hide spinner.
     if (!this._loadingClearedByMsg && msg.username) {
