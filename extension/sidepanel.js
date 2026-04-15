@@ -3546,6 +3546,57 @@ class UnityChat {
     }
   }
 
+  // Walk remaining text nodes inside a rendered message body and wrap any
+  // @username references in <span class="mention"> with the target user's
+  // color (looked up via _chatUsers). Runs post-emote/URL render so we
+  // never touch existing <img>/<a> children — only pure text fragments.
+  _processMentions(el, platform) {
+    if (!el) return;
+    // Pattern: start-of-string OR a non-identifier character, then @name.
+    // Username rules mirror Twitch/Kick/YT: 2–25 chars of [A-Za-z0-9_].
+    const mentionRe = /(^|[^A-Za-z0-9_])@([A-Za-z0-9_]{2,25})/g;
+
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+
+    for (const textNode of nodes) {
+      const text = textNode.nodeValue;
+      if (!text || text.indexOf('@') === -1) continue;
+
+      mentionRe.lastIndex = 0;
+      let match;
+      let last = 0;
+      let frag = null;
+
+      while ((match = mentionRe.exec(text)) !== null) {
+        const prefixLen = match[1].length;
+        const start = match.index + prefixLen;
+        const name = match[2];
+        if (!frag) frag = document.createDocumentFragment();
+        if (start > last) frag.appendChild(document.createTextNode(text.substring(last, start)));
+
+        const span = document.createElement('span');
+        span.className = 'mention';
+        const entry = this._chatUsers.get(`${platform}:${name.toLowerCase()}`)
+          || this._chatUsers.get(name.toLowerCase());
+        const color = entry?.color;
+        if (color) {
+          const sanitized = this.emotes._sc(color);
+          if (sanitized) span.style.color = sanitized;
+        }
+        span.textContent = '@' + name;
+        frag.appendChild(span);
+        last = start + name.length + 1;
+      }
+
+      if (!frag) continue;
+      if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
+
   _applyPaintToRenderedMessages(username, paint) {
     const css = _7tvPaintToCss(paint);
     if (!css) return;
@@ -3936,6 +3987,11 @@ class UnityChat {
     } else {
       tx.innerHTML = this.emotes.renderPlain(msg.message);
     }
+
+    // @mentions — bold + colored with the mentioned user's chat color.
+    // Runs AFTER emote/URL render so we only walk remaining text nodes (no
+    // risk of corrupting <img> / <a> tags inside the rendered body).
+    this._processMentions(tx, msg.platform);
 
     el.appendChild(tx);
 

@@ -807,6 +807,13 @@ body.layout-large #settings details summary { font-size: 15px; }
   letter-spacing: 0.5px;
   opacity: 0.85;
 }
+/* @mention inside message text — bold + colored to the target user's
+   chat color (JS writes inline color via _processMentions). Unknown
+   users fall back to default bold styling. */
+.tx .mention {
+  font-weight: 700;
+}
+
 .msg-tag.tag-reply { color: #cc3333; }
 .msg-tag.tag-mention { color: #cc3333; }
 .msg-tag.tag-first { color: #9146ff; }
