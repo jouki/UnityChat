@@ -30,9 +30,10 @@
       const urlHasLive = window.location.href.includes('/live');
       const hasLiveChat = !!chatFrame || urlHasLive;
       if (hasLiveChat) {
+        const channelHandle = getChannelHandle();
         // Return cached username if already detected for this URL
         if (_cachedYtUsername && _cachedForUrl === window.location.href) {
-          sendResponse({ platform: 'youtube', username: _cachedYtUsername });
+          sendResponse({ platform: 'youtube', username: _cachedYtUsername, channelHandle });
           return;
         }
         chrome.runtime.sendMessage({ type: 'YT_GET_USERNAME', tabId: null }, (resp) => {
@@ -40,7 +41,7 @@
             _cachedYtUsername = resp.username;
             _cachedForUrl = window.location.href;
           }
-          sendResponse({ platform: 'youtube', username: resp?.username || null });
+          sendResponse({ platform: 'youtube', username: resp?.username || null, channelHandle });
         });
         return true; // async sendResponse
       }
@@ -315,6 +316,49 @@
     if (!result?.ok) {
       throw new Error(result?.error || 'YouTube odeslání selhalo');
     }
+  }
+
+  // Resolve channel handle of the currently-watched video/stream from DOM.
+  // Works on /watch pages (live streams + VODs) where URL parsing can't help.
+  // Prefers @handle (backend lookup key); falls back to UC... channel ID.
+  function getChannelHandle() {
+    const selectors = [
+      'ytd-video-owner-renderer a[href^="/@"]',
+      '#owner a[href^="/@"]',
+      'ytd-channel-name a[href^="/@"]',
+      'ytd-watch-metadata a[href^="/@"]',
+      'ytd-video-owner-renderer a[href*="/channel/"]',
+      '#owner a[href*="/channel/"]',
+      'ytd-channel-name a[href*="/channel/"]',
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const href = el.getAttribute('href') || '';
+      const mAt = href.match(/^\/@([^/?#]+)/);
+      if (mAt) return mAt[1];
+      const mCh = href.match(/\/channel\/(UC[A-Za-z0-9_-]{22})/);
+      if (mCh) return mCh[1];
+    }
+    // Fallback: og:url / canonical don't carry the channel, but JSON-LD often does
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const s of scripts) {
+      try {
+        const json = JSON.parse(s.textContent || '{}');
+        const authors = Array.isArray(json) ? json : [json];
+        for (const a of authors) {
+          const url = a?.author?.url || a?.itemListElement?.[0]?.item?.url;
+          if (!url) continue;
+          const m = url.match(/\/(@[^/?#]+|channel\/UC[A-Za-z0-9_-]{22})/);
+          if (m) {
+            const tok = m[1];
+            if (tok.startsWith('@')) return tok.substring(1);
+            return tok.substring(tok.indexOf('/') + 1);
+          }
+        }
+      } catch {}
+    }
+    return null;
   }
 
   function getVideoId() {

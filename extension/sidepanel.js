@@ -2292,7 +2292,7 @@ class UnityChat {
       // má fungovat i bez funkčního content scriptu.
       if (tab.url) {
         const p = resp?.platform || this._detectPlatformFromUrl(tab.url);
-        if (p) this._checkAutoSwitch(p, tab.url).catch(() => {});
+        if (p) this._checkAutoSwitch(p, tab.url, resp?.channelHandle).catch(() => {});
       }
     } catch {
       this._setActivePlatform(null);
@@ -2386,9 +2386,14 @@ class UnityChat {
     return null;
   }
 
-  async _checkAutoSwitch(platform, tabUrl) {
+  async _checkAutoSwitch(platform, tabUrl, contentHandle) {
     if (!platform || !tabUrl) return;
-    const handle = this._parseChannelFromUrl(tabUrl, platform);
+    let handle = this._parseChannelFromUrl(tabUrl, platform);
+    // YouTube /watch pages don't have channel handle in URL — use DOM-resolved
+    // handle from content script as fallback.
+    if (!handle && contentHandle) {
+      handle = String(contentHandle).toLowerCase().replace(/^@/, '');
+    }
     if (!handle) return;
 
     // Skip if the handle already matches our current config for this platform.
