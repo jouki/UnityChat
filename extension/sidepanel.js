@@ -2394,6 +2394,11 @@ class UnityChat {
     this._setupEmotePreview();
     this._scheduleColorRevalidation();
     this._pullCredits();
+    // GQL-backed pin polling. Twitch's highlight stack can unmount when
+    // chat column is zero-width (hide-not-collapse), so DOM mirror misses
+    // pin cards entirely. FETCH_PINS pulls pinned messages straight from
+    // the server — works regardless of chat UI visibility.
+    this._startPinPoll();
     this._bootMark('_init done');
     this._bootPending = false;
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
@@ -3476,6 +3481,9 @@ class UnityChat {
       twCredits.querySelectorAll('.tc-pill').forEach((p) => p.classList.add('hidden'));
     }
     this._pullCredits();
+    // Reset GQL pin cards on channel switch — old channel's pin is gone.
+    this._gqlPinCards = [];
+    this._lastDomHighlightCards = [];
 
     // Clear the highlight banner (raid / hype / gifts / pinned cards)
     // — the raid card that triggered this auto-switch is no longer
@@ -5225,9 +5233,75 @@ class UnityChat {
     wrap.classList.toggle('hidden', !anyShown);
   }
 
+  // Start a periodic GQL poll for pinned messages on the active Twitch
+  // channel. Runs every 8s (pin state rarely changes faster). Caches
+  // the last result in this._gqlPinCards so _handleHighlights merges
+  // them into whatever DOM-sourced highlight cards are active.
+  _startPinPoll() {
+    if (this._pinPollT) return;
+    this._gqlPinCards = [];
+    const tick = async () => {
+      try {
+        const channel = this.config.channel;
+        if (!channel) return;
+        const resp = await chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel });
+        if (!resp?.ok) { this._gqlPinCards = []; return; }
+        this._gqlPinCards = (resp.pins || []).map((p) => ({
+          kind: 'pin',
+          text: (p.contentText || '').slice(0, 120) || 'Pinned',
+          pin: {
+            pinnedBy: p.pinnedBy,
+            author: p.author,
+            authorColor: p.authorColor,
+            // GQL-sourced badges carry setID/version; sidepanel maps via
+            // _twitchBadges (already loaded per channel from IVR) to get
+            // the image URL + title when rendering.
+            authorBadges: (p.senderBadges || [])
+              .map((b) => {
+                const key = `${b.setID}/${b.version}`;
+                const entry = this._twitchBadges?.[key];
+                const url = entry && typeof entry === 'object' ? entry.url : entry;
+                const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
+                return url ? { url, alt: title } : null;
+              }).filter(Boolean),
+            bodySegments: (p.segments || []).map((s) => {
+              if (s.type === 'emote') return { type: 'emote', url: s.url, alt: s.alt };
+              return { type: 'text', value: s.value || '' };
+            }),
+            timeText: p.pinnedAt
+              ? 'odesláno v ' + new Date(p.pinnedAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+              : null,
+            pinId: p.pinId,
+          },
+        }));
+        // Re-render the banner merging freshly-fetched pins with whatever
+        // DOM-mirror highlights are currently showing.
+        this._rerenderHighlights();
+      } catch {}
+    };
+    tick();
+    this._pinPollT = setInterval(tick, 8000);
+  }
+
+  // Merge DOM-mirror and GQL pin cards and re-render the highlights banner.
+  _rerenderHighlights() {
+    this._handleHighlights({
+      channel: this.config.channel,
+      cards: [...(this._lastDomHighlightCards || []), ...(this._gqlPinCards || [])],
+    });
+  }
+
   _handleHighlights(msg) {
     // Channel-scoped: ignore highlights from other open Twitch tabs.
     if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    // If this call came from a TW_HIGHLIGHTS message (has .cards) and isn't
+    // a re-render triggered by _rerenderHighlights, cache the DOM cards
+    // (minus pins — those come from GQL) so we can merge next pin tick.
+    if (msg.cards && msg !== this._rerenderTag) {
+      this._lastDomHighlightCards = msg.cards.filter((c) => c && c.kind !== 'pin');
+      // Append fresh GQL pin cards to this render
+      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...(this._gqlPinCards || [])] };
+    }
     const banner = document.getElementById('highlights-banner');
     if (!banner) return;
     const cards = (msg.cards || []).filter((c) => c && c.text);

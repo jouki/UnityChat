@@ -321,6 +321,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'FETCH_PINS') {
+    fetchPins(msg.channel)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
   if (msg.type === 'PIN_MESSAGE') {
     pinMessage(msg.messageId, msg.broadcasterId, msg.durationSecs)
       .then(sendResponse)
@@ -762,6 +769,99 @@ async function checkPin(channel, pinIdOrMsgId) {
     const stillPinned = edges.some(e => e.node?.id === pinIdOrMsgId);
     ucLog('Pin', `CheckPin: edges=${edges.length}, target=${pinIdOrMsgId}, stillPinned=${stillPinned}, ids=${JSON.stringify(edges.map(e => e.node?.id))}`);
     return { ok: true, stillPinned };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// FETCH_PINS: authoritative source for pin cards via Twitch GQL. Works
+// regardless of chat UI visibility — DOM mirror would otherwise miss the
+// pin when Twitch unmounts the highlight stack (hide-not-collapse + chat
+// column width 0). Returns structured pin info the sidepanel renders into
+// the highlights banner as kind:'pin' cards.
+async function fetchPins(channel) {
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  if (!channel) return { ok: false, error: 'no channel' };
+  try {
+    const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+    const headers = {
+      'Client-Id': CLIENT_ID,
+      'Content-Type': 'application/json',
+      ...(cookie?.value ? { Authorization: 'OAuth ' + cookie.value } : {})
+    };
+    // Query pulls the pinner (via pinnedBy), message sender + badges,
+    // message content with rich fragments (emotes carry ID we can resolve
+    // to CDN URLs), pin timestamp and duration. Schema is reasonably
+    // stable but Twitch occasionally renames fields — errors surface in
+    // the Pin log for re-tuning.
+    const r = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        query: `query ($name: String!) {
+          channel(name: $name) {
+            pinnedChatMessages {
+              edges {
+                node {
+                  id
+                  endsAt
+                  pinnedAt
+                  pinnedBy { id login displayName }
+                  sender { id login displayName chatColor }
+                  senderBadges { setID version }
+                  content {
+                    text
+                    fragments {
+                      text
+                      content {
+                        __typename
+                        ... on Emote { emoteID token }
+                        ... on Cheermote { bitsAmount prefix tier }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`,
+        variables: { name: channel }
+      })
+    });
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const data = await r.json();
+    if (data.errors?.length) {
+      ucLog('Pin', 'FetchPins GQL errors:', JSON.stringify(data.errors));
+      return { ok: false, error: 'GQL ' + data.errors[0].message };
+    }
+    const edges = data.data?.channel?.pinnedChatMessages?.edges || [];
+    const pins = edges.map((e) => {
+      const n = e.node || {};
+      const sender = n.sender || {};
+      const pinnedBy = n.pinnedBy || {};
+      const fragments = n.content?.fragments || [];
+      const segments = fragments.map((f) => {
+        const c = f.content;
+        if (c?.__typename === 'Emote' && c.emoteID) {
+          return { type: 'emote', url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.emoteID}/default/dark/2.0`, alt: c.token || f.text || '' };
+        }
+        return { type: 'text', value: f.text || '' };
+      });
+      const badges = (n.senderBadges || []).map((b) => ({ setID: b.setID, version: b.version }));
+      return {
+        pinId: n.id,
+        endsAt: n.endsAt,
+        pinnedAt: n.pinnedAt,
+        pinnedBy: pinnedBy.displayName || pinnedBy.login || null,
+        author: sender.displayName || sender.login || null,
+        authorLogin: sender.login || null,
+        authorUserId: sender.id || null,
+        authorColor: sender.chatColor || null,
+        senderBadges: badges,
+        segments,
+        contentText: n.content?.text || '',
+      };
+    });
+    return { ok: true, pins };
   } catch (e) {
     return { ok: false, error: e.message };
   }
