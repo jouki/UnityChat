@@ -455,7 +455,7 @@ async function loadTwitchBadges(channel, roomId) {
     if (gr.ok) {
       for (const b of await gr.json()) {
         for (const v of b.versions || []) {
-          badges[`${b.set_id}/${v.id}`] = { url: v.image_url_1x, title: v.title || b.set_id };
+          badges[`${b.set_id}/${v.id}`] = { url: v.image_url_2x || v.image_url_1x, title: v.title || b.set_id };
         }
       }
     }
@@ -464,7 +464,7 @@ async function loadTwitchBadges(channel, roomId) {
       if (cr.ok) {
         for (const b of await cr.json()) {
           for (const v of b.versions || []) {
-            badges[`${b.set_id}/${v.id}`] = { url: v.image_url_1x, title: v.title || b.set_id };
+            badges[`${b.set_id}/${v.id}`] = { url: v.image_url_2x || v.image_url_1x, title: v.title || b.set_id };
           }
         }
       }

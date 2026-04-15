@@ -1885,13 +1885,21 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
    dark-bg side panel. */
 .tc-claim {
   background: linear-gradient(90deg, #00db84, #00b870);
-  color: #fff;
+  color: #fff !important;
   font-weight: 700;
-  padding: 3px 10px;
+  padding: 4px 12px;
   box-shadow: 0 0 10px rgba(0, 219, 132, 0.45);
   animation: tc-claim-pulse 1.6s ease-in-out infinite;
+  white-space: nowrap;
 }
-.tc-claim svg { color: #fff; }
+.tc-claim svg { color: #fff; flex-shrink: 0; }
+.tc-claim-label {
+  display: inline-block;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .tc-claim:hover {
   background: linear-gradient(90deg, #15e89a, #02c47b);
   box-shadow: 0 0 14px rgba(0, 219, 132, 0.7);
