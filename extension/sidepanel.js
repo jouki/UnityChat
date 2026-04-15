@@ -541,7 +541,8 @@ class EmoteManager {
    * 7TV personal emote resolution across channels.
    */
   renderTwitch(text, emotesTag, ctx) {
-    const segments = this._splitTwitchEmotes(text, emotesTag);
+    const offset = (ctx && ctx.emotesOffset) || 0;
+    const segments = this._splitTwitchEmotes(text, emotesTag, offset);
     return this.renderSegments(segments, ctx);
   }
 
@@ -585,7 +586,7 @@ class EmoteManager {
 
   // ---- Twitch emote parsing ----
 
-  _splitTwitchEmotes(text, tag) {
+  _splitTwitchEmotes(text, tag, offset = 0) {
     if (!tag) return [{ type: 'text', value: text }];
 
     const positions = [];
@@ -597,9 +598,12 @@ class EmoteManager {
       for (const range of part.substring(ci + 1).split(',')) {
         const dash = range.indexOf('-');
         if (dash === -1) continue;
-        const s = parseInt(range.substring(0, dash), 10);
-        const e = parseInt(range.substring(dash + 1), 10);
-        if (!isNaN(s) && !isNaN(e)) {
+        const s = parseInt(range.substring(0, dash), 10) - offset;
+        const e = parseInt(range.substring(dash + 1), 10) - offset;
+        // Skip positions that got shifted entirely off the trimmed text
+        // (shouldn't happen for emotes — the stripped prefix is plain
+        // "@name " text — but guard anyway).
+        if (!isNaN(s) && !isNaN(e) && s >= 0 && e >= 0 && e < text.length + 1) {
           positions.push({ id, start: s, end: e + 1 });
         }
       }
@@ -1109,11 +1113,18 @@ class TwitchProvider {
     }
 
     // Twitch přidává @username na začátek reply zpráv - odstranit
-    // (reply context už ukazuje komu se odpovídá)
+    // (reply context už ukazuje komu se odpovídá).
+    // Track how many chars we stripped so emote positions in the emotes tag
+    // (which are computed from the ORIGINAL message including the @username
+    // prefix) can be shifted to match the trimmed body when we render.
     let cleanMessage = message;
+    let replyPrefixLen = 0;
     if (replyTo && message.startsWith('@')) {
       const sp = message.indexOf(' ');
-      if (sp !== -1) cleanMessage = message.substring(sp + 1);
+      if (sp !== -1) {
+        cleanMessage = message.substring(sp + 1);
+        replyPrefixLen = sp + 1;
+      }
     }
 
     this.onMessage?.({
@@ -1132,6 +1143,7 @@ class TwitchProvider {
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
       twitchEmotes: tags.emotes || null,
+      twitchEmotesOffset: replyPrefixLen || 0,
       replyTo,
       firstMsg: tags['first-msg'] === '1',
       isAction,
@@ -4728,8 +4740,8 @@ class UnityChat {
       if (!cached) continue;
       const ctx = { platform, author: cached.username || username };
       if (platform === 'twitch') {
-        const emotesTag = cached.replyTo ? null : cached.twitchEmotes;
-        tx.innerHTML = this.emotes.renderTwitch(cached.message, emotesTag, ctx);
+        ctx.emotesOffset = cached.twitchEmotesOffset || 0;
+        tx.innerHTML = this.emotes.renderTwitch(cached.message, cached.twitchEmotes, ctx);
       } else if (platform === 'kick') {
         tx.innerHTML = this.emotes.renderKick(cached.kickContent || cached.message, ctx);
       } else {
@@ -5156,10 +5168,11 @@ class UnityChat {
 
     const renderCtx = { platform: msg.platform, author: msg.username };
     if (msg.platform === 'twitch') {
-      // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
-      // → pro reply použít jen 7TV/BTTV matching (bez position-based Twitch emotes)
-      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
-      tx.innerHTML = this.emotes.renderTwitch(msg.message, emotesTag, renderCtx);
+      // Reply messages strip the "@username " prefix from the body, but the
+      // emotes tag positions are computed from the ORIGINAL message — shift
+      // by twitchEmotesOffset so subscriber/native emotes resolve in replies.
+      renderCtx.emotesOffset = msg.twitchEmotesOffset || 0;
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, renderCtx);
     } else if (msg.platform === 'kick') {
       tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message, renderCtx);
     } else if (msg.platform === 'youtube' && msg.ytRuns?.length) {
@@ -5371,10 +5384,10 @@ class UnityChat {
       if (tx) {
         // Learn new emotes first so renderSegments can find them
         this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
-        const emotesTag = realMsg.replyTo ? null : realMsg.twitchEmotes;
-        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag, {
+        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, realMsg.twitchEmotes, {
           platform: 'twitch',
           author: realMsg.username,
+          emotesOffset: realMsg.twitchEmotesOffset || 0,
         });
       }
     }
@@ -5388,6 +5401,7 @@ class UnityChat {
       cached.color = ucColor || realMsg.color || cached.color;
       if (realMsg.badgesRaw) cached.badgesRaw = realMsg.badgesRaw;
       if (realMsg.twitchEmotes) cached.twitchEmotes = realMsg.twitchEmotes;
+      if (realMsg.twitchEmotesOffset != null) cached.twitchEmotesOffset = realMsg.twitchEmotesOffset;
       delete cached._optimistic;
       chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
     }

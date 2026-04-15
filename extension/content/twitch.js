@@ -47,14 +47,47 @@
       chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
         if (!resp) return;
         if (resp.action === 'opened') {
-          // Opening UC → collapse vanilla Twitch chat
-          const collapseBtn = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
-          if (collapseBtn) collapseBtn.click();
+          // Opening UC → hide vanilla chat visually but keep it mounted.
+          // Collapsing would unmount the chat-room — which breaks DOM mirror
+          // features (channel-point redeems, loyalty credits, username
+          // colors). Instead we set display:none on the right-column
+          // container but leave the chat-shell alive.
+          hideTwitchChatVisually(true);
+        } else if (resp.action === 'closed') {
+          hideTwitchChatVisually(false);
         }
-        // Closing UC → leave vanilla chat as-is
       });
     });
     return btn;
+  }
+
+  // Hide the Twitch right-column chat visually without collapsing — we
+  // need the chat DOM alive for redeem/credit/color mirroring to keep
+  // working. Toggling visibility is reversible; collapsing via the
+  // built-in button would unmount .chat-shell.
+  const UC_HIDE_STYLE_ID = 'uc-hide-twitch-chat';
+  function hideTwitchChatVisually(hide) {
+    let style = document.getElementById(UC_HIDE_STYLE_ID);
+    if (hide) {
+      if (!style) {
+        style = document.createElement('style');
+        style.id = UC_HIDE_STYLE_ID;
+        style.textContent = `
+          .channel-root__right-column,
+          [data-a-target="right-column"],
+          .right-column {
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            overflow: hidden !important;
+            visibility: hidden !important;
+          }
+        `;
+        document.documentElement.appendChild(style);
+      }
+    } else if (style) {
+      style.remove();
+    }
   }
 
   function findChatHeader() {
