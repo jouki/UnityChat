@@ -403,4 +403,129 @@
       await sendChat('@' + username + ' ' + text);
     }
   }
+
+  // ---- DOM mirror: Twitch redeem / highlighted / community-goal lines ----
+  // IRC doesn't carry text-less redemptions (community goals, "unlock emote"),
+  // only PubSub does — and PubSub needs OAuth, which our anonymous justinfan
+  // connection can't do. Watching the rendered Twitch chat DOM lets us mirror
+  // those events anyway.
+  const REDEEM_SEEN = new WeakSet();
+  const REDEEM_KEY_TTL = 30 * 1000; // ms — dedup against rapid re-render
+  const redeemKeyMap = new Map();
+
+  function currentTwitchChannel() {
+    const m = location.pathname.match(/^\/([a-zA-Z0-9_]+)(?:\/|$)/);
+    return m ? m[1].toLowerCase() : null;
+  }
+
+  function extractRedeem(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+    if (REDEEM_SEEN.has(node)) return null;
+
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    const lookup = (node.querySelector || (() => null));
+    const deep = (node.textContent || '').trim();
+    if (!deep) return null;
+
+    // Heuristics: redeem/highlight/community-goal lines on Twitch typically
+    // carry one of these class hints OR contain the phrase "redeemed" with
+    // no regular chat ":" username→message split.
+    const isRedeemClass = /redeem|channel-points|highlight|contribution|community-goal/i.test(cls);
+    const hasRedeemedWord = / redeemed /i.test(deep);
+
+    if (!isRedeemClass && !hasRedeemedWord) return null;
+
+    // Try to extract username
+    const userEl = node.querySelector && (
+      node.querySelector('.chat-author__display-name')
+      || node.querySelector('[data-a-target="chat-message-username"]')
+      || node.querySelector('.seventv-chat-user-username')
+      || node.querySelector('[data-a-user]')
+    );
+    let username = userEl?.textContent?.trim() || '';
+
+    // Fallback: take the first "word before redeemed"
+    if (!username && hasRedeemedWord) {
+      const m = deep.match(/^\s*([A-Za-z0-9_]{2,25})\s+redeemed\s/i);
+      if (m) username = m[1];
+    }
+    if (!username) return null;
+
+    // Extract reward name: everything between "redeemed" and optional cost icon.
+    let rewardName = null;
+    let rewardCost = null;
+    const rm = deep.match(/redeemed\s+(.+?)(?:\s+[\u25CB\u25CF\u25CE\u2B24\u2022\u25A0-\u25FF\u2700-\u27BF⚫⚪◯●○]\s*(\d+))?\s*$/i);
+    if (rm) {
+      rewardName = (rm[1] || '').trim();
+      if (rm[2]) rewardCost = parseInt(rm[2], 10) || null;
+    }
+    // Cost fallback: grep any trailing "<icon> <number>" style
+    if (rewardCost == null) {
+      const cm = deep.match(/(\d+)\s*$/);
+      if (cm && parseInt(cm[1], 10) > 0) rewardCost = parseInt(cm[1], 10);
+    }
+
+    // Optional attached chat message (redeems that require text input)
+    let message = '';
+    const msgEl = node.querySelector && (
+      node.querySelector('[data-a-target="chat-line-message-body"]')
+      || node.querySelector('.seventv-message-body')
+      || node.querySelector('[class*="message-body"]')
+    );
+    if (msgEl) message = (msgEl.textContent || '').trim();
+
+    REDEEM_SEEN.add(node);
+
+    const key = `${username.toLowerCase()}|${rewardName || ''}|${message.slice(0, 40)}`;
+    const now = Date.now();
+    const prev = redeemKeyMap.get(key);
+    if (prev && now - prev < REDEEM_KEY_TTL) return null;
+    redeemKeyMap.set(key, now);
+    // Trim old keys
+    if (redeemKeyMap.size > 500) {
+      for (const [k, t] of redeemKeyMap) {
+        if (now - t > REDEEM_KEY_TTL) redeemKeyMap.delete(k);
+      }
+    }
+
+    return {
+      username,
+      rewardName,
+      rewardCost,
+      message,
+      timestamp: now,
+      channel: currentTwitchChannel(),
+    };
+  }
+
+  let redeemObserver = null;
+  function setupRedeemObserver() {
+    if (redeemObserver) return;
+    redeemObserver = new MutationObserver((mutations) => {
+      for (const mut of mutations) {
+        for (const node of mut.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          // Check the node itself + any chat-line descendants
+          const candidates = [node];
+          if (node.querySelectorAll) {
+            node.querySelectorAll('.chat-line__message, [class*="chat-line"], [class*="redeem"], [class*="highlight"]').forEach((el) => candidates.push(el));
+          }
+          for (const cand of candidates) {
+            const data = extractRedeem(cand);
+            if (data) {
+              try { chrome.runtime.sendMessage({ type: 'TW_REDEEM_DOM', data }); } catch { /* extension context gone */ }
+            }
+          }
+        }
+      }
+    });
+    redeemObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // Setup after DOM is ready (idempotent via window._ucTwitch guard at top)
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupRedeemObserver, { once: true });
+  } else {
+    setupRedeemObserver();
+  }
 })();

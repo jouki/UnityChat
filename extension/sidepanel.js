@@ -2264,6 +2264,8 @@ class UnityChat {
         if (wrap) {
           wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
         }
+      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+        this._handleDomRedeem(msg.data);
       }
     });
   }
@@ -4321,6 +4323,40 @@ class UnityChat {
   // @username references in <span class="mention"> with the target user's
   // color (looked up via _chatUsers). Runs post-emote/URL render so we
   // never touch existing <img>/<a> children — only pure text fragments.
+  // Content script on a Twitch tab observed a redeem/highlight line in the
+  // vanilla chat DOM and relayed it here. Twitch IRC does NOT carry text-less
+  // redemptions (community goals, "unlock emote", etc.) — only PubSub does,
+  // and that's OAuth-gated. DOM mirroring is the anonymous-safe workaround.
+  _handleDomRedeem(data) {
+    if (!data?.username) return;
+    // Only mirror redeems for the currently-connected Twitch channel.
+    const channelMatch = !data.channel
+      || data.channel.toLowerCase() === (this.config.channel || '').toLowerCase();
+    if (!channelMatch) return;
+    const key = `dom-redeem:${data.username.toLowerCase()}|${data.rewardName || ''}|${Math.floor((data.timestamp || Date.now()) / 5000)}`;
+    if (!this._domRedeemSeen) this._domRedeemSeen = new Set();
+    if (this._domRedeemSeen.has(key)) return;
+    this._domRedeemSeen.add(key);
+    if (this._domRedeemSeen.size > 500) {
+      // Simple cap to avoid unbounded growth on long sessions.
+      const first = this._domRedeemSeen.values().next().value;
+      this._domRedeemSeen.delete(first);
+    }
+    this._addMessage({
+      platform: 'twitch',
+      username: data.username,
+      message: data.message || '',
+      color: twitchDefaultColor(data.username),
+      _needsColorLookup: true,
+      timestamp: data.timestamp || Date.now(),
+      id: `dom-redeem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      isRedeem: true,
+      rewardName: data.rewardName || 'Channel Points Reward',
+      rewardCost: data.rewardCost || null,
+      _fromDom: true,
+    });
+  }
+
   _renderGiftEvent(el, msg) {
     // Gift icon (SVG, currentColor — tinted by CSS)
     const icon = document.createElement('span');
