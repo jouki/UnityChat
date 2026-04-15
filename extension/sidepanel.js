@@ -5138,6 +5138,8 @@ class UnityChat {
         // main row with avatar + structured text highlighting raider
         // and target channel names.
         item.appendChild(this._buildRaidCard(c));
+      } else if (c.kind === 'pin') {
+        item.appendChild(this._buildPinCard(c));
       } else {
         if (c.avatar) {
           const av = document.createElement('img');
@@ -5160,6 +5162,62 @@ class UnityChat {
       }
       banner.appendChild(item);
     }
+  }
+
+  _buildPinCard(c) {
+    // Twitch-style pinned message: header "Připnuto uživatelem {X}"
+    // + collapse/hide controls, expanded body with the pinned text.
+    // Same structure our own pin-banner uses — just mounted inside
+    // the highlight banner (where community-highlight-stack cards
+    // render pins from other users).
+    const wrap = document.createElement('div');
+    wrap.className = 'hl-pin-wrap';
+    const pinnedBy = c.pinnedBy || 'uživatel';
+    const body = c.pinBody || c.text || '';
+
+    wrap.innerHTML = `
+      <div class="hl-pin-head">
+        <span class="hl-pin-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+          </svg>
+        </span>
+        <span class="hl-pin-head-text">
+          Připnuto uživatelem
+          <strong class="hl-pin-head-user">${this.emotes._eh(pinnedBy)}</strong>
+        </span>
+        <button class="hl-pin-btn hl-pin-btn-hide" title="Schovat" aria-label="Schovat">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M12 4c-5.5 0-10 8-10 8s4.5 8 10 8 10-8 10-8-4.5-8-10-8Zm0 14c-4.1 0-7.5-5.2-8.1-6 .6-.8 4-6 8.1-6s7.5 5.2 8.1 6c-.6.8-4 6-8.1 6Z"/>
+            <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/>
+          </svg>
+        </button>
+        <button class="hl-pin-btn hl-pin-btn-toggle" title="Rozbalit" aria-label="Rozbalit">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path class="hl-pin-chev" d="M6 9l6 6 6-6z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hl-pin-body">
+        <div class="hl-pin-body-text">${this.emotes.renderPlain(body)}</div>
+      </div>
+    `;
+
+    const card = wrap;
+    card.classList.add('collapsed'); // start collapsed like Twitch
+    const toggleBtn = wrap.querySelector('.hl-pin-btn-toggle');
+    const hideBtn = wrap.querySelector('.hl-pin-btn-hide');
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.classList.toggle('collapsed');
+      toggleBtn.title = card.classList.contains('collapsed') ? 'Rozbalit' : 'Sbalit';
+    });
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = wrap.closest('.hl-card');
+      if (host) host.style.display = 'none';
+    });
+    return wrap;
   }
 
   _buildRaidCard(c) {

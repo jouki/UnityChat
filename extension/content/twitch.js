@@ -1258,14 +1258,30 @@
       const key = text.slice(0, 120);
       if (seenTexts.has(key)) continue;
       seenTexts.add(key);
+      const isPin = /p[rř]ipnuto|pinned/i.test(text)
+        || /pin(ned)?/i.test(el.className || '')
+        || !!el.querySelector?.('[class*="pin"], [aria-label*="pin" i]');
       const isHypeTrain = /hype\s*train|hype\s*raid|úr\.|%\b/i.test(text)
         || /hype/i.test(el.className || '');
       const isRaid = /n[aá]jezd|raid/i.test(text) || /raid/i.test(el.className || '');
       const isGiftLeaderboard = /gift/i.test(text) || /gift/i.test(el.className || '');
-      const kind = isRaid ? 'raid'
+      // Pin first — it's the most specific signal, and raid-text matches
+      // also appear inside pinned messages about raids ("Karpo_cz
+      // provádí nájezd…" pinned card shouldn't render as raid).
+      const kind = isPin ? 'pin'
+        : isRaid ? 'raid'
         : isHypeTrain ? 'hype-train'
         : isGiftLeaderboard ? 'gift-leaderboard'
         : 'generic';
+      // For pin cards, pull out the "pinned by {user}" label and the
+      // message body separately so the sidepanel can render the new
+      // Twitch-style pin banner (header + expandable body + footer).
+      let pinnedBy = null, pinBody = null;
+      if (kind === 'pin') {
+        const m = text.match(/P[řr]ipnuto uživatelem\s+([^\n]+?)(?:[A-Z]|$)/);
+        if (m) pinnedBy = m[1].trim().replace(/[,.;:]+$/, '');
+        pinBody = text.replace(/^.*?(?:P[řr]ipnuto[^]+?uživatelem\s+\S+\s*)/i, '').trim() || text;
+      }
       // Pull the first channel-style avatar image out of the card if
       // present — raid notices embed the raider's profile pic.
       let avatar = null;
@@ -1281,7 +1297,14 @@
         const r = img.getBoundingClientRect();
         if (r.width >= 24 && Math.abs(r.width - r.height) < 4) { avatar = src; break; }
       }
-      cards.push({ kind, text: text.slice(0, 400), avatar, html: el.outerHTML.slice(0, 4000) });
+      cards.push({
+        kind,
+        text: text.slice(0, 400),
+        avatar,
+        pinnedBy,
+        pinBody: pinBody?.slice(0, 400) || null,
+        html: el.outerHTML.slice(0, 4000),
+      });
     }
     return cards;
   }

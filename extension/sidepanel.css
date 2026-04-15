@@ -1321,6 +1321,85 @@ body.no-timestamps .msg .ts { display: none; }
    rocket header + structured body (raider → target + viewer count +
    points). Matches the .msg.raid chat-line treatment so the raid
    identity reads consistent across both the banner and chat. */
+/* Pin highlight card (Twitch-style) — header + expandable body */
+.hl-card.hl-pin {
+  display: block;
+  padding: 0;
+  background: linear-gradient(160deg, rgba(230, 161, 26, 0.12), rgba(255, 140, 0, 0.06));
+  border: 1px solid rgba(230, 161, 26, 0.22);
+  box-shadow: 0 0 10px rgba(230, 161, 26, 0.12);
+}
+.hl-pin-wrap { display: block; }
+.hl-pin-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.hl-pin-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: #e6a11a;
+  flex-shrink: 0;
+}
+.hl-pin-head-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted, #9999a5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.2px;
+}
+.hl-pin-head-user { color: #e6a11a; font-weight: 700; }
+.hl-pin-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #9a9aa6);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.hl-pin-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.hl-pin-chev { transition: transform 0.18s ease; transform-origin: 12px 12px; }
+.hl-pin-wrap.collapsed .hl-pin-chev { transform: rotate(-90deg); }
+.hl-pin-body {
+  padding: 2px 12px 10px 40px;
+  overflow: hidden;
+  max-height: 400px;
+  transition: max-height 0.18s ease, padding 0.18s ease, opacity 0.12s ease;
+}
+.hl-pin-wrap.collapsed .hl-pin-body {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+.hl-pin-body-text {
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--text, #e6e6ea);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.hl-pin-body-text a {
+  color: #e6a11a;
+  text-decoration: underline;
+  text-decoration-color: rgba(230, 161, 26, 0.4);
+}
+
 .hl-card.hl-raid {
   display: block;
   padding: 0;
