@@ -669,18 +669,22 @@
     }
     if (!username) return null;
 
-    // Extract reward name: everything between "redeemed" and optional cost icon.
+    // Extract reward name + cost. Twitch's textContent concatenates the
+    // reward title and the trailing cost pill with NO separator, so
+    // "redeemed Contribute to Cult's Totem500" comes through as one
+    // string. Pull trailing digits as cost first, then strip them off
+    // the rewardName so we don't render "…Totem500" alongside the cost
+    // pill ⊙ 500.
     let rewardName = null;
     let rewardCost = null;
-    const rm = deep.match(/redeemed\s+(.+?)(?:\s+[\u25CB\u25CF\u25CE\u2B24\u2022\u25A0-\u25FF\u2700-\u27BF⚫⚪◯●○]\s*(\d+))?\s*$/i);
-    if (rm) {
-      rewardName = (rm[1] || '').trim();
-      if (rm[2]) rewardCost = parseInt(rm[2], 10) || null;
-    }
-    // Cost fallback: grep any trailing "<icon> <number>" style
-    if (rewardCost == null) {
-      const cm = deep.match(/(\d+)\s*$/);
-      if (cm && parseInt(cm[1], 10) > 0) rewardCost = parseInt(cm[1], 10);
+    const rm = deep.match(/redeemed\s+(.+?)\s*$/i);
+    if (rm) rewardName = (rm[1] || '').trim();
+    if (rewardName) {
+      const cm = rewardName.match(/(?:[\u25CB\u25CF\u25CE\u2B24\u2022\u25A0-\u25FF\u2700-\u27BF⚫⚪◯●○]\s*)?(\d{1,7})\s*$/);
+      if (cm && parseInt(cm[1], 10) > 0) {
+        rewardCost = parseInt(cm[1], 10);
+        rewardName = rewardName.slice(0, cm.index).trim();
+      }
     }
 
     // Optional attached chat message (redeems that require text input)
