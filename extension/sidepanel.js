@@ -4851,13 +4851,24 @@ class UnityChat {
     if (this._suppressFlashesUntil && Date.now() < this._suppressFlashesUntil) return;
     const wrap = document.getElementById('tw-credits');
     if (!wrap) return;
-    const anchor = wrap.querySelector('.tc-points');
-    if (!anchor) return;
+    // Anchor to the RIGHTMOST visible pill so the flash slides to the
+    // right from outside the pill cluster and never overlaps the
+    // claim-bonus button (which sits to the right of points when
+    // available). Fall back to the points pill if nothing else visible.
+    const claim = wrap.querySelector('.tc-claim');
+    const points = wrap.querySelector('.tc-points');
+    const bits = wrap.querySelector('.tc-bits');
+    const pills = [claim, points, bits].filter((p) => p && !p.classList.contains('hidden'));
+    const anchor = pills[0] || points || wrap;
     const f = document.createElement('span');
     f.className = 'tc-points-flash';
     f.textContent = `+${delta.toLocaleString('cs-CZ')}`;
-    anchor.appendChild(f);
-    // Remove after the CSS animation finishes (1.5s).
+    wrap.appendChild(f);
+    // Position to the right of the anchor, vertically centered on the row.
+    const ar = anchor.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    f.style.left = (ar.right - wr.left + 6) + 'px';
+    f.style.top = (ar.top - wr.top + ar.height / 2) + 'px';
     setTimeout(() => f.remove(), 1600);
   }
 
