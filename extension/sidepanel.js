@@ -2534,23 +2534,27 @@ class UnityChat {
         } else {
           this._acHide();
         }
-      } else if (text.startsWith('/uc ') && ws === 4) {
-        // /uc subcommand autocomplete
-        const prefix = partial.toLowerCase();
-        const cmds = ['raid', 'raider', 'first', 'sus'];
-        const matches = cmds.filter(c => c.startsWith(prefix)).map(c => '/uc ' + c);
+      } else if (text === '/uc' || (text.startsWith('/uc ') && ws <= 4)) {
+        // /uc subcommand autocomplete — shows the full list as soon as
+        // the user finishes typing "/uc" (before the space) and filters
+        // as they continue with "/uc r…".
+        const UC_CMDS = [
+          'raid', 'raider', 'first', 'sus',
+          'announcement', 'ann',
+          'sub', 'resub', 'prime', 'sub2', 'sub3',
+          'subgift', 'giftbundle',
+          'redeem', 'highlight',
+          'timeout', 'ban', 'delete',
+          'claim', 'points10', 'points50',
+        ];
+        const prefix = (text === '/uc' ? '' : partial).toLowerCase();
+        const matches = (prefix ? UC_CMDS.filter((c) => c.startsWith(prefix)) : UC_CMDS).map((c) => '/uc ' + c);
         if (matches.length) {
           this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
           this._acRender();
         } else {
           this._acHide();
         }
-      } else if (text === '/uc ' && partial === '' && pos === 4) {
-        // Just typed "/uc " — show all subcommands
-        const cmds = ['raid', 'raider', 'first', 'sus'];
-        const matches = cmds.map(c => '/uc ' + c);
-        this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
-        this._acRender();
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
         if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
@@ -4830,6 +4834,7 @@ class UnityChat {
   }
 
   _flashPointsDelta(delta) {
+    if (this._suppressFlashesUntil && Date.now() < this._suppressFlashesUntil) return;
     const wrap = document.getElementById('tw-credits');
     if (!wrap) return;
     const anchor = wrap.querySelector('.tc-points');
@@ -4900,12 +4905,12 @@ class UnityChat {
           await chrome.tabs.sendMessage(target.id, { type: 'TW_CLAIM_BONUS' }).catch(() => {});
           // Optimistic hide — observer will re-show if claim didn't fire
           claimPill.classList.add('hidden');
-          // Optimistic flash so user gets feedback even when the post-
-          // claim balance round-trips to the same abbreviation (delta
-          // detector wouldn't fire). 50 is Twitch's standard claim
-          // bonus; if the actual amount differs the next snapshot
-          // delta will show the correction.
+          // Optimistic +50 flash. Suppress the next ~3s of delta-based
+          // flashes so the post-claim balance update doesn't fire a
+          // second "+50" when Twitch's DOM observer picks up the reward
+          // animation too.
           this._flashPointsDelta(50);
+          this._suppressFlashesUntil = Date.now() + 3000;
         } catch {}
       });
     }

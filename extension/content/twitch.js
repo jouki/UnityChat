@@ -332,34 +332,37 @@
         } catch {}
       };
       try {
-        // Check the DOM directly — our ucChatHidden flag resets after
-        // extension reload, but the <style> element we appended to
-        // documentElement + the stripped --with-chat modifiers can
-        // survive the reload (the isolated world dies but the DOM we
-        // mutated is the page's DOM). So rely on actual state, not flag.
         const styleEl = document.getElementById(UC_HIDE_STYLE_ID);
         const anyStripped = document.querySelector('[data-uc-with-chat="1"]');
         const wasHidden = !!styleEl || !!anyStripped;
         log('start', { wasHidden, flagSaid: ucChatHidden, hasStyle: !!styleEl, hasStrippedMods: !!anyStripped, url: location.href });
+
+        // Toggle case: if a popover is already open (our portaled copy
+        // or Twitch's own), close it and bail. Same click semantics as
+        // clicking the button in vanilla chat — second click = close.
+        const openDlg = document.querySelector('[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"]');
+        if (openDlg) {
+          log('toggle-close', { html: openDlg.outerHTML.slice(0, 120) });
+          try { openDlg.remove(); } catch {}
+          // Also dispatch ESC on document so Twitch's internal state
+          // reflects the close.
+          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true })); } catch {}
+          sendResponse({ ok: true, closed: true });
+          return;
+        }
         const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
         log('summary-lookup', { found: !!summary, html: summary ? summary.outerHTML.slice(0, 200) : null });
         if (!summary) { sendResponse({ ok: false, error: 'no_summary' }); return; }
         const btn = summary.querySelector('button');
         log('btn-lookup', { found: !!btn, ariaLabel: btn?.getAttribute('aria-label'), rect: btn ? btn.getBoundingClientRect().toJSON?.() || { l: btn.getBoundingClientRect().left, t: btn.getBoundingClientRect().top, w: btn.getBoundingClientRect().width, h: btn.getBoundingClientRect().height } : null });
         if (!btn) { sendResponse({ ok: false, error: 'no_btn' }); return; }
-        if (wasHidden) {
-          const style = document.getElementById(UC_HIDE_STYLE_ID);
-          log('hide-lift', { hadStyle: !!style });
-          if (style) style.remove();
-          let modCount = 0;
-          for (const t of UC_WITH_CHAT_TARGETS) {
-            for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
-              el.classList.add(t.modifier);
-              modCount++;
-            }
-          }
-          log('hide-lift-mods-restored', { modCount });
-        }
+        // NO LIFT — try the click on the button while chat is still
+        // hidden. Twitch's React click listener fires on dispatched
+        // composed events even if the button's bounding rect is 0
+        // (width:0 container). If the popover opens, great — no visual
+        // flash of vanilla chat. Only if polling fails to find the
+        // dialog do we lift hide as a fallback.
+        log('click-without-lift');
         // Scroll button into view if off-screen — Twitch's React popover
         // handler may bail when the trigger has zero intersection.
         try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
@@ -401,79 +404,114 @@
         //     that case relocate the popover to document.body with
         //     fixed positioning so it survives the re-hide.
         const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
-        let attemptsAll = 0;
         const rightColumnSel = '.channel-root__right-column, [data-a-target="right-column"], .right-column';
+
+        // Portal any dialog that's inside the chat column out to body
+        // so our width:0 hide doesn't clip it.
+        const portalIfNeeded = (dlg) => {
+          const rr = dlg.getBoundingClientRect();
+          const insideColumn = !!dlg.closest(rightColumnSel);
+          if (!insideColumn) return { portaled: false, rr };
+          try {
+            document.body.appendChild(dlg);
+            dlg.style.position = 'fixed';
+            dlg.style.left = rr.left + 'px';
+            dlg.style.top = rr.top + 'px';
+            dlg.style.width = rr.width + 'px';
+            dlg.style.height = rr.height + 'px';
+            dlg.style.zIndex = '9999';
+            dlg.dataset.ucPortaled = '1';
+            return { portaled: true, rr };
+          } catch { return { portaled: false, rr }; }
+        };
+
+        const wireDismiss = (dlg) => {
+          const obs = new MutationObserver(() => {
+            if (!document.contains(dlg)) { obs.disconnect(); log('portal-dialog-removed'); }
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+          const onDocClick = (e) => {
+            if (!dlg.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+              document.removeEventListener('click', onDocClick, true);
+              obs.disconnect();
+              setTimeout(() => { try { dlg.remove(); } catch {} }, 100);
+              log('portal-click-outside');
+            }
+          };
+          setTimeout(() => document.addEventListener('click', onDocClick, true), 200);
+        };
+
+        // Phase 1: poll briefly for dialog WITHOUT lifting hide
+        let attempts = 0;
+        const maxPhase1 = 6; // 6 × 50ms = 300ms — should be enough for React render
         const checkDialog = () => {
-          attemptsAll++;
+          attempts++;
           const dlg = document.querySelector(dialogSel);
           if (dlg) {
-            const rr = dlg.getBoundingClientRect();
-            const insideColumn = !!dlg.closest(rightColumnSel);
-            log('post-click-dialog', { attempts: attemptsAll, x: rr.left, y: rr.top, w: rr.width, h: rr.height, computed: getComputedStyle(dlg).display, insideColumn });
-
-            if (wasHidden) {
-              if (insideColumn) {
-                // Popover lives inside the chat column DOM tree — our
-                // width:0 hide would clip it. Portal it to body root
-                // with fixed positioning at the exact viewport coords
-                // we just measured, then re-apply hide.
-                const fx = rr.left, fy = rr.top, fw = rr.width, fh = rr.height;
-                try {
-                  document.body.appendChild(dlg);
-                  dlg.style.position = 'fixed';
-                  dlg.style.left = fx + 'px';
-                  dlg.style.top = fy + 'px';
-                  dlg.style.width = fw + 'px';
-                  dlg.style.height = fh + 'px';
-                  dlg.style.zIndex = '9999';
-                  dlg.dataset.ucPortaled = '1';
-                  log('dialog-portaled', { fx, fy, fw, fh });
-                } catch (e) { log('dialog-portal-err', { msg: e.message }); }
-              }
-              // Re-apply hide so vanilla chat stays invisible.
-              for (const t of UC_WITH_CHAT_TARGETS) {
-                for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
-                  el.classList.remove(t.modifier);
-                }
-              }
-              let style = document.getElementById(UC_HIDE_STYLE_ID);
-              if (!style) {
-                style = document.createElement('style');
-                style.id = UC_HIDE_STYLE_ID;
-                style.textContent = `
-                  .channel-root__right-column,
-                  [data-a-target="right-column"],
-                  .right-column {
-                    width: 0 !important; min-width: 0 !important; max-width: 0 !important;
-                    overflow: hidden !important; visibility: hidden !important;
-                  }
-                `;
-                document.documentElement.appendChild(style);
-              }
-              log('hide-reapplied');
-
-              // Watch for dismissal to clean up the portaled node.
-              const obs = new MutationObserver(() => {
-                if (!document.contains(dlg)) {
-                  obs.disconnect();
-                  log('portal-dialog-removed');
-                }
-              });
-              obs.observe(document.body, { childList: true, subtree: true });
-              const onDocClick = (e) => {
-                if (!dlg.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
-                  document.removeEventListener('click', onDocClick, true);
-                  obs.disconnect();
-                  setTimeout(() => { try { dlg.remove(); } catch {} }, 100);
-                  log('portal-click-outside');
-                }
-              };
-              setTimeout(() => document.addEventListener('click', onDocClick, true), 200);
-            }
+            const info = portalIfNeeded(dlg);
+            log('post-click-dialog', { attempts, phase: 1, x: info.rr.left, y: info.rr.top, w: info.rr.width, h: info.rr.height, portaled: info.portaled });
+            wireDismiss(dlg);
             return;
           }
-          if (attemptsAll < 20) setTimeout(checkDialog, 100);
-          else log('post-click-no-dialog', { attempts: attemptsAll });
+          if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
+          // Phase 2 fallback: popover didn't open — lift hide briefly,
+          // re-dispatch click, poll again, portal + re-hide.
+          log('fallback-lift', { attempts });
+          if (wasHidden) {
+            const style = document.getElementById(UC_HIDE_STYLE_ID);
+            if (style) style.remove();
+            for (const t of UC_WITH_CHAT_TARGETS) {
+              for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+                el.classList.add(t.modifier);
+              }
+            }
+          }
+          // Re-click after lift
+          try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+          const rb = btn.getBoundingClientRect();
+          const cx = rb.left + rb.width / 2, cy = rb.top + rb.height / 2;
+          const mopts = (extra = {}) => ({ bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: window, button: 0, buttons: 1, ...extra });
+          try { btn.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts() })); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('mousedown', mopts())); } catch {}
+          try { btn.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts({ buttons: 0 }) })); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('mouseup', mopts({ buttons: 0 }))); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('click', mopts({ buttons: 0 }))); } catch {}
+          try { btn.click(); } catch {}
+
+          let attempts2 = 0;
+          const checkDialog2 = () => {
+            attempts2++;
+            const dlg = document.querySelector(dialogSel);
+            if (dlg) {
+              const info = portalIfNeeded(dlg);
+              log('post-click-dialog', { attempts: attempts2, phase: 2, x: info.rr.left, y: info.rr.top, w: info.rr.width, h: info.rr.height, portaled: info.portaled });
+              if (wasHidden) {
+                // Re-apply hide now that popover is portaled out
+                for (const t of UC_WITH_CHAT_TARGETS) {
+                  for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+                    el.classList.remove(t.modifier);
+                  }
+                }
+                let style = document.getElementById(UC_HIDE_STYLE_ID);
+                if (!style) {
+                  style = document.createElement('style');
+                  style.id = UC_HIDE_STYLE_ID;
+                  style.textContent = `
+                    .channel-root__right-column, [data-a-target="right-column"], .right-column {
+                      width: 0 !important; min-width: 0 !important; max-width: 0 !important;
+                      overflow: hidden !important; visibility: hidden !important;
+                    }
+                  `;
+                  document.documentElement.appendChild(style);
+                }
+              }
+              wireDismiss(dlg);
+              return;
+            }
+            if (attempts2 < 20) setTimeout(checkDialog2, 50);
+            else log('post-click-no-dialog', { phase: 2, attempts: attempts2 });
+          };
+          setTimeout(checkDialog2, 50);
         };
         setTimeout(checkDialog, 50);
 

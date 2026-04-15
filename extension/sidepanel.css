@@ -1138,13 +1138,17 @@ body.no-timestamps .msg .ts { display: none; }
    are no stretched corner artifacts. */
 .msg.announcement[data-announcement-color="PRIMARY"] {
   border-color: transparent;
+  /* Mirrored: edges darker, middle brighter — gives the strip a "lit
+     from the centre" glint rather than uniform gold. */
   border-image: linear-gradient(
     180deg,
-    #ffeaa1 0%,
-    #ffd93d 25%,
-    #ffb31e 50%,
-    #ffd93d 75%,
-    #ffeaa1 100%
+    #8a5a00 0%,
+    #c98a11 20%,
+    #ffd93d 45%,
+    #fff1a8 50%,
+    #ffd93d 55%,
+    #c98a11 80%,
+    #8a5a00 100%
   ) 1;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.06) inset,
