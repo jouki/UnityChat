@@ -108,6 +108,12 @@ body.layout-large #settings details summary { font-size: 15px; }
 .hdr-logo-wrap.has-update {
   cursor: pointer;
 }
+/* Inside the tooltip, revert to the default text/arrow cursor — the whole
+   card isn't clickable, only the inline link is. Link gets pointer back
+   via the <a> user-agent default. */
+.hdr-logo-wrap.has-update .update-tooltip {
+  cursor: default;
+}
 .hdr-logo-wrap.has-update .update-dot {
   display: block;
   position: absolute;
@@ -283,6 +289,12 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 .ut-text a {
   color: #ffc800;
   text-decoration: underline;
+  transition: color 0.12s ease, text-shadow 0.12s ease;
+}
+.ut-text a:hover,
+.ut-text a:focus-visible {
+  color: #ffe28a;
+  text-shadow: 0 0 8px rgba(255, 200, 0, 0.35);
 }
 .ut-explorer {
   background: #1c1c20;
