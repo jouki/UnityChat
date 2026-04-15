@@ -970,7 +970,15 @@ function readableColor(input) {
     else if (max === g) h = ((b - r) / d + 2) / 6;
     else h = ((r - g) / d + 4) / 6;
   }
-  const minL = 0.5, maxL = 0.88;
+  // WCAG relative luminance — accounts for hue: pure blue is much harder
+  // to read on dark bg than pure red even at the same HSL Lightness, so
+  // we boost L extra when perceived luminance is very low. Twitch's vanilla
+  // chat does the same — pure #0000FF renders at ~#9999FF (HSL L≈0.8).
+  const wcagL = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  let minL = 0.5;
+  if (wcagL < 0.10) minL = 0.78;       // very dark (pure blue, dark navy)
+  else if (wcagL < 0.20) minL = 0.65;  // dark (e.g. dark red, navy variants)
+  const maxL = 0.88;
   let nL = l;
   if (l < minL) nL = minL;
   else if (l > maxL) nL = maxL;
@@ -5119,12 +5127,24 @@ class UnityChat {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const plainKey = msg.username.toLowerCase();
       const prevEntry = this._chatUsers.get(colorKey);
-      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prevEntry?.badgesRaw || '' };
+      // CRITICAL: preserve resolved state (_fromGQL, _paint, _paintChecked,
+      // userId) from prior lookups. Otherwise every new IRC message wipes
+      // it, the queue refires forever, and renderedColor stays stuck on
+      // the raw IRC color (no DOM/GQL boost, no 7TV paint).
+      const entry = {
+        ...(prevEntry || {}),
+        name: msg.username,
+        platform: msg.platform,
+        // Don't downgrade a GQL/DOM-resolved color back to raw IRC color —
+        // the resolved one already includes Twitch's readability boost.
+        color: prevEntry?._fromGQL ? (prevEntry.color || msg.color) : msg.color,
+        badgesRaw: msg.badgesRaw || prevEntry?.badgesRaw || '',
+        userId: msg.userId || prevEntry?.userId || null,
+      };
       if (msg.color) {
-        const prev = this._chatUsers.get(colorKey);
         this._chatUsers.set(colorKey, entry);
         this._chatUsers.set(plainKey, entry); // for @autocomplete
-        if (!prev || prev.color !== msg.color) {
+        if (!prevEntry || prevEntry.color !== entry.color) {
           if (!this._userColorTimer) {
             this._userColorTimer = setTimeout(() => {
               this._userColorTimer = null;
