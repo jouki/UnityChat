@@ -10,33 +10,30 @@
   <!-- Header -->
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
-    <div id="header-actions">
-      <div id="update-wrap" class="hidden">
-        <button id="btn-update" title="Nová verze k dispozici" aria-label="Nová verze">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-            <path d="M12 2v10l4-4 1.41 1.41L12 14.83 6.59 9.41 8 8l4 4V2h0zM20 18v2H4v-2h16z"/>
-          </svg>
-          <span class="update-dot" aria-hidden="true"></span>
-        </button>
-        <div id="update-tooltip" class="update-tooltip">
-          <div class="ut-title">Nová verze k dispozici</div>
-          <div class="ut-version">v<span id="ut-version-num">?</span></div>
-          <div class="ut-text">
-            Můžeš updatovat pomocí <code>update.bat</code> ve složce extensionu,
-            nebo si stáhni <a id="ut-download-link" href="https://jouki.cz/download/unitychat.zip" target="_blank" rel="noopener">novou verzi</a>.
-          </div>
-          <div class="ut-explorer" aria-hidden="true">
-            <div class="ut-exp-path">&#128193; extension</div>
-            <ul class="ut-exp-list">
-              <li>&#128196; background.js</li>
-              <li>&#128196; sidepanel.html</li>
-              <li>&#128196; sidepanel.js</li>
-              <li>&#128196; manifest.json</li>
-              <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
-            </ul>
-          </div>
+    <!-- Update notification tooltip template — JS relocates this into
+         #hdr-logo-wrap (built at init time) so the dot and tooltip hang
+         off the UnityChat logo on the left of the header. -->
+    <template id="update-tooltip-tpl">
+      <div class="update-tooltip">
+        <div class="ut-title">Nová verze k dispozici</div>
+        <div class="ut-version">v<span id="ut-version-num">?</span></div>
+        <div class="ut-text">
+          Můžeš updatovat pomocí <code>update.bat</code> ve složce extensionu,
+          nebo si stáhni <a id="ut-download-link" href="https://jouki.cz/download/unitychat.zip" target="_blank" rel="noopener">novou verzi</a>.
+        </div>
+        <div class="ut-explorer" aria-hidden="true">
+          <div class="ut-exp-path">&#128193; extension</div>
+          <ul class="ut-exp-list">
+            <li>&#128196; background.js</li>
+            <li>&#128196; sidepanel.html</li>
+            <li>&#128196; sidepanel.js</li>
+            <li>&#128196; manifest.json</li>
+            <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
+          </ul>
         </div>
       </div>
+    </template>
+    <div id="header-actions">
       <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
       <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
       <button id="btn-settings" title="Nastavení">&#9881;</button>

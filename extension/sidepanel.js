@@ -1685,10 +1685,24 @@ class UnityChat {
   }
 
   async _init() {
-    // Verze v titulku
+    // Verze v titulku — wrap the logo so the update dot + tooltip can hang
+    // off it (dot anchors to the top-right corner of the logo, tooltip
+    // drops to the right from the logo's left edge).
     const ver = chrome.runtime.getManifest().version;
-    document.getElementById('header-title').innerHTML =
-      `<img src="icons/icon48.png" class="hdr-logo"> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
+    const title = document.getElementById('header-title');
+    title.innerHTML =
+      `<span class="hdr-logo-wrap" id="hdr-logo-wrap">
+        <img src="icons/icon48.png" class="hdr-logo" alt="UnityChat">
+        <span class="update-dot" aria-hidden="true"></span>
+      </span> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
+    // Clone the update tooltip template into the logo wrap so hover on the
+    // logo reveals it. Pulled from a <template> in sidepanel.html so the
+    // markup stays authored in HTML and readable.
+    const tpl = document.getElementById('update-tooltip-tpl');
+    const logoWrap = document.getElementById('hdr-logo-wrap');
+    if (tpl && logoWrap) {
+      logoWrap.appendChild(tpl.content.cloneNode(true));
+    }
 
     await this._loadConfig();
     if (this.config._platformUsernames) {
@@ -1787,10 +1801,10 @@ class UnityChat {
       const remote = await resp.json();
       const latest = remote?.version;
       if (!latest || !this._isNewerVersion(latest, current)) return;
-      // Show update indicator
-      const wrap = document.getElementById('update-wrap');
+      // Pulsing red dot on the logo + tooltip-on-hover with the new version.
+      const wrap = document.getElementById('hdr-logo-wrap');
       const num = document.getElementById('ut-version-num');
-      if (wrap) wrap.classList.remove('hidden');
+      if (wrap) wrap.classList.add('has-update');
       if (num) num.textContent = latest;
     } catch {}
   }

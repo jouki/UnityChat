@@ -84,10 +84,70 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 8px;
 }
 
+.hdr-logo-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
+}
+
 .hdr-logo {
   width: 22px;
   height: 22px;
   filter: drop-shadow(0 0 6px rgba(255, 140, 0, 0.5));
+}
+
+/* Update dot + tooltip: both hidden unless .has-update is on the wrap.
+   Tooltip anchors to the left edge of the logo so it doesn't run off the
+   right side of a narrow side panel — the panel can be as tight as
+   ~300px and the tooltip is ~290px wide. */
+.hdr-logo-wrap .update-dot,
+.hdr-logo-wrap .update-tooltip {
+  display: none;
+}
+.hdr-logo-wrap.has-update {
+  cursor: pointer;
+}
+.hdr-logo-wrap.has-update .update-dot {
+  display: block;
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  background: #e5484d;
+  border: 1.5px solid var(--bg);
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(229, 72, 77, 0.85);
+  animation: update-pulse 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+.hdr-logo-wrap.has-update .update-tooltip {
+  display: block;
+  position: absolute;
+  top: calc(100% + 10px);
+  left: -8px;
+  min-width: 260px;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 14px;
+  background: #151518;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 140, 0, 0.15);
+  z-index: 200;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.hdr-logo-wrap.has-update:hover .update-tooltip,
+.hdr-logo-wrap.has-update:focus-within .update-tooltip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .hdr-ver {
@@ -110,7 +170,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 2px;
 }
 
-#btn-popout, #btn-dump, #btn-settings, #btn-update {
+#btn-popout, #btn-dump, #btn-settings {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -121,57 +181,9 @@ body.layout-large #settings details summary { font-size: 15px; }
   line-height: 1;
 }
 
-/* Update notification */
-#update-wrap { position: relative; }
-#update-wrap.hidden { display: none; }
-#btn-update {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-}
-#btn-update:hover { filter: brightness(1.15); }
-.update-dot {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  width: 8px;
-  height: 8px;
-  background: #e5484d;
-  border-radius: 50%;
-  box-shadow: 0 0 6px rgba(229, 72, 77, 0.8);
-  animation: update-pulse 1.5s ease-in-out infinite;
-}
 @keyframes update-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50%      { transform: scale(1.25); opacity: 0.7; }
-}
-.update-tooltip {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  min-width: 280px;
-  max-width: 320px;
-  padding: 14px;
-  background: #151518;
-  border: 1px solid rgba(255, 140, 0, 0.45);
-  border-radius: 6px;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 140, 0, 0.15);
-  z-index: 200;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-primary);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-#update-wrap:hover .update-tooltip,
-#update-wrap:focus-within .update-tooltip {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
 }
 .ut-title {
   font-size: 13px;
