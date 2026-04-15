@@ -4072,19 +4072,36 @@ class UnityChat {
         this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
         break;
       case 'raidbanner': {
-        // Inject a synthetic TW_HIGHLIGHTS card so the raid banner
-        // renders without waiting for a real raid. Text + avatar shape
-        // mirrors what the content script extracts from Twitch DOM.
-        const raider = (text && text !== 'test message') ? text : 'Karpo_cz';
-        this._handleHighlights({
-          channel: this.config.channel,
-          cards: [{
-            kind: 'raid',
-            text: `${raider} provádí nájezd na kanál Lessinka s 195 nájezdníky. Nájezd za +250 bodů.`,
-            avatar: 'https://static-cdn.jtvnw.net/jtv_user_pictures/robdiesalot-profile_image-300x300.png',
-          }],
-        });
-        this._sys('/uc raidbanner: mock raid banner injected');
+        const raider = (text && text !== 'test message') ? text : (this.config.channel || 'Karpo_cz');
+        // Try to fetch the current channel's real profile avatar from
+        // the open Twitch tab; fall back to a placeholder if nothing's
+        // available (e.g. no Twitch tab open).
+        (async () => {
+          let avatar = null;
+          try {
+            const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+            const ch = (this.config.channel || '').toLowerCase();
+            const target = tabs.find((t) => {
+              try {
+                const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+                return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+              } catch { return false; }
+            }) || tabs[0];
+            if (target?.id) {
+              const r = await chrome.tabs.sendMessage(target.id, { type: 'GET_CHANNEL_AVATAR' }).catch(() => null);
+              if (r?.ok && r.avatar) avatar = r.avatar;
+            }
+          } catch {}
+          this._handleHighlights({
+            channel: this.config.channel,
+            cards: [{
+              kind: 'raid',
+              text: `${raider} provádí nájezd na kanál Lessinka s 195 nájezdníky. Nájezd za +250 bodů.`,
+              avatar,
+            }],
+          });
+          this._sys(`/uc raidbanner: mock raid banner injected${avatar ? ' (with real channel avatar)' : ''}`);
+        })();
         break;
       }
       case 'claim': {
@@ -5123,8 +5140,43 @@ class UnityChat {
     if (c.avatar) {
       const av = document.createElement('img');
       av.className = 'hl-raid-avatar';
+      av.crossOrigin = 'anonymous';
       av.src = c.avatar;
       av.alt = '';
+      // On load, sample a dominant colour from the avatar and apply it
+      // as CSS custom properties on the raid card — gives the banner
+      // a background tuned to the raider's brand without hardcoding
+      // per-channel palettes.
+      av.addEventListener('load', () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 24;
+          canvas.height = 24;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(av, 0, 0, 24, 24);
+          const { data } = ctx.getImageData(0, 0, 24, 24);
+          let r = 0, g = 0, b = 0, n = 0;
+          // Average non-transparent, non-near-white/black pixels —
+          // keeps the hue away from washed-out highlights.
+          for (let i = 0; i < data.length; i += 4) {
+            const pr = data[i], pg = data[i + 1], pb = data[i + 2], pa = data[i + 3];
+            if (pa < 180) continue;
+            const sum = pr + pg + pb;
+            if (sum < 90 || sum > 680) continue;
+            r += pr; g += pg; b += pb; n++;
+          }
+          if (n > 20) {
+            r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+            const card = av.closest('.hl-card');
+            if (card) {
+              card.style.setProperty('--hl-accent-r', r);
+              card.style.setProperty('--hl-accent-g', g);
+              card.style.setProperty('--hl-accent-b', b);
+              card.classList.add('has-accent');
+            }
+          }
+        } catch { /* CORS or sample failed — keep default palette */ }
+      }, { once: true });
       row.appendChild(av);
     }
 

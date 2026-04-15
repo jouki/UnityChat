@@ -1390,6 +1390,29 @@ body.no-timestamps .msg .ts { display: none; }
   color: #e0c7a8;
 }
 .hl-raid-meta .hl-raid-points { color: #ffd93d; font-weight: 700; }
+/* When the card sampled a dominant colour from the avatar, recolor
+   the background + border + glow ring from that accent so the banner
+   feels "themed" to the raider's brand instead of a fixed red/gold. */
+.hl-card.hl-raid.has-accent {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.32),
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.1)
+  );
+  border-image: linear-gradient(
+    180deg,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 0%,
+    rgb(calc(var(--hl-accent-r) * 0.7), calc(var(--hl-accent-g) * 0.7), calc(var(--hl-accent-b) * 0.7)) 50%,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 100%
+  ) 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 14px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.4);
+}
+.hl-card.hl-raid.has-accent .hl-raid-avatar {
+  border-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.8);
+  box-shadow: 0 0 12px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.55);
+}
 
 /* ==== Subscription gift events ==== */
 /* Bundle header: full-width purple pill */

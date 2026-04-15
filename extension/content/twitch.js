@@ -597,6 +597,21 @@
       return;
     }
 
+    if (msg.type === 'GET_CHANNEL_AVATAR') {
+      try {
+        const imgs = document.querySelectorAll('img[src*="jtv_user_pictures"], img[src*="profile_image"], [class*="channel-info"] img, [data-a-target*="avatar"] img, .channel-info-content img');
+        let pick = null;
+        for (const img of imgs) {
+          const r = img.getBoundingClientRect();
+          if (r.width >= 28 && r.width <= 300 && Math.abs(r.width - r.height) < 4 && img.src) {
+            pick = img.src; break;
+          }
+        }
+        sendResponse({ ok: true, avatar: pick });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'GET_DOM_COLORS') {
       try {
         sendResponse({ ok: true, colors: getDomColors(msg.usernames || []) });
