@@ -1222,7 +1222,8 @@ class TwitchProvider {
         color: '#ff6b6b',
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
-        isRaid: true
+        isRaid: true,
+        raidViewers: viewers,
       });
       return;
     }
@@ -3893,7 +3894,7 @@ class UnityChat {
 
     switch (cmd) {
       case 'raid':
-        this._addMessage({ ...base, username: mockUser, message: `${text} přichází s raidem!`, isRaid: true, color: '#ff6b6b' });
+        this._addMessage({ ...base, username: mockUser, message: '', isRaid: true, color: '#ff6b6b', raidViewers: text.match(/^\d+$/) ? text : '88' });
         break;
       case 'raider':
         this._addMessage({ ...base, isRaider: true, color: '#00e676' });
@@ -3904,8 +3905,57 @@ class UnityChat {
       case 'sus':
         this._addMessage({ ...base, isSus: true, color: '#ffc107' });
         break;
+      case 'announcement':
+      case 'ann': {
+        // /uc announcement [PRIMARY|BLUE|GREEN|ORANGE|PURPLE] [body]
+        const colorOpts = ['PRIMARY', 'BLUE', 'GREEN', 'ORANGE', 'PURPLE'];
+        let annColor = 'PRIMARY';
+        let body = text;
+        const firstWord = (parts[1] || '').toUpperCase();
+        if (colorOpts.includes(firstWord)) {
+          annColor = firstWord;
+          body = parts.slice(2).join(' ') || 'Mock announcement body';
+        }
+        this._addMessage({ ...base, message: body, isAnnouncement: true, announcementColor: annColor, color: '#9146ff' });
+        break;
+      }
+      case 'sub':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 1 });
+        break;
+      case 'resub':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 6, subStreak: 6 });
+        break;
+      case 'subgift':
+        this._addMessage({ ...base, message: '', isSubGift: true, giftPlan: '1000', giftRecipient: text === 'test message' ? 'RecipientUser' : text });
+        break;
+      case 'giftbundle': {
+        const n = parseInt(text, 10) || 6;
+        this._addMessage({ ...base, message: '', isGiftBundle: true, giftPlan: '1000', giftCount: n });
+        break;
+      }
+      case 'redeem': {
+        const cost = parseInt(parts[parts.length - 1], 10);
+        const rewardName = (Number.isFinite(cost) ? parts.slice(1, -1).join(' ') : text) || 'Send Cult follower message';
+        this._addMessage({ ...base, message: 'Mock redeem message body', isRedeem: true, rewardName, rewardCost: Number.isFinite(cost) ? cost : 500, color: '#9146ff' });
+        break;
+      }
+      case 'highlight':
+        this._addMessage({ ...base, message: text, isHighlight: true });
+        break;
+      case 'mod':
+      case 'timeout': {
+        const secs = parseInt(text, 10) || 600;
+        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _cleared: `Timeout (${secs >= 60 ? Math.round(secs / 60) + 'm' : secs + 's'})` });
+        break;
+      }
+      case 'ban':
+        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _cleared: 'Permanently banned' });
+        break;
+      case 'delete':
+        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
+        break;
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
     }
   }
 
@@ -5328,7 +5378,18 @@ class UnityChat {
     if (msg.superChat) el.classList.add('superchat');
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
-    if (msg.isRaid) el.classList.add('raid');
+    if (msg.isRaid) {
+      el.classList.add('raid');
+      // Prominent header bar matching the announcement style — pulsing
+      // raid icon + RAID label + viewer count. Mirrors vanilla Twitch's
+      // "RAID FROM …" callout so it doesn't get lost in fast chat.
+      const rh = document.createElement('div');
+      rh.className = 'raid-header';
+      const viewers = msg.raidViewers != null ? ` <span class="raid-count">${msg.raidViewers}\u00A0div\u00E1k\u016F</span>` : '';
+      rh.innerHTML = '<span class="raid-icon" aria-hidden="true">\u{1F680}</span>'
+        + '<span class="raid-label">RAID</span>' + viewers;
+      el.appendChild(rh);
+    }
     if (msg.isRaider) el.classList.add('raider-msg');
     if (msg.isSus) el.classList.add('sus-msg');
     if (msg.isAnnouncement) {

@@ -1184,18 +1184,68 @@ body.no-timestamps .msg .ts { display: none; }
   50%      { transform: scale(1.12); filter: drop-shadow(0 0 8px rgba(255,175,20,0.75)); }
 }
 
-/* Raid */
+/* Raid — same prominence treatment as Announcements: bilateral accent
+   borders + glow + pulsing rocket icon header so it never gets lost in
+   fast chat. */
 .msg.raid {
-  background: rgba(255, 107, 107, 0.12);
-  border-left: 2px solid #ff6b6b;
-  padding-left: 8px;
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.18), rgba(255, 107, 107, 0.06));
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 5px 0 5px;
+  border-image: linear-gradient(180deg, #ff4500 0%, #ff6b6b 50%, #ffaf14 100%) 1;
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 18px rgba(255, 107, 107, 0.32);
 }
-
 .msg.raid:hover {
-  background: rgba(255, 107, 107, 0.2);
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.26), rgba(255, 107, 107, 0.1));
 }
 
-/* (raid-label removed — replaced by right-side .msg-tag system) */
+.raid-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  padding-bottom: 5px;
+  color: #fff;
+  opacity: 0.95;
+}
+.raid-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 107, 107, 0.55));
+  animation: raid-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+.raid-label {
+  background: linear-gradient(90deg, #ffaf14, #ff4500, #ff6b6b);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.raid-count {
+  margin-left: auto;
+  background: rgba(255, 69, 0, 0.18);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: #ffd9c2;
+  text-transform: none;
+}
+@keyframes raid-pulse {
+  0%, 100% { transform: translateX(0) scale(1); filter: drop-shadow(0 0 4px rgba(255,107,107,0.55)); }
+  40%      { transform: translateX(2px) scale(1.18); filter: drop-shadow(0 0 10px rgba(255,107,107,0.85)); }
+}
+
+/* (raid-label legacy comment removed — replaced by header system) */
 
 /* Raider (came from raid) */
 .msg.raider-msg {
