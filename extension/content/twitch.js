@@ -935,12 +935,18 @@
       }, 400);
     });
     creditsObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-    // Twitch lazy-loads the community-points-summary subtree (and the
-    // points balance often arrives a beat later than bits). Stagger
-    // several early scrapes so we don't get stuck on a partial snapshot
-    // when the MutationObserver settled on something else (e.g. the
-    // page added many unrelated nodes between balance updates).
+    // Twitch lazy-loads the community-points-summary subtree, and the
+    // ScAnimatedNumber span sometimes only renders the actual balance
+    // after the first watch-reward animation fires (the +10 flash) —
+    // before that its textContent can be empty/0 even though the value
+    // is held in component state. MutationObserver settles on
+    // surrounding noise and misses it. So:
+    //   - Stagger early scrapes during page hydration
+    //   - Then keep polling every 5s permanently. It's just a DOM walk,
+    //     no network — and the relay hash-dedups so nothing is sent
+    //     unless the snapshot actually changed.
     [800, 2000, 4000, 8000, 16000].forEach((ms) => setTimeout(relayCredits, ms));
+    setInterval(relayCredits, 5000);
   }
 
   function setupHighlightsObserver() {
