@@ -748,7 +748,10 @@ class EmoteManager {
       let cls = 'emote';
       const isTwitchCdn = /static-cdn\.jtvnw\.net\/emoticons\//.test(s.url || '');
       if (isTwitchCdn && _isTwitchOgFaceName(s.value)) cls += ' emote-tiny';
-      const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+      // No native browser title — our own hover-preview card already shows
+      // the emote name + source, and the browser tooltip would compete
+      // with it (and pop up after the same hover delay).
+      const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}">`;
       if (s.zw) {
         if (!stackOpen) out.push('<span class="emote-stack">');
         out.push(img);
