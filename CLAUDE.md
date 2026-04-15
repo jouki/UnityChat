@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.23.13
+# UnityChat - Chrome/Opera Extension + Backend v3.26.4
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -395,7 +395,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.23.13**
+- Aktuální: **v3.26.4**
 
 ## Známé limitace / gotchas
 
@@ -599,7 +599,25 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.23.8–v3.23.10** - Color UI: "Barva jména (platform)" label, `_refreshColorUI(platform)`, `_platformDefaultColor(platform)` (YT default #ff0000), custom color → real value / no custom → placeholder s default hex, `_upgradeOptimistic` zachovává UC custom color
 - **v3.23.11** - `GET /users` merged endpoint (seen_users + nicknames), `backend/src/routes/users.ts`
 - **v3.23.12** - Backup utility (`extension/backup.html` + `backup.js`): export/import chrome.storage sync+local, external JS (MV3 CSP), export přes chrome.downloads API (saveAs dialog)
-- **v3.23.13** - Profile sync s local dedup + merged users endpoint, repo public, aktuální verze
+- **v3.23.13** - Profile sync s local dedup + merged users endpoint, repo public
+- **v3.24.0–v3.24.18** - Streamer Directory fáze 2–5: backend schema (`streamers`, `streamer_tokens` AES-256-GCM, `streamer_sessions`), OAuth flow pro Twitch + YouTube (Google) + Kick (PKCE), public lookup + seen + private `/me`/unlink/logout endpointy, extension "Jsem streamer" page s Link/Unlink UI, auto-switch na změnu tab URL (extension sleduje usera napříč streamery); extracted landing pages do private `jouki/jouki.cz` repo (workflow `trigger-jouki-cz.yml` z UnityChat pushu)
+- **v3.24.19** - YouTube auto-switch funguje na `/watch` live stream stránkách (content script resolvuje channel handle z DOM: `ytd-video-owner-renderer a[href^="/@"]` + JSON-LD fallback); sidepanel použije `resp.channelHandle` jako fallback když URL parsing selže
+- **v3.24.20** - Reset `@mention` autocomplete na auto-switch: `_performAutoSwitch` smaže plain-key entries z `_chatUsers` (ale zachová `platform:username` color cache)
+- **v3.24.21** - Twitch default color palette (15 colors, Chatty-style `(firstChar + lastChar) % 15` hash) místo flat `#9146ff` pro colorless usery
+- **v3.24.22** - Twitch chat colors z GQL: batched `user(login:) { chatColor }` query v `GET_CHAT_COLORS` background handleru, retint DOM přes `data-username` selektor. `_fromGQL: true` flag v `_chatUsers` zabraňuje aby další IRC hash-fallback zprávy clobbernuly resolvnutou barvu
+- **v3.24.23** - Twitch Announcement render (`USERNOTICE msg-id=announcement`): parsed message body, `msg-param-color` (PRIMARY|BLUE|GREEN|ORANGE|PURPLE), bilateral gradient border (PRIMARY duhový rainbow), pulsující megafon ikona, color-tinted glow
+- **v3.24.24** - Color preservation fix (`_fromGQL` přes nové zprávy zachován) + 72h message cache (age-based prune místo 200 count cap) + `maxMessages` bumpnut 500→5000 s migrací + prominentní announcement (bilaterální border-image, pulse)
+- **v3.24.25** - 7TV paints na Twitch nicknamech (LINEAR_GRADIENT, RADIAL_GRADIENT, URL paints + drop-shadows). GQL bulk query `{ cosmetics { paints { ... } } }` načte všech ~1000 paintů najednou (per-paint REST endpoint 404s); per-user paint ID z `/v3/users/twitch/{userId}` cached v `_chatUsers._paint`
+- **v3.24.26** - 7TV paints retroactive pro cached/scraped zprávy: `fetchChatColors` rozšířený o `user.id`, `_flushColorLookups` triggerne paint lookup pro všechny userId
+- **v3.24.27** - `@mention` v textu zprávy bold + colored target user's chat color (`_processMentions` walker v `.tx` po emote renderu)
+- **v3.24.28** - Settings: timestamp toggle (`body.no-timestamps .ts { display:none }`)
+- **v3.25.0–v3.25.7** - Update notification UI: červená pulsující tečka na logu (ne v toolbaru), tooltip anchored left (max-width `min(300px, calc(100vw - 24px))`), template v HTML, logo-wrap s dot+tooltip, cursor revert na default v tooltipu + link hover color feedback
+- **v3.25.8–v3.25.10** - Browser action badge (`chrome.action.setBadgeText`/`setTitle`), speech-bubble arrow (2 stacked triangles outside tooltip), 10s auto-reveal s countdown barem (scaleX origin-left), layout-scaled tooltip přes `--ut-scale` CSS variable (1 / 1.1 / 1.22)
+- **v3.26.0** - Periodic update poll: `chrome.alarms` 15min interval v background, broadcasts `UC_UPDATE_AVAILABLE` message do sidepanelu (auto-reveal jen na false→true); loading overlay: pulsující logo + radial glow + animované "Načítání chatu…" + 3 platform pills (pulse → brand gradient při connected) + bouncing bar
+- **v3.26.1** - Channel switch recykluje boot loading overlay; per-user 7TV emote loadouts (cross-channel personal emotes, retroactive re-render); fulltext toggle v emote autocomplete; emote hover preview (220ms intent) + click-pinned detail card s lazy-fetch metadata (owner, added date, external link)
+- **v3.26.2** - Twitch mod actions: CLEARCHAT (timeout/ban) + CLEARMSG (single delete) parser, greyed out + italic line-through + red pill label ("Timeout (10m)" / "Permanently banned" / "Deleted by mod"), persisted v `_cleared` field v cache
+- **v3.26.3** - "Added by" row v 7TV emote preview (actor_id + timestamp z emote-set entries, cached přes `fetch7tvUser`); auto-scroll race fix (`_programmaticScrollUntil` 150ms window suprimuje scroll events z vlastního scrollu)
+- **v3.26.4** - Chat vibration fix na rychlém chatu: `scrollbar-gutter: stable` + `overflow-anchor: none` na `#chat`, `contain: layout style` na `.msg`, `min-width: 1.75em` placeholder na emote `<img>` aby inline flow reservoval prostor před image decodem. **Aktuální verze**
 
 ## Release workflow
 
