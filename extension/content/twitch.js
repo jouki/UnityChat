@@ -1229,6 +1229,14 @@
     '.community-highlight-stack__card',
     '.community-highlight',
     '[data-test-selector*="community-highlight"]',
+    // Collapsed-chat mode: Twitch renders highlights as a compact badge
+    // stack on the video player instead of full cards. Selectors below
+    // match those compact elements so we can at least detect their
+    // presence and log diagnostics. Exact structure varies — diagnostic
+    // log in snapshotHighlights dumps HTML when chat is hidden.
+    '[class*="community-highlights"]',
+    '[data-a-target="community-highlights"]',
+    '.pinned-chat__highlight-card',
   ];
   let highlightObserver = null;
   let lastHighlightHash = '';
@@ -1489,6 +1497,30 @@
           allCandidates.push(el);
         }
       });
+    }
+    // Diagnostic: when no candidates were matched AND the page clearly has
+    // highlight-related DOM (e.g. the compact "!N" badge on the player),
+    // dump everything matching pin/highlight classes so we can tune
+    // selectors. Rate-limited to once every 30s to avoid spam.
+    if (!allCandidates.length) {
+      const now = Date.now();
+      if (!snapshotHighlights._lastDiag || now - snapshotHighlights._lastDiag > 30000) {
+        // Look for ANY element whose class or aria-label mentions pin or
+        // community-highlight — these exist in collapsed mode too.
+        const probes = document.querySelectorAll('[class*="pinned"], [class*="highlight"], [aria-label*="pin" i], [aria-label*="zpráv" i]');
+        if (probes.length) {
+          snapshotHighlights._lastDiag = now;
+          const dumps = [];
+          for (const el of Array.from(probes).slice(0, 6)) {
+            const html = (el.outerHTML || '').slice(0, 1200);
+            dumps.push(`{cls="${el.className || ''}" aria="${el.getAttribute('aria-label') || ''}" html=${html}}`);
+          }
+          try {
+            chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'HighlightDiag',
+              text: `no cards matched; probes=${probes.length}: ${dumps.join(' || ')}` }).catch(() => {});
+          } catch {}
+        }
+      }
     }
     // Drop ancestors of other candidates — keep only the innermost matches
     // so a wrapping container and its inner card don't both emit. Also
