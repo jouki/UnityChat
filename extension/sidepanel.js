@@ -435,7 +435,7 @@ class EmoteManager {
 
   // ---- Učení nativních emotes z příchozích zpráv ----
 
-  learnTwitch(text, emotesTag) {
+  learnTwitch(text, emotesTag, offset = 0) {
     if (!emotesTag) return;
     for (const part of emotesTag.split('/')) {
       const ci = part.indexOf(':');
@@ -444,11 +444,16 @@ class EmoteManager {
       const range = part.substring(ci + 1).split(',')[0];
       const dash = range.indexOf('-');
       if (dash === -1) continue;
-      const s = parseInt(range.substring(0, dash), 10);
-      const e = parseInt(range.substring(dash + 1), 10);
-      if (isNaN(s) || isNaN(e)) continue;
+      const s = parseInt(range.substring(0, dash), 10) - offset;
+      const e = parseInt(range.substring(dash + 1), 10) - offset;
+      if (isNaN(s) || isNaN(e) || s < 0 || e >= text.length) continue;
       const name = text.substring(s, e + 1);
-      if (name && !this.twitchNative.has(name)) {
+      // Sanity check: real Twitch emote names are alphanumeric (with
+      // some punctuation). Skip if the slice would learn a fragment of
+      // a regular word — happens when offset is wrong (we'd teach
+      // "te" as an alias for :D from a misaligned reply prefix).
+      if (!name || !/^[\S]+$/.test(name) || /^[a-z]{1,3}$/.test(name)) continue;
+      if (!this.twitchNative.has(name)) {
         this.twitchNative.set(name,
           `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
       }
@@ -4860,23 +4865,25 @@ class UnityChat {
     const pointsIcon = wrap.querySelector('.tc-points-icon');
 
     // Keep-last-shown: Twitch's points-balance subtree briefly drops the
-    // bits/points text spans during the +10 watch-reward animation. If
-    // we hide the pill on every transient null, the whole row keeps
-    // flashing in/out. Only update when we have a real value; only
-    // hide when the pill has never been shown.
+    // bits/points text spans during the +10 watch-reward animation. We
+    // remember the last seen value per pill so transient nulls don't
+    // hide the row.
     let anyShown = false;
-    const bitsShown = !bitsPill.classList.contains('hidden');
     if (data.bits != null && data.bits !== '') {
-      bitsVal.textContent = data.bits;
+      this._lastBitsText = data.bits;
+    }
+    if (this._lastBitsText != null) {
+      bitsVal.textContent = this._lastBitsText;
       bitsPill.classList.remove('hidden');
-      anyShown = true;
-    } else if (bitsShown) {
-      // Keep prior bits visible — don't hide on transient missing data
       anyShown = true;
     } else {
       bitsPill.classList.add('hidden');
     }
     if (data.points != null && data.points !== '') {
+      this._lastPointsText = data.points;
+      if (data.pointsIcon) this._lastPointsIcon = data.pointsIcon;
+    }
+    if (this._lastPointsText != null) {
       // Parse numeric value to detect increases (+10 watch reward, +N from
       // claim) — Twitch formats with comma decimal + Czech "tis."/EN "K"
       // suffix for thousands. We strip non-breaking spaces too.
@@ -4889,28 +4896,20 @@ class UnityChat {
         const n = parseFloat(raw);
         return Number.isFinite(n) ? Math.round(n * mult) : null;
       };
-      const prevText = pointsVal.textContent;
       const prevNum = this._lastPointsNum;
-      const newNum = parseTwitchNum(data.points);
-      pointsVal.textContent = data.points;
-      if (data.pointsIcon) {
-        pointsIcon.style.backgroundImage = `url(${this.emotes._ea(data.pointsIcon)})`;
+      const newNum = parseTwitchNum(this._lastPointsText);
+      pointsVal.textContent = this._lastPointsText;
+      if (this._lastPointsIcon) {
+        pointsIcon.style.backgroundImage = `url(${this.emotes._ea(this._lastPointsIcon)})`;
         pointsIcon.classList.add('has-icon');
       }
       pointsPill.classList.remove('hidden');
       anyShown = true;
-      // Numerical delta only — text-equality guard would suppress
-      // flashes when both pre/post values round to the same abbreviation
-      // ("1,5 tis." → +10 → still "1,5 tis." but parseTwitchNum sees
-      // 1500 → 1510 if we have higher precision).
+      // Numerical delta only (text-equality would miss "1,5 tis."→"1,5 tis.")
       if (prevNum != null && newNum != null && newNum > prevNum) {
         this._flashPointsDelta(newNum - prevNum);
       }
       if (newNum != null) this._lastPointsNum = newNum;
-    } else if (!pointsPill.classList.contains('hidden')) {
-      // Keep prior points visible — don't hide on transient missing
-      // data (e.g. during +10 reward animation Twitch swaps spans).
-      anyShown = true;
     } else {
       pointsPill.classList.add('hidden');
     }
@@ -5654,10 +5653,13 @@ class UnityChat {
 
     // Učení nativních emotes z příchozích zpráv
     if (msg.platform === 'twitch' && msg.twitchEmotes) {
-      // Pro učení emotes potřebujeme originální pozice - u reply zpráv
-      // je @username stripnutý, ale emote tag má originální pozice.
-      // learnTwitch extrahuje jen name→url mapování, takže OK i s offsetem.
-      this.emotes.learnTwitch(msg.message, msg.twitchEmotes);
+      // Reply messages strip "@username " prefix from message body, but
+      // IRC emote positions still reference the ORIGINAL text including
+      // that prefix. Pass the same offset we use for rendering so we
+      // extract the right substring for the emote name (otherwise we'd
+      // learn garbage like "te" as an alias for :D from a misaligned
+      // reply slice — confirmed in production logs).
+      this.emotes.learnTwitch(msg.message, msg.twitchEmotes, msg.twitchEmotesOffset || 0);
     } else if (msg.platform === 'kick' && msg.kickContent) {
       this.emotes.learnKick(msg.kickContent);
     }
@@ -6135,7 +6137,7 @@ class UnityChat {
       const tx = el.querySelector('.tx');
       if (tx) {
         // Learn new emotes first so renderSegments can find them
-        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
+        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes, realMsg.twitchEmotesOffset || 0);
         tx.innerHTML = this.emotes.renderTwitch(realMsg.message, realMsg.twitchEmotes, {
           platform: 'twitch',
           author: realMsg.username,
