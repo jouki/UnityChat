@@ -65,8 +65,41 @@
   // need the chat DOM alive for redeem/credit/color mirroring to keep
   // working. Toggling visibility is reversible; collapsing via the
   // built-in button would unmount .chat-shell.
+  //
+  // Twitch's layout uses BEM modifier classes (player--with-chat /
+  // info--with-chat) to reserve horizontal space for the chat column.
+  // Hiding the column alone leaves that reserved gap — so we also strip
+  // the --with-chat modifier while UC is open and restore it on close.
+  // A MutationObserver re-applies the strip when Twitch re-renders
+  // (channel switch, SPA nav) and we're still in the "hidden" state.
   const UC_HIDE_STYLE_ID = 'uc-hide-twitch-chat';
+  const UC_WITH_CHAT_TARGETS = [
+    { selector: '.channel-root__player', modifier: 'channel-root__player--with-chat' },
+    { selector: '.channel-root__info', modifier: 'channel-root__info--with-chat' },
+  ];
+  let ucChatHidden = false;
+  let ucWithChatObserver = null;
+
+  function stripWithChatModifiers() {
+    for (const t of UC_WITH_CHAT_TARGETS) {
+      for (const el of document.querySelectorAll(t.selector + '.' + t.modifier)) {
+        el.classList.remove(t.modifier);
+        el.dataset.ucWithChat = '1';
+      }
+    }
+  }
+
+  function restoreWithChatModifiers() {
+    for (const t of UC_WITH_CHAT_TARGETS) {
+      for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+        el.classList.add(t.modifier);
+        delete el.dataset.ucWithChat;
+      }
+    }
+  }
+
   function hideTwitchChatVisually(hide) {
+    ucChatHidden = !!hide;
     let style = document.getElementById(UC_HIDE_STYLE_ID);
     if (hide) {
       if (!style) {
@@ -85,8 +118,25 @@
         `;
         document.documentElement.appendChild(style);
       }
-    } else if (style) {
-      style.remove();
+      stripWithChatModifiers();
+      if (!ucWithChatObserver) {
+        ucWithChatObserver = new MutationObserver(() => {
+          if (ucChatHidden) stripWithChatModifiers();
+        });
+        ucWithChatObserver.observe(document.body, {
+          attributes: true,
+          attributeFilter: ['class'],
+          subtree: true,
+          childList: true,
+        });
+      }
+    } else {
+      if (style) style.remove();
+      restoreWithChatModifiers();
+      if (ucWithChatObserver) {
+        ucWithChatObserver.disconnect();
+        ucWithChatObserver = null;
+      }
     }
   }
 
