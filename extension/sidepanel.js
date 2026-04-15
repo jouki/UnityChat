@@ -3391,6 +3391,20 @@ class UnityChat {
     this._twitchBadges = {};
     this.emotes.loadTwitchGlobals();
 
+    // Reset credits keep-last-shown — old channel's bits/points would
+    // otherwise bleed into the new channel until its first snapshot
+    // arrives. Clear pills and request a fresh pull for the new tab.
+    this._lastBitsText = null;
+    this._lastPointsText = null;
+    this._lastPointsIcon = null;
+    this._lastPointsNum = null;
+    const twCredits = document.getElementById('tw-credits');
+    if (twCredits) {
+      twCredits.classList.add('hidden');
+      twCredits.querySelectorAll('.tc-pill').forEach((p) => p.classList.add('hidden'));
+    }
+    this._pullCredits();
+
     this._disconnectAll();
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
 
