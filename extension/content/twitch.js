@@ -417,23 +417,60 @@
         const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
         const rightColumnSel = '.channel-root__right-column, [data-a-target="right-column"], .right-column';
 
-        // Portal any dialog that's inside the chat column out to body
-        // so our width:0 hide doesn't clip it.
+        // The [role="dialog"] element on Twitch is a thin ARIA wrapper
+        // with no intrinsic dimensions — the actual rendered popover
+        // lives inside .tw-balloon / .reward-center__content. Reading
+        // the wrapper's bounding rect always returns 0. We therefore
+        // measure the largest non-zero descendant for size detection,
+        // but portal the OUTER role=dialog so ARIA + close handlers
+        // stay wired.
+        const measureDialog = (dlg) => {
+          const outer = dlg.getBoundingClientRect();
+          if (outer.width > 4 && outer.height > 4) {
+            log('measure-outer', { w: outer.width, h: outer.height });
+            return outer;
+          }
+          // Find the largest rect among descendants
+          const candidates = dlg.querySelectorAll('.tw-balloon, .ScBalloonWrapper-sc-14jr088-0, .reward-center__content, [class*="balloon"], [class*="reward-center"], [class*="ScTransitionBase"]');
+          let best = null, area = 0;
+          for (const el of candidates) {
+            const r = el.getBoundingClientRect();
+            const a = r.width * r.height;
+            if (a > area) { area = a; best = r; }
+          }
+          if (!best) {
+            // Last resort — find any descendant with sizable rect
+            for (const el of dlg.querySelectorAll('*')) {
+              const r = el.getBoundingClientRect();
+              const a = r.width * r.height;
+              if (a > area) { area = a; best = r; }
+            }
+          }
+          if (best) log('measure-descendant', { w: best.width, h: best.height });
+          return best || outer;
+        };
+
         const portalIfNeeded = (dlg) => {
-          const rr = dlg.getBoundingClientRect();
+          const rr = measureDialog(dlg);
           const insideColumn = !!dlg.closest(rightColumnSel);
+          log('portal-decision', {
+            insideColumn,
+            outerRect: (() => { const o = dlg.getBoundingClientRect(); return { w: o.width, h: o.height }; })(),
+            measuredRect: { w: rr.width, h: rr.height, x: rr.left, y: rr.top },
+          });
           if (!insideColumn) return { portaled: false, rr };
           try {
             document.body.appendChild(dlg);
             dlg.style.position = 'fixed';
             dlg.style.left = rr.left + 'px';
             dlg.style.top = rr.top + 'px';
-            dlg.style.width = rr.width + 'px';
-            dlg.style.height = rr.height + 'px';
+            // Don't force width/height — let content determine size
+            // (width:0 inherited from hidden parent would otherwise
+            // propagate via explicit style).
             dlg.style.zIndex = '9999';
             dlg.dataset.ucPortaled = '1';
             return { portaled: true, rr };
-          } catch { return { portaled: false, rr }; }
+          } catch (e) { log('portal-err', { msg: e.message }); return { portaled: false, rr }; }
         };
 
         const wireDismiss = (dlg) => {
@@ -478,11 +515,8 @@
           const dlg = document.querySelector(dialogSel);
           if (dlg) {
             dialogSeen = true;
-            const rr0 = dlg.getBoundingClientRect();
+            const rr0 = measureDialog(dlg);
             if (rr0.width < 4 || rr0.height < 4) {
-              // Dialog mounted but 0-size — its parent (hidden chat
-              // column) has width:0. Don't re-click (would toggle it
-              // closed) — just keep polling for dims.
               if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
             } else {
               const info = portalIfNeeded(dlg);
@@ -535,7 +569,7 @@
             attempts2++;
             const dlg = document.querySelector(dialogSel);
             if (dlg) {
-              const rr0 = dlg.getBoundingClientRect();
+              const rr0 = measureDialog(dlg);
               if (rr0.width < 4 || rr0.height < 4) {
                 if (attempts2 < 20) { setTimeout(checkDialog2, 50); return; }
               }
