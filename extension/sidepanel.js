@@ -2154,8 +2154,15 @@ class UnityChat {
     this._cacheTimer = null;
     this._twitchBadges = {};
     this._chatUsers = new Map();  // username → { name, platform, color }
-    this._seenMsgIds = new Set();
-    this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
+    // Per-channel LRU dedup. Map<"platform:channel", {ids:Set, content:Set}>.
+    // Each channel holds its own dedup sets so switching channels and coming
+    // back doesn't duplicate messages still in the target's DOM. LRU eviction
+    // caps total channels at _dedupMaxChannels; per-channel FIFO at
+    // _dedupMaxPerChannel keeps memory bounded regardless of channel activity.
+    this._dedupChannels = new Map();
+    this._dedupLRU = [];                // channel keys, most-recent last
+    this._dedupMaxChannels = 150;       // ~50 per platform × 3 platforms
+    this._dedupMaxPerChannel = 250;     // Twitch DOM caps at ~200, 25% headroom
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._isModOnChannel = false; // viewer has moderator/broadcaster badge on current Twitch channel
@@ -2807,8 +2814,8 @@ class UnityChat {
     $('btn-clear-cache').addEventListener('click', () => {
       chrome.storage.local.remove(this._cacheKey);
       this._msgCache = [];
-      this._seenMsgIds.clear();
-      this._seenContentKeys.clear();
+      this._dedupChannels.clear();
+      this._dedupLRU.length = 0;
       this.chatEl.innerHTML = '';
       this.msgCount = 0;
     });
@@ -3413,12 +3420,13 @@ class UnityChat {
     this._saveConfig();
     this._refreshSettingsInputs();
 
-    // Clear on-screen chat + in-memory dedup — new streamer has its own history.
+    // Clear on-screen chat — new streamer has its own history. Dedup structures
+    // are per-channel (LRU-evicted), so we leave them alone: returning to a
+    // recently-visited channel keeps its dedup state intact and prevents DOM
+    // scrape from re-rendering messages that are still sitting in Twitch's DOM.
     this.chatEl.innerHTML = '';
     this.msgCount = 0;
     this._msgCache = [];
-    this._seenMsgIds = new Set();
-    this._seenContentKeys = new Set();
     this._optimisticKeys = new Map();
     this._isModOnChannel = false; // re-detect from badges on new channel
     // Recycle the boot-time loading overlay during channel switch — same
@@ -4260,7 +4268,7 @@ class UnityChat {
   }
 
   async _scrapeExistingChat() {
-    // Always attempt scrape — dedup (_seenContentKeys + _seenMsgIds) drops
+    // Always attempt scrape — per-channel dedup (_dedupChannels) drops
     // duplicates that overlap with the cache, and missing the scrape
     // entirely loses any messages that arrived during the gap between
     // last cached message and now (e.g. user reopened UC after 30s).
@@ -4764,12 +4772,24 @@ class UnityChat {
     });
 
     // Cache sizes
+    let dedupIdsTotal = 0, dedupContentTotal = 0;
+    const dedupPerChannel = {};
+    if (this._dedupChannels) {
+      for (const [k, v] of this._dedupChannels) {
+        dedupIdsTotal += v.ids.size;
+        dedupContentTotal += v.content.size;
+        dedupPerChannel[k] = { ids: v.ids.size, content: v.content.size };
+      }
+    }
     push('Cache stats', {
       msgCacheSize: this._msgCache?.length || 0,
       msgCacheOldest: this._msgCache?.[0]?.timestamp,
       msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
-      seenMsgIds: this._seenMsgIds?.size || 0,
-      seenContentKeys: this._seenContentKeys?.size || 0,
+      dedupChannels: this._dedupChannels?.size || 0,
+      dedupChannelsLRU: this._dedupLRU?.slice() || [],
+      dedupIdsTotal,
+      dedupContentTotal,
+      dedupPerChannel,
       chatUsersEntries: this._chatUsers?.size || 0,
       twitchBadgesLoaded: Object.keys(this._twitchBadges || {}).length,
       sevenTvPaintsLoaded: (typeof _7TV_PAINTS !== 'undefined') ? Object.keys(_7TV_PAINTS).length : 'n/a',
@@ -6017,6 +6037,47 @@ class UnityChat {
     }
   }
 
+  // Resolve dedup entry (ids Set + content-key Set) for a message's platform
+  // and current channel. Creates the entry on first use, bumps it to the top
+  // of the LRU, and evicts the oldest entry if we're over the channel cap.
+  // Returns {ids, content} — callers mutate them directly. Returns null if
+  // the platform/channel can't be resolved (let the caller skip dedup).
+  _dedupEntry(msg) {
+    const platform = msg?.platform;
+    if (!platform) return null;
+    let channel;
+    if (platform === 'twitch') channel = this.config.channel;
+    else if (platform === 'youtube') channel = this.config.ytChannel;
+    else if (platform === 'kick') channel = this.config.kickChannel || this.config.channel;
+    if (!channel) return null;
+    const key = platform + ':' + String(channel).toLowerCase();
+    let entry = this._dedupChannels.get(key);
+    if (!entry) {
+      entry = { ids: new Set(), content: new Set() };
+      this._dedupChannels.set(key, entry);
+    }
+    // LRU bump: move key to end (most recent)
+    const lruIdx = this._dedupLRU.indexOf(key);
+    if (lruIdx !== -1) this._dedupLRU.splice(lruIdx, 1);
+    this._dedupLRU.push(key);
+    // Evict oldest if over channel cap
+    while (this._dedupLRU.length > this._dedupMaxChannels) {
+      const oldest = this._dedupLRU.shift();
+      this._dedupChannels.delete(oldest);
+    }
+    return entry;
+  }
+
+  // FIFO trim a channel's Set — Sets preserve insertion order, so dropping
+  // the first N entries removes the oldest. Called after every add.
+  _dedupTrim(set) {
+    const cap = this._dedupMaxPerChannel;
+    if (set.size <= cap) return;
+    const over = set.size - cap;
+    const it = set.values();
+    for (let i = 0; i < over; i++) set.delete(it.next().value);
+  }
+
   _addMessage(msg) {
     // Defensive drop: a regular chat message with no body is just a
     // "username:" line with empty text — these were showing up in
@@ -6129,14 +6190,15 @@ class UnityChat {
       }
     }
 
-    // Dedup podle ID (cache + live zprávy)
-    if (msg.id) {
-      if (this._seenMsgIds.has(msg.id)) return;
-      this._seenMsgIds.add(msg.id);
-      if (this._seenMsgIds.size > 2000) {
-        const arr = [...this._seenMsgIds];
-        this._seenMsgIds = new Set(arr.slice(-1000));
-      }
+    // Dedup podle ID + content, scoped per-channel via _dedupEntry. LRU caps
+    // total channel count (_dedupMaxChannels) and each channel caps its own
+    // ID/content sets (_dedupMaxPerChannel) so memory stays bounded even on
+    // 8h+ sessions with heavy channel hopping.
+    const dedup = this._dedupEntry(msg);
+    if (msg.id && dedup) {
+      if (dedup.ids.has(msg.id)) return;
+      dedup.ids.add(msg.id);
+      this._dedupTrim(dedup.ids);
     }
 
     // Content-based dedup pro scraped zprávy
@@ -6150,8 +6212,8 @@ class UnityChat {
     const contentKey = msg.username && msg.message
       ? norm(msg.username) + '|' + norm(msg.message)
       : null;
-    if (contentKey) {
-      if (this._seenContentKeys.has(contentKey)) {
+    if (contentKey && dedup) {
+      if (dedup.content.has(contentKey)) {
         if (msg._optimistic) {
           // Optimistic messages always pass through — user can send same text twice
           this._optimisticKeys.set(contentKey, msg.id);
@@ -6169,12 +6231,9 @@ class UnityChat {
           // like !bulgarians always send the same text). Let it through.
         }
       } else {
-        this._seenContentKeys.add(contentKey);
+        dedup.content.add(contentKey);
+        this._dedupTrim(dedup.content);
         if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
-      }
-      if (this._seenContentKeys.size > 2000) {
-        const arr = [...this._seenContentKeys];
-        this._seenContentKeys = new Set(arr.slice(-1000));
       }
     }
 
@@ -6676,7 +6735,10 @@ class UnityChat {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el && realMsg.id) el.dataset.msgId = realMsg.id;
-    if (realMsg.id) this._seenMsgIds.add(realMsg.id);
+    if (realMsg.id) {
+      const dedup = this._dedupEntry(realMsg);
+      if (dedup) { dedup.ids.add(realMsg.id); this._dedupTrim(dedup.ids); }
+    }
 
     // Update username color — prefer UnityChat custom color over IRC color
     if (el) {
