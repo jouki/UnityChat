@@ -3406,6 +3406,18 @@ class UnityChat {
     }
     this._pullCredits();
 
+    // Clear the highlight banner (raid / hype / gifts / pinned cards)
+    // — the raid card that triggered this auto-switch is no longer
+    // relevant now that we're on the target channel, and keeping it
+    // visible is confusing ("raid into Lessinka" still showing when
+    // we ARE on Lessinka). The next TW_HIGHLIGHTS snapshot from the
+    // new channel's tab will repopulate with anything that belongs.
+    const hlBanner = document.getElementById('highlights-banner');
+    if (hlBanner) {
+      hlBanner.classList.add('hidden');
+      hlBanner.innerHTML = '';
+    }
+
     this._disconnectAll();
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
 
