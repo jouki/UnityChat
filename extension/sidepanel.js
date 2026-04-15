@@ -1800,13 +1800,38 @@ class UnityChat {
       if (!resp.ok) return;
       const remote = await resp.json();
       const latest = remote?.version;
-      if (!latest || !this._isNewerVersion(latest, current)) return;
-      // Pulsing red dot on the logo + tooltip-on-hover with the new version.
       const wrap = document.getElementById('hdr-logo-wrap');
       const num = document.getElementById('ut-version-num');
-      if (wrap) wrap.classList.add('has-update');
+      const hasUpdate = latest && this._isNewerVersion(latest, current);
+      if (!hasUpdate) {
+        // User is on latest (or ahead — update.bat was run). Clear any stale
+        // badge from a previous session.
+        chrome.runtime.sendMessage({ type: 'CLEAR_UPDATE_BADGE' }).catch(() => {});
+        return;
+      }
       if (num) num.textContent = latest;
+      if (wrap) wrap.classList.add('has-update');
+      // Browser action icon: red ! badge + hover title "UPDATE available"
+      chrome.runtime.sendMessage({ type: 'SET_UPDATE_BADGE', version: latest }).catch(() => {});
+      // Auto-reveal the tooltip for 10s with a shrinking countdown bar so
+      // the user sees the notice even without hovering the logo.
+      this._autoRevealUpdateTooltip();
     } catch {}
+  }
+
+  _autoRevealUpdateTooltip() {
+    const wrap = document.getElementById('hdr-logo-wrap');
+    if (!wrap || !wrap.classList.contains('has-update')) return;
+    // Restart the countdown bar animation on repeat calls by removing and
+    // re-adding the class on the next frame.
+    wrap.classList.remove('auto-reveal');
+    // Force reflow so the animation restart actually takes effect
+    void wrap.offsetWidth;
+    wrap.classList.add('auto-reveal');
+    clearTimeout(this._autoRevealT);
+    this._autoRevealT = setTimeout(() => {
+      wrap.classList.remove('auto-reveal');
+    }, 10000);
   }
 
   _isNewerVersion(remote, current) {

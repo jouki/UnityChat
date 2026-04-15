@@ -125,29 +125,87 @@ body.layout-large #settings details summary { font-size: 15px; }
 .hdr-logo-wrap.has-update .update-tooltip {
   display: block;
   position: absolute;
-  top: calc(100% + 10px);
+  /* Offset enough for the arrow to sit between the logo and the card. */
+  top: calc(100% + 14px);
   left: -8px;
   min-width: 260px;
-  max-width: min(300px, calc(100vw - 24px));
-  padding: 14px;
+  /* Layout-scale variable drives size across layout-small/medium/large.
+     Resolves to 1 by default, 1.1 at medium, 1.22 at large. */
+  --ut-scale: 1;
+  max-width: min(calc(300px * var(--ut-scale)), calc(100vw - 24px));
+  padding: calc(14px * var(--ut-scale));
   background: #151518;
   border: 1px solid rgba(255, 140, 0, 0.45);
   border-radius: 6px;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 140, 0, 0.15);
   z-index: 200;
-  font-size: 12px;
+  font-size: calc(12px * var(--ut-scale));
   line-height: 1.45;
   color: var(--text-primary);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-4px);
   transition: opacity 0.18s ease, transform 0.18s ease;
+  overflow: hidden; /* so countdown bar matches tooltip corners */
 }
+
+/* Scale tooltip with layout size (body.layout-medium/large set globally) */
+body.layout-medium .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.1; }
+body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22; }
+
+/* Speech-bubble arrow pointing up to the logo. Two stacked triangles so
+   we get a bordered wedge matching the tooltip's 1px border. */
+.hdr-logo-wrap.has-update .ut-arrow-outer,
+.hdr-logo-wrap.has-update .ut-arrow-inner {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.hdr-logo-wrap.has-update .ut-arrow-outer {
+  top: -10px;
+  left: 14px;
+  border-left: 11px solid transparent;
+  border-right: 11px solid transparent;
+  border-bottom: 11px solid rgba(255, 140, 0, 0.45);
+}
+.hdr-logo-wrap.has-update .ut-arrow-inner {
+  top: -9px;
+  left: 15px;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 10px solid #151518;
+}
+
+/* Show tooltip on hover/focus OR while auto-reveal class is active. */
 .hdr-logo-wrap.has-update:hover .update-tooltip,
-.hdr-logo-wrap.has-update:focus-within .update-tooltip {
+.hdr-logo-wrap.has-update:focus-within .update-tooltip,
+.hdr-logo-wrap.has-update.auto-reveal .update-tooltip {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+/* Countdown bar — starts 100% width, scales to 0 from the right edge over
+   10s. Visible only during .auto-reveal phase. transform-origin: left
+   keeps the bar "running" right-to-left as remaining time depletes. */
+.hdr-logo-wrap.has-update .ut-countdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ff7a00, #ffc25a);
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+}
+.hdr-logo-wrap.has-update.auto-reveal .ut-countdown {
+  animation: ut-countdown 10s linear forwards;
+}
+@keyframes ut-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
 }
 
 .hdr-ver {

@@ -15,6 +15,11 @@
          off the UnityChat logo on the left of the header. -->
     <template id="update-tooltip-tpl">
       <div class="update-tooltip">
+        <!-- Speech-bubble arrow pointing up to the logo. Outer wedge is the
+             border color, inner wedge is the panel fill, stacked to create
+             a bordered triangle. -->
+        <span class="ut-arrow-outer" aria-hidden="true"></span>
+        <span class="ut-arrow-inner" aria-hidden="true"></span>
         <div class="ut-title">Nová verze k dispozici</div>
         <div class="ut-version">v<span id="ut-version-num">?</span></div>
         <div class="ut-text">
@@ -31,6 +36,8 @@
             <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
           </ul>
         </div>
+        <!-- 10s auto-reveal countdown bar, shrinks right-edge-leftward. -->
+        <span class="ut-countdown" aria-hidden="true"></span>
       </div>
     </template>
     <div id="header-actions">

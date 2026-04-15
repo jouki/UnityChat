@@ -61,6 +61,22 @@ if (HAS_SIDE_PANEL) {
   });
 }
 
+// Restore the update-available badge on service-worker startup. MV3 workers
+// shut down under idle and lose in-memory state, but chrome.action badge is
+// persistent in browser session; we still re-assert from storage to survive
+// `chrome.action.*` internal clears between worker lifecycles.
+(async () => {
+  try {
+    const d = await chrome.storage.local.get('uc_update');
+    if (d?.uc_update?.version) {
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
+      if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
+      chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${d.uc_update.version})` });
+    }
+  } catch {}
+})();
+
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
   const targets = [
@@ -152,6 +168,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }).then(() => sendResponse({ ok: true, action: 'opened' }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  }
+  if (msg.type === 'SET_UPDATE_BADGE') {
+    const v = msg.version || '?';
+    chrome.action.setBadgeText({ text: '!' });
+    chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
+    if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
+    chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${v})` });
+    chrome.storage.local.set({ uc_update: { version: v, at: Date.now() } }).catch(() => {});
+    return;
+  }
+  if (msg.type === 'CLEAR_UPDATE_BADGE') {
+    chrome.action.setBadgeText({ text: '' });
+    chrome.action.setTitle({ title: 'UnityChat - Otevřít sjednocený chat' });
+    chrome.storage.local.remove('uc_update').catch(() => {});
+    return;
   }
   if (msg.type === 'GET_CHAT_COLORS') {
     fetchChatColors(msg.usernames || [])
