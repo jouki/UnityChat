@@ -730,7 +730,18 @@ class EmoteManager {
         continue;
       }
       const alt = this._ea(s.value);
-      const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+      // Twitch's original global face emotes (:), :D, :O, ;), B), <3 …)
+      // ship at a much lower native resolution than channel/subscriber
+      // emotes — scaling them up to our standard chat-emote size makes
+      // them blurry and pushes them visually out of proportion with
+      // vanilla Twitch. Detect by the small-integer ID inside the
+      // jtvnw v2 URL and tag with .emote-tiny so CSS shrinks them.
+      // Threshold 100 covers the OG face set without touching modern
+      // subscriber emotes (whose IDs are in the millions).
+      let cls = 'emote';
+      const tinyMatch = (s.url || '').match(/\/emoticons\/v2\/(\d{1,3})\/default/);
+      if (tinyMatch && parseInt(tinyMatch[1], 10) <= 100) cls += ' emote-tiny';
+      const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
       if (s.zw) {
         if (!stackOpen) out.push('<span class="emote-stack">');
         out.push(img);
