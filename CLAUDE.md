@@ -615,7 +615,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.35** - **DOM pin extract iter 3 — direct text nodes + body selector fix**: scan přímých text nodes pro pinner, `.pinned-chat__message` selector pro body.
 - **v3.38.36** - **Pin emote resolve + rounded corners**: tokenize text body for emote lookup (bug: použil `entry?.url` ale maps drží URL string). Border-image → solid border + box-shadow.
 - **v3.38.37** - **Emote map value type fix**: maps drží URL string přímo, ne `{url}` objekt. Resolve fix v `_buildPinCard` + `/uc pin` mocku.
-- **v3.38.38** - **Unify pin path: legacy `#pinned-banner` → `#highlights-banner`**: po klik na UC pin button starý kód renderoval **separate** `#pinned-banner` element (legacy z v3.37.0). Plus parallel GQL `FETCH_PINS` zobrazoval ten samý pin v `#highlights-banner` → 2 cards. Fix: po `PIN_MESSAGE` mutation skip `_showPinnedBanner`, jen `_hidePinnedBanner` + immediate `FETCH_PINS` fetch s rerender → single fancy pin card v highlights banneru. `_pinFromGql(p)` extracted as method (used by polling tick + post-mutation fast-fetch). Plus stejný `entry?.url` → URL string fix v poll path. **Aktuální verze**
+- **v3.38.38** - **Unify pin path**: legacy `#pinned-banner` schován po PIN_MESSAGE, jen `#highlights-banner` přes immediate FETCH_PINS. `_pinFromGql(p)` extracted method.
+- **v3.38.39** - **Version bump (live)** — záměrný release pro test update-notifikace (live cap je nyní +1 nad uživatelovou aktuálně-staženou verzí, červená pulse + tooltip by se měla objevit do 15 min poll cyklu). **Aktuální verze**
 
 ## Release workflow
 
