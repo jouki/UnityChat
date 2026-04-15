@@ -4804,7 +4804,7 @@ class UnityChat {
     // contract.
     if (!wrap.dataset.wired) {
       wrap.dataset.wired = '1';
-      const openOnTwitch = async (which) => {
+      const openOnTwitch = async () => {
         try {
           const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
           const ch = (this.config.channel || '').toLowerCase();
@@ -4815,18 +4815,13 @@ class UnityChat {
             } catch { return false; }
           }) || tabs[0];
           if (!target?.id) return;
+          // Focus tab so the popover is visible to the user, then ask
+          // content script to open the rewards popover. If our soft-hide
+          // is active it'll lift it temporarily for the popover and
+          // restore once the user closes it.
           await chrome.tabs.update(target.id, { active: true });
           await chrome.windows.update(target.windowId, { focused: true });
-          await chrome.scripting.executeScript({
-            target: { tabId: target.id },
-            world: 'MAIN',
-            func: () => {
-              const btn = document.querySelector('[data-test-selector="community-points-summary"] button')
-                || document.querySelector('.community-points-summary button')
-                || document.querySelector('[aria-label*="bit" i][aria-label*="bod" i]');
-              if (btn) btn.click();
-            },
-          });
+          await chrome.tabs.sendMessage(target.id, { type: 'TW_OPEN_REWARDS_POPOVER' }).catch(() => {});
         } catch {}
       };
       bitsPill.style.cursor = 'pointer';

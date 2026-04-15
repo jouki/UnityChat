@@ -321,6 +321,104 @@
       return true;
     }
 
+    if (msg.type === 'TW_OPEN_REWARDS_POPOVER') {
+      // Open the rewards popover even when our soft-hide is keeping
+      // vanilla chat invisible. Strategy: temporarily lift the hide,
+      // click the summary button to open the popover, then watch for
+      // the [role=dialog] element to disappear and re-apply hide.
+      try {
+        const wasHidden = ucChatHidden;
+        const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
+        if (!summary) { sendResponse({ ok: false, error: 'no_summary' }); return; }
+        const btn = summary.querySelector('button');
+        if (!btn) { sendResponse({ ok: false, error: 'no_btn' }); return; }
+        if (wasHidden) {
+          // Lift hide so the popover renders inside the visible viewport.
+          // We don't toggle ucChatHidden so internal state stays "hidden"
+          // — restoreWithChatModifiers etc. won't run.
+          const style = document.getElementById(UC_HIDE_STYLE_ID);
+          if (style) style.remove();
+          // Restore the BEM modifiers so chat column has its width back
+          // (otherwise popover renders inside a 0-width container off-screen).
+          for (const t of UC_WITH_CHAT_TARGETS) {
+            for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+              el.classList.add(t.modifier);
+            }
+          }
+        }
+        const r = btn.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const opts = (extra = {}) => ({
+          bubbles: true, cancelable: true, composed: true,
+          clientX: x, clientY: y, view: window, button: 0, buttons: 1, ...extra,
+        });
+        try { btn.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts() })); } catch {}
+        try { btn.dispatchEvent(new MouseEvent('mousedown', opts())); } catch {}
+        try { btn.dispatchEvent(new PointerEvent('pointerup',   { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts({ buttons: 0 }) })); } catch {}
+        try { btn.dispatchEvent(new MouseEvent('mouseup',   opts({ buttons: 0 }))); } catch {}
+        try { btn.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
+        try { btn.click(); } catch {}
+
+        if (wasHidden) {
+          // Wait for the popover dialog to appear, then watch for its
+          // disappearance to restore our hide. Poll for up to 2s for
+          // the popover to mount; once it's in DOM, observe removal.
+          const restore = () => {
+            if (!ucChatHidden) return; // user toggled UC themselves
+            for (const t of UC_WITH_CHAT_TARGETS) {
+              for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+                el.classList.remove(t.modifier);
+              }
+            }
+            let style = document.getElementById(UC_HIDE_STYLE_ID);
+            if (!style) {
+              style = document.createElement('style');
+              style.id = UC_HIDE_STYLE_ID;
+              style.textContent = `
+                .channel-root__right-column,
+                [data-a-target="right-column"],
+                .right-column {
+                  width: 0 !important; min-width: 0 !important; max-width: 0 !important;
+                  overflow: hidden !important; visibility: hidden !important;
+                }
+              `;
+              document.documentElement.appendChild(style);
+            }
+          };
+          const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
+          let attempts = 0;
+          const waitForDialog = () => {
+            attempts++;
+            const dlg = document.querySelector(dialogSel);
+            if (dlg) {
+              const obs = new MutationObserver(() => {
+                if (!document.contains(dlg)) {
+                  obs.disconnect();
+                  restore();
+                }
+              });
+              obs.observe(document.body, { childList: true, subtree: true });
+              // Safety timeout — if the dialog hangs around forever, force restore on click outside
+              const onDocClick = (e) => {
+                if (!dlg.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                  document.removeEventListener('click', onDocClick, true);
+                  obs.disconnect();
+                  setTimeout(restore, 100);
+                }
+              };
+              setTimeout(() => document.addEventListener('click', onDocClick, true), 200);
+              return;
+            }
+            if (attempts < 20) setTimeout(waitForDialog, 100);
+            else restore(); // never opened — restore immediately
+          };
+          waitForDialog();
+        }
+        sendResponse({ ok: true });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'GET_CREDITS') {
       // Sidepanel just opened — give it whatever the current snapshot
       // is right now, bypassing the dedup cache so it gets sent even if
