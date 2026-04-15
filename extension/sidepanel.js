@@ -19,7 +19,8 @@ const DEFAULTS = {
   // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
   maxMessages: 5000,
   username: '',
-  layout: 'small'
+  layout: 'small',
+  showTimestamps: true,
 };
 
 // =============================================================
@@ -1573,18 +1574,40 @@ function _7tvApplyPaintStyles(el, css) {
   if (css.filter) el.style.filter = css.filter;
 }
 
+// 7TV's REST API doesn't expose per-paint GETs (/v3/cosmetics/paints/{id}
+// 404s). The only way to get paint definitions is a bulk GQL query that
+// returns all ~1000 paints in one shot (~300KB). We fire it lazily on the
+// first paint lookup and every caller shares the same in-flight promise.
+let _7TV_PAINTS_LOADED = false;
+let _7TV_PAINTS_LOADING = null;
+
+async function _7tvLoadAllPaints() {
+  if (_7TV_PAINTS_LOADED) return;
+  if (_7TV_PAINTS_LOADING) return _7TV_PAINTS_LOADING;
+  _7TV_PAINTS_LOADING = (async () => {
+    try {
+      const query = `{ cosmetics { paints { id kind name function color stops { at color } repeat angle shape image_url shadows { x_offset y_offset radius color } } } }`;
+      const r = await fetch('https://7tv.io/v3/gql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      const json = await r.json();
+      const paints = json?.data?.cosmetics?.paints || [];
+      for (const p of paints) if (p?.id) _7TV_PAINTS.set(p.id, p);
+      _7TV_PAINTS_LOADED = true;
+    } catch (e) {
+      // Allow a retry on next lookup
+      _7TV_PAINTS_LOADING = null;
+    }
+  })();
+  return _7TV_PAINTS_LOADING;
+}
+
 async function _7tvFetchPaint(paintId) {
   if (!paintId) return null;
-  if (_7TV_PAINTS.has(paintId)) return _7TV_PAINTS.get(paintId);
-  try {
-    const r = await fetch(`https://7tv.io/v3/cosmetics/paints/${paintId}`);
-    if (!r.ok) { _7TV_PAINTS.set(paintId, null); return null; }
-    const paint = await r.json();
-    _7TV_PAINTS.set(paintId, paint);
-    return paint;
-  } catch {
-    return null;
-  }
+  if (!_7TV_PAINTS_LOADED) await _7tvLoadAllPaints();
+  return _7TV_PAINTS.get(paintId) || null;
 }
 
 // Resolve the paint attached to a Twitch user via their Twitch numeric ID.
@@ -1834,6 +1857,17 @@ class UnityChat {
       this._saveConfig();
       this._applyLayout();
     });
+    // Timestamp visibility — CSS-only toggle, no re-render needed
+    const tsBox = $('chk-timestamps');
+    if (tsBox) {
+      tsBox.checked = this.config.showTimestamps !== false;
+      this._applyTimestampVisibility();
+      tsBox.addEventListener('change', () => {
+        this.config.showTimestamps = tsBox.checked;
+        this._saveConfig();
+        this._applyTimestampVisibility();
+      });
+    }
     // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
       this.msgInput.style.height = 'auto';
@@ -2879,6 +2913,11 @@ class UnityChat {
     const layout = this.config.layout || 'small';
     document.body.classList.remove('layout-small', 'layout-medium', 'layout-large');
     document.body.classList.add('layout-' + layout);
+  }
+
+  _applyTimestampVisibility() {
+    const show = this.config.showTimestamps !== false;
+    document.body.classList.toggle('no-timestamps', !show);
   }
 
   // ---- Twitch Badges ----

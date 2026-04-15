@@ -725,6 +725,9 @@ body.layout-large #settings details summary { font-size: 15px; }
   margin-right: 3px;
 }
 
+/* User-toggled via settings — hides timestamps without re-rendering msgs. */
+body.no-timestamps .msg .ts { display: none; }
+
 .msg .bdg {
   margin-right: 2px;
   display: inline;
