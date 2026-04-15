@@ -5548,7 +5548,7 @@ class UnityChat {
         ${author || timeText ? `
           <div class="hl-pin-foot">
             ${badgesHtml ? `<span class="hl-pin-badges">${badgesHtml}</span>` : ''}
-            ${author ? `<span class="hl-pin-author" style="color:${authorColor}">${this.emotes._eh(author)}</span>` : ''}
+            ${author ? `<span class="hl-pin-author" style="color:${readableColor(authorColor)}">${this.emotes._eh(author)}</span>` : ''}
             ${timeText ? `<span class="hl-pin-time">${this.emotes._eh(timeText)}</span>` : ''}
           </div>
         ` : ''}

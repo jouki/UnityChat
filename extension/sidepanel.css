@@ -1321,41 +1321,83 @@ body.no-timestamps .msg .ts { display: none; }
    rocket header + structured body (raider → target + viewer count +
    points). Matches the .msg.raid chat-line treatment so the raid
    identity reads consistent across both the banner and chat. */
-/* Pin highlight card (Twitch-style) — header + expandable body */
+/* Pin highlight card — fancy amber/gold design with layered glow,
+   bilateral gradient borders, pulsing pin icon, and strong contrast
+   for author names (readableColor() in JS clamps dark hues). */
 .hl-card.hl-pin {
   display: block;
   padding: 0;
-  background: linear-gradient(160deg, rgba(230, 161, 26, 0.12), rgba(255, 140, 0, 0.06));
-  border: 1px solid rgba(230, 161, 26, 0.22);
-  box-shadow: 0 0 10px rgba(230, 161, 26, 0.12);
+  position: relative;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(255, 183, 77, 0.10), transparent 60%),
+    linear-gradient(155deg, rgba(230, 161, 26, 0.18) 0%, rgba(184, 106, 0, 0.08) 55%, rgba(120, 60, 0, 0.04) 100%);
+  border: 1px solid transparent;
+  border-image: linear-gradient(135deg, rgba(255, 195, 80, 0.65), rgba(230, 161, 26, 0.35) 40%, rgba(180, 100, 20, 0.2) 70%, rgba(255, 183, 77, 0.55)) 1;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(230, 161, 26, 0.12),
+    0 4px 18px -4px rgba(230, 161, 26, 0.25),
+    inset 0 1px 0 rgba(255, 220, 150, 0.10);
+  overflow: hidden;
+  animation: hl-pin-glow 5s ease-in-out infinite;
 }
-.hl-pin-wrap { display: block; }
+.hl-card.hl-pin::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 195, 80, 0.55) 30%, rgba(255, 230, 150, 0.85) 50%, rgba(255, 195, 80, 0.55) 70%, transparent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+@keyframes hl-pin-glow {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(230, 161, 26, 0.12), 0 4px 18px -4px rgba(230, 161, 26, 0.22), inset 0 1px 0 rgba(255, 220, 150, 0.10); }
+  50%      { box-shadow: 0 0 0 1px rgba(230, 161, 26, 0.22), 0 6px 26px -4px rgba(230, 161, 26, 0.42), inset 0 1px 0 rgba(255, 220, 150, 0.18); }
+}
+.hl-pin-wrap { display: block; position: relative; }
 .hl-pin-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 9px;
+  padding: 8px 11px;
+  background: linear-gradient(180deg, rgba(255, 183, 77, 0.08), transparent);
 }
 .hl-pin-icon {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
-  color: #e6a11a;
+  color: #ffc34d;
   flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(255, 195, 80, 0.55));
+  animation: hl-pin-icon-pulse 2.6s ease-in-out infinite;
+}
+@keyframes hl-pin-icon-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(255, 195, 80, 0.55)); }
+  50%      { transform: scale(1.1); filter: drop-shadow(0 0 8px rgba(255, 210, 120, 0.85)); }
 }
 .hl-pin-head-text {
   flex: 1;
   min-width: 0;
   font-size: 11px;
-  color: var(--text-muted, #9999a5);
+  color: var(--text-muted, #b5b5c0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 600;
 }
-.hl-pin-head-user { color: #e6a11a; font-weight: 700; }
+.hl-pin-head-user {
+  color: #ffc34d;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12.5px;
+  margin-left: 2px;
+  text-shadow: 0 0 8px rgba(255, 195, 80, 0.4);
+}
 .hl-pin-btn {
   flex-shrink: 0;
   display: inline-flex;
@@ -1368,17 +1410,21 @@ body.no-timestamps .msg .ts { display: none; }
   border: none;
   color: var(--text-muted, #9a9aa6);
   cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.12s ease, color 0.12s ease;
+  border-radius: 5px;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
 }
-.hl-pin-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.hl-pin-chev { transition: transform 0.18s ease; transform-origin: 12px 12px; }
+.hl-pin-btn:hover {
+  background: rgba(255, 195, 80, 0.14);
+  color: #ffd680;
+  transform: translateY(-1px);
+}
+.hl-pin-chev { transition: transform 0.22s cubic-bezier(.4,.0,.2,1); transform-origin: 12px 12px; }
 .hl-pin-wrap.collapsed .hl-pin-chev { transform: rotate(-90deg); }
 .hl-pin-body {
-  padding: 2px 12px 10px 40px;
+  padding: 4px 14px 12px 42px;
   overflow: hidden;
-  max-height: 400px;
-  transition: max-height 0.18s ease, padding 0.18s ease, opacity 0.12s ease;
+  max-height: 600px;
+  transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.15s ease;
 }
 .hl-pin-wrap.collapsed .hl-pin-body {
   max-height: 0;
@@ -1387,56 +1433,93 @@ body.no-timestamps .msg .ts { display: none; }
   opacity: 0;
 }
 .hl-pin-body-text {
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: 14.5px;
+  line-height: 1.45;
   font-weight: 600;
-  color: var(--text, #e6e6ea);
+  color: #f6f2ea;
   word-wrap: break-word;
   overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 .hl-pin-body-text a {
-  color: #e6a11a;
+  color: #ffc34d;
+  font-weight: 700;
   text-decoration: underline;
-  text-decoration-color: rgba(230, 161, 26, 0.4);
+  text-decoration-color: rgba(255, 195, 80, 0.5);
+  text-underline-offset: 2px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
 }
-.hl-pin-body-text a:hover { text-decoration-color: #e6a11a; }
+.hl-pin-body-text a:hover {
+  color: #ffdc80;
+  text-decoration-color: #ffdc80;
+}
 .hl-pin-body-text img.emote {
-  height: 1.6em;
+  height: 1.7em;
   vertical-align: middle;
   margin: -2px 2px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
 }
-/* Author footer: badges + display name + timestamp, distinct from
-   message body so they don't bleed into each other. */
+/* Author footer: badges + display name + timestamp. Warm divider,
+   padded chip-like rows. Name uses readableColor() in JS + text-shadow
+   for guaranteed contrast against the amber background. */
 .hl-pin-foot {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(230, 161, 26, 0.18);
+  margin-top: 10px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid rgba(255, 195, 80, 0.22);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  color: var(--text-muted, #9a9aa6);
+  color: var(--text-muted, #b5b5c0);
   flex-wrap: wrap;
+  position: relative;
+}
+.hl-pin-foot::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 210, 120, 0.7), transparent);
+  pointer-events: none;
 }
 .hl-pin-badges {
   display: inline-flex;
-  gap: 3px;
+  gap: 4px;
   align-items: center;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
 }
 .hl-pin-badge {
   width: 18px;
   height: 18px;
   border-radius: 3px;
   vertical-align: middle;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
 }
 .hl-pin-author {
-  font-weight: 700;
-  font-size: 12.5px;
+  font-weight: 800;
+  font-size: 13.5px;
+  letter-spacing: 0.1px;
+  /* JS applies readableColor() to ensure dark hex colors are
+     brightened enough to read against the amber card. Stacked
+     shadows lock in contrast for any hue. */
+  text-shadow:
+    0 0 6px rgba(0, 0, 0, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.7);
 }
 .hl-pin-time {
-  color: var(--text-muted, #8a8a96);
+  color: #d4a85a;
   font-size: 11px;
+  font-weight: 600;
   margin-left: auto;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 195, 80, 0.15);
+  border-radius: 10px;
+  letter-spacing: 0.2px;
 }
 
 .hl-card.hl-raid {
