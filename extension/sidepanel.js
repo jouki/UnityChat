@@ -6708,6 +6708,14 @@ class UnityChat {
       this.scrollBtn.classList.remove('hidden');
     }
 
+    // When autoScroll is off (user scrolled up to read older msgs), lock
+    // scrollTop across the append — even with overflow-anchor:none Chrome
+    // occasionally nudges scrollTop during reflow (scrollbar gutter churn,
+    // image-load height changes, etc). Explicit capture+restore keeps the
+    // user's reading line dead still as new messages stack below.
+    const preserveScroll = !this.autoScroll && !this._hydratingOlder;
+    const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
+
     this.chatEl.appendChild(el);
 
     // Skip trim/scroll/cache writes while we're prepending *older* msgs via
@@ -6717,6 +6725,13 @@ class UnityChat {
     // against the fragment instead of the real chat. _scroll() is a no-op
     // on fragments but harmless — skipping it anyway.
     if (this._hydratingOlder) return;
+
+    if (preserveScroll && this.chatEl.scrollTop !== prevScrollTop) {
+      // Suppress the scroll handler briefly so our restore doesn't get
+      // re-interpreted as "user paused auto-scroll" when it already was.
+      this._programmaticScrollUntil = performance.now() + 50;
+      this.chatEl.scrollTop = prevScrollTop;
+    }
 
     if (this.msgCount > this.config.maxMessages) this._trim();
     this._scroll();
