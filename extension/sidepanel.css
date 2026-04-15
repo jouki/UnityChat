@@ -814,6 +814,38 @@ body.layout-large #settings details summary { font-size: 15px; }
 .msg-tag.tag-raider { color: #b2e63d; }
 .msg-tag.tag-sus { color: #ffc107; }
 
+/* Announcement (USERNOTICE msg-id=announcement) — matches Twitch's vanilla
+   UI: left accent bar whose color comes from msg-param-color, small header
+   with a megaphone icon + "Announcement" label above the username row. */
+.msg.announcement {
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid #9146ff;
+  padding-left: 8px;
+  border-radius: 2px;
+}
+.msg.announcement[data-announcement-color="PRIMARY"] {
+  border-left-color: transparent;
+  border-image: linear-gradient(180deg, #ff4500, #ffaf14, #00ff87, #00d7ec, #9146ff) 1;
+}
+.msg.announcement[data-announcement-color="BLUE"]   { border-left-color: #00d7ec; }
+.msg.announcement[data-announcement-color="GREEN"]  { border-left-color: #00db84; }
+.msg.announcement[data-announcement-color="ORANGE"] { border-left-color: #ffb31e; }
+.msg.announcement[data-announcement-color="PURPLE"] { border-left-color: #9146ff; }
+.announcement-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+  padding-bottom: 2px;
+}
+.announcement-icon {
+  font-size: 11px;
+}
+
 /* Raid */
 .msg.raid {
   background: rgba(255, 107, 107, 0.12);

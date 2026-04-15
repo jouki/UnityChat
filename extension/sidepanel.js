@@ -890,12 +890,14 @@ class TwitchProvider {
 
   _parseNotice(raw) {
     let tags = {};
+    let rest = raw;
     if (raw.startsWith('@')) {
       const si = raw.indexOf(' ');
       for (const t of raw.substring(1, si).split(';')) {
         const eq = t.indexOf('=');
         if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
       }
+      rest = raw.substring(si + 1);
     }
     const msgId = tags['msg-id'];
     if (msgId === 'raid') {
@@ -909,6 +911,34 @@ class TwitchProvider {
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
         isRaid: true
+      });
+      return;
+    }
+    if (msgId === 'announcement') {
+      // USERNOTICE #channel :message text — grab the body after the command+channel.
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni === -1) return;
+      const after = rest.substring(uni + 10);
+      const ci = after.indexOf(':');
+      const message = ci !== -1 ? after.substring(ci + 1) : '';
+      if (!message) return;
+      const username = tags['display-name'] || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      // PRIMARY | BLUE | GREEN | ORANGE | PURPLE — used by CSS to pick accent color.
+      const ann = (tags['msg-param-color'] || 'PRIMARY').toUpperCase();
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message,
+        color,
+        _needsColorLookup: !ircColor,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isAnnouncement: true,
+        announcementColor: ann,
       });
     }
   }
@@ -3508,6 +3538,16 @@ class UnityChat {
     if (msg.isRaid) el.classList.add('raid');
     if (msg.isRaider) el.classList.add('raider-msg');
     if (msg.isSus) el.classList.add('sus-msg');
+    if (msg.isAnnouncement) {
+      el.classList.add('announcement');
+      // PRIMARY | BLUE | GREEN | ORANGE | PURPLE — CSS picks the accent.
+      el.dataset.announcementColor = msg.announcementColor || 'PRIMARY';
+      // Inline header bar with megaphone icon, matches Twitch's vanilla UI.
+      const header = document.createElement('div');
+      header.className = 'announcement-header';
+      header.innerHTML = '<span class="announcement-icon" aria-hidden="true">\u{1F4E3}</span><span class="announcement-label">Announcement</span>';
+      el.appendChild(header);
+    }
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
 
     // Determine if reply is TO the current user (not just any reply)
