@@ -42,6 +42,13 @@ class EmoteManager {
     // resolve in foreign channels too. Key: `${platform}:${loginLower}`,
     // value: Map(emoteName → { url, zw }).
     this.userEmotes = new Map();
+    // 7TV "added to set" provenance per emote name — actor_id + timestamp
+    // from the emote-set response. Used by the click-to-pin preview to
+    // render "ADDED BY {actor}" + the actual addition date.
+    this._emoteAdditions = new Map();
+    // Cache of resolved 7TV user lookups (id → { displayName, avatarUrl })
+    // so repeat actor resolutions across emotes don't re-hit the API.
+    this._sevenTvUserCache = new Map();
     this._globalLoaded = false;
 
     // UnityChat custom emotes (bundled in extension/emotes/)
@@ -86,6 +93,14 @@ class EmoteManager {
         if (url) {
           this.channel7tv.set(emote.name, url);
           if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
+          // Provenance: who added this emote to the channel set + when.
+          // Used by the click-to-pin preview's "ADDED BY" row.
+          if (emote.actor_id || emote.timestamp) {
+            this._emoteAdditions.set(emote.name, {
+              actorId: emote.actor_id || null,
+              addedAt: emote.timestamp ? new Date(emote.timestamp) : null,
+            });
+          }
           count++;
         }
       }
@@ -226,8 +241,37 @@ class EmoteManager {
       if (!e?.name || !url) continue;
       const flags = (e?.data?.flags ?? e?.flags) || 0;
       map.set(e.name, { url, zw: !!(flags & 1) });
+      // Same provenance capture as channel emotes — actor + timestamp.
+      if (e.actor_id || e.timestamp) {
+        this._emoteAdditions.set(e.name, {
+          actorId: e.actor_id || null,
+          addedAt: e.timestamp ? new Date(e.timestamp) : null,
+        });
+      }
     }
     if (map.size) this.userEmotes.set(`${platform}:${String(login).toLowerCase()}`, map);
+  }
+
+  // Resolve a 7TV user-id to display name + avatar (cached). Used to label
+  // the "ADDED BY" row in the click-to-pin preview without re-hitting the
+  // API every emote.
+  async fetch7tvUser(userId) {
+    if (!userId) return null;
+    if (this._sevenTvUserCache.has(userId)) return this._sevenTvUserCache.get(userId);
+    try {
+      const r = await fetch(`https://7tv.io/v3/users/${userId}`);
+      if (!r.ok) { this._sevenTvUserCache.set(userId, null); return null; }
+      const d = await r.json();
+      const info = {
+        displayName: d.display_name || d.username || null,
+        avatarUrl: d.avatar_url || null,
+      };
+      this._sevenTvUserCache.set(userId, info);
+      return info;
+    } catch {
+      this._sevenTvUserCache.set(userId, null);
+      return null;
+    }
   }
 
   // Lookup an emote by name on a specific user's personal loadout.
@@ -267,17 +311,36 @@ class EmoteManager {
   // Lazy-fetch full emote metadata for the click-to-pin preview card.
   // Returns { owner, ownerAvatar, addedAt, externalUrl } or null. Per-source
   // public APIs, no auth needed.
-  async fetchEmoteDetails(source, id) {
+  async fetchEmoteDetails(source, id, name) {
     if (!id) return null;
     try {
       if (source === '7TV') {
         const r = await fetch(`https://7tv.io/v3/emotes/${id}`);
         if (!r.ok) return null;
         const d = await r.json();
+        // "Added to set" provenance was captured during channel/user emote
+        // load — pull it back out by name. Resolve actor's display name
+        // via the cached /users/{id} helper.
+        const addition = name ? this._emoteAdditions.get(name) : null;
+        let addedBy = null;
+        let addedByAvatar = null;
+        if (addition?.actorId) {
+          const actor = await this.fetch7tvUser(addition.actorId);
+          if (actor) {
+            addedBy = actor.displayName;
+            addedByAvatar = actor.avatarUrl;
+          }
+        }
+        // Prefer the per-set addition timestamp over the emote's global
+        // creation date — it's what the 7TV banner shows as "Added On".
+        const addedAt = addition?.addedAt
+          || (d.created_at ? new Date(d.created_at) : null);
         return {
           owner: d.owner?.display_name || d.owner?.username || null,
           ownerAvatar: d.owner?.avatar_url || null,
-          addedAt: d.created_at ? new Date(d.created_at) : null,
+          addedBy,
+          addedByAvatar,
+          addedAt,
           externalUrl: `https://7tv.app/emotes/${id}`,
         };
       }
@@ -289,6 +352,8 @@ class EmoteManager {
           owner: d.user?.displayName || d.user?.name || null,
           ownerAvatar: d.user?.providerId
             ? `https://cdn.betterttv.net/provider/twitch/${d.user.providerId}` : null,
+          addedBy: null,
+          addedByAvatar: null,
           addedAt: null,
           externalUrl: `https://betterttv.com/emotes/${id}`,
         };
@@ -301,6 +366,8 @@ class EmoteManager {
         return {
           owner: e.owner?.display_name || e.owner?.name || null,
           ownerAvatar: null,
+          addedBy: null,
+          addedByAvatar: null,
           addedAt: e.created_at ? new Date(e.created_at) : null,
           externalUrl: `https://www.frankerfacez.com/emoticon/${id}`,
         };
@@ -2402,11 +2469,22 @@ class UnityChat {
       this.msgCount = 0;
     });
 
-    // Scroll - detekce nových zpráv + auto-scroll pause
+    // Scroll - detekce nových zpráv + auto-scroll pause.
+    //
+    // Race fix for fast chat: when many messages arrive in quick succession,
+    // a programmatic scroll-to-bottom can fire its scroll event AFTER more
+    // messages have appended (scrollHeight grew but scrollTop wasn't yet
+    // re-set in this frame). The atBottom check then sees the gap and
+    // wrongly disables autoScroll. We mark a short window after every
+    // programmatic scroll during which scroll events are ignored.
     this._unreadCount = 0;
+    this._programmaticScrollUntil = 0;
     this.chatEl.addEventListener('scroll', () => {
+      if (performance.now() < this._programmaticScrollUntil) return;
       const el = this.chatEl;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+      // Bigger slack (100px) so casual cursor wiggle near the bottom
+      // doesn't accidentally pause auto-scroll on busy streams.
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
       this.autoScroll = atBottom;
       if (atBottom) {
         this._clearUnread();
@@ -4183,7 +4261,7 @@ class UnityChat {
     // block with owner + date + external link.
     if (pinned && meta?.id) {
       try {
-        const d = await this.emotes.fetchEmoteDetails(meta.source, meta.id);
+        const d = await this.emotes.fetchEmoteDetails(meta.source, meta.id, name);
         // Card may have been dismissed while we awaited
         if (!this._emotePreviewPinned || card.classList.contains('hidden')) return;
         const detail = card.querySelector('.ep-detail');
@@ -4191,16 +4269,20 @@ class UnityChat {
           if (detail) detail.innerHTML = '<span class="ep-hint">Žádné další detaily</span>';
           return;
         }
+        const ehAvatar = (url) =>
+          url
+            ? `<img class="ep-avatar" src="${this.emotes._ea(url)}" alt="">`
+            : '<span class="ep-avatar ep-avatar-blank"></span>';
         const rows = [];
         if (d.owner) {
-          const avatar = d.ownerAvatar
-            ? `<img class="ep-avatar" src="${this.emotes._ea(d.ownerAvatar)}" alt="">`
-            : '<span class="ep-avatar ep-avatar-blank"></span>';
-          rows.push(`<div class="ep-row"><span class="ep-label">By</span>${avatar}<span class="ep-owner">${this.emotes._eh(d.owner)}</span></div>`);
+          rows.push(`<div class="ep-row"><span class="ep-label">Made by</span>${ehAvatar(d.ownerAvatar)}<span class="ep-owner">${this.emotes._eh(d.owner)}</span></div>`);
+        }
+        if (d.addedBy) {
+          rows.push(`<div class="ep-row"><span class="ep-label">Added by</span>${ehAvatar(d.addedByAvatar)}<span class="ep-owner">${this.emotes._eh(d.addedBy)}</span></div>`);
         }
         if (d.addedAt instanceof Date && !isNaN(d.addedAt)) {
           const fmt = d.addedAt.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
-          rows.push(`<div class="ep-row"><span class="ep-label">Added</span><span>${fmt}</span></div>`);
+          rows.push(`<div class="ep-row"><span class="ep-label">Added on</span><span>${fmt}</span></div>`);
         }
         if (d.externalUrl) {
           rows.push(`<a class="ep-extlink" href="${this.emotes._ea(d.externalUrl)}" target="_blank" rel="noopener">Otevřít na ${sourceLabel} ↗</a>`);
@@ -4964,6 +5046,10 @@ class UnityChat {
   _scroll() {
     if (this.autoScroll) {
       requestAnimationFrame(() => {
+        // Open a 200ms suppression window so the resulting scroll event
+        // (which can fire after more messages have appended in a busy
+        // chat) doesn't get re-interpreted as the user scrolling away.
+        this._programmaticScrollUntil = performance.now() + 200;
         this.chatEl.scrollTop = this.chatEl.scrollHeight;
       });
     }
