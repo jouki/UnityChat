@@ -20,6 +20,10 @@ jobs:
           if [ -z "$COOLIFY_TOKEN" ] || [ -z "$COOLIFY_APP_UUID" ]; then
             echo "COOLIFY_TOKEN or COOLIFY_APP_UUID secret not set — skipping."; exit 0
           fi
+          # force=1 is required: Coolify's git tracker watches the jouki.cz
+          # repo, but this Dockerfile clones UnityChat at build time. Without
+          # force, Coolify sees "no jouki.cz repo changes" and skips the
+          # rebuild entirely, leaving the bundled extension ZIPs stale.
           curl -fsS -X GET \
             -H "Authorization: Bearer $COOLIFY_TOKEN" \
-            "https://coolify.jouki.cz/api/v1/deploy?uuid=$COOLIFY_APP_UUID&force=0"
+            "https://coolify.jouki.cz/api/v1/deploy?uuid=$COOLIFY_APP_UUID&force=1"
