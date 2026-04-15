@@ -1331,13 +1331,17 @@ body.no-timestamps .msg .ts { display: none; }
   background:
     radial-gradient(120% 80% at 50% 0%, rgba(255, 183, 77, 0.10), transparent 60%),
     linear-gradient(155deg, rgba(230, 161, 26, 0.18) 0%, rgba(184, 106, 0, 0.08) 55%, rgba(120, 60, 0, 0.04) 100%);
-  border: 1px solid transparent;
-  border-image: linear-gradient(135deg, rgba(255, 195, 80, 0.65), rgba(230, 161, 26, 0.35) 40%, rgba(180, 100, 20, 0.2) 70%, rgba(255, 183, 77, 0.55)) 1;
+  /* border-image breaks border-radius in Chrome (spec: ignored when
+     border-image is set). Use a solid amber border + layered box-shadow
+     for the gradient ring effect so the rounded corners stay smooth. */
+  border: 1px solid rgba(230, 161, 26, 0.45);
   border-radius: 10px;
   box-shadow:
-    0 0 0 1px rgba(230, 161, 26, 0.12),
-    0 4px 18px -4px rgba(230, 161, 26, 0.25),
-    inset 0 1px 0 rgba(255, 220, 150, 0.10);
+    0 0 0 1px rgba(255, 195, 80, 0.18),
+    0 0 14px -2px rgba(230, 161, 26, 0.28),
+    0 4px 18px -4px rgba(120, 60, 0, 0.35),
+    inset 0 1px 0 rgba(255, 220, 150, 0.12),
+    inset 0 -1px 0 rgba(120, 60, 0, 0.18);
   overflow: hidden;
   animation: hl-pin-glow 5s ease-in-out infinite;
 }
@@ -1351,8 +1355,22 @@ body.no-timestamps .msg .ts { display: none; }
   pointer-events: none;
 }
 @keyframes hl-pin-glow {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(230, 161, 26, 0.12), 0 4px 18px -4px rgba(230, 161, 26, 0.22), inset 0 1px 0 rgba(255, 220, 150, 0.10); }
-  50%      { box-shadow: 0 0 0 1px rgba(230, 161, 26, 0.22), 0 6px 26px -4px rgba(230, 161, 26, 0.42), inset 0 1px 0 rgba(255, 220, 150, 0.18); }
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(255, 195, 80, 0.16),
+      0 0 14px -2px rgba(230, 161, 26, 0.22),
+      0 4px 18px -4px rgba(120, 60, 0, 0.32),
+      inset 0 1px 0 rgba(255, 220, 150, 0.12),
+      inset 0 -1px 0 rgba(120, 60, 0, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(255, 210, 120, 0.30),
+      0 0 22px -2px rgba(255, 195, 80, 0.45),
+      0 6px 24px -4px rgba(120, 60, 0, 0.45),
+      inset 0 1px 0 rgba(255, 235, 180, 0.18),
+      inset 0 -1px 0 rgba(120, 60, 0, 0.18);
+  }
 }
 .hl-pin-wrap { display: block; position: relative; }
 .hl-pin-head {

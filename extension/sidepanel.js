@@ -5580,16 +5580,43 @@ class UnityChat {
     const authorColor = this.emotes._sc(pin.authorColor) || '#e6a11a';
     const timeText = pin.timeText || '';
 
-    // Build body HTML from segments — text gets linkified + mention-
-    // colored, emotes render as <img class="emote">.
+    // Build body HTML from segments. Twitch's pin DOM keeps body as a
+    // text-fragment so 7TV/BTTV/FFZ emotes arrive as plain text (their
+    // Vue replacer doesn't run inside pin subtrees). Tokenize each text
+    // segment by whitespace and resolve every word against our local
+    // emote library, falling back to linkified text. Plus strip the UC
+    // marker (Braille blank) so it doesn't leak as visible whitespace.
+    const em = this.emotes;
+    const resolveEmote = (name) =>
+      em?.twitchNative?.get(name)
+      || em?.channel7tv?.get(name)
+      || em?.global7tv?.get(name)
+      || em?.bttvEmotes?.get(name)
+      || em?.ffzEmotes?.get(name)
+      || em?.kickNative?.get(name)
+      || em?.ucEmotes?.get(name);
+    const renderTextWithEmotes = (raw) => {
+      const cleaned = String(raw || '').replace(new RegExp(UC_MARKER, 'g'), '');
+      if (!cleaned) return '';
+      const parts = cleaned.split(/(\s+)/);
+      return parts.map((tok) => {
+        if (!tok) return '';
+        if (/^\s+$/.test(tok)) return em._eh(tok);
+        const entry = resolveEmote(tok);
+        if (entry?.url) {
+          return `<img class="emote" src="${em._ea(entry.url)}" alt="${em._eh(tok)}">`;
+        }
+        return em._linkify(tok);
+      }).join('');
+    };
     const bodyHtml = (() => {
-      if (!pin.bodySegments?.length) return this.emotes._eh(c.text || '');
+      if (!pin.bodySegments?.length) return renderTextWithEmotes(c.text || '');
       return pin.bodySegments.map((s) => {
         if (s.type === 'emote') {
-          const alt = this.emotes._eh(s.alt || '');
-          return `<img class="emote" src="${this.emotes._ea(s.url)}" alt="${alt}">`;
+          const alt = em._eh(s.alt || '');
+          return `<img class="emote" src="${em._ea(s.url)}" alt="${alt}">`;
         }
-        return this.emotes._linkify(s.value || '');
+        return renderTextWithEmotes(s.value || '');
       }).join('');
     })();
 
