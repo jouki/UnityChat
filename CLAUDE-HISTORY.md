@@ -131,3 +131,4 @@ Formát: `YYYY-MM-DD [autor/session] — popis`
 
 - **2026-04-15** [session post-v3.37.3] — Archiv založen. Přesunuty milestones v1.x–v3.30.3 z `CLAUDE.md` do `CLAUDE-HISTORY.md` (CLAUDE.md překročil 40k threshold, performance warning od Claude Code). `CLAUDE.md` teď obsahuje jen v3.31.0+ milestones + pointer na tento soubor. Memory `project_unitychat.md` doplněn o pravidlo logování.
 - **2026-04-15** [stejná session] — Druhá iterace archivace: přesunuty milestones v3.31.0–v3.34.9 (CLAUDE.md byl po prvním přesunu stále 43.7k znaků). `CLAUDE.md` teď drží jen v3.35.0+ milestones.
+- **2026-04-15** [stejná session] — v3.37.4 milestone zapsán (boot instrumentation + watchdog auto-dump). Důvod zápisu do changelogu: user reportoval freeze + nereagující 💾 button na vysoce zatížených streamech, přidán logging + escape hatch.

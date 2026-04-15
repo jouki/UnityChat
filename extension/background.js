@@ -163,6 +163,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 let _logs = [];
 let _logsHydrated = false;
 let _logsSaveT = null;
+let _bootWatchT = null;
 
 async function _hydrateLogs() {
   if (_logsHydrated) return;
@@ -212,6 +213,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse?.({ ok: true });
     });
     return true;
+  }
+
+  // Boot watchdog: side panel announces start; if END doesn't arrive within
+  // 20s, we assume it froze and auto-dump the log so the user has something
+  // to share even when the 💾 button stopped responding. The dump runs in
+  // the service worker, which stays alive independently of the panel UI.
+  if (msg.type === 'BOOT_WATCH_START') {
+    clearTimeout(_bootWatchT);
+    ucLog('Boot', 'watchdog armed (20s)');
+    _bootWatchT = setTimeout(() => {
+      ucLog('Boot', 'WATCHDOG FIRED — panel did not report _init done within 20s; auto-dumping logs');
+      dumpLogs();
+    }, 20000);
+    sendResponse?.({ ok: true });
+    return false;
+  }
+  if (msg.type === 'BOOT_WATCH_END') {
+    clearTimeout(_bootWatchT);
+    _bootWatchT = null;
+    ucLog('Boot', 'watchdog cleared — panel reported _init done');
+    sendResponse?.({ ok: true });
+    return false;
   }
 
   // Toggle side panel from content script (UC button in Twitch/YouTube).

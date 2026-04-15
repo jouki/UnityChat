@@ -2187,7 +2187,38 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
 
+    // Boot instrumentation: every _bootMark() logs ms since this timestamp,
+    // pushed to background (persisted to chrome.storage.session) so the log
+    // survives even if the side panel freezes or the service worker sleeps.
+    this._bootT0 = performance.now();
+    this._bootLastT = this._bootT0;
+    this._bootPending = true;
+    this._bootMark('sidepanel.js instantiated');
+    // Escape hatch: when the panel UI locks up, devtools console still runs.
+    // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
+    // force a log dump without needing the 💾 button to respond.
+    try { window.ucDump = () => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }); } catch {}
+
     this._init();
+  }
+
+  _bootMark(label, extra) {
+    const now = performance.now();
+    const sinceStart = Math.round(now - this._bootT0);
+    const sinceLast = Math.round(now - this._bootLastT);
+    this._bootLastT = now;
+    let mem = '';
+    try {
+      if (performance.memory) {
+        const mb = (performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+        mem = ` heap=${mb}MB`;
+      }
+    } catch {}
+    const line = `+${sinceStart}ms (Δ${sinceLast}ms)${mem} ${label}${extra ? ' ' + extra : ''}`;
+    console.log('[UC boot]', line);
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Boot', text: line }).catch(() => {});
+    } catch {}
   }
 
   async _init() {
@@ -2229,7 +2260,13 @@ class UnityChat {
       }
     }
 
+    this._bootMark('_init start');
+    // Arm background watchdog — if _bootMark('_init done') never arrives,
+    // background auto-dumps the log at +20s. This survives a frozen side
+    // panel because dump runs in the service worker context.
+    try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
+    this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
@@ -2258,7 +2295,9 @@ class UnityChat {
         }
       }
     } catch {}
+    this._bootMark('user colors hydrated', `size=${this._chatUsers.size}`);
     await this.nicknames.loadCache();
+    this._bootMark('nicknames cache loaded');
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
@@ -2277,9 +2316,10 @@ class UnityChat {
       this._refreshColorUI(this.activePlatform || 'twitch');
     };
     this._setupUI();
+    this._bootMark('UI setup done');
     this._setupProviders();
+    this._bootMark('providers set up');
 
-    console.log('[UC] init: providers set up, detecting username...');
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
@@ -2295,23 +2335,29 @@ class UnityChat {
         }
       } catch {}
     }
+    this._bootMark('username detection done', `username=${this.config.username || '—'}`);
 
-    console.log('[UC] init: loading emotes + badges...');
     // Load emotes + badges FIRST so cached messages render with correct emotes/badges.
     // Use Promise.allSettled — one failing source shouldn't block the rest.
     try {
       this.emotes.loadTwitchGlobals();
       await this.emotes.loadGlobal();
+      this._bootMark('7TV globals loaded', `size=${this.emotes.global7tv?.size ?? 0}`);
       if (this.config._roomId) {
-        await Promise.allSettled([
+        const results = await Promise.allSettled([
           this.emotes.loadChannel('twitch', this.config._roomId),
           this.emotes.loadBTTV(this.config._roomId),
           this.emotes.loadFFZ(this.config._roomId),
           this.emotes.loadTwitchChannel(this.config.channel),
           this._loadTwitchBadges(this.config._roomId)
         ]);
+        const rej = results.filter(r => r.status === 'rejected').length;
+        this._bootMark('channel emotes+badges loaded',
+          `7tv=${this.emotes.channel7tv?.size ?? 0} bttv=${this.emotes.bttvEmotes?.size ?? 0} ffz=${this.emotes.ffzEmotes?.size ?? 0} rejected=${rej}`);
       }
-    } catch {}
+    } catch (e) {
+      this._bootMark('emote load threw', String(e?.message || e));
+    }
 
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
@@ -2321,11 +2367,10 @@ class UnityChat {
     // when all configured platforms reach a terminal state, or after 8s.
     this._showLoading();
 
-    console.log('[UC] init: loading cache...');
     await this._loadCachedMessages();
-    console.log('[UC] init: cache loaded, connecting all...');
+    this._bootMark('cache loaded', `rendered=${this.chatEl?.children.length ?? 0} msgCache=${this._msgCache?.length ?? 0}`);
     this._connectAll();
-    console.log('[UC] init: connected, starting detect loop');
+    this._bootMark('_connectAll dispatched');
     this._detectLoop();
     // Fire-and-forget update check against the public landing page manifest.
     this._checkForUpdate().catch(() => {});
@@ -2336,6 +2381,9 @@ class UnityChat {
     this._setupEmotePreview();
     this._scheduleColorRevalidation();
     this._pullCredits();
+    this._bootMark('_init done');
+    this._bootPending = false;
+    try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
   async _checkForUpdate() {
@@ -4406,6 +4454,7 @@ class UnityChat {
     const el = document.getElementById('loading-overlay');
     if (!el) return;
     if (el.classList.contains('fade-out') || el.classList.contains('hidden')) return;
+    try { this._bootMark('loading overlay hiding'); } catch {}
     el.classList.add('fade-out');
     clearTimeout(this._loadingHardT);
     // Drop from layout after the CSS fade so it doesn't keep absorbing
@@ -4414,6 +4463,7 @@ class UnityChat {
   }
 
   _updateLoadingPill(platform, status) {
+    try { this._bootMark(`pill ${platform} → ${status}`); } catch {}
     const el = document.getElementById('loading-overlay');
     if (!el || el.classList.contains('hidden')) return;
     const pill = el.querySelector(`.lo-pill[data-platform="${platform}"]`);
