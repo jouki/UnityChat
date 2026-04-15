@@ -948,33 +948,35 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 .msg-actions {
   display: none;
   position: absolute;
-  right: 6px;
-  top: -2px;
+  right: 4px;
+  /* Float the action cluster above the message line so it doesn't sit
+     on top of inline emotes the user wants to hover for the preview. */
+  top: -14px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 1px;
+  padding: 0;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   z-index: 5;
 }
 
 .msg:hover .msg-actions {
   display: flex;
-  gap: 1px;
+  gap: 0;
 }
 
 .msg-action-btn {
   background: none;
   border: none;
   color: var(--text-secondary);
-  width: 26px;
-  height: 24px;
+  width: 20px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   border-radius: 3px;
-  font-size: 14px;
+  font-size: 11px;
 }
 
 .msg-action-btn:hover {
@@ -984,6 +986,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 
 .msg-action-btn svg {
   display: block;
+  width: 11px;
+  height: 11px;
 }
 
 .msg .pi {
