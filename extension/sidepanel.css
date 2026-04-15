@@ -733,6 +733,13 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 2px 0;
+  /* Reserve scrollbar gutter even when content doesn't overflow yet — stops
+     the width change (and resulting multi-message reflow / "vibration")
+     the moment chat first grows past viewport. */
+  scrollbar-gutter: stable;
+  /* Hard-pin overflow anchor off — browsers sometimes try to "hold" scroll
+     at a message during reflows, which on fast chat reads as jitter. */
+  overflow-anchor: none;
 }
 
 #chat::-webkit-scrollbar { width: 5px; }
@@ -926,6 +933,11 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   line-height: 1.45;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  /* Isolate each message's layout from its neighbors — when a message's
+     own content changes (emote/avatar async load, paint retint, cleared
+     banner), the reflow stops at its boundary instead of cascading
+     through the list as sub-pixel jitter. */
+  contain: layout style;
 }
 
 .msg:hover {
@@ -1275,6 +1287,11 @@ body.no-timestamps .msg .ts { display: none; }
 .msg .tx img.emote {
   display: inline-block;
   height: 1.75em;
+  /* Minimum width placeholder so the inline flow reserves space before the
+     image loads — without this the text flows through the empty slot and
+     reflows (1-pixel-row vibration) when the image pops in. Natural width
+     still takes over once the image is decoded. */
+  min-width: 1.75em;
   vertical-align: middle;
   margin: -3px 1px;
   object-fit: contain;
