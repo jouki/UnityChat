@@ -3487,6 +3487,8 @@ class UnityChat {
     this._lastDomHighlightCards = [];
     this._lastGoodPinCache = null;
     this._lastHighlightsHash = '';
+    this._mockPinCards = [];
+    clearTimeout(this._mockPinExpiryT);
 
     // Clear the highlight banner (raid / hype / gifts / pinned cards)
     // — the raid card that triggered this auto-switch is no longer
@@ -4302,19 +4304,21 @@ class UnityChat {
             pinId: 'mock-' + Date.now(),
           },
         };
-        // Inject via the normal DOM-highlights path so the mock wins
-        // the merge: pushing it into _gqlPinCards alone would be
-        // overridden by _lastGoodPinCache if a real pin was visible
-        // earlier. Feeding it as a TW_HIGHLIGHTS card makes it the
-        // domPin for this tick → merge picks its fields first, cache
-        // refreshes, banner renders the mock. A subsequent DOM scan
-        // will replace it with the real pin, which is fine.
+        // Stash mock in its own _mockPinCards array — separate from
+        // _gqlPinCards (real GQL poll source) so the mock can coexist
+        // with whatever real pin is active. Banner stacks both. Auto-
+        // expire after 30s so it doesn't linger forever.
+        if (!this._mockPinCards) this._mockPinCards = [];
+        this._mockPinCards.push(mockPin);
+        clearTimeout(this._mockPinExpiryT);
+        this._mockPinExpiryT = setTimeout(() => {
+          this._mockPinCards = [];
+          this._lastHighlightsHash = '';
+          this._rerenderHighlights();
+        }, 30000);
         this._lastHighlightsHash = '';
-        this._handleHighlights({
-          channel: this.config.channel,
-          cards: [mockPin, ...(this._lastDomHighlightCards || [])],
-        });
-        this._sys(`/uc pin: mock pin banner injected (body="${body.slice(0, 60)}${body.length > 60 ? '…' : ''}")`);
+        this._rerenderHighlights();
+        this._sys(`/uc pin: mock pin banner injected (30s, body="${body.slice(0, 60)}${body.length > 60 ? '…' : ''}")`);
         break;
       }
       default:
@@ -5479,8 +5483,12 @@ class UnityChat {
       const gqlPin = (this._gqlPinCards || [])[0];
       const domPin = domPins[0];
       const mergedPin = this._mergePinCard(domPin, gqlPin);
-      const pins = mergedPin ? [mergedPin] : [];
-      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...pins] };
+      const realPins = mergedPin ? [mergedPin] : [];
+      // Mock pins (from /uc pin) stack on top of any real pin so the
+      // user can compare layouts side by side. They auto-expire after
+      // 30s via _mockPinExpiryT.
+      const mockPins = this._mockPinCards || [];
+      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...realPins, ...mockPins] };
     }
     const banner = document.getElementById('highlights-banner');
     if (!banner) return;

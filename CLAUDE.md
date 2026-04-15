@@ -609,7 +609,9 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.29** - **Pin body full-width, no author truncation**: padding-left 42→14, author nowrap bez ellipsis.
 - **v3.38.30** - **`/uc pin [text]` mock command** (bug: `args.slice` na stringu místo array).
 - **v3.38.31** - **`/uc pin` body parsing fix**: `parts.slice(1)` místo `args.slice(1)`.
-- **v3.38.32** - **`/uc pin` injection path fix**: push do `_gqlPinCards` + `_rerenderHighlights` neprojevoval mock protože `_lastGoodPinCache` (z předchozího reálného pinu) vyhrál v merge nad GQL. Fix: inject mock jako **DOM-highlights card** přímo přes `_handleHighlights({cards: [mockPin, ...]})` + hash bust. Mock je v `domPins` → `_mergePinCard(domPin, gqlPin)` pick DOM wins → banner rendruje mock + cache refreshne. Příští real DOM scan ho nahradí (expected). **Aktuální verze**
+- **v3.38.32** - **`/uc pin` injection path fix**: inject mock jako DOM card přímým voláním `_handleHighlights`. Mock zmizí po pár vteřin, řešeno v dalších verzích.
+- **v3.38.33** - **Mock pin sticky 30s** (přechodný): `_mockPinUntil` flag suppress real GQL poll. Nahrazeno v3.38.34 aby mock mohl coexistovat s real pinem.
+- **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards` array, real pin (DOM+GQL merged) + mock pins se renderují vedle sebe v banneru. Auto-expire mock po 30s. Real pin polling pokračuje normálně. Channel switch resetuje mock + clearTimeout. **Aktuální verze**
 
 ## Release workflow
 
