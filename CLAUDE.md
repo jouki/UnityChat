@@ -604,7 +604,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.24** - **Pin merge per-field (no more downgrades)**: `_mergePinCard(dom, gql)` per-field picker, `_lastGoodPinCache` pro sticky expanded data.
 - **v3.38.25** - **Proactive DOM highlight scan (boot latency fix)**: `SCAN_HIGHLIGHTS_NOW` handler + `_kickDomHighlightScan` na boot/tick/visibility.
 - **v3.38.26** - **Fix emote downgrade po polling tick**: `_rerenderHighlights` už neposílá GQL pins v msg.cards; GQL se merguje separately. `isRerender` guard. **Pin flow uzamčen jako stable.**
-- **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: user chtěl "víc fancy" a lepší contrast na tmavých author color (např. `#B22222` na amber pozadí). Změny **jen vizuální** — core data flow zachován: (1) bilateral gradient border-image (zlaté tóny), (2) radial + linear gradient pozadí, (3) top highlight line přes `::before`, (4) layered glow box-shadow + 5s pulse animace, (5) pulsing pin icon (2.6s scale + drop-shadow glow), (6) author footer divider s fading amber line přes `::before`, (7) badges wrapped v semi-transparent chip rámečku, (8) timestamp jako pill s border, (9) body text shadow + větší typography, (10) hover state pro btny s translateY + warm glow, (11) `readableColor(authorColor)` na `.hl-pin-author` — brightens tmavé hues pro contrast, plus layered text-shadow pro universal readability. **Aktuální verze**
+- **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: fancy gold gradient, pulsing icon, readable author, pill timestamp.
+- **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + `.hl-pin-author` ellipsis truncation + `flex-shrink: 0` na timestamp pill → badges, author name, timestamp sedí na jednom řádku. Extrémně dlouhé nicky získají ellipsis. **Aktuální verze**
 
 ## Release workflow
 
