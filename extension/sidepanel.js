@@ -1090,7 +1090,14 @@ class TwitchProvider {
       twitchEmotes: tags.emotes || null,
       replyTo,
       firstMsg: tags['first-msg'] === '1',
-      isAction
+      isAction,
+      // Channel-point reward redemption (with required message body).
+      // IRC only exposes the reward UUID, not the display name/cost — those
+      // come via PubSub which is OAuth-gated (not available anonymously).
+      isRedeem: !!tags['custom-reward-id'],
+      rewardId: tags['custom-reward-id'] || null,
+      // Highlight My Message channel-point redeem — Twitch exposes this via msg-id.
+      isHighlight: tags['msg-id'] === 'highlighted-message',
     });
   }
 
@@ -1117,6 +1124,88 @@ class TwitchProvider {
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
         isRaid: true
+      });
+      return;
+    }
+    if (msgId === 'sub' || msgId === 'resub') {
+      // Optional attached chat message body
+      let body = '';
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni !== -1) {
+        const after = rest.substring(uni + 10);
+        const ci = after.indexOf(':');
+        if (ci !== -1) body = after.substring(ci + 1);
+      }
+      const username = tags['display-name'] || tags.login || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const months = parseInt(tags['msg-param-cumulative-months'] || tags['msg-param-months'] || '0', 10) || null;
+      const streak = (tags['msg-param-should-share-streak'] === '1')
+        ? (parseInt(tags['msg-param-streak-months'] || '0', 10) || null)
+        : null;
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message: body,
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isSubEvent: true,
+        subPlan: plan,
+        subMonths: months,
+        subStreak: streak,
+      });
+      return;
+    }
+    if (msgId === 'submysterygift') {
+      // Bundle announcement: "gifter is gifting N subs to the community"
+      const gifter = tags['display-name'] || tags.login || '?';
+      const count = parseInt(tags['msg-param-mass-gift-count'] || '0', 10) || 1;
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(gifter);
+      this.onMessage?.({
+        platform: 'twitch',
+        username: gifter,
+        message: '',
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        isGiftBundle: true,
+        giftCount: count,
+        giftPlan: plan,
+      });
+      return;
+    }
+    if (msgId === 'subgift') {
+      // Individual gift line: "gifter gifted a sub to recipient"
+      const gifter = tags['display-name'] || tags.login || '?';
+      const recipient = tags['msg-param-recipient-display-name']
+        || tags['msg-param-recipient-user-name'] || '?';
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(gifter);
+      this.onMessage?.({
+        platform: 'twitch',
+        username: gifter,
+        message: '',
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        isSubGift: true,
+        giftRecipient: recipient,
+        giftPlan: plan,
       });
       return;
     }
@@ -4126,6 +4215,165 @@ class UnityChat {
   // @username references in <span class="mention"> with the target user's
   // color (looked up via _chatUsers). Runs post-emote/URL render so we
   // never touch existing <img>/<a> children — only pure text fragments.
+  _renderGiftEvent(el, msg) {
+    // Gift icon (SVG, currentColor — tinted by CSS)
+    const icon = document.createElement('span');
+    icon.className = 'gift-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="20 12 20 22 4 22 4 12"/>' +
+      '<rect x="2" y="7" width="20" height="5"/>' +
+      '<line x1="12" y1="22" x2="12" y2="7"/>' +
+      '<path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>' +
+      '<path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>' +
+      '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'gift-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    body.appendChild(un);
+
+    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.giftPlan] || '1';
+
+    if (msg.isGiftBundle) {
+      // "username – darovaná předplatná"  + count pill on right
+      body.appendChild(document.createTextNode(' \u2013 darovaná předplatná'));
+      const count = document.createElement('span');
+      count.className = 'gift-count';
+      count.textContent = `\u00D7${msg.giftCount || 1}`;
+      el.appendChild(body);
+      el.appendChild(count);
+      return;
+    }
+
+    // isSubGift: "Gifted a Tier N Sub to Recipient"
+    const line = document.createElement('div');
+    line.className = 'gift-line';
+    line.appendChild(document.createTextNode('Gifted a '));
+    const tierSpan = document.createElement('strong');
+    tierSpan.textContent = `Tier ${tier}`;
+    line.appendChild(tierSpan);
+    line.appendChild(document.createTextNode(' Sub to '));
+    const recipSpan = document.createElement('strong');
+    recipSpan.textContent = msg.giftRecipient || '?';
+    line.appendChild(recipSpan);
+    body.appendChild(line);
+    el.appendChild(body);
+  }
+
+  _renderSubEvent(el, msg) {
+    const icon = document.createElement('span');
+    icon.className = 'sub-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">' +
+      '<path d="M12 2l2.9 6.9L22 10l-5.5 4.8L18 22l-6-3.5L6 22l1.5-7.2L2 10l7.1-1.1z"/>' +
+      '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'sub-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    body.appendChild(un);
+
+    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
+    const line = document.createElement('div');
+    line.className = 'sub-line';
+    const prefix = document.createElement('strong');
+    prefix.textContent = 'Subscribed';
+    line.appendChild(prefix);
+    line.appendChild(document.createTextNode(` with Tier ${tier}.`));
+    if (msg.subMonths && msg.subMonths > 1) {
+      line.appendChild(document.createTextNode(` They've subscribed for `));
+      const m = document.createElement('strong');
+      m.textContent = `${msg.subMonths} month${msg.subMonths === 1 ? '' : 's'}`;
+      line.appendChild(m);
+      if (msg.subStreak && msg.subStreak > 1) {
+        line.appendChild(document.createTextNode(`, `));
+        const s = document.createElement('strong');
+        s.textContent = `${msg.subStreak} month${msg.subStreak === 1 ? '' : 's'} in a row`;
+        line.appendChild(s);
+      }
+      line.appendChild(document.createTextNode('.'));
+    }
+    body.appendChild(line);
+
+    // Optional attached message body
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'sub-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
+  _renderRedeemEvent(el, msg) {
+    const icon = document.createElement('span');
+    icon.className = 'redeem-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">' +
+      '<path d="M12 2l3 7 7 .5-5.5 4.5L18 21l-6-4-6 4 1.5-7L2 9.5 9 9z"/>' +
+      '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'redeem-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    body.appendChild(un);
+    body.appendChild(document.createTextNode(' redeemed '));
+    const rewardSpan = document.createElement('strong');
+    rewardSpan.textContent = msg.rewardName || 'Channel Points Reward';
+    body.appendChild(rewardSpan);
+    el.appendChild(body);
+
+    if (msg.rewardCost != null) {
+      const cost = document.createElement('span');
+      cost.className = 'redeem-cost';
+      cost.textContent = `\u25CE ${msg.rewardCost}`;
+      el.appendChild(cost);
+    }
+
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'redeem-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      el.appendChild(tx);
+    }
+  }
+
   _processMentions(el, platform) {
     if (!el) return;
     // Pattern: start-of-string OR a non-identifier character, then @name.
@@ -4596,6 +4844,15 @@ class UnityChat {
       header.innerHTML = '<span class="announcement-icon" aria-hidden="true">\u{1F4E3}</span><span class="announcement-label">Announcement</span>';
       el.appendChild(header);
     }
+    const isGift = !!(msg.isGiftBundle || msg.isSubGift);
+    const isSubEvent = !!msg.isSubEvent;
+    const isRedeem = !!msg.isRedeem;
+    const isCustomEvent = isGift || isSubEvent || isRedeem;
+    if (msg.isGiftBundle) el.classList.add('gift-bundle');
+    if (msg.isSubGift) el.classList.add('sub-gift');
+    if (isSubEvent) el.classList.add('sub-event');
+    if (isRedeem) el.classList.add('redeem');
+    if (msg.isHighlight) el.classList.add('highlight');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
     // Cached message that was cleared (timeout/ban/delete) in a previous
     // session — re-apply the visual on render. Live clears go through
@@ -4616,6 +4873,14 @@ class UnityChat {
       (myNick && replyTarget === myNick) ||
       (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
     );
+
+    if (isGift) {
+      this._renderGiftEvent(el, msg);
+    } else if (isSubEvent) {
+      this._renderSubEvent(el, msg);
+    } else if (isRedeem) {
+      this._renderRedeemEvent(el, msg);
+    } else {
 
     // Reply context (Twitch reply-parent tagy)
     if (msg.replyTo) {
@@ -4839,6 +5104,7 @@ class UnityChat {
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
+    }
 
     // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu)
     if (!this.autoScroll) {

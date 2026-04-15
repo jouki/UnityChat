@@ -1203,6 +1203,181 @@ body.no-timestamps .msg .ts { display: none; }
   background: rgba(178, 230, 61, 0.22);
 }
 
+/* ==== Subscription gift events ==== */
+/* Bundle header: full-width purple pill */
+.msg.gift-bundle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  margin: 4px 0;
+  background: linear-gradient(135deg, rgba(145, 70, 255, 0.28), rgba(145, 70, 255, 0.18));
+  border: 1px solid rgba(145, 70, 255, 0.5);
+  border-radius: 10px;
+  color: #e8dcff;
+  box-shadow: 0 0 16px rgba(145, 70, 255, 0.25);
+}
+.msg.gift-bundle .gift-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(145, 70, 255, 0.35);
+  color: #fff;
+  flex-shrink: 0;
+}
+.msg.gift-bundle .gift-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.gift-bundle .un {
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.gift-bundle .gift-count {
+  font-weight: 700;
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+}
+
+/* Individual subgift line: compact row with purple left border */
+.msg.sub-gift {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  margin: 2px 0;
+  background: rgba(145, 70, 255, 0.06);
+  border-left: 3px solid #9146ff;
+  border-radius: 4px;
+  color: var(--text, #d7d7e0);
+}
+.msg.sub-gift .gift-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: #b78cff;
+  flex-shrink: 0;
+}
+.msg.sub-gift .gift-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.sub-gift .un {
+  font-weight: 700;
+  cursor: pointer;
+  margin-right: 2px;
+}
+.msg.sub-gift .gift-line {
+  font-size: 0.95em;
+  color: var(--text, #c7c7d0);
+  margin-top: 1px;
+}
+.msg.sub-gift .gift-line strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ==== Subscribe / Resubscribe events ==== */
+.msg.sub-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 3px 0;
+  background: rgba(145, 70, 255, 0.08);
+  border-left: 3px solid #9146ff;
+  border-radius: 4px;
+}
+.msg.sub-event .sub-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #b78cff;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg.sub-event .sub-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.sub-event .un {
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.sub-event .sub-line {
+  font-size: 0.95em;
+  color: var(--text, #d0d0da);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.msg.sub-event .sub-line strong {
+  color: #fff;
+  font-weight: 700;
+}
+.msg.sub-event .sub-text {
+  margin-top: 4px;
+  color: var(--text, #d0d0da);
+}
+
+/* ==== Channel Points redeem events ==== */
+.msg.redeem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  margin: 2px 0;
+  background: rgba(145, 70, 255, 0.06);
+  border-left: 3px solid #9146ff;
+  border-radius: 4px;
+}
+.msg.redeem .redeem-icon {
+  color: #b78cff;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.msg.redeem .redeem-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.redeem .un {
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.redeem .redeem-body strong {
+  color: #fff;
+  font-weight: 700;
+}
+.msg.redeem .redeem-cost {
+  font-weight: 600;
+  color: #b78cff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(145, 70, 255, 0.15);
+  flex-shrink: 0;
+}
+.msg.redeem .redeem-text {
+  width: 100%;
+  margin-top: 4px;
+}
+.msg.highlight {
+  background: linear-gradient(90deg, rgba(145, 70, 255, 0.18), rgba(145, 70, 255, 0.04));
+  border-left: 3px solid #9146ff;
+  padding-left: 8px;
+}
+
 /* Suspicious user */
 .msg.sus-msg {
   background: rgba(255, 193, 7, 0.1);
