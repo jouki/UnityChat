@@ -545,6 +545,23 @@ class EmoteManager {
       // Text: per-author → 7TV/BTTV/FFZ → platform native → UC custom
       const parts = seg.value.split(/(\s+)/);
       for (const part of parts) {
+        // Cheermote: "Cheer{N}" on Twitch is a bits cheer — render the
+        // animated tier emote + colored bits count. Tier + color per
+        // Twitch's standard Cheer prefix (channels can have custom
+        // prefixes with their own emotes, which we can't resolve
+        // without OAuth — those fall through to the regular flow).
+        if (platform === 'twitch') {
+          const cm = /^(?:Cheer)(\d+)$/i.exec(part);
+          if (cm) {
+            const bits = parseInt(cm[1], 10);
+            const tier = bits >= 100000 ? 100000 : bits >= 10000 ? 10000 : bits >= 5000 ? 5000 : bits >= 1000 ? 1000 : bits >= 100 ? 100 : 1;
+            const colors = { 1: '#979797', 100: '#9c3ee8', 1000: '#1db2a5', 5000: '#0099fe', 10000: '#f43021', 100000: '#f43021' };
+            const url = `https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/${tier}/2.gif`;
+            out.push({ type: 'emote', value: `Cheer${bits}`, url, zw: false });
+            out.push({ type: 'text', value: `${bits}`, style: `color:${colors[tier]};font-weight:700;` });
+            continue;
+          }
+        }
         const personal = userLookup(part);
         if (personal) {
           out.push({ type: 'emote', value: part, url: personal.url, zw: personal.zw });
@@ -766,7 +783,15 @@ class EmoteManager {
         // Whitespace between base and ZW emote — skip (don't close stack)
         if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        out.push(this._linkify(s.value));
+        if (s.style) {
+          // Styled text segment (cheermote bits count, future spans).
+          // Sanitize the inline style to allow only color/font-weight/
+          // background rules — no URL / expression injection.
+          const safe = String(s.style).replace(/[<>"'`]/g, '');
+          out.push(`<span style="${safe}">${this._eh(s.value)}</span>`);
+        } else {
+          out.push(this._linkify(s.value));
+        }
         continue;
       }
       const alt = this._ea(s.value);
