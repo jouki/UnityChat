@@ -605,10 +605,94 @@
     redeemObserver.observe(document.body, { childList: true, subtree: true });
   }
 
+  // ---- Intercept native Twitch "Sbalit" (collapse) button ----
+  // Native collapse unmounts .chat-shell which kills redeem/credit/color
+  // mirroring. Capture-phase listener rewrites the click to our soft-hide.
+  function isCollapseButton(el) {
+    if (!el || !el.closest) return null;
+    return el.closest('[data-a-target="right-column__toggle-collapse-btn"]');
+  }
+  function setupSbalitIntercept() {
+    document.addEventListener('click', (e) => {
+      const btn = isCollapseButton(e.target);
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      hideTwitchChatVisually(!ucChatHidden);
+    }, true);
+  }
+
+  // ---- Community highlights mirror (Hype Train, gift-sub leaderboard, pinned messages) ----
+  // These live in Twitch's DOM, not IRC. Observer watches the highlights
+  // container and relays structured snapshots to the sidepanel, which
+  // renders a compact version at the top of its own chat.
+  const HIGHLIGHT_SELECTORS = [
+    '.community-highlight-stack',
+    '[class*="community-highlight"]',
+    '[data-test-selector*="community-highlight"]',
+    '[data-a-target*="highlight-stack"]',
+  ];
+  let highlightObserver = null;
+  let lastHighlightHash = '';
+  function snapshotHighlights() {
+    const cards = [];
+    const seen = new Set();
+    for (const sel of HIGHLIGHT_SELECTORS) {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (seen.has(el)) return;
+        seen.add(el);
+        const text = (el.textContent || '').trim();
+        if (!text) return;
+        // Classify. Hype train has progress / minutes text; gift sub has
+        // "Tier" / "subs"; pinned messages have distinctive classes.
+        const isHypeTrain = /hype\s*train|hype\s*raid|úr\.|%\b/i.test(text)
+          || /hype/i.test(el.className || '');
+        const isGiftLeaderboard = /gift/i.test(text) || /gift/i.test(el.className || '');
+        const kind = isHypeTrain ? 'hype-train' : (isGiftLeaderboard ? 'gift-leaderboard' : 'generic');
+        cards.push({ kind, text: text.slice(0, 400), html: el.outerHTML.slice(0, 4000) });
+      });
+    }
+    return cards;
+  }
+  function relayHighlights() {
+    const cards = snapshotHighlights();
+    const hash = cards.map((c) => c.kind + ':' + c.text).join('|');
+    if (hash === lastHighlightHash) return;
+    lastHighlightHash = hash;
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TW_HIGHLIGHTS',
+        channel: currentTwitchChannel(),
+        cards,
+      });
+    } catch { /* extension context gone */ }
+  }
+  function setupHighlightsObserver() {
+    if (highlightObserver) return;
+    highlightObserver = new MutationObserver(() => {
+      // Throttle via microtask coalescing — multiple mutations per tick
+      // collapse to a single snapshot.
+      if (highlightObserver._t) return;
+      highlightObserver._t = setTimeout(() => {
+        highlightObserver._t = null;
+        relayHighlights();
+      }, 300);
+    });
+    highlightObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // First snapshot after initial paint
+    setTimeout(relayHighlights, 1500);
+  }
+
   // Setup after DOM is ready (idempotent via window._ucTwitch guard at top)
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupRedeemObserver, { once: true });
-  } else {
+  function setupAll() {
     setupRedeemObserver();
+    setupSbalitIntercept();
+    setupHighlightsObserver();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupAll, { once: true });
+  } else {
+    setupAll();
   }
 })();

@@ -2278,6 +2278,8 @@ class UnityChat {
         }
       } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
         this._handleDomRedeem(msg.data);
+      } else if (msg?.type === 'TW_HIGHLIGHTS') {
+        this._handleHighlights(msg);
       }
     });
   }
@@ -4339,6 +4341,36 @@ class UnityChat {
   // vanilla chat DOM and relayed it here. Twitch IRC does NOT carry text-less
   // redemptions (community goals, "unlock emote", etc.) — only PubSub does,
   // and that's OAuth-gated. DOM mirroring is the anonymous-safe workaround.
+  _handleHighlights(msg) {
+    // Channel-scoped: ignore highlights from other open Twitch tabs.
+    if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    const banner = document.getElementById('highlights-banner');
+    if (!banner) return;
+    const cards = (msg.cards || []).filter((c) => c && c.text);
+    if (!cards.length) {
+      banner.classList.add('hidden');
+      banner.innerHTML = '';
+      return;
+    }
+    banner.classList.remove('hidden');
+    banner.innerHTML = '';
+    for (const c of cards) {
+      const item = document.createElement('div');
+      item.className = 'hl-card hl-' + (c.kind || 'generic');
+      const icon = document.createElement('span');
+      icon.className = 'hl-icon';
+      icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
+        : c.kind === 'gift-leaderboard' ? '\u{1F381}'
+        : '\u2728';
+      const body = document.createElement('span');
+      body.className = 'hl-body';
+      body.textContent = c.text;
+      item.appendChild(icon);
+      item.appendChild(body);
+      banner.appendChild(item);
+    }
+  }
+
   _handleDomRedeem(data) {
     if (!data?.username) return;
     // Only mirror redeems for the currently-connected Twitch channel.
