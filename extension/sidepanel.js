@@ -3889,13 +3889,10 @@ class UnityChat {
   }
 
   async _scrapeExistingChat() {
-    // Skip scrape if cache has recent messages (< 2 min old).
-    // After a reload the cache IS the backfill — scraping would just
-    // create incomplete duplicates (emotes are img tags in DOM, lost
-    // during text extraction → boundary detection fails).
-    const lastCached = this._msgCache[this._msgCache.length - 1];
-    if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
-
+    // Always attempt scrape — dedup (_seenContentKeys + _seenMsgIds) drops
+    // duplicates that overlap with the cache, and missing the scrape
+    // entirely loses any messages that arrived during the gap between
+    // last cached message and now (e.g. user reopened UC after 30s).
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel) return;
 
@@ -3927,10 +3924,16 @@ class UnityChat {
         const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
 
         let boundary = -1;
-        // Try decreasing suffix lengths (5→2) of cached username sequence
+        // Try decreasing suffix lengths (5→2) of cached username sequence.
+        // Iterate scraped from START → END so we lock onto the EARLIEST
+        // occurrence of the suffix — when the same user-pair repeats later
+        // in the scraped chat, picking the latest match would silently
+        // drop the messages BETWEEN the two occurrences. Picking earliest
+        // may add a few duplicates, but those get caught by content-key
+        // dedup downstream.
         for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
           const suffix = cachedUsers.slice(-len);
-          for (let i = scrapedUsers.length - len; i >= 0; i--) {
+          for (let i = 0; i + len <= scrapedUsers.length; i++) {
             let match = true;
             for (let j = 0; j < len; j++) {
               if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
