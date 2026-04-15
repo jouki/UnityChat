@@ -1390,6 +1390,33 @@ body.no-timestamps .msg .ts { display: none; }
   color: #e0c7a8;
 }
 .hl-raid-meta .hl-raid-points { color: #ffd93d; font-weight: 700; }
+.hl-raid-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  color: #ffd9c2;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  margin-left: auto;
+}
+.hl-raid-close:hover {
+  background: rgba(255, 107, 107, 0.25);
+  color: #fff;
+  transform: scale(1.08);
+}
+.hl-card.hl-raid.has-accent .hl-raid-close {
+  border-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.35);
+}
+.hl-card.hl-raid.has-accent .hl-raid-close:hover {
+  background: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.3);
+}
 /* Countdown progress bar — fills from 100% to 0 over duration, giving
    a visual sense of the "raid in N seconds" deadline. */
 .hl-raid-bar {

@@ -5248,6 +5248,37 @@ class UnityChat {
       body.textContent = c.text;
     }
     row.appendChild(body);
+
+    // Close button — dismisses the raid by clicking the matching
+    // close control on Twitch's raid card in the DOM.
+    const close = document.createElement('button');
+    close.className = 'hl-raid-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Zrušit nájezd');
+    close.title = 'Zrušit nájezd';
+    close.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">'
+      + '<path d="M6.414 5 5 6.414l5.588 5.588L5 17.59l1.414 1.414 5.588-5.588 5.588 5.588 1.414-1.414-5.588-5.588 5.588-5.588L17.59 5l-5.588 5.588L6.414 5Z"/></svg>';
+    close.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // Optimistic hide + ask content script to click Twitch's close.
+      const card = wrap.closest('.hl-card');
+      if (card) card.style.display = 'none';
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        const ch = (this.config.channel || '').toLowerCase();
+        const target = tabs.find((t) => {
+          try {
+            const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+            return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+          } catch { return false; }
+        }) || tabs[0];
+        if (target?.id) {
+          chrome.tabs.sendMessage(target.id, { type: 'TW_DISMISS_RAID' }).catch(() => {});
+        }
+      } catch {}
+    });
+    row.appendChild(close);
+
     wrap.appendChild(row);
 
     // Countdown progress bar — mirrors vanilla Twitch's raid banner

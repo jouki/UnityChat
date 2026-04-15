@@ -597,6 +597,40 @@
       return;
     }
 
+    if (msg.type === 'TW_DISMISS_RAID') {
+      try {
+        // Find the raid/nájezd card in the community-highlight stack
+        // and click its close button. Twitch usually labels it
+        // "Odejít" (CZ) / "Leave" (EN) — plus a generic X button.
+        const stack = document.querySelector('.community-highlight-stack, [class*="community-highlight"]');
+        let target = null;
+        const scope = stack || document;
+        const cands = scope.querySelectorAll('button, [role="button"]');
+        for (const b of cands) {
+          const al = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+          // Match leave/close/dismiss/zavřít/odejít/zrušit keywords
+          if (!/(leave|close|dismiss|zav[rř][ií]t|odej[ií]t|zru[sš]it)/i.test(al)) continue;
+          const r = b.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) { target = b; break; }
+        }
+        if (!target) { sendResponse({ ok: false, error: 'no_dismiss_btn' }); return; }
+        const r = target.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const opts = (extra = {}) => ({
+          bubbles: true, cancelable: true, composed: true,
+          clientX: x, clientY: y, view: window, button: 0, buttons: 1, ...extra,
+        });
+        try { target.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts() })); } catch {}
+        try { target.dispatchEvent(new MouseEvent('mousedown', opts())); } catch {}
+        try { target.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts({ buttons: 0 }) })); } catch {}
+        try { target.dispatchEvent(new MouseEvent('mouseup', opts({ buttons: 0 }))); } catch {}
+        try { target.dispatchEvent(new MouseEvent('click', opts({ buttons: 0 }))); } catch {}
+        try { target.click(); } catch {}
+        sendResponse({ ok: true, clicked: target.getAttribute('aria-label') || target.textContent?.trim() });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'GET_CHANNEL_AVATAR') {
       try {
         const wantLogin = (msg.channel || currentTwitchChannel() || '').toLowerCase();
