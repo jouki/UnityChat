@@ -803,16 +803,26 @@ class EmoteManager {
   }
 
   _linkify(s) {
-    const urlRe = /https?:\/\/[^\s<>'")\]]+/g;
+    // Match any of:
+    //   https://… / http://…           — explicit scheme
+    //   www.example.com[/...]          — schemeless www-prefixed
+    //   example.com[/...]              — bare domain with a known TLD
+    // The bare-domain branch is gated on a TLD whitelist so we don't
+    // accidentally turn things like "verca.je" / Czech sentences with
+    // dots into links. Word-boundary lookbehind keeps it from matching
+    // mid-token (like emails).
+    const urlRe = /(?:(?<=^|[\s(\[<])(?:https?:\/\/[^\s<>'")\]]+|www\.[A-Za-z0-9][A-Za-z0-9\-_.]*\.[A-Za-z]{2,}(?:\/[^\s<>'")\]]*)?|[A-Za-z0-9][A-Za-z0-9\-_]*\.(?:cz|sk|com|net|org|io|gg|tv|me|app|dev|ai|eu|de|uk|us|fr|pl|jp|ru|ca|nl|it|info|live|video|stream|games|game|wiki|news|blog|shop|store|fun)(?:\/[^\s<>'")\]]*)?))/gi;
     let last = 0;
     let out = '';
     let m;
     while ((m = urlRe.exec(s)) !== null) {
       if (m.index > last) out += this._eh(s.substring(last, m.index));
-      const url = m[0].replace(/[.,;:!?]+$/, '');
-      urlRe.lastIndex = m.index + url.length;
-      out += `<a href="${this._ea(url)}" target="_blank" rel="noopener">${this._eh(url)}</a>`;
-      last = m.index + url.length;
+      const raw = m[0].replace(/[.,;:!?)]+$/, '');
+      // Build href: prepend https:// if no scheme present
+      const href = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+      urlRe.lastIndex = m.index + raw.length;
+      out += `<a href="${this._ea(href)}" target="_blank" rel="noopener">${this._eh(raw)}</a>`;
+      last = m.index + raw.length;
     }
     if (last === 0) return this._eh(s);
     if (last < s.length) out += this._eh(s.substring(last));
