@@ -2614,6 +2614,7 @@ class UnityChat {
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
+          'pin',
         ];
         const prefix = (text === '/uc' ? '' : partial).toLowerCase();
         const matches = (prefix ? UC_CMDS.filter((c) => c.startsWith(prefix)) : UC_CMDS).map((c) => '/uc ' + c);
@@ -4244,8 +4245,72 @@ class UnityChat {
         this._flashPointsDelta(50);
         break;
       }
+      case 'pin': {
+        // Mock pin banner injection. Uses the current user profile as
+        // both pinner and author so colors + badges pick up whatever
+        // the user has cached locally. Body = everything after "/uc pin".
+        const body = args.slice(1).join(' ').trim() || 'Mock pin — připnutá zpráva pro testování.';
+        // Split body into word-level segments, resolve any known emote
+        // names via the full emote library (Twitch native, 7TV, BTTV,
+        // FFZ) so mocks with real emote tokens render as images.
+        const em = this.emotes;
+        const resolveEmote = (name) =>
+          em?.channel7tv?.get(name)
+          || em?.global7tv?.get(name)
+          || em?.bttvEmotes?.get(name)
+          || em?.ffzEmotes?.get(name)
+          || em?.twitchNative?.get(name);
+        const segs = [];
+        for (const token of body.split(/(\s+)/)) {
+          if (!token) continue;
+          if (/^\s+$/.test(token)) {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += token;
+            else segs.push({ type: 'text', value: token });
+            continue;
+          }
+          const entry = resolveEmote(token);
+          if (entry?.url) {
+            segs.push({ type: 'emote', url: entry.url, alt: token });
+          } else {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += token;
+            else segs.push({ type: 'text', value: token });
+          }
+        }
+        const myName = this.config.username || 'TestUser';
+        const myColorRaw = (this._platformColors?.twitch) || '#e6a11a';
+        const myBadges = this._myBadgesCache
+          ? (this._myBadgesCache.split(',').map((b) => {
+              const entry = this._twitchBadges?.[b];
+              const url = entry && typeof entry === 'object' ? entry.url : entry;
+              const title = (entry && typeof entry === 'object' && entry.title) || b.split('/')[0];
+              return url ? { url, alt: title } : null;
+            }).filter(Boolean))
+          : [];
+        const mockPin = {
+          kind: 'pin',
+          text: body.slice(0, 200) || 'Pinned',
+          pin: {
+            pinnedBy: myName,
+            author: myName,
+            authorColor: myColorRaw,
+            authorBadges: myBadges,
+            bodySegments: segs,
+            timeText: 'odesláno v ' + new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }),
+            pinId: 'mock-' + Date.now(),
+          },
+        };
+        // Push into _gqlPinCards so _handleHighlights merge treats it as
+        // the source of truth (as if GQL returned this pin). Re-render
+        // bumps last-good cache via its normal path.
+        this._gqlPinCards = [mockPin];
+        this._rerenderHighlights();
+        this._sys(`/uc pin: mock pin banner injected (body="${body.slice(0, 60)}${body.length > 60 ? '…' : ''}")`);
+        break;
+      }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 

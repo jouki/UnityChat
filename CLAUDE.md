@@ -606,7 +606,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.26** - **Fix emote downgrade po polling tick**: `_rerenderHighlights` už neposílá GQL pins v msg.cards; GQL se merguje separately. `isRerender` guard. **Pin flow uzamčen jako stable.**
 - **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: fancy gold gradient, pulsing icon, readable author, pill timestamp.
 - **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + ellipsis na author + `flex-shrink: 0` na timestamp.
-- **v3.38.29** - **Pin body využívá plnou šířku (no ellipsis)**: body padding-left `42px → 14px` — zrušeno odsazení pod pin ikonou co se nepoužívalo. Author name teď bez ellipsis (`nowrap + flex-shrink: 0`) — rozložení rostoucí podle obsahu, využívá plnou šířku karty. **Aktuální verze**
+- **v3.38.29** - **Pin body full-width, no author truncation**: padding-left 42→14, author nowrap bez ellipsis.
+- **v3.38.30** - **`/uc pin [text]` mock command**: nový mock pro testování pin banneru. Push mock pin do `_gqlPinCards` + `_rerenderHighlights`. Body je vše za `/uc pin` (default: "Mock pin — připnutá zpráva pro testování."). Tokenize na word-level + resolve emote names proti full emote library (channel 7TV → global 7TV → BTTV → FFZ → Twitch native) → real emote obrázky v mocku. Pinner + author = current user; color z `_platformColors.twitch`; badges z `_myBadgesCache` (mapped přes `_twitchBadges` cache). Timestamp = current local HH:MM. Plus entry v autocomplete (`/uc pin`). **Aktuální verze**
 
 ## Release workflow
 
