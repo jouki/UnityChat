@@ -2172,6 +2172,48 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   margin: 0 8px;
 }
 
+/* ---- Lazy scroll-up hydration spinner ----
+   Shown at the top of the chat while _hydrateOlderMessages prepends an
+   older batch (150 msgs). Lives inside #chat so it contributes to the
+   scrollHeight delta we use to restore the user's reading position. */
+.hydrate-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 12px;
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  background: linear-gradient(135deg, rgba(255, 140, 0, 0.08), rgba(255, 140, 0, 0.02));
+  border: 1px solid rgba(255, 140, 0, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 0 18px rgba(255, 140, 0, 0.08);
+  animation: hs-pulse 1.2s ease-in-out infinite;
+}
+.hydrate-spinner .hs-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 140, 0, 0.25);
+  border-top-color: var(--accent);
+  animation: hs-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+.hydrate-spinner .hs-label {
+  white-space: nowrap;
+}
+@keyframes hs-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes hs-pulse {
+  0%, 100% { box-shadow: 0 0 18px rgba(255, 140, 0, 0.08); }
+  50%      { box-shadow: 0 0 26px rgba(255, 140, 0, 0.22); }
+}
+
 /* ---- Twitch credits mirror (footer pills above input) ---- */
 #tw-credits {
   display: flex;

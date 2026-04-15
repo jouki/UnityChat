@@ -6663,8 +6663,11 @@ class UnityChat {
     }
     } // end isSystemEvent guard
 
-    // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu)
-    if (!this.autoScroll) {
+    // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu).
+    // Skip this entire block when prepending *older* messages via lazy scroll-up
+    // hydration — those are not "new", they are pre-existing chat history being
+    // exposed to the viewer.
+    if (!this.autoScroll && !this._hydratingOlder) {
       if (this._unreadCount === 0) {
         // První nová zpráva → vložit separator
         const sep = document.createElement('div');
@@ -6674,7 +6677,7 @@ class UnityChat {
         this.chatEl.appendChild(sep);
       }
       this._unreadCount++;
-      this.scrollBtn.textContent = `↓ ${this._unreadCount} ${this._unreadCount === 1 ? 'nová zpráva' : 'nové zprávy'}`;
+      this.scrollBtn.textContent = `↓ ${this._formatNewMsgCount(this._unreadCount)}`;
       this.scrollBtn.classList.remove('hidden');
     }
 
@@ -6849,16 +6852,39 @@ class UnityChat {
     if (this._hydratingOlder) return;
     if (!this._msgCache?.length || !(this._hydratedIdx > 0)) return;
     this._hydratingOlder = true;
+
+    // Show an inline spinner at the very top of the chat so the viewer sees
+    // WHY the scroll just nudged forward. Sits inside chatEl (so its height
+    // counts toward scrollHeight), visible for the ~100-200ms render window,
+    // then swapped for the actual messages. Animation is CSS; the label is
+    // pluralized via _formatNewMsgCount but uses a dedicated "starší zprávy"
+    // wording so users don't confuse it with the "new messages" pill.
+    const spinner = document.createElement('div');
+    spinner.className = 'hydrate-spinner';
+    spinner.innerHTML = '<span class="hs-ring" aria-hidden="true"></span><span class="hs-label">Načítání starších zpráv…</span>';
+    this.chatEl.insertBefore(spinner, this.chatEl.firstChild);
+    // Capture scroll metrics AFTER spinner is in DOM but BEFORE messages are
+    // prepended, so the scrollTop jump accounts for the spinner already being
+    // in the layout (we subtract its height in the final restore).
+    const realChat = this.chatEl;
+    const prevHeight = realChat.scrollHeight;
+    const prevTop = realChat.scrollTop;
+
     try {
-      const batch = 250;
+      // One-frame delay so the spinner paints before we start the (cheaper,
+      // but still non-trivial) render work. Without this the user sees a
+      // scroll jump with no indicator of what happened.
+      await new Promise((r) => requestAnimationFrame(() => r()));
+
+      const batch = 150;
       const startIdx = Math.max(0, this._hydratedIdx - batch);
       const slice = this._msgCache.slice(startIdx, this._hydratedIdx);
+
       // Build a detached fragment so we don't trigger layout per insert,
       // then splice it in front of the oldest currently-rendered msg.
       // _addMessage appends to this.chatEl, so we temporarily swap chatEl
       // for a fragment, render into it, then prepend the fragment.
       const frag = document.createDocumentFragment();
-      const realChat = this.chatEl;
       this.chatEl = frag;
       try {
         for (const m of slice) {
@@ -6867,17 +6893,19 @@ class UnityChat {
       } finally {
         this.chatEl = realChat;
       }
-      // Capture scroll metrics BEFORE insert so we can restore the view.
-      const prevHeight = realChat.scrollHeight;
-      const prevTop = realChat.scrollTop;
+      spinner.remove();
       realChat.insertBefore(frag, realChat.firstChild);
       // Jump scrollTop forward by the height of the newly prepended block
-      // so the user's current reading line stays put (suppress the auto-
-      // scroll handler during this nudge).
+      // (spinner was removed, messages inserted) so the user's current
+      // reading line stays put. Suppress the auto-scroll handler during
+      // this nudge.
       this._programmaticScrollUntil = performance.now() + 200;
       const newHeight = realChat.scrollHeight;
       realChat.scrollTop = prevTop + (newHeight - prevHeight);
       this._hydratedIdx = startIdx;
+    } catch (e) {
+      spinner.remove();
+      throw e;
     } finally {
       this._hydratingOlder = false;
     }
@@ -6976,6 +7004,15 @@ class UnityChat {
     if (n > 0 && typeof this._hydratedIdx === 'number') {
       this._hydratedIdx = Math.min((this._msgCache?.length || 0), this._hydratedIdx + n);
     }
+  }
+
+  // Czech plural rules for the "N new messages" pill. 1 → singular;
+  // 2-4 → few form; 0 + 5+ → many form.
+  _formatNewMsgCount(n) {
+    const abs = Math.abs(n);
+    if (abs === 1) return `${n} nová zpráva`;
+    if (abs >= 2 && abs <= 4) return `${n} nové zprávy`;
+    return `${n} nových zpráv`;
   }
 
   _scroll() {
