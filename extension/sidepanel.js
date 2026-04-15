@@ -5088,7 +5088,10 @@ class UnityChat {
       banner.innerHTML = '';
       return;
     }
-    banner.classList.remove('hidden');
+    banner.classList.remove('hidden', 'has-accent');
+    banner.style.removeProperty('--hl-accent-r');
+    banner.style.removeProperty('--hl-accent-g');
+    banner.style.removeProperty('--hl-accent-b');
     banner.innerHTML = '';
     for (const c of cards) {
       const item = document.createElement('div');
@@ -5200,6 +5203,16 @@ class UnityChat {
               card.style.setProperty('--hl-accent-g', g);
               card.style.setProperty('--hl-accent-b', b);
               card.classList.add('has-accent');
+            }
+            // Propagate accent to the outer banner so its own
+            // background/border tunes to the card's palette instead
+            // of the fixed cyan/purple gradient.
+            const banner = av.closest('#highlights-banner');
+            if (banner) {
+              banner.style.setProperty('--hl-accent-r', r);
+              banner.style.setProperty('--hl-accent-g', g);
+              banner.style.setProperty('--hl-accent-b', b);
+              banner.classList.add('has-accent');
             }
           }
         } catch { /* CORS or sample failed — keep default palette */ }

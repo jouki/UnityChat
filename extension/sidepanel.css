@@ -1968,6 +1968,18 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   flex-wrap: wrap;
 }
 #tw-credits.hidden { display: none; }
+
+/* Highlights banner background tunes to the accent of its single
+   featured card (raid avatar sample, etc.). Fallback = the fixed
+   cyan/purple gradient defined earlier. */
+#highlights-banner.has-accent {
+  background: linear-gradient(
+    135deg,
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.22),
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.07)
+  );
+  border-bottom-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.5);
+}
 .tc-pill {
   display: inline-flex;
   align-items: center;
