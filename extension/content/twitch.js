@@ -98,6 +98,77 @@
     }
   }
 
+  // ---- Top-nav restore button (visible while UC has hidden the chat) ----
+  // Sits left of the user avatar / notification bell. Clicking it reverses
+  // our soft-hide so vanilla Twitch chat reappears, then the button
+  // removes itself (same as if UC had never hidden chat).
+  const UC_RESTORE_BTN_ID = 'uc-restore-chat-btn';
+  function buildRestoreButton() {
+    const btn = document.createElement('button');
+    btn.id = UC_RESTORE_BTN_ID;
+    btn.type = 'button';
+    btn.title = 'Zobrazit Twitch chat';
+    btn.setAttribute('aria-label', 'Zobrazit Twitch chat');
+    Object.assign(btn.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '30px',
+      height: '30px',
+      minWidth: '30px',
+      padding: '0',
+      marginRight: '6px',
+      background: 'transparent',
+      border: 'none',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      color: 'var(--color-text, #efeff1)',
+      transition: 'background 0.15s ease',
+    });
+    // Speech-bubble SVG (matches Twitch's visual language)
+    btn.innerHTML =
+      '<svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor" aria-hidden="true">'
+      + '<path d="M17 3H3c-1.1 0-2 .9-2 2v9c0 1.1.9 2 2 2h3v3l4-3h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 9H5v-2h5v2zm5-4H5V6h10v2z"/>'
+      + '</svg>';
+    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,255,255,0.1)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideTwitchChatVisually(false);
+    });
+    return btn;
+  }
+
+  function findTopNavActions() {
+    return document.querySelector('.top-nav__actions')
+      || document.querySelector('[data-a-target="top-nav-user-menu-toggle"]')?.closest('div[class]')?.parentElement
+      || document.querySelector('.top-nav .Layout-sc-1xcs6mc-0');
+  }
+
+  function ensureRestoreButton() {
+    const actions = findTopNavActions();
+    if (!actions) return;
+    if (document.getElementById(UC_RESTORE_BTN_ID)) return;
+    const btn = buildRestoreButton();
+    // Insert as the first child so it lands left of the user menu / bell.
+    actions.insertBefore(btn, actions.firstChild);
+  }
+
+  function removeRestoreButton() {
+    const btn = document.getElementById(UC_RESTORE_BTN_ID);
+    if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+  }
+
+  let restoreBtnObserver = null;
+  function setupRestoreBtnObserver() {
+    if (restoreBtnObserver) return;
+    restoreBtnObserver = new MutationObserver(() => {
+      if (ucChatHidden) ensureRestoreButton();
+    });
+    restoreBtnObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
   function hideTwitchChatVisually(hide) {
     ucChatHidden = !!hide;
     let style = document.getElementById(UC_HIDE_STYLE_ID);
@@ -130,12 +201,19 @@
           childList: true,
         });
       }
+      ensureRestoreButton();
+      setupRestoreBtnObserver();
     } else {
       if (style) style.remove();
       restoreWithChatModifiers();
       if (ucWithChatObserver) {
         ucWithChatObserver.disconnect();
         ucWithChatObserver = null;
+      }
+      removeRestoreButton();
+      if (restoreBtnObserver) {
+        restoreBtnObserver.disconnect();
+        restoreBtnObserver = null;
       }
     }
   }
