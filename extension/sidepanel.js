@@ -5311,31 +5311,35 @@ class UnityChat {
     });
   }
 
-  // Merge DOM-mirror and GQL pin cards and re-render the highlights banner.
+  // Merge cached non-pin DOM cards with whatever pin source wins
+  // (DOM if recent, otherwise GQL) and re-render the highlights banner.
   _rerenderHighlights() {
-    this._handleHighlights({
+    const msg = {
       channel: this.config.channel,
       cards: [...(this._lastDomHighlightCards || []), ...(this._gqlPinCards || [])],
-    });
+    };
+    this._rerenderTag = msg;
+    this._handleHighlights(msg);
   }
 
   _handleHighlights(msg) {
     // Channel-scoped: ignore highlights from other open Twitch tabs.
     if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
-    // DOM cards (from TW_HIGHLIGHTS) take precedence over GQL fallback
-    // because DOM has full sender + content + badges + emotes that the
-    // anonymous GQL query can't return. GQL-sourced cards only fill in
-    // when chat is hidden (DOM scrape can't reach the pin card) — they
-    // show pinner + timestamp + "Pinned" placeholder body so the user
-    // at least knows a pin exists.
+    // Cache cleanup logic — only runs for DOM-sourced TW_HIGHLIGHTS
+    // messages (not our own _rerenderHighlights callbacks, which carry
+    // the _rerenderTag identity). Splits pin cards out from the rest so
+    // that re-renders never accidentally re-inject stale pins from the
+    // cache (which caused 4x duplicate "Připnuto uživatelem …" banners).
     if (msg.cards && msg !== this._rerenderTag) {
       const domCards = msg.cards;
-      const hasDomPin = domCards.some((c) => c?.kind === 'pin');
-      this._lastDomHighlightCards = domCards;
-      // Only inject GQL pins when DOM has no pin of its own (chat hidden /
-      // unmounted). Otherwise DOM pin wins.
-      const gqlPins = hasDomPin ? [] : (this._gqlPinCards || []);
-      msg = { ...msg, cards: [...domCards, ...gqlPins] };
+      const domPins = domCards.filter((c) => c?.kind === 'pin');
+      // Stash ONLY non-pin cards — pins always come fresh from either
+      // this DOM tick or the GQL poll, never from the cache.
+      this._lastDomHighlightCards = domCards.filter((c) => c?.kind !== 'pin');
+      // Prefer DOM pins when they exist (DOM has full sender + content +
+      // badges + emotes); else use GQL fallback.
+      const pins = domPins.length ? domPins : (this._gqlPinCards || []);
+      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...pins] };
     }
     const banner = document.getElementById('highlights-banner');
     if (!banner) return;

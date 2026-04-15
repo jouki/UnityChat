@@ -1378,18 +1378,23 @@
     //    Fallback: all badge-looking imgs in the last third of the card
     //    (pin footer is always at bottom).
     if (authorEl) {
-      let authorRow = authorEl.parentElement;
-      while (authorRow && authorRow !== card) {
-        const cs = getComputedStyle(authorRow);
-        if (cs.display === 'flex' || cs.display === 'grid') break;
-        authorRow = authorRow.parentElement;
-      }
-      authorRow = authorRow || authorEl.parentElement || card;
+      // Scope strictly to the footer <p> — walking up to the first flex
+      // container hit the card root, which includes the pinner's mod
+      // badge from the header ("Připnuto uživatelem [mod-badge] Suzunahara")
+      // AND the 3 author badges from the footer → 4 badges rendered with
+      // the first one duplicated. <p class="jPfhdt"> is the authoritative
+      // author footer container per Twitch's pin layout.
+      const authorRow = authorEl.closest('p') || authorEl.parentElement || card;
+      const seenSrc = new Set();
       for (const img of authorRow.querySelectorAll('img[src]')) {
         const src = img.src;
-        if (/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) {
-          out.authorBadges.push({ url: src, alt: img.alt || '' });
-        }
+        if (!/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) continue;
+        // Hard dedup on src URL — handles cases where Twitch renders the
+        // same badge twice (e.g. wrapped in a linked <a> alongside a
+        // standalone <img>).
+        if (seenSrc.has(src)) continue;
+        seenSrc.add(src);
+        out.authorBadges.push({ url: src, alt: img.alt || '' });
       }
     }
     // Fallback: if we found an author but no badges, scan for badges
