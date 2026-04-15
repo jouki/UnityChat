@@ -5165,15 +5165,34 @@ class UnityChat {
   }
 
   _buildPinCard(c) {
-    // Twitch-style pinned message: header "Připnuto uživatelem {X}"
-    // + collapse/hide controls, expanded body with the pinned text.
-    // Same structure our own pin-banner uses — just mounted inside
-    // the highlight banner (where community-highlight-stack cards
-    // render pins from other users).
+    // Structured pin render — expects c.pin = { pinnedBy, author,
+    // authorColor, authorBadges[], bodySegments[], timeText }.
+    const pin = c.pin || {};
+    const pinnedBy = pin.pinnedBy || 'uživatel';
+    const author = pin.author;
+    const authorColor = this.emotes._sc(pin.authorColor) || '#e6a11a';
+    const timeText = pin.timeText || '';
+
+    // Build body HTML from segments — text gets linkified + mention-
+    // colored, emotes render as <img class="emote">.
+    const bodyHtml = (() => {
+      if (!pin.bodySegments?.length) return this.emotes._eh(c.text || '');
+      return pin.bodySegments.map((s) => {
+        if (s.type === 'emote') {
+          const alt = this.emotes._eh(s.alt || '');
+          return `<img class="emote" src="${this.emotes._ea(s.url)}" alt="${alt}">`;
+        }
+        return this.emotes._linkify(s.value || '');
+      }).join('');
+    })();
+
+    // Badges row before author name
+    const badgesHtml = (pin.authorBadges || []).map((b) => (
+      `<img class="hl-pin-badge" src="${this.emotes._ea(b.url)}" alt="${this.emotes._eh(b.alt || '')}" title="${this.emotes._eh(b.alt || '')}">`
+    )).join('');
+
     const wrap = document.createElement('div');
     wrap.className = 'hl-pin-wrap';
-    const pinnedBy = c.pinnedBy || 'uživatel';
-    const body = c.pinBody || c.text || '';
 
     wrap.innerHTML = `
       <div class="hl-pin-head">
@@ -5199,12 +5218,19 @@ class UnityChat {
         </button>
       </div>
       <div class="hl-pin-body">
-        <div class="hl-pin-body-text">${this.emotes.renderPlain(body)}</div>
+        <div class="hl-pin-body-text">${bodyHtml}</div>
+        ${author || timeText ? `
+          <div class="hl-pin-foot">
+            ${badgesHtml ? `<span class="hl-pin-badges">${badgesHtml}</span>` : ''}
+            ${author ? `<span class="hl-pin-author" style="color:${authorColor}">${this.emotes._eh(author)}</span>` : ''}
+            ${timeText ? `<span class="hl-pin-time">${this.emotes._eh(timeText)}</span>` : ''}
+          </div>
+        ` : ''}
       </div>
     `;
 
     const card = wrap;
-    card.classList.add('collapsed'); // start collapsed like Twitch
+    card.classList.add('collapsed');
     const toggleBtn = wrap.querySelector('.hl-pin-btn-toggle');
     const hideBtn = wrap.querySelector('.hl-pin-btn-hide');
     toggleBtn.addEventListener('click', (e) => {
@@ -5217,6 +5243,28 @@ class UnityChat {
       const host = wrap.closest('.hl-card');
       if (host) host.style.display = 'none';
     });
+
+    // Propagate warm amber/gold accent to the outer banner so
+    // #highlights-banner background matches the pin palette instead
+    // of the default cyan/purple. Value matches our pin-banner
+    // amber (#e6a11a ≈ 230,161,26).
+    setTimeout(() => {
+      const host = wrap.closest('.hl-card');
+      const banner = wrap.closest('#highlights-banner');
+      if (host) {
+        host.classList.add('has-accent');
+        host.style.setProperty('--hl-accent-r', '230');
+        host.style.setProperty('--hl-accent-g', '161');
+        host.style.setProperty('--hl-accent-b', '26');
+      }
+      if (banner) {
+        banner.classList.add('has-accent');
+        banner.style.setProperty('--hl-accent-r', '230');
+        banner.style.setProperty('--hl-accent-g', '161');
+        banner.style.setProperty('--hl-accent-b', '26');
+      }
+    }, 0);
+
     return wrap;
   }
 

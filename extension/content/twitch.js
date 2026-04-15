@@ -1232,6 +1232,122 @@
   ];
   let highlightObserver = null;
   let lastHighlightHash = '';
+  // Parse a pinned-message highlight card into structured fields.
+  // Twitch's pin card renders roughly as:
+  //   [pin icon] Připnuto uživatelem <moderator>
+  //   <chevron> <eye>
+  //   <big bold body with inline emote <img>s and text fragments>
+  //   <author badges> <author-display-name> odesláno v HH:MM AM/PM
+  // We walk the DOM to pull each piece rather than slicing text, so
+  // emotes + badges survive as image URLs for the sidepanel to render.
+  function extractPinDetails(card) {
+    const out = {
+      pinnedBy: null,
+      author: null,
+      authorColor: null,
+      authorBadges: [],
+      bodySegments: [],
+      timeText: null,
+    };
+    // 1. Pinned-by: find element whose text starts with "Připnuto
+    //    uživatelem" and grab the username span that follows.
+    const allText = (card.textContent || '').trim();
+    const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+(\S+)/i);
+    if (pbMatch) out.pinnedBy = pbMatch[1];
+    // 2. Author — look for the LAST .seventv-chat-user / [data-a-user]
+    //    / .chat-author__display-name in the card (message author shows
+    //    at the bottom in the pin layout).
+    const authorCandidates = [
+      ...card.querySelectorAll('.seventv-chat-user'),
+      ...card.querySelectorAll('[data-a-user]'),
+      ...card.querySelectorAll('.chat-author__display-name'),
+    ];
+    const authorEl = authorCandidates[authorCandidates.length - 1];
+    if (authorEl) {
+      const userTextEl = authorEl.querySelector('.seventv-chat-user-username, .chat-author__display-name')
+        || authorEl;
+      out.author = (userTextEl.textContent || '').trim();
+      out.authorColor = authorEl.style?.color || userTextEl.style?.color || null;
+    }
+    // 3. Author badges — all <img> siblings before the author name
+    //    inside the pin card bottom row that look like badge imgs.
+    if (authorEl) {
+      const authorRow = authorEl.closest('[class*="Layout"], div') || card;
+      for (const img of authorRow.querySelectorAll('img[src]')) {
+        const src = img.src;
+        if (/badges\.twitch\.tv|static-cdn\.jtvnw\.net\/badges|\/badges\//.test(src)) {
+          out.authorBadges.push({ url: src, alt: img.alt || '' });
+        }
+      }
+    }
+    // 4. Body — find the bold/large message text container. Pinned
+    //    messages use a distinct container separate from the pin header.
+    //    Walk candidate selectors that match Twitch's pin-body classes;
+    //    fallback to the largest text container that ISN'T the header.
+    const bodySelectors = [
+      '[data-test-selector="pinned-chat-message-body"]',
+      '[class*="pinned-chat-message"] [class*="message-body"]',
+      '.pinned-chat-message__body',
+      '[class*="PinnedChatMessage"] [class*="body"]',
+      '[class*="pinned"] p',
+    ];
+    let bodyEl = null;
+    for (const sel of bodySelectors) {
+      const found = card.querySelector(sel);
+      if (found && (found.textContent || '').trim().length > 3) {
+        bodyEl = found; break;
+      }
+    }
+    if (!bodyEl) {
+      // Fallback: paragraph / span with the longest text that's not the
+      // pin header ("Připnuto uživatelem …").
+      let best = null, bestLen = 0;
+      for (const el of card.querySelectorAll('p, span, div')) {
+        const t = (el.textContent || '').trim();
+        if (t.length < 5) continue;
+        if (/^P[řr]ipnuto/i.test(t)) continue;
+        if (el.childElementCount === 0 || el.querySelectorAll('img').length > 0) {
+          if (t.length > bestLen) { best = el; bestLen = t.length; }
+        }
+      }
+      bodyEl = best;
+    }
+    if (bodyEl) {
+      // Walk the body container producing alternating text / emote segments.
+      const segs = [];
+      const walk = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const t = node.textContent;
+          if (t) {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += t;
+            else segs.push({ type: 'text', value: t });
+          }
+          return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.tagName === 'IMG') {
+          const src = node.src || node.getAttribute('src');
+          const alt = node.alt || '';
+          if (src) segs.push({ type: 'emote', url: src, alt });
+          else if (alt) {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += alt;
+            else segs.push({ type: 'text', value: alt });
+          }
+          return;
+        }
+        for (const c of node.childNodes) walk(c);
+      };
+      walk(bodyEl);
+      out.bodySegments = segs;
+    }
+    // 5. Time — match "odesláno v HH:MM {AM|PM}" anywhere in the card.
+    const tMatch = allText.match(/odesláno v\s+\S+\s*(?:AM|PM)?/i) || allText.match(/sent at\s+\S+\s*(?:AM|PM)?/i);
+    if (tMatch) out.timeText = tMatch[0];
+    return out;
+  }
+
   function snapshotHighlights() {
     const cards = [];
     const seenEls = new Set();
@@ -1273,14 +1389,12 @@
         : isHypeTrain ? 'hype-train'
         : isGiftLeaderboard ? 'gift-leaderboard'
         : 'generic';
-      // For pin cards, pull out the "pinned by {user}" label and the
-      // message body separately so the sidepanel can render the new
-      // Twitch-style pin banner (header + expandable body + footer).
-      let pinnedBy = null, pinBody = null;
+      // For pin cards, parse the DOM into structured fields so the
+      // sidepanel can render the Twitch-style layout with badges,
+      // emotes, and a distinct author/timestamp footer.
+      let pinDetails = null;
       if (kind === 'pin') {
-        const m = text.match(/P[řr]ipnuto uživatelem\s+([^\n]+?)(?:[A-Z]|$)/);
-        if (m) pinnedBy = m[1].trim().replace(/[,.;:]+$/, '');
-        pinBody = text.replace(/^.*?(?:P[řr]ipnuto[^]+?uživatelem\s+\S+\s*)/i, '').trim() || text;
+        pinDetails = extractPinDetails(el);
       }
       // Pull the first channel-style avatar image out of the card if
       // present — raid notices embed the raider's profile pic.
@@ -1301,8 +1415,7 @@
         kind,
         text: text.slice(0, 400),
         avatar,
-        pinnedBy,
-        pinBody: pinBody?.slice(0, 400) || null,
+        pin: pinDetails,
         html: el.outerHTML.slice(0, 4000),
       });
     }
