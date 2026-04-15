@@ -814,36 +814,76 @@ body.layout-large #settings details summary { font-size: 15px; }
 .msg-tag.tag-raider { color: #b2e63d; }
 .msg-tag.tag-sus { color: #ffc107; }
 
-/* Announcement (USERNOTICE msg-id=announcement) — matches Twitch's vanilla
-   UI: left accent bar whose color comes from msg-param-color, small header
-   with a megaphone icon + "Announcement" label above the username row. */
+/* Announcement (USERNOTICE msg-id=announcement) — callout-style block with
+   bilateral accent bars (left + right) whose color/gradient is driven by
+   msg-param-color. Prominent by design: stronger background, vertical
+   spacing, glow, and a pulsing icon so it stands out in a fast chat. */
 .msg.announcement {
-  background: rgba(255, 255, 255, 0.04);
-  border-left: 3px solid #9146ff;
-  padding-left: 8px;
-  border-radius: 2px;
+  position: relative;
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.04));
+  /* Left + right borders; top/bottom intentionally 0 so we can run a gradient
+     across both vertical edges via border-image without ugly corner pieces. */
+  border-style: solid;
+  border-color: #9146ff;
+  border-width: 0 5px 0 5px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(145, 70, 255, 0.18);
 }
+
+/* PRIMARY = Twitch's rainbow gradient on both edges. `border-image` with
+   `slice: 1` fills each edge strip with the full gradient; top/bottom have
+   zero width so there are no stretched corner artifacts. */
 .msg.announcement[data-announcement-color="PRIMARY"] {
-  border-left-color: transparent;
-  border-image: linear-gradient(180deg, #ff4500, #ffaf14, #00ff87, #00d7ec, #9146ff) 1;
+  border-color: transparent;
+  border-image: linear-gradient(
+    180deg,
+    #ff4500 0%,
+    #ffaf14 22%,
+    #ffd93d 42%,
+    #00ff87 60%,
+    #00d7ec 80%,
+    #9146ff 100%
+  ) 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 18px rgba(255, 175, 20, 0.22);
 }
-.msg.announcement[data-announcement-color="BLUE"]   { border-left-color: #00d7ec; }
-.msg.announcement[data-announcement-color="GREEN"]  { border-left-color: #00db84; }
-.msg.announcement[data-announcement-color="ORANGE"] { border-left-color: #ffb31e; }
-.msg.announcement[data-announcement-color="PURPLE"] { border-left-color: #9146ff; }
+.msg.announcement[data-announcement-color="BLUE"]   { border-color: #00d7ec; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 215, 236, 0.28); }
+.msg.announcement[data-announcement-color="GREEN"]  { border-color: #00db84; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 219, 132, 0.28); }
+.msg.announcement[data-announcement-color="ORANGE"] { border-color: #ffb31e; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(255, 179, 30, 0.3); }
+.msg.announcement[data-announcement-color="PURPLE"] { border-color: #9146ff; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(145, 70, 255, 0.28); }
+
 .announcement-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 700;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  opacity: 0.85;
-  padding-bottom: 2px;
+  letter-spacing: 1.2px;
+  padding-bottom: 5px;
+  color: #fff;
+  opacity: 0.92;
 }
 .announcement-icon {
-  font-size: 11px;
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 175, 20, 0.5));
+  animation: announcement-pulse 2.4s ease-in-out infinite;
+}
+.msg.announcement[data-announcement-color="PRIMARY"] .announcement-label {
+  background: linear-gradient(90deg, #ffd93d, #ff4500, #9146ff, #00d7ec);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+@keyframes announcement-pulse {
+  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 4px rgba(255,175,20,0.5)); }
+  50%      { transform: scale(1.12); filter: drop-shadow(0 0 8px rgba(255,175,20,0.75)); }
 }
 
 /* Raid */

@@ -15,7 +15,9 @@ const DEFAULTS = {
   twitch: true,
   youtube: true,
   kick: true,
-  maxMessages: 500,
+  // Soft render cap — chat should hold ~72h of activity, cache is the source
+  // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
+  maxMessages: 5000,
   username: '',
   layout: 'small'
 };
@@ -1660,6 +1662,12 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
+      // One-time migration: older configs have maxMessages=500 baked in, bump
+      // them to the new default so existing users benefit from the 72h cache.
+      if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
+        this.config.maxMessages = DEFAULTS.maxMessages;
+        this._saveConfig();
+      }
     } catch {}
   }
 
@@ -3354,8 +3362,21 @@ class UnityChat {
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const prev = this._chatUsers.get(colorKey);
-      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prev?.badgesRaw || '' };
-      if (!prev || prev.color !== msg.color || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
+      // Preserve _fromGQL flag across message updates so we don't re-query a
+      // user we've already resolved. If a new IRC message arrives for a user
+      // whose color was resolved via GQL AND this message has no explicit
+      // color tag (i.e. we're only producing hash fallback), keep the GQL
+      // color — otherwise we'd clobber the correct value with a local guess.
+      const keepGqlColor = prev?._fromGQL && msg._needsColorLookup;
+      const resolvedColor = keepGqlColor ? prev.color : msg.color;
+      const entry = {
+        name: msg.username,
+        platform: msg.platform,
+        color: resolvedColor,
+        badgesRaw: msg.badgesRaw || prev?.badgesRaw || '',
+        _fromGQL: prev?._fromGQL || false,
+      };
+      if (!prev || prev.color !== resolvedColor || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
         this._chatUsers.set(colorKey, entry);
       }
       // Also set plain username key for @autocomplete
@@ -3829,7 +3850,15 @@ class UnityChat {
 
   _cacheMsg(msg) {
     this._msgCache.push(this._compactMsg(msg));
-    if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
+    // Cache is bounded by AGE (72h), not count — full 72h of chat activity is
+    // preserved so reload restores everything. Age-prune in batches every 50
+    // pushes to keep the hot path cheap on busy streams.
+    if (!this._cachePruneN) this._cachePruneN = 0;
+    if (++this._cachePruneN >= 50) {
+      this._cachePruneN = 0;
+      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+      this._msgCache = this._msgCache.filter((m) => !m.timestamp || m.timestamp > cutoff);
+    }
     // Save immediately — extension reload can kill context anytime
     chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
   }
