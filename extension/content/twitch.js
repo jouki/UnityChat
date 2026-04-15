@@ -1554,6 +1554,26 @@
       // emotes, and a distinct author/timestamp footer.
       let pinDetails = null;
       if (kind === 'pin') {
+        // Twitch renders pin cards in "collapsed" mode when chat is hidden
+        // (native Sbalit, our hide-not-collapse, or small-viewport fallback).
+        // Collapsed cards omit the author footer entirely — Twitch only
+        // mounts pinner + body. Click the expand chevron once so the author
+        // row renders, then re-scrape. We do NOT click it back — Twitch
+        // re-collapses on its own when chat re-hides.
+        const isCollapsed = /__collapsed|highlight__collapsed/.test(el.className || '')
+          || !!el.querySelector?.('.highlight__collapsed, [class*="__collapsed"]');
+        if (isCollapsed && !el._ucExpanded) {
+          const expandBtn = el.querySelector('button[aria-label*="rozbalit" i], button[aria-label*="expand" i], button[aria-expanded="false"]');
+          if (expandBtn) {
+            try {
+              // Real event click — Twitch React sometimes ignores synthetic .click().
+              ['pointerdown','mousedown','pointerup','mouseup','click'].forEach((t) => {
+                expandBtn.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, composed: true, view: window }));
+              });
+              el._ucExpanded = true;
+            } catch {}
+          }
+        }
         pinDetails = extractPinDetails(el);
         // Diagnostic log (once per unique pin) so we can see what Twitch
         // rendered and what extractPinDetails returned. Trimmed HTML keeps
