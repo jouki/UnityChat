@@ -4198,6 +4198,12 @@ class UnityChat {
         if (ucProfile?.color) continue;
         un.style.color = readableColor(col);
       }
+      // Also retint any @mention spans for this user (may have been
+      // rendered before the user ever spoke in our session).
+      const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+      for (const mn of this.chatEl.querySelectorAll(msel)) {
+        mn.style.color = readableColor(col);
+      }
     }
     if (!pendingGql.length) {
       if (this._colorQueue.size > 0) {
@@ -4252,6 +4258,11 @@ class UnityChat {
           const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
           if (ucProfile?.color) continue;
           un.style.color = readableColor(color);
+        }
+        // Retint @mention spans for this user too
+        const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+        for (const mn of this.chatEl.querySelectorAll(msel)) {
+          mn.style.color = readableColor(color);
         }
       }
 
@@ -4622,12 +4633,19 @@ class UnityChat {
 
         const span = document.createElement('span');
         span.className = 'mention';
-        const entry = this._chatUsers.get(`${platform}:${name.toLowerCase()}`)
-          || this._chatUsers.get(name.toLowerCase());
+        const lname = name.toLowerCase();
+        span.dataset.mentionUser = lname;
+        const entry = this._chatUsers.get(`${platform}:${lname}`)
+          || this._chatUsers.get(lname);
         const color = entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
-          if (sanitized) span.style.color = sanitized;
+          if (sanitized) span.style.color = readableColor(sanitized);
+        } else if (platform === 'twitch') {
+          // Unknown user — they've been @mentioned but haven't spoken in
+          // our session yet. Queue a Twitch color lookup so the mention
+          // retroactively gets their real chat color once resolved.
+          this._enqueueTwitchColorLookup(lname);
         }
         span.textContent = '@' + name;
         frag.appendChild(span);
