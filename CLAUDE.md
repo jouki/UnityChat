@@ -594,7 +594,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.14** - **GQL pin fallback — pin fetch přes Twitch API, nezávislý na DOM**: background `FETCH_PINS` + sidepanel `_startPinPoll()` + merge DOM/GQL cards. Hide CSS zpět na stabilní `width: 0`.
 - **v3.38.15** - **GQL schema fix #1 pro FETCH_PINS** (špatný guess — `message` také neexistuje).
 - **v3.38.16** - **GQL introspection pro PinnedChatMessage** — introspection však Twitch disabled, vrátila `{"data":{}}`.
-- **v3.38.17** - **GQL field probing — zkoušíme kandidáty naslepo**: introspection nedostupná. Probe loop iteruje 18 candidate field names (`text`, `body`, `sender`, `user`, `messageID`, `fragments`, atd.), každý jako samostatný query. Pole co selže s "Cannot query field" neexistuje, ostatní se logují jako `PROBE fieldName: EXISTS` + sample data. Runs once per session. Výsledky → dostaneme skutečná pole a v další iteraci postavíme správnou query. **Aktuální verze**
+- **v3.38.17** - **GQL field probing** (bug: variable name mismatch — všechny probes fail-ovaly na `Variable "n" has invalid value null`).
+- **v3.38.18** - **Probe variable fix + subselection detection**: query variable `$n` changed na `$name` aby matchovala `variables: { name: channel }`. Plus rozlišení 3 typů response: (1) "Cannot query field" = neexistuje (skip log), (2) "requires subselection" = je to object type (log jako EXISTS — object), (3) scalar success = log EXISTS + sample data. Runs once per session. **Aktuální verze**
 
 ## Release workflow
 

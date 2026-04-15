@@ -811,19 +811,21 @@ async function fetchPins(channel) {
           const pr = await fetch('https://gql.twitch.tv/gql', {
             method: 'POST', headers,
             body: JSON.stringify({
-              query: `query($n:String!){channel(name:$n){pinnedChatMessages{edges{node{${field}}}}}}`,
+              query: `query($name:String!){channel(name:$name){pinnedChatMessages{edges{node{${field}}}}}}`,
               variables: { name: channel }
             }),
           });
           const pdata = await pr.json();
-          const err = pdata?.errors?.[0]?.message;
-          if (err && /Cannot query field/.test(err)) {
-            // field is NOT on PinnedChatMessage
+          const err = pdata?.errors?.[0]?.message || '';
+          if (/Cannot query field/.test(err)) {
+            // field is NOT on PinnedChatMessage — skip, don't spam log
+          } else if (/requires a subselection|must not have a sub selection|has no sub/i.test(err)) {
+            ucLog('Pin', `PROBE ${field}: EXISTS (object, needs subselection — err: ${err.slice(0, 120)})`);
           } else if (err) {
-            // other error — field might exist but needs subselection
-            ucLog('Pin', `PROBE ${field}: may exist (err: ${err.slice(0, 120)})`);
+            ucLog('Pin', `PROBE ${field}: ??? err: ${err.slice(0, 200)}`);
           } else {
-            ucLog('Pin', `PROBE ${field}: EXISTS — data=${JSON.stringify(pdata?.data?.channel?.pinnedChatMessages?.edges?.[0]?.node || null)}`);
+            const sample = pdata?.data?.channel?.pinnedChatMessages?.edges?.[0]?.node || null;
+            ucLog('Pin', `PROBE ${field}: EXISTS (scalar) — sample=${JSON.stringify(sample)}`);
           }
         } catch (pe) { /* ignore */ }
       }
