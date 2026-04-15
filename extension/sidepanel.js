@@ -4805,24 +4805,26 @@ class UnityChat {
     if (!wrap.dataset.wired) {
       wrap.dataset.wired = '1';
       const openOnTwitch = async () => {
+        const log = (s, x) => chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'PillClick', args: [s, x ? JSON.stringify(x) : ''] }).catch(() => {});
         try {
           const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
           const ch = (this.config.channel || '').toLowerCase();
+          log('tabs', { count: tabs.length, channel: ch, urls: tabs.map((t) => t.url) });
           const target = tabs.find((t) => {
             try {
               const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
               return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
             } catch { return false; }
           }) || tabs[0];
+          log('target-tab', { id: target?.id, url: target?.url });
           if (!target?.id) return;
-          // Focus tab so the popover is visible to the user, then ask
-          // content script to open the rewards popover. If our soft-hide
-          // is active it'll lift it temporarily for the popover and
-          // restore once the user closes it.
           await chrome.tabs.update(target.id, { active: true });
           await chrome.windows.update(target.windowId, { focused: true });
-          await chrome.tabs.sendMessage(target.id, { type: 'TW_OPEN_REWARDS_POPOVER' }).catch(() => {});
-        } catch {}
+          const resp = await chrome.tabs.sendMessage(target.id, { type: 'TW_OPEN_REWARDS_POPOVER' }).catch((e) => ({ ok: false, error: e.message }));
+          log('sendMessage-resp', resp);
+        } catch (e) {
+          log('exception', { msg: e.message });
+        }
       };
       bitsPill.style.cursor = 'pointer';
       pointsPill.style.cursor = 'pointer';

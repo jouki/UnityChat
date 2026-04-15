@@ -326,25 +326,32 @@
       // vanilla chat invisible. Strategy: temporarily lift the hide,
       // click the summary button to open the popover, then watch for
       // the [role=dialog] element to disappear and re-apply hide.
+      const log = (step, extra) => {
+        try {
+          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'RewardsPopover', args: [step, extra ? JSON.stringify(extra) : ''] });
+        } catch {}
+      };
       try {
         const wasHidden = ucChatHidden;
+        log('start', { wasHidden, url: location.href });
         const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
+        log('summary-lookup', { found: !!summary, html: summary ? summary.outerHTML.slice(0, 200) : null });
         if (!summary) { sendResponse({ ok: false, error: 'no_summary' }); return; }
         const btn = summary.querySelector('button');
+        log('btn-lookup', { found: !!btn, ariaLabel: btn?.getAttribute('aria-label'), rect: btn ? btn.getBoundingClientRect().toJSON?.() || { l: btn.getBoundingClientRect().left, t: btn.getBoundingClientRect().top, w: btn.getBoundingClientRect().width, h: btn.getBoundingClientRect().height } : null });
         if (!btn) { sendResponse({ ok: false, error: 'no_btn' }); return; }
         if (wasHidden) {
-          // Lift hide so the popover renders inside the visible viewport.
-          // We don't toggle ucChatHidden so internal state stays "hidden"
-          // — restoreWithChatModifiers etc. won't run.
           const style = document.getElementById(UC_HIDE_STYLE_ID);
+          log('hide-lift', { hadStyle: !!style });
           if (style) style.remove();
-          // Restore the BEM modifiers so chat column has its width back
-          // (otherwise popover renders inside a 0-width container off-screen).
+          let modCount = 0;
           for (const t of UC_WITH_CHAT_TARGETS) {
             for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
               el.classList.add(t.modifier);
+              modCount++;
             }
           }
+          log('hide-lift-mods-restored', { modCount });
         }
         const r = btn.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
@@ -358,6 +365,7 @@
         try { btn.dispatchEvent(new MouseEvent('mouseup',   opts({ buttons: 0 }))); } catch {}
         try { btn.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
         try { btn.click(); } catch {}
+        log('clicks-dispatched');
 
         if (wasHidden) {
           // Wait for the popover dialog to appear, then watch for its
@@ -391,18 +399,21 @@
             attempts++;
             const dlg = document.querySelector(dialogSel);
             if (dlg) {
+              const r = dlg.getBoundingClientRect();
+              log('dialog-found', { attempts, x: r.left, y: r.top, w: r.width, h: r.height, html: dlg.outerHTML.slice(0, 200) });
               const obs = new MutationObserver(() => {
                 if (!document.contains(dlg)) {
                   obs.disconnect();
+                  log('dialog-removed-restoring');
                   restore();
                 }
               });
               obs.observe(document.body, { childList: true, subtree: true });
-              // Safety timeout — if the dialog hangs around forever, force restore on click outside
               const onDocClick = (e) => {
                 if (!dlg.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
                   document.removeEventListener('click', onDocClick, true);
                   obs.disconnect();
+                  log('click-outside-restoring');
                   setTimeout(restore, 100);
                 }
               };
@@ -410,12 +421,14 @@
               return;
             }
             if (attempts < 20) setTimeout(waitForDialog, 100);
-            else restore(); // never opened — restore immediately
+            else { log('dialog-never-appeared', { attempts }); restore(); }
           };
           waitForDialog();
+        } else {
+          log('not-hidden-no-restore-needed');
         }
         sendResponse({ ok: true });
-      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      } catch (e) { log('exception', { msg: e.message, stack: (e.stack || '').slice(0, 300) }); sendResponse({ ok: false, error: e.message }); }
       return;
     }
 
