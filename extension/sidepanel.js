@@ -17,7 +17,8 @@ const DEFAULTS = {
   kick: true,
   // Soft render cap — chat should hold ~72h of activity, cache is the source
   // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
-  maxMessages: 5000,
+  maxMessages: 5000,       // storage cap — how many msgs we keep in _msgCache (72h TTL still applies)
+  initialRender: 250,      // how many render into DOM on boot; older load on scroll-up
   username: '',
   layout: 'small',
   showTimestamps: true,
@@ -119,7 +120,7 @@ class EmoteManager {
       const gr = await fetch('https://api.betterttv.net/3/cached/emotes/global');
       if (gr.ok) {
         for (const e of await gr.json()) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
           count++;
         }
       }
@@ -130,7 +131,7 @@ class EmoteManager {
       if (cr.ok) {
         const data = await cr.json();
         for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
           count++;
         }
       }
@@ -159,7 +160,7 @@ class EmoteManager {
     };
     for (const [id, name] of Object.entries(globals)) {
       if (!this.twitchNative.has(name)) {
-        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
       }
     }
   }
@@ -191,7 +192,7 @@ class EmoteManager {
           for (const e of (product.emotes || [])) {
             if (e.token && !this.twitchNative.has(e.token)) {
               this.twitchNative.set(e.token,
-                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`);
+                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0`);
               count++;
             }
           }
@@ -209,7 +210,8 @@ class EmoteManager {
     const parseSet = (sets) => {
       for (const setId in sets) {
         for (const e of sets[setId].emoticons || []) {
-          const url = e.urls?.['1'] || e.urls?.['2'];
+          // Prefer 2x for hi-DPI sharpness; fall back to 4x then 1x.
+          const url = e.urls?.['2'] || e.urls?.['4'] || e.urls?.['1'];
           if (url) {
             this.ffzEmotes.set(e.name, url.startsWith('//') ? `https:${url}` : url);
             count++;
@@ -286,6 +288,22 @@ class EmoteManager {
   // Identify which provider an emote came from based on its CDN URL.
   // Returns { source, id, hires } or null. id is fetched from the URL,
   // hires is a swapped-up resolution variant for the preview card.
+  // Diagnostic: log every short-name emote hit (≤3 chars) once per
+  // (name, source) so we can pin down stray entries like "te" being
+  // matched out of one of the loaded maps.
+  _logShortEmoteHit(name, source, url, platform, author) {
+    if (!this._shortHitsLogged) this._shortHitsLogged = new Set();
+    const key = `${name}|${source}`;
+    if (this._shortHitsLogged.has(key)) return;
+    this._shortHitsLogged.add(key);
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UC_LOG', tag: 'ShortEmote',
+        args: [`name="${name}" source=${source} url=${url} platform=${platform} author=${author}`],
+      });
+    } catch {}
+  }
+
   _emoteSourceFromUrl(url) {
     if (!url) return null;
     let m;
@@ -380,10 +398,15 @@ class EmoteManager {
     const host = emote.data?.host || emote.host;
     if (!host?.url) return null;
 
-    // Preferovat WebP (animované), fallback na AVIF, pak cokoliv
+    // Prefer 2x for hi-DPI sharpness — we render at ~28–32px CSS, so 1x
+    // (typically 32px native) gets browser-upscaled and goes blurry on
+    // high-DPI displays. 2x (~64px) downscales cleanly. WebP first
+    // (animations + smaller bytes), then AVIF, then any 2x, then 1x.
     const file =
-      host.files?.find((f) => f.name === '1x.webp') ||
       host.files?.find((f) => f.name === '2x.webp') ||
+      host.files?.find((f) => f.name === '2x.avif') ||
+      host.files?.find((f) => f.name?.startsWith('2x')) ||
+      host.files?.find((f) => f.name === '1x.webp') ||
       host.files?.find((f) => f.name === '1x.avif') ||
       host.files?.find((f) => f.name?.startsWith('1x')) ||
       host.files?.[0];
@@ -413,7 +436,7 @@ class EmoteManager {
 
   // ---- Učení nativních emotes z příchozích zpráv ----
 
-  learnTwitch(text, emotesTag) {
+  learnTwitch(text, emotesTag, offset = 0) {
     if (!emotesTag) return;
     for (const part of emotesTag.split('/')) {
       const ci = part.indexOf(':');
@@ -422,13 +445,18 @@ class EmoteManager {
       const range = part.substring(ci + 1).split(',')[0];
       const dash = range.indexOf('-');
       if (dash === -1) continue;
-      const s = parseInt(range.substring(0, dash), 10);
-      const e = parseInt(range.substring(dash + 1), 10);
-      if (isNaN(s) || isNaN(e)) continue;
+      const s = parseInt(range.substring(0, dash), 10) - offset;
+      const e = parseInt(range.substring(dash + 1), 10) - offset;
+      if (isNaN(s) || isNaN(e) || s < 0 || e >= text.length) continue;
       const name = text.substring(s, e + 1);
-      if (name && !this.twitchNative.has(name)) {
+      // Sanity check: real Twitch emote names are alphanumeric (with
+      // some punctuation). Skip if the slice would learn a fragment of
+      // a regular word — happens when offset is wrong (we'd teach
+      // "te" as an alias for :D from a misaligned reply prefix).
+      if (!name || !/^[\S]+$/.test(name) || /^[a-z]{1,3}$/.test(name)) continue;
+      if (!this.twitchNative.has(name)) {
         this.twitchNative.set(name,
-          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
       }
     }
   }
@@ -518,14 +546,44 @@ class EmoteManager {
       // Text: per-author → 7TV/BTTV/FFZ → platform native → UC custom
       const parts = seg.value.split(/(\s+)/);
       for (const part of parts) {
+        // Cheermote: "Cheer{N}" on Twitch is a bits cheer — render the
+        // animated tier emote + colored bits count. Tier + color per
+        // Twitch's standard Cheer prefix (channels can have custom
+        // prefixes with their own emotes, which we can't resolve
+        // without OAuth — those fall through to the regular flow).
+        if (platform === 'twitch') {
+          const cm = /^(?:Cheer)(\d+)$/i.exec(part);
+          if (cm) {
+            const bits = parseInt(cm[1], 10);
+            const tier = bits >= 100000 ? 100000 : bits >= 10000 ? 10000 : bits >= 5000 ? 5000 : bits >= 1000 ? 1000 : bits >= 100 ? 100 : 1;
+            const colors = { 1: '#979797', 100: '#9c3ee8', 1000: '#1db2a5', 5000: '#0099fe', 10000: '#f43021', 100000: '#f43021' };
+            const url = `https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/${tier}/2.gif`;
+            out.push({ type: 'emote', value: `Cheer${bits}`, url, zw: false });
+            out.push({ type: 'text', value: `${bits}`, style: `color:${colors[tier]};font-weight:700;` });
+            continue;
+          }
+        }
         const personal = userLookup(part);
         if (personal) {
           out.push({ type: 'emote', value: part, url: personal.url, zw: personal.zw });
+          if (part.length <= 3 && part.length > 0 && /\S/.test(part)) {
+            this._logShortEmoteHit?.(part, 'personal', personal.url, platform, author);
+          }
           continue;
         }
-        const url = this._get7tv(part)
-          || this.twitchNative.get(part) || this.kickNative.get(part);
+        let url = null;
+        let source = null;
+        if ((url = this.channel7tv.get(part))) source = 'channel7tv';
+        else if ((url = this.global7tv.get(part))) source = 'global7tv';
+        else if ((url = this.bttvEmotes.get(part))) source = 'bttv';
+        else if ((url = this.ffzEmotes.get(part))) source = 'ffz';
+        else if ((url = this.ucEmotes.get(part))) source = 'uc';
+        else if ((url = this.twitchNative.get(part))) source = 'twitchNative';
+        else if ((url = this.kickNative.get(part))) source = 'kickNative';
         if (url) {
+          if (part.length <= 3 && /\S/.test(part)) {
+            this._logShortEmoteHit?.(part, source, url, platform, author);
+          }
           out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
           out.push({ type: 'text', value: part });
@@ -541,7 +599,8 @@ class EmoteManager {
    * 7TV personal emote resolution across channels.
    */
   renderTwitch(text, emotesTag, ctx) {
-    const segments = this._splitTwitchEmotes(text, emotesTag);
+    const offset = (ctx && ctx.emotesOffset) || 0;
+    const segments = this._splitTwitchEmotes(text, emotesTag, offset);
     return this.renderSegments(segments, ctx);
   }
 
@@ -585,7 +644,7 @@ class EmoteManager {
 
   // ---- Twitch emote parsing ----
 
-  _splitTwitchEmotes(text, tag) {
+  _splitTwitchEmotes(text, tag, offset = 0) {
     if (!tag) return [{ type: 'text', value: text }];
 
     const positions = [];
@@ -597,9 +656,12 @@ class EmoteManager {
       for (const range of part.substring(ci + 1).split(',')) {
         const dash = range.indexOf('-');
         if (dash === -1) continue;
-        const s = parseInt(range.substring(0, dash), 10);
-        const e = parseInt(range.substring(dash + 1), 10);
-        if (!isNaN(s) && !isNaN(e)) {
+        const s = parseInt(range.substring(0, dash), 10) - offset;
+        const e = parseInt(range.substring(dash + 1), 10) - offset;
+        // Skip positions that got shifted entirely off the trimmed text
+        // (shouldn't happen for emotes — the stripped prefix is plain
+        // "@name " text — but guard anyway).
+        if (!isNaN(s) && !isNaN(e) && s >= 0 && e >= 0 && e < text.length + 1) {
           positions.push({ id, start: s, end: e + 1 });
         }
       }
@@ -619,7 +681,7 @@ class EmoteManager {
         type: 'emote',
         value: name,
         // OPRAVENÁ URL - správná doména jtvnw.net
-        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/1.0`
+        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/2.0`
       });
       last = p.end;
     }
@@ -722,11 +784,34 @@ class EmoteManager {
         // Whitespace between base and ZW emote — skip (don't close stack)
         if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        out.push(this._linkify(s.value));
+        if (s.style) {
+          // Styled text segment (cheermote bits count, future spans).
+          // Sanitize the inline style to allow only color/font-weight/
+          // background rules — no URL / expression injection.
+          const safe = String(s.style).replace(/[<>"'`]/g, '');
+          out.push(`<span style="${safe}">${this._eh(s.value)}</span>`);
+        } else {
+          out.push(this._linkify(s.value));
+        }
         continue;
       }
       const alt = this._ea(s.value);
-      const img = `<img class="emote" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
+      // Twitch's original global face emotes (:), :D, :O, ;), B), <3 …)
+      // ship at a much lower native resolution than channel/subscriber
+      // emotes — scaling them up to our standard chat-emote size makes
+      // them blurry and pushes them visually out of proportion with
+      // vanilla Twitch. Detect by NAME (stable across ID-system changes:
+      // <3 went from low ID to 555555584) AND require a Twitch CDN URL
+      // so BTTV/FFZ/7TV emotes that happen to share the same name (e.g.
+      // someone's BTTV ":D") don't get shrunk — they live on different
+      // domains.
+      let cls = 'emote';
+      const isTwitchCdn = /static-cdn\.jtvnw\.net\/emoticons\//.test(s.url || '');
+      if (isTwitchCdn && _isTwitchOgFaceName(s.value)) cls += ' emote-tiny';
+      // No native browser title — our own hover-preview card already shows
+      // the emote name + source, and the browser tooltip would compete
+      // with it (and pop up after the same hover delay).
+      const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}">`;
       if (s.zw) {
         if (!stackOpen) out.push('<span class="emote-stack">');
         out.push(img);
@@ -749,16 +834,26 @@ class EmoteManager {
   }
 
   _linkify(s) {
-    const urlRe = /https?:\/\/[^\s<>'")\]]+/g;
+    // Match any of:
+    //   https://… / http://…           — explicit scheme
+    //   www.example.com[/...]          — schemeless www-prefixed
+    //   example.com[/...]              — bare domain with a known TLD
+    // The bare-domain branch is gated on a TLD whitelist so we don't
+    // accidentally turn things like "verca.je" / Czech sentences with
+    // dots into links. Word-boundary lookbehind keeps it from matching
+    // mid-token (like emails).
+    const urlRe = /(?:(?<=^|[\s(\[<])(?:https?:\/\/[^\s<>'")\]]+|www\.[A-Za-z0-9][A-Za-z0-9\-_.]*\.[A-Za-z]{2,}(?:\/[^\s<>'")\]]*)?|[A-Za-z0-9][A-Za-z0-9\-_]*\.(?:cz|sk|com|net|org|io|gg|tv|me|app|dev|ai|eu|de|uk|us|fr|pl|jp|ru|ca|nl|it|info|live|video|stream|games|game|wiki|news|blog|shop|store|fun)(?:\/[^\s<>'")\]]*)?))/gi;
     let last = 0;
     let out = '';
     let m;
     while ((m = urlRe.exec(s)) !== null) {
       if (m.index > last) out += this._eh(s.substring(last, m.index));
-      const url = m[0].replace(/[.,;:!?]+$/, '');
-      urlRe.lastIndex = m.index + url.length;
-      out += `<a href="${this._ea(url)}" target="_blank" rel="noopener">${this._eh(url)}</a>`;
-      last = m.index + url.length;
+      const raw = m[0].replace(/[.,;:!?)]+$/, '');
+      // Build href: prepend https:// if no scheme present
+      const href = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
+      urlRe.lastIndex = m.index + raw.length;
+      out += `<a href="${this._ea(href)}" target="_blank" rel="noopener">${this._eh(raw)}</a>`;
+      last = m.index + raw.length;
     }
     if (last === 0) return this._eh(s);
     if (last < s.length) out += this._eh(s.substring(last));
@@ -944,6 +1039,72 @@ function twitchDefaultColor(username) {
   return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
 }
 
+// Twitch's "Global Emotes" panel ships these legacy face emotes at a tiny
+// native resolution — upscaling makes them blurry. We render them smaller
+// to match vanilla chat. Stable across ID renumbering (e.g. <3 = 555555584).
+const _TWITCH_OG_FACE_NAMES = new Set([
+  ':)', ':(', ':D', ':P', ':p', ':o', ':O', ';)', ';P', ';p',
+  'B)', 'b)', ':|', ':/', ':\\', ':7', ':S', ':s', ':z', ':Z',
+  'R)', 'r)', '<3', 'O_o', 'o_O', 'O_O', '8)',
+  ':-)', ':-(', ':-D', ':-P', ':-p', ':-O', ':-o',
+  '#/', ':?',
+]);
+function _isTwitchOgFaceName(name) {
+  return _TWITCH_OG_FACE_NAMES.has(name);
+}
+
+// Twitch's vanilla chat lightens dark user colors on dark backgrounds so they
+// stay legible (DarkRed #8B0000 → a visible red, etc.). We mirror that: lift
+// the HSL Lightness floor to 0.5 and ceiling to 0.85 so both extremes read well.
+const _READABLE_CACHE = new Map();
+function readableColor(input) {
+  if (!input) return input;
+  if (_READABLE_CACHE.has(input)) return _READABLE_CACHE.get(input);
+  const hex = /^#[0-9a-fA-F]{6}$/.test(input) ? input : null;
+  if (!hex) { _READABLE_CACHE.set(input, input); return input; }
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let h = 0, s = 0;
+  if (d) {
+    s = l < 0.5 ? d / (max + min) : d / (2 - max - min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  // WCAG relative luminance — accounts for hue: pure blue is much harder
+  // to read on dark bg than pure red even at the same HSL Lightness, so
+  // we boost L extra when perceived luminance is very low. Twitch's vanilla
+  // chat does the same — pure #0000FF renders at ~#9999FF (HSL L≈0.8).
+  const wcagL = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  let minL = 0.5;
+  if (wcagL < 0.10) minL = 0.78;       // very dark (pure blue, dark navy)
+  else if (wcagL < 0.20) minL = 0.65;  // dark (e.g. dark red, navy variants)
+  const maxL = 0.88;
+  let nL = l;
+  if (l < minL) nL = minL;
+  else if (l > maxL) nL = maxL;
+  if (nL === l) { _READABLE_CACHE.set(input, hex); return hex; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = nL < 0.5 ? nL * (1 + s) : nL + s - nL * s;
+  const p = 2 * nL - q;
+  const nr = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
+  const ng = Math.round(hue2rgb(p, q, h) * 255);
+  const nb = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
+  const out = '#' + [nr, ng, nb].map(x => x.toString(16).padStart(2, '0')).join('');
+  _READABLE_CACHE.set(input, out);
+  return out;
+}
+
 class TwitchProvider {
   constructor() {
     this.ws = null;
@@ -1065,11 +1226,18 @@ class TwitchProvider {
     }
 
     // Twitch přidává @username na začátek reply zpráv - odstranit
-    // (reply context už ukazuje komu se odpovídá)
+    // (reply context už ukazuje komu se odpovídá).
+    // Track how many chars we stripped so emote positions in the emotes tag
+    // (which are computed from the ORIGINAL message including the @username
+    // prefix) can be shifted to match the trimmed body when we render.
     let cleanMessage = message;
+    let replyPrefixLen = 0;
     if (replyTo && message.startsWith('@')) {
       const sp = message.indexOf(' ');
-      if (sp !== -1) cleanMessage = message.substring(sp + 1);
+      if (sp !== -1) {
+        cleanMessage = message.substring(sp + 1);
+        replyPrefixLen = sp + 1;
+      }
     }
 
     this.onMessage?.({
@@ -1088,9 +1256,17 @@ class TwitchProvider {
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
       twitchEmotes: tags.emotes || null,
+      twitchEmotesOffset: replyPrefixLen || 0,
       replyTo,
       firstMsg: tags['first-msg'] === '1',
-      isAction
+      isAction,
+      // Channel-point reward redemption (with required message body).
+      // IRC only exposes the reward UUID, not the display name/cost — those
+      // come via PubSub which is OAuth-gated (not available anonymously).
+      isRedeem: !!tags['custom-reward-id'],
+      rewardId: tags['custom-reward-id'] || null,
+      // Highlight My Message channel-point redeem — Twitch exposes this via msg-id.
+      isHighlight: tags['msg-id'] === 'highlighted-message',
     });
   }
 
@@ -1116,7 +1292,90 @@ class TwitchProvider {
         color: '#ff6b6b',
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
-        isRaid: true
+        isRaid: true,
+        raidViewers: viewers,
+      });
+      return;
+    }
+    if (msgId === 'sub' || msgId === 'resub') {
+      // Optional attached chat message body
+      let body = '';
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni !== -1) {
+        const after = rest.substring(uni + 10);
+        const ci = after.indexOf(':');
+        if (ci !== -1) body = after.substring(ci + 1);
+      }
+      const username = tags['display-name'] || tags.login || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const months = parseInt(tags['msg-param-cumulative-months'] || tags['msg-param-months'] || '0', 10) || null;
+      const streak = (tags['msg-param-should-share-streak'] === '1')
+        ? (parseInt(tags['msg-param-streak-months'] || '0', 10) || null)
+        : null;
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message: body,
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isSubEvent: true,
+        subPlan: plan,
+        subMonths: months,
+        subStreak: streak,
+      });
+      return;
+    }
+    if (msgId === 'submysterygift') {
+      // Bundle announcement: "gifter is gifting N subs to the community"
+      const gifter = tags['display-name'] || tags.login || '?';
+      const count = parseInt(tags['msg-param-mass-gift-count'] || '0', 10) || 1;
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(gifter);
+      this.onMessage?.({
+        platform: 'twitch',
+        username: gifter,
+        message: '',
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        isGiftBundle: true,
+        giftCount: count,
+        giftPlan: plan,
+      });
+      return;
+    }
+    if (msgId === 'subgift') {
+      // Individual gift line: "gifter gifted a sub to recipient"
+      const gifter = tags['display-name'] || tags.login || '?';
+      const recipient = tags['msg-param-recipient-display-name']
+        || tags['msg-param-recipient-user-name'] || '?';
+      const plan = tags['msg-param-sub-plan'] || '1000';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(gifter);
+      this.onMessage?.({
+        platform: 'twitch',
+        username: gifter,
+        message: '',
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        isSubGift: true,
+        giftRecipient: recipient,
+        giftPlan: plan,
       });
       return;
     }
@@ -1896,8 +2155,20 @@ class UnityChat {
     this._cacheTimer = null;
     this._twitchBadges = {};
     this._chatUsers = new Map();  // username → { name, platform, color }
-    this._seenMsgIds = new Set();
-    this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
+    // Lazy-load cursor: index into _msgCache of the first un-rendered msg.
+    // Boot renders only the last `initialRender` msgs; scroll-up triggers
+    // _hydrateOlderMessages which prepends batches of 250 from _msgCache.
+    this._hydratedIdx = 0;
+    this._hydratingOlder = false;
+    // Per-channel LRU dedup. Map<"platform:channel", {ids:Set, content:Set}>.
+    // Each channel holds its own dedup sets so switching channels and coming
+    // back doesn't duplicate messages still in the target's DOM. LRU eviction
+    // caps total channels at _dedupMaxChannels; per-channel FIFO at
+    // _dedupMaxPerChannel keeps memory bounded regardless of channel activity.
+    this._dedupChannels = new Map();
+    this._dedupLRU = [];                // channel keys, most-recent last
+    this._dedupMaxChannels = 150;       // ~50 per platform × 3 platforms
+    this._dedupMaxPerChannel = 250;     // Twitch DOM caps at ~200, 25% headroom
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._isModOnChannel = false; // viewer has moderator/broadcaster badge on current Twitch channel
@@ -1929,7 +2200,38 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
 
+    // Boot instrumentation: every _bootMark() logs ms since this timestamp,
+    // pushed to background (persisted to chrome.storage.session) so the log
+    // survives even if the side panel freezes or the service worker sleeps.
+    this._bootT0 = performance.now();
+    this._bootLastT = this._bootT0;
+    this._bootPending = true;
+    this._bootMark('sidepanel.js instantiated');
+    // Escape hatch: when the panel UI locks up, devtools console still runs.
+    // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
+    // force a log dump without needing the 💾 button to respond.
+    try { window.ucDump = () => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }); } catch {}
+
     this._init();
+  }
+
+  _bootMark(label, extra) {
+    const now = performance.now();
+    const sinceStart = Math.round(now - this._bootT0);
+    const sinceLast = Math.round(now - this._bootLastT);
+    this._bootLastT = now;
+    let mem = '';
+    try {
+      if (performance.memory) {
+        const mb = (performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+        mem = ` heap=${mb}MB`;
+      }
+    } catch {}
+    const line = `+${sinceStart}ms (Δ${sinceLast}ms)${mem} ${label}${extra ? ' ' + extra : ''}`;
+    console.log('[UC boot]', line);
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Boot', text: line }).catch(() => {});
+    } catch {}
   }
 
   async _init() {
@@ -1971,7 +2273,13 @@ class UnityChat {
       }
     }
 
+    this._bootMark('_init start');
+    // Arm background watchdog — if _bootMark('_init done') never arrives,
+    // background auto-dumps the log at +20s. This survives a frozen side
+    // panel because dump runs in the service worker context.
+    try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
+    this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
@@ -1983,16 +2291,26 @@ class UnityChat {
       if (Array.isArray(r.uc_synced)) this._syncedProfiles = new Set(r.uc_synced);
     } catch {}
 
-    // Load persisted user colors
+    // Load persisted user colors. Sanitize stale state from prior buggy
+    // builds: an entry can have _fromGQL=true while .color is still a raw
+    // IRC hex (#rrggbb). That combo blocks future lookups (the queue
+    // skips _fromGQL entries) so the user is stuck with the raw color
+    // forever. Drop _fromGQL on those so a fresh lookup can re-resolve.
     try {
       const d = await chrome.storage.local.get('uc_user_colors');
       if (d.uc_user_colors) {
         for (const [k, v] of Object.entries(d.uc_user_colors)) {
+          if (v && typeof v === 'object' && v._fromGQL && typeof v.color === 'string'
+              && /^#[0-9a-fA-F]{6}$/.test(v.color)) {
+            v._fromGQL = false;
+          }
           this._chatUsers.set(k, v);
         }
       }
     } catch {}
+    this._bootMark('user colors hydrated', `size=${this._chatUsers.size}`);
     await this.nicknames.loadCache();
+    this._bootMark('nicknames cache loaded');
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
@@ -2011,9 +2329,10 @@ class UnityChat {
       this._refreshColorUI(this.activePlatform || 'twitch');
     };
     this._setupUI();
+    this._bootMark('UI setup done');
     this._setupProviders();
+    this._bootMark('providers set up');
 
-    console.log('[UC] init: providers set up, detecting username...');
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
@@ -2029,23 +2348,29 @@ class UnityChat {
         }
       } catch {}
     }
+    this._bootMark('username detection done', `username=${this.config.username || '—'}`);
 
-    console.log('[UC] init: loading emotes + badges...');
     // Load emotes + badges FIRST so cached messages render with correct emotes/badges.
     // Use Promise.allSettled — one failing source shouldn't block the rest.
     try {
       this.emotes.loadTwitchGlobals();
       await this.emotes.loadGlobal();
+      this._bootMark('7TV globals loaded', `size=${this.emotes.global7tv?.size ?? 0}`);
       if (this.config._roomId) {
-        await Promise.allSettled([
+        const results = await Promise.allSettled([
           this.emotes.loadChannel('twitch', this.config._roomId),
           this.emotes.loadBTTV(this.config._roomId),
           this.emotes.loadFFZ(this.config._roomId),
           this.emotes.loadTwitchChannel(this.config.channel),
           this._loadTwitchBadges(this.config._roomId)
         ]);
+        const rej = results.filter(r => r.status === 'rejected').length;
+        this._bootMark('channel emotes+badges loaded',
+          `7tv=${this.emotes.channel7tv?.size ?? 0} bttv=${this.emotes.bttvEmotes?.size ?? 0} ffz=${this.emotes.ffzEmotes?.size ?? 0} rejected=${rej}`);
       }
-    } catch {}
+    } catch (e) {
+      this._bootMark('emote load threw', String(e?.message || e));
+    }
 
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
@@ -2055,11 +2380,10 @@ class UnityChat {
     // when all configured platforms reach a terminal state, or after 8s.
     this._showLoading();
 
-    console.log('[UC] init: loading cache...');
     await this._loadCachedMessages();
-    console.log('[UC] init: cache loaded, connecting all...');
+    this._bootMark('cache loaded', `rendered=${this.chatEl?.children.length ?? 0} msgCache=${this._msgCache?.length ?? 0}`);
     this._connectAll();
-    console.log('[UC] init: connected, starting detect loop');
+    this._bootMark('_connectAll dispatched');
     this._detectLoop();
     // Fire-and-forget update check against the public landing page manifest.
     this._checkForUpdate().catch(() => {});
@@ -2068,6 +2392,16 @@ class UnityChat {
     this._wireBackgroundUpdateListener();
     // Hover/click preview card for emotes inside chat messages.
     this._setupEmotePreview();
+    this._scheduleColorRevalidation();
+    this._pullCredits();
+    // GQL-backed pin polling. Twitch's highlight stack can unmount when
+    // chat column is zero-width (hide-not-collapse), so DOM mirror misses
+    // pin cards entirely. FETCH_PINS pulls pinned messages straight from
+    // the server — works regardless of chat UI visibility.
+    this._startPinPoll();
+    this._bootMark('_init done');
+    this._bootPending = false;
+    try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
   async _checkForUpdate() {
@@ -2131,6 +2465,16 @@ class UnityChat {
         if (wrap) {
           wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
         }
+      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+        this._handleDomRedeem(msg.data);
+      } else if (msg?.type === 'TW_HIGHLIGHTS') {
+        this._handleHighlights(msg);
+      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
+        this._handleCredits(msg.data);
+      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
+        // Twitch fired a floating "+N" reward animation — content script
+        // caught it from DOM mutations. We just flash the amount.
+        this._flashPointsDelta(msg.amount);
       }
     });
   }
@@ -2155,12 +2499,13 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
-      // One-time migration: older configs have maxMessages=500 baked in, bump
-      // them to the new default so existing users benefit from the 72h cache.
+      // Older configs have maxMessages baked in — bring them up to the new
+      // default so existing users benefit from the 72h cache + lazy load.
       if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
         this.config.maxMessages = DEFAULTS.maxMessages;
         this._saveConfig();
       }
+      if (!this.config.initialRender) this.config.initialRender = DEFAULTS.initialRender;
     } catch {}
   }
 
@@ -2256,23 +2601,29 @@ class UnityChat {
         } else {
           this._acHide();
         }
-      } else if (text.startsWith('/uc ') && ws === 4) {
-        // /uc subcommand autocomplete
-        const prefix = partial.toLowerCase();
-        const cmds = ['raid', 'raider', 'first', 'sus'];
-        const matches = cmds.filter(c => c.startsWith(prefix)).map(c => '/uc ' + c);
+      } else if (text === '/uc' || (text.startsWith('/uc ') && ws <= 4)) {
+        // /uc subcommand autocomplete — shows the full list as soon as
+        // the user finishes typing "/uc" (before the space) and filters
+        // as they continue with "/uc r…".
+        const UC_CMDS = [
+          'raid', 'raider', 'first', 'sus',
+          'announcement', 'ann',
+          'sub', 'resub', 'prime', 'sub2', 'sub3',
+          'subgift', 'giftbundle',
+          'redeem', 'highlight',
+          'timeout', 'ban', 'delete',
+          'claim', 'points10', 'points50',
+          'raidbanner',
+          'pin',
+        ];
+        const prefix = (text === '/uc' ? '' : partial).toLowerCase();
+        const matches = (prefix ? UC_CMDS.filter((c) => c.startsWith(prefix)) : UC_CMDS).map((c) => '/uc ' + c);
         if (matches.length) {
           this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
           this._acRender();
         } else {
           this._acHide();
         }
-      } else if (text === '/uc ' && partial === '' && pos === 4) {
-        // Just typed "/uc " — show all subcommands
-        const cmds = ['raid', 'raider', 'first', 'sus'];
-        const matches = cmds.map(c => '/uc ' + c);
-        this._ac = { start: 0, end: pos, index: 0, matches, _type: 'uc' };
-        this._acRender();
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
         if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
@@ -2305,9 +2656,22 @@ class UnityChat {
         height: 720
       });
     });
-    $('btn-dump').addEventListener('click', () =>
-      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' })
-    );
+    $('btn-dump').addEventListener('click', async () => {
+      // Build a rich diagnostics report and prepend it to the log dump so
+      // a single download answers the most common debugging questions
+      // (color/paint mismatches, missing scrape, badge attribution, …).
+      try {
+        const diag = await this._buildDiagnostics();
+        // Await the UC_LOG round-trip so the diag is in the array BEFORE
+        // we trigger the file dump (otherwise the download race-loses).
+        await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: diag });
+      } catch (e) {
+        try {
+          await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
+        } catch {}
+      }
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' });
+    });
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
     );
@@ -2372,7 +2736,7 @@ class UnityChat {
           const newNick = profile?.nickname || null;
           this.chatEl.querySelectorAll('.un').forEach((un) => {
             if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
-              un.style.color = resolvedColor;
+              un.style.color = readableColor(resolvedColor);
               if (newNick) { un.textContent = newNick; un.title = uname; }
               else { un.textContent = uname; un.title = ''; }
             }
@@ -2463,8 +2827,9 @@ class UnityChat {
     $('btn-clear-cache').addEventListener('click', () => {
       chrome.storage.local.remove(this._cacheKey);
       this._msgCache = [];
-      this._seenMsgIds.clear();
-      this._seenContentKeys.clear();
+      this._hydratedIdx = 0;
+      this._dedupChannels.clear();
+      this._dedupLRU.length = 0;
       this.chatEl.innerHTML = '';
       this.msgCount = 0;
     });
@@ -2488,6 +2853,12 @@ class UnityChat {
       this.autoScroll = atBottom;
       if (atBottom) {
         this._clearUnread();
+      }
+      // Lazy load older messages when user scrolls near the top. Keeps boot
+      // fast (only initialRender msgs in DOM) while letting heavy scrollers
+      // reach the full 72h cache on demand.
+      if (el.scrollTop < 200 && this._hydratedIdx > 0 && !this._hydratingOlder) {
+        this._hydrateOlderMessages();
       }
     });
     this.scrollBtn.addEventListener('click', () => {
@@ -3069,12 +3440,14 @@ class UnityChat {
     this._saveConfig();
     this._refreshSettingsInputs();
 
-    // Clear on-screen chat + in-memory dedup — new streamer has its own history.
+    // Clear on-screen chat — new streamer has its own history. Dedup structures
+    // are per-channel (LRU-evicted), so we leave them alone: returning to a
+    // recently-visited channel keeps its dedup state intact and prevents DOM
+    // scrape from re-rendering messages that are still sitting in Twitch's DOM.
     this.chatEl.innerHTML = '';
     this.msgCount = 0;
     this._msgCache = [];
-    this._seenMsgIds = new Set();
-    this._seenContentKeys = new Set();
+    this._hydratedIdx = 0;
     this._optimisticKeys = new Map();
     this._isModOnChannel = false; // re-detect from badges on new channel
     // Recycle the boot-time loading overlay during channel switch — same
@@ -3095,6 +3468,39 @@ class UnityChat {
     this.emotes.twitchNative.clear();
     this._twitchBadges = {};
     this.emotes.loadTwitchGlobals();
+
+    // Reset credits keep-last-shown — old channel's bits/points would
+    // otherwise bleed into the new channel until its first snapshot
+    // arrives. Clear pills and request a fresh pull for the new tab.
+    this._lastBitsText = null;
+    this._lastPointsText = null;
+    this._lastPointsIcon = null;
+    this._lastPointsNum = null;
+    const twCredits = document.getElementById('tw-credits');
+    if (twCredits) {
+      twCredits.classList.add('hidden');
+      twCredits.querySelectorAll('.tc-pill').forEach((p) => p.classList.add('hidden'));
+    }
+    this._pullCredits();
+    // Reset pin state on channel switch — old channel's pin is gone.
+    this._gqlPinCards = [];
+    this._lastDomHighlightCards = [];
+    this._lastGoodPinCache = null;
+    this._lastHighlightsHash = '';
+    this._mockPinCards = [];
+    clearTimeout(this._mockPinExpiryT);
+
+    // Clear the highlight banner (raid / hype / gifts / pinned cards)
+    // — the raid card that triggered this auto-switch is no longer
+    // relevant now that we're on the target channel, and keeping it
+    // visible is confusing ("raid into Lessinka" still showing when
+    // we ARE on Lessinka). The next TW_HIGHLIGHTS snapshot from the
+    // new channel's tab will repopulate with anything that belongs.
+    const hlBanner = document.getElementById('highlights-banner');
+    if (hlBanner) {
+      hlBanner.classList.add('hidden');
+      hlBanner.innerHTML = '';
+    }
 
     this._disconnectAll();
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
@@ -3200,7 +3606,7 @@ class UnityChat {
     if (myName) {
       this.chatEl.querySelectorAll('.un').forEach((un) => {
         if (un.dataset.platform === platform && un.dataset.username === myName) {
-          un.style.color = color;
+          un.style.color = readableColor(color);
         }
       });
     }
@@ -3379,9 +3785,22 @@ class UnityChat {
         broadcasterId: this.config._roomId || null
       });
       if (resp?.ok) {
-        this._showPinnedBanner(msg);
-        // Sledovat pin entity ID z odpovědi (ne původní message ID)
-        this._startPinWatcher(resp.pinId || msg.id);
+        // Hide the legacy #pinned-banner — pin will surface in
+        // #highlights-banner via the next FETCH_PINS poll tick (≤4s),
+        // unified with all other pinned messages from any source.
+        this._hidePinnedBanner();
+        // Trigger a fast pin poll so the banner shows up promptly
+        // instead of waiting up to 4s for the next interval.
+        chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel: this.config.channel })
+          .then((r) => {
+            if (r?.ok) {
+              this._gqlPinCards = (r.pins || []).map((p) => this._pinFromGql(p));
+              this._lastHighlightsHash = '';
+              this._rerenderHighlights();
+            }
+          })
+          .catch(() => {});
+        this._sys('Pin: zpráva připnuta — banner se zobrazí za chvíli.');
       } else {
         this._sys(`Pin: ${resp?.error || 'selhalo'}`);
       }
@@ -3394,41 +3813,77 @@ class UnityChat {
     const banner = document.getElementById('pinned-banner');
     if (!banner) return;
 
-    // Vyrenderovat zprávu v banneru
     const ts = new Date(msg.timestamp);
-    const time = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}`;
+    const h = ts.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = ((h + 11) % 12 + 1).toString().padStart(2, '0');
+    const mm = ts.getMinutes().toString().padStart(2, '0');
+    const time = `${h12}:${mm} ${ampm}`;
 
     let body;
     if (msg.platform === 'twitch') {
-      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
-      body = this.emotes.renderTwitch(msg.message, emotesTag);
+      body = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username, emotesOffset: msg.twitchEmotesOffset || 0 });
     } else if (msg.platform === 'kick') {
       body = this.emotes.renderKick(msg.kickContent || msg.message);
     } else {
       body = this.emotes.renderPlain(msg.message);
     }
 
+    const pinnedBy = msg.pinnedBy || msg.username;
+    const authorColor = this.emotes._sc(msg.color) || '#e6a11a';
+
     banner.innerHTML = `
-      <div class="pin-icon">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-          <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
-        </svg>
-        <span>Připnuto</span>
+      <div class="pin-head">
+        <span class="pin-head-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+          </svg>
+        </span>
+        <span class="pin-head-text">
+          Připnuto uživatelem
+          <strong class="pin-head-user" style="color:${authorColor}">${this.emotes._eh(pinnedBy)}</strong>
+        </span>
+        <button class="pin-btn pin-btn-hide" title="Schovat" aria-label="Schovat připnutou zprávu">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M12 4c-5.5 0-10 8-10 8s4.5 8 10 8 10-8 10-8-4.5-8-10-8Zm0 14c-4.1 0-7.5-5.2-8.1-6 .6-.8 4-6 8.1-6s7.5 5.2 8.1 6c-.6.8-4 6-8.1 6Z"/>
+            <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/>
+          </svg>
+        </button>
+        <button class="pin-btn pin-btn-toggle" title="Rozbalit" aria-label="Rozbalit">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path class="pin-chev" d="M6 9l6 6 6-6z"/>
+          </svg>
+        </button>
       </div>
-      <div class="pin-content">
-        <span class="pin-time">${time}</span>
-        <span class="pin-user" style="color:${this.emotes._sc(msg.color)}">${this.emotes._eh(msg.username)}:</span>
-        <span class="pin-text">${body}</span>
+      <div class="pin-body">
+        <div class="pin-body-text">${body}</div>
+        <div class="pin-body-foot">
+          <span class="pin-author" style="color:${authorColor}">${this.emotes._eh(msg.username)}</span>
+          <span class="pin-author-meta">odesláno v ${time}</span>
+        </div>
       </div>
-      <button class="pin-close" title="Odepnout">&times;</button>
     `;
-    banner.classList.remove('hidden');
+    banner.classList.remove('hidden', 'collapsed', 'dismissed');
 
-    banner.querySelector('.pin-close').addEventListener('click', () => {
-      this._hidePinnedBanner();
+    const toggleBtn = banner.querySelector('.pin-btn-toggle');
+    const hideBtn = banner.querySelector('.pin-btn-hide');
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      banner.classList.toggle('collapsed');
+      toggleBtn.setAttribute('title', banner.classList.contains('collapsed') ? 'Rozbalit' : 'Sbalit');
     });
+    // Hide = local dismiss (message stays pinned on Twitch; our polling
+    // will re-show it if the pin is still active AND user reloads).
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      banner.classList.add('dismissed');
+      this._dismissedPinId = msg.id;
+    });
+    // Don't re-open if user manually dismissed this pin within this session
+    if (this._dismissedPinId && this._dismissedPinId === msg.id) {
+      banner.classList.add('dismissed');
+    }
 
-    // Bez lokálního timeru - banner zmizí když polling detekuje unpin
     clearTimeout(this._pinTimer);
   }
 
@@ -3485,7 +3940,7 @@ class UnityChat {
       if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
         un.textContent = nickname;
         un.title = username;
-        if (color) un.style.color = color;
+        if (color) un.style.color = readableColor(color);
       }
     });
   }
@@ -3680,7 +4135,7 @@ class UnityChat {
 
     switch (cmd) {
       case 'raid':
-        this._addMessage({ ...base, username: mockUser, message: `${text} přichází s raidem!`, isRaid: true, color: '#ff6b6b' });
+        this._addMessage({ ...base, username: mockUser, message: '', isRaid: true, color: '#ff6b6b', raidViewers: text.match(/^\d+$/) ? text : '88' });
         break;
       case 'raider':
         this._addMessage({ ...base, isRaider: true, color: '#00e676' });
@@ -3691,8 +4146,196 @@ class UnityChat {
       case 'sus':
         this._addMessage({ ...base, isSus: true, color: '#ffc107' });
         break;
+      case 'announcement':
+      case 'ann': {
+        // /uc announcement [PRIMARY|BLUE|GREEN|ORANGE|PURPLE] [body]
+        const colorOpts = ['PRIMARY', 'BLUE', 'GREEN', 'ORANGE', 'PURPLE'];
+        let annColor = 'PRIMARY';
+        let body = text;
+        const firstWord = (parts[1] || '').toUpperCase();
+        if (colorOpts.includes(firstWord)) {
+          annColor = firstWord;
+          body = parts.slice(2).join(' ') || 'Mock announcement body';
+        }
+        this._addMessage({ ...base, message: body, isAnnouncement: true, announcementColor: annColor, color: '#9146ff' });
+        break;
+      }
+      case 'sub':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 1 });
+        break;
+      case 'resub':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 6, subStreak: 6 });
+        break;
+      case 'prime':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: 'Prime', subMonths: 13, subStreak: 2 });
+        break;
+      case 'sub2':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '2000', subMonths: 4, subStreak: 4 });
+        break;
+      case 'sub3':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '3000', subMonths: 9, subStreak: 9 });
+        break;
+      case 'subgift':
+        this._addMessage({ ...base, message: '', isSubGift: true, giftPlan: '1000', giftRecipient: text === 'test message' ? 'RecipientUser' : text });
+        break;
+      case 'giftbundle': {
+        const n = parseInt(text, 10) || 6;
+        this._addMessage({ ...base, message: '', isGiftBundle: true, giftPlan: '1000', giftCount: n });
+        break;
+      }
+      case 'redeem': {
+        const cost = parseInt(parts[parts.length - 1], 10);
+        const rewardName = (Number.isFinite(cost) ? parts.slice(1, -1).join(' ') : text) || 'Send Cult follower message';
+        this._addMessage({ ...base, message: 'Mock redeem message body', isRedeem: true, rewardName, rewardCost: Number.isFinite(cost) ? cost : 500, color: '#9146ff' });
+        break;
+      }
+      case 'highlight':
+        this._addMessage({ ...base, message: text, isHighlight: true });
+        break;
+      case 'mod':
+      case 'timeout': {
+        const secs = parseInt(text, 10) || 600;
+        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _cleared: `Timeout (${secs >= 60 ? Math.round(secs / 60) + 'm' : secs + 's'})` });
+        break;
+      }
+      case 'ban':
+        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _cleared: 'Permanently banned' });
+        break;
+      case 'delete':
+        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
+        break;
+      case 'raidbanner': {
+        const raider = (text && text !== 'test message') ? text : (this.config.channel || 'Karpo_cz');
+        // Try to fetch the current channel's real profile avatar from
+        // the open Twitch tab; fall back to a placeholder if nothing's
+        // available (e.g. no Twitch tab open).
+        (async () => {
+          let avatar = null;
+          try {
+            const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+            const ch = (this.config.channel || '').toLowerCase();
+            const target = tabs.find((t) => {
+              try {
+                const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+                return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+              } catch { return false; }
+            }) || tabs[0];
+            if (target?.id) {
+              const r = await chrome.tabs.sendMessage(target.id, { type: 'GET_CHANNEL_AVATAR', channel: this.config.channel }).catch(() => null);
+              if (r?.ok && r.avatar) avatar = r.avatar;
+            }
+          } catch {}
+          this._handleHighlights({
+            channel: this.config.channel,
+            cards: [{
+              kind: 'raid',
+              text: `${raider} provádí nájezd na kanál Lessinka s 195 nájezdníky. Nájezd za +250 bodů.`,
+              avatar,
+            }],
+          });
+          this._sys(`/uc raidbanner: mock raid banner injected${avatar ? ' (with real channel avatar)' : ''}`);
+        })();
+        break;
+      }
+      case 'claim': {
+        // Mock the claim-bonus pill showing up in the credits footer.
+        // Injects a synthetic TW_CREDITS snapshot via _handleCredits.
+        const channel = this.config.channel || '';
+        this._handleCredits({
+          bits: '0',
+          points: '1,5 tis.',
+          pointsIcon: null,
+          claimAvailable: true,
+          channel,
+        });
+        this._sys('/uc claim: mock claim pill visible');
+        break;
+      }
+      case 'points10': {
+        // Mock the +10 watch-reward flash (no balance change needed).
+        this._flashPointsDelta(10);
+        break;
+      }
+      case 'points50': {
+        this._flashPointsDelta(50);
+        break;
+      }
+      case 'pin': {
+        // Mock pin banner injection. Uses the current user profile as
+        // both pinner and author so colors + badges pick up whatever
+        // the user has cached locally. Body = everything after "/uc pin".
+        // args is the raw string passed in, so use parts.slice(1).
+        const body = parts.slice(1).join(' ').trim() || 'Mock pin — připnutá zpráva pro testování.';
+        // Split body into word-level segments, resolve any known emote
+        // names via the full emote library (Twitch native, 7TV, BTTV,
+        // FFZ) so mocks with real emote tokens render as images.
+        const em = this.emotes;
+        const resolveEmote = (name) =>
+          em?.channel7tv?.get(name)
+          || em?.global7tv?.get(name)
+          || em?.bttvEmotes?.get(name)
+          || em?.ffzEmotes?.get(name)
+          || em?.twitchNative?.get(name);
+        const segs = [];
+        for (const token of body.split(/(\s+)/)) {
+          if (!token) continue;
+          if (/^\s+$/.test(token)) {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += token;
+            else segs.push({ type: 'text', value: token });
+            continue;
+          }
+          const url = resolveEmote(token);
+          if (typeof url === 'string' && url) {
+            segs.push({ type: 'emote', url, alt: token });
+          } else {
+            const last = segs[segs.length - 1];
+            if (last && last.type === 'text') last.value += token;
+            else segs.push({ type: 'text', value: token });
+          }
+        }
+        const myName = this.config.username || 'TestUser';
+        const myColorRaw = (this._platformColors?.twitch) || '#e6a11a';
+        const myBadges = this._myBadgesCache
+          ? (this._myBadgesCache.split(',').map((b) => {
+              const entry = this._twitchBadges?.[b];
+              const url = entry && typeof entry === 'object' ? entry.url : entry;
+              const title = (entry && typeof entry === 'object' && entry.title) || b.split('/')[0];
+              return url ? { url, alt: title } : null;
+            }).filter(Boolean))
+          : [];
+        const mockPin = {
+          kind: 'pin',
+          text: body.slice(0, 200) || 'Pinned',
+          pin: {
+            pinnedBy: myName,
+            author: myName,
+            authorColor: myColorRaw,
+            authorBadges: myBadges,
+            bodySegments: segs,
+            timeText: 'odesláno v ' + new Date().toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' }),
+            pinId: 'mock-' + Date.now(),
+          },
+        };
+        // Stash mock in its own _mockPinCards array — separate from
+        // _gqlPinCards (real GQL poll source) so the mock can coexist
+        // with whatever real pin is active. Banner stacks both. Auto-
+        // expire after 30s so it doesn't linger forever.
+        if (!this._mockPinCards) this._mockPinCards = [];
+        this._mockPinCards.push(mockPin);
+        clearTimeout(this._mockPinExpiryT);
+        this._mockPinExpiryT = setTimeout(() => {
+          this._mockPinCards = [];
+          this._lastHighlightsHash = '';
+          this._rerenderHighlights();
+        }, 30000);
+        this._lastHighlightsHash = '';
+        this._rerenderHighlights();
+        this._sys(`/uc pin: mock pin banner injected (30s, body="${body.slice(0, 60)}${body.length > 60 ? '…' : ''}")`);
+        break;
+      }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
@@ -3740,13 +4383,10 @@ class UnityChat {
   }
 
   async _scrapeExistingChat() {
-    // Skip scrape if cache has recent messages (< 2 min old).
-    // After a reload the cache IS the backfill — scraping would just
-    // create incomplete duplicates (emotes are img tags in DOM, lost
-    // during text extraction → boundary detection fails).
-    const lastCached = this._msgCache[this._msgCache.length - 1];
-    if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
-
+    // Always attempt scrape — per-channel dedup (_dedupChannels) drops
+    // duplicates that overlap with the cache, and missing the scrape
+    // entirely loses any messages that arrived during the gap between
+    // last cached message and now (e.g. user reopened UC after 30s).
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel) return;
 
@@ -3778,10 +4418,16 @@ class UnityChat {
         const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
 
         let boundary = -1;
-        // Try decreasing suffix lengths (5→2) of cached username sequence
+        // Try decreasing suffix lengths (5→2) of cached username sequence.
+        // Iterate scraped from START → END so we lock onto the EARLIEST
+        // occurrence of the suffix — when the same user-pair repeats later
+        // in the scraped chat, picking the latest match would silently
+        // drop the messages BETWEEN the two occurrences. Picking earliest
+        // may add a few duplicates, but those get caught by content-key
+        // dedup downstream.
         for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
           const suffix = cachedUsers.slice(-len);
-          for (let i = scrapedUsers.length - len; i >= 0; i--) {
+          for (let i = 0; i + len <= scrapedUsers.length; i++) {
             let match = true;
             for (let j = 0; j < len; j++) {
               if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
@@ -3931,6 +4577,7 @@ class UnityChat {
     const el = document.getElementById('loading-overlay');
     if (!el) return;
     if (el.classList.contains('fade-out') || el.classList.contains('hidden')) return;
+    try { this._bootMark('loading overlay hiding'); } catch {}
     el.classList.add('fade-out');
     clearTimeout(this._loadingHardT);
     // Drop from layout after the CSS fade so it doesn't keep absorbing
@@ -3939,6 +4586,7 @@ class UnityChat {
   }
 
   _updateLoadingPill(platform, status) {
+    try { this._bootMark(`pill ${platform} → ${status}`); } catch {}
     const el = document.getElementById('loading-overlay');
     if (!el || el.classList.contains('hidden')) return;
     const pill = el.querySelector(`.lo-pill[data-platform="${platform}"]`);
@@ -4001,14 +4649,82 @@ class UnityChat {
     if (!this._colorQueue || !this._colorQueue.size) return;
     const batch = [...this._colorQueue].slice(0, 100);
     for (const u of batch) this._colorQueue.delete(u);
+
+    // Phase 1: try DOM scrape on any open Twitch tab first. Rendered
+    // colors already reflect whatever the vanilla chat picked (real Twitch
+    // chat color including user-set hex, not a hash palette guess) and the
+    // lookup is free (no network). Only usernames still missing after this
+    // fall through to GQL.
+    const domColors = {};
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        const missing = batch.filter((u) => !domColors[u]);
+        if (!missing.length) break;
+        let r;
+        try {
+          r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames: missing });
+        } catch { continue; }
+        if (r?.ok && r.colors) Object.assign(domColors, r.colors);
+      }
+    } catch { /* tabs perm or no matching tab */ }
+
+    // Apply DOM-resolved colors and drop them from the GQL batch.
+    const pendingGql = [];
+    for (const login of batch) {
+      const col = domColors[login];
+      if (!col) { pendingGql.push(login); continue; }
+      const key = `twitch:${login}`;
+      const prev = this._chatUsers.get(key);
+      const entry = {
+        name: prev?.name || login,
+        platform: 'twitch',
+        color: col,
+        badgesRaw: prev?.badgesRaw || '',
+        userId: prev?.userId || null,
+        _paint: prev?._paint,
+        _paintChecked: prev?._paintChecked || false,
+        _fromGQL: true,
+      };
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(login, entry);
+      const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+      for (const un of this.chatEl.querySelectorAll(sel)) {
+        const msgId = un.closest('.msg')?.dataset.msgId;
+        const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+        const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+        if (ucProfile?.color) continue;
+        un.style.color = readableColor(col);
+      }
+      // Also retint any @mention spans for this user (may have been
+      // rendered before the user ever spoke in our session).
+      const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+      for (const mn of this.chatEl.querySelectorAll(msel)) {
+        mn.style.color = readableColor(col);
+      }
+    }
+    if (!pendingGql.length) {
+      if (this._colorQueue.size > 0) {
+        this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 1500);
+      }
+      if (!this._userColorTimer) {
+        this._userColorTimer = setTimeout(() => {
+          this._userColorTimer = null;
+          chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+        }, 1500);
+      }
+      return;
+    }
+
     let resp;
     try {
-      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: batch });
+      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: pendingGql });
     } catch { return; }
     if (!resp?.ok || !resp.users) return;
 
     let dirty = false;
-    for (const login of batch) {
+    for (const login of pendingGql) {
       const info = resp.users[login] || {};
       const color = info.color;
       const userId = info.id;
@@ -4018,15 +4734,23 @@ class UnityChat {
       // don't re-query. Keep the existing (hash) color as display fallback.
       // userId gets captured too so we can kick off 7TV paint lookups for
       // users whose messages didn't carry a user-id (cached schema, scrape).
+      // Only mark _fromGQL when we actually got a non-null color from GQL.
+      // If GQL had nothing (user has no custom Twitch color in their settings),
+      // leave _fromGQL false so DOM lookup can keep trying — DOM is the
+      // ground truth for the rendered color (incl. Twitch's readability
+      // boost) and may resolve on a later flush once the user's row is
+      // visible in the Twitch tab. Without this, any user whose first
+      // resolution attempt missed got stuck with raw IRC color forever.
+      const resolvedColor = color || prev?.color;
       const entry = {
         name: prev?.name || login,
         platform: 'twitch',
-        color: color || prev?.color,
+        color: resolvedColor,
         badgesRaw: prev?.badgesRaw || '',
         userId: userId || prev?.userId || null,
         _paint: prev?._paint,
         _paintChecked: prev?._paintChecked || false,
-        _fromGQL: true,
+        _fromGQL: !!color,
       };
       this._chatUsers.set(key, entry);
       this._chatUsers.set(login, entry);
@@ -4040,7 +4764,12 @@ class UnityChat {
           const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
           const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
           if (ucProfile?.color) continue;
-          un.style.color = color;
+          un.style.color = readableColor(color);
+        }
+        // Retint @mention spans for this user too
+        const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+        for (const mn of this.chatEl.querySelectorAll(msel)) {
+          mn.style.color = readableColor(color);
         }
       }
 
@@ -4126,6 +4855,1280 @@ class UnityChat {
   // @username references in <span class="mention"> with the target user's
   // color (looked up via _chatUsers). Runs post-emote/URL render so we
   // never touch existing <img>/<a> children — only pure text fragments.
+  // Content script on a Twitch tab observed a redeem/highlight line in the
+  // vanilla chat DOM and relayed it here. Twitch IRC does NOT carry text-less
+  // redemptions (community goals, "unlock emote", etc.) — only PubSub does,
+  // and that's OAuth-gated. DOM mirroring is the anonymous-safe workaround.
+  // ---- Diagnostics dump (attached to debug log on 💾 click) ----
+  // Aim: a single download contains enough state for someone (Claude, me)
+  // to answer "why is user X colored Y / why is paint missing / why is
+  // scrape skipping messages" without further round-trips with the user.
+  async _buildDiagnostics() {
+    const out = [];
+    const push = (label, val) => out.push(`### ${label}\n${typeof val === 'string' ? val : JSON.stringify(val, null, 2)}`);
+
+    push('UnityChat version', chrome.runtime.getManifest().version);
+    push('Channel / config', {
+      channel: this.config.channel,
+      ytChannel: this.config.ytChannel,
+      username: this.config.username,
+      platforms: { tw: this.config.twitch, yt: this.config.youtube, ki: this.config.kick },
+      maxMessages: this.config.maxMessages,
+      layout: this.config.layout,
+      _platformUsernames: this._platformUsernames,
+      _isModOnChannel: this._isModOnChannel,
+    });
+
+    // Connection status
+    push('Provider connection state', {
+      twitch: { connected: !!this.twitch?.connected, channel: this.twitch?.channel },
+      kick: { connected: !!this.kick?.connected, channel: this.kick?.channel },
+      youtube: { connected: !!this.youtube?.connected, channel: this.youtube?.channel },
+    });
+
+    // Cache sizes
+    let dedupIdsTotal = 0, dedupContentTotal = 0;
+    const dedupPerChannel = {};
+    if (this._dedupChannels) {
+      for (const [k, v] of this._dedupChannels) {
+        dedupIdsTotal += v.ids.size;
+        dedupContentTotal += v.content.size;
+        dedupPerChannel[k] = { ids: v.ids.size, content: v.content.size };
+      }
+    }
+    push('Cache stats', {
+      msgCacheSize: this._msgCache?.length || 0,
+      msgCacheOldest: this._msgCache?.[0]?.timestamp,
+      msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
+      dedupChannels: this._dedupChannels?.size || 0,
+      dedupChannelsLRU: this._dedupLRU?.slice() || [],
+      dedupIdsTotal,
+      dedupContentTotal,
+      dedupPerChannel,
+      chatUsersEntries: this._chatUsers?.size || 0,
+      twitchBadgesLoaded: Object.keys(this._twitchBadges || {}).length,
+      sevenTvPaintsLoaded: (typeof _7TV_PAINTS !== 'undefined') ? Object.keys(_7TV_PAINTS).length : 'n/a',
+      sevenTvUserCacheSize: this.emotes?._sevenTvUserCache?.size || 0,
+      emoteAdditions: this.emotes?._emoteAdditions?.size || 0,
+    });
+
+    // Per-user color/paint state for everyone currently rendered in chat
+    const renderedUsers = new Map();
+    this.chatEl.querySelectorAll('.un[data-platform="twitch"]').forEach((un) => {
+      const u = un.dataset.username;
+      if (!u || renderedUsers.has(u)) return;
+      const entry = this._chatUsers.get(`twitch:${u}`) || this._chatUsers.get(u);
+      const computed = un.style.color || getComputedStyle(un).color;
+      const hasPaintBg = !!un.style.backgroundImage;
+      renderedUsers.set(u, {
+        renderedColor: computed,
+        hasPaintBackground: hasPaintBg,
+        entryColor: entry?.color,
+        entryUserId: entry?.userId,
+        entryFromGQL: !!entry?._fromGQL,
+        entryPaintChecked: !!entry?._paintChecked,
+        entryPaintNonNull: !!entry?._paint,
+        entryPaintFunction: entry?._paint?.function,
+      });
+    });
+    push('Twitch users currently rendered (color + paint state)', Object.fromEntries(renderedUsers));
+
+    // Persistent storage snapshots
+    try {
+      const local = await chrome.storage.local.get(['uc_user_colors', 'uc_synced', 'uc_update', 'uc_msg_history']);
+      const ucColors = local.uc_user_colors || {};
+      // Slim down: just keys + paint flags, full color is huge
+      const slim = {};
+      for (const [k, v] of Object.entries(ucColors)) {
+        if (!v || typeof v !== 'object') continue;
+        slim[k] = {
+          color: v.color,
+          userId: v.userId,
+          fromGQL: !!v._fromGQL,
+          paintChecked: !!v._paintChecked,
+          paint: v._paint ? { function: v._paint.function, id: v._paint.id } : null,
+        };
+      }
+      push('chrome.storage.local.uc_user_colors (slim)', slim);
+      push('chrome.storage.local.uc_synced size', (local.uc_synced || []).length || 0);
+      push('chrome.storage.local.uc_update', local.uc_update || null);
+    } catch (e) {
+      push('storage.local read error', e.message);
+    }
+
+    // For each rendered Twitch user, ask the active Twitch tab what the
+    // vanilla DOM thinks their color is. This is the gold-standard for
+    // "what should our chat show".
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+      const usernames = [...renderedUsers.keys()];
+      const tabReports = [];
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        let r = null;
+        try {
+          r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames });
+        } catch (e) { r = { error: e.message }; }
+        tabReports.push({ url: tab.url, ok: !!r?.ok, colors: r?.colors || null, error: r?.error });
+      }
+      push('Twitch DOM color snapshot per open tab', tabReports);
+    } catch (e) {
+      push('tabs query error', e.message);
+    }
+
+    // Sweep all loaded emote maps for ≤3-char names — these are the most
+    // likely culprits for "why did this short word get rendered as an
+    // emote". Lists name + URL per source.
+    try {
+      const sources = [
+        ['channel7tv',   this.emotes?.channel7tv],
+        ['global7tv',    this.emotes?.global7tv],
+        ['bttvEmotes',   this.emotes?.bttvEmotes],
+        ['ffzEmotes',    this.emotes?.ffzEmotes],
+        ['ucEmotes',     this.emotes?.ucEmotes],
+        ['twitchNative', this.emotes?.twitchNative],
+        ['kickNative',   this.emotes?.kickNative],
+      ];
+      const shortByName = {};
+      for (const [src, map] of sources) {
+        if (!map?.forEach) continue;
+        map.forEach((url, name) => {
+          if (typeof name !== 'string' || name.length > 3 || !name.length) return;
+          if (!shortByName[name]) shortByName[name] = {};
+          shortByName[name][src] = url;
+        });
+      }
+      push('Short-name (≤3 chars) emote entries across all maps', shortByName);
+    } catch (e) {
+      push('short-emote sweep error', e.message);
+    }
+
+    // Recent messages snapshot — last 30 msgs with key flags
+    const recent = (this._msgCache || []).slice(-30).map((m) => ({
+      ts: m.timestamp,
+      platform: m.platform,
+      username: m.username,
+      color: m.color,
+      hasReplyTo: !!m.replyTo,
+      hasTwitchEmotes: !!m.twitchEmotes,
+      twitchEmotesOffset: m.twitchEmotesOffset,
+      isRedeem: !!m.isRedeem,
+      isAnnouncement: !!m.isAnnouncement,
+      isSubEvent: !!m.isSubEvent,
+      isGiftBundle: !!m.isGiftBundle,
+      isSubGift: !!m.isSubGift,
+      isAction: !!m.isAction,
+      scraped: !!m.scraped,
+      optimistic: !!m._optimistic,
+      cleared: m._cleared || null,
+      msgLen: (m.message || '').length,
+      msgPreview: (m.message || '').slice(0, 80),
+    }));
+    push('Last 30 cached messages (slim)', recent);
+
+    return out.join('\n\n');
+  }
+
+  // Mirror the Twitch credits widget (bits + channel-points) from an open
+  // Twitch tab. Anonymous IRC has no way to get either balance — the only
+  // anonymous-safe path is to scrape the rendered DOM.
+  // Twitch picks default colors from a hash palette for users without a
+  // custom hex set. That hash is per-session, so when the streamer (or
+  // viewer) refreshes the Twitch page, those defaults can flip. Our
+  // cached _fromGQL state would otherwise stick the old color forever.
+  // Periodically re-snapshot DOM colors for currently-rendered Twitch
+  // users and overwrite cache + retint when changed. DOM lookup is free.
+  _scheduleColorRevalidation() {
+    if (this._colorRevalT) return;
+    const tick = async () => {
+      this._colorRevalT = null;
+      try {
+        const seen = new Set();
+        const usernames = [];
+        this.chatEl.querySelectorAll('.un[data-platform="twitch"]').forEach((un) => {
+          const u = un.dataset.username;
+          if (!u || seen.has(u)) return;
+          seen.add(u);
+          usernames.push(u);
+        });
+        if (!usernames.length) return;
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        for (const tab of tabs) {
+          if (!tab.id) continue;
+          let r;
+          try { r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames }); }
+          catch { continue; }
+          if (!r?.ok || !r.colors) continue;
+          for (const [login, col] of Object.entries(r.colors)) {
+            if (!col) continue;
+            const key = `twitch:${login}`;
+            const prev = this._chatUsers.get(key);
+            if (prev?.color === col) continue;
+            const entry = {
+              ...(prev || {}),
+              name: prev?.name || login,
+              platform: 'twitch',
+              color: col,
+              _fromGQL: true,
+            };
+            this._chatUsers.set(key, entry);
+            this._chatUsers.set(login, entry);
+            const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+            for (const un of this.chatEl.querySelectorAll(sel)) {
+              const msgId = un.closest('.msg')?.dataset.msgId;
+              const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+              const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+              if (ucProfile?.color) continue;
+              un.style.color = readableColor(col);
+            }
+            const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+            for (const mn of this.chatEl.querySelectorAll(msel)) {
+              mn.style.color = readableColor(col);
+            }
+          }
+        }
+      } catch {}
+      // Re-arm — every 5 min while the panel is alive
+      this._colorRevalT = setTimeout(tick, 5 * 60 * 1000);
+    };
+    // First tick after 90s (give initial lookups time to settle), then 5min
+    this._colorRevalT = setTimeout(tick, 90 * 1000);
+  }
+
+  // Float a "+N" pill above the points balance so the +10 watch-reward
+  // tick (and bonus claims) get visible feedback. Caller supplies the
+  // already-computed delta; we just animate.
+  // Ask all open Twitch tabs to push their current credits snapshot
+  // immediately — the in-tab MutationObserver may have already settled
+  // before our sidepanel opened, leaving us with no pill until the next
+  // organic DOM mutation (typically the +10 watch-reward tick ~5 min
+  // later). Retries a few times during page hydration.
+  async _pullCredits() {
+    const ask = async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        for (const tab of tabs) {
+          if (!tab.id) continue;
+          chrome.tabs.sendMessage(tab.id, { type: 'GET_CREDITS' }).catch(() => {});
+        }
+      } catch {}
+    };
+    // Initial ask, then a couple of retries during Twitch's hydration
+    // window in case the summary subtree wasn't mounted yet.
+    ask();
+    [1500, 4000, 9000].forEach((ms) => setTimeout(ask, ms));
+  }
+
+  _flashPointsDelta(delta) {
+    if (this._suppressFlashesUntil && Date.now() < this._suppressFlashesUntil) return;
+    const wrap = document.getElementById('tw-credits');
+    if (!wrap) return;
+    // Anchor to the RIGHTMOST visible pill so the flash slides to the
+    // right from outside the pill cluster and never overlaps the
+    // claim-bonus button (which sits to the right of points when
+    // available). Fall back to the points pill if nothing else visible.
+    const claim = wrap.querySelector('.tc-claim');
+    const points = wrap.querySelector('.tc-points');
+    const bits = wrap.querySelector('.tc-bits');
+    const pills = [claim, points, bits].filter((p) => p && !p.classList.contains('hidden'));
+    const anchor = pills[0] || points || wrap;
+    const f = document.createElement('span');
+    f.className = 'tc-points-flash';
+    f.textContent = `+${delta.toLocaleString('cs-CZ')}`;
+    wrap.appendChild(f);
+    // Position to the right of the anchor, vertically centered on the row.
+    const ar = anchor.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    f.style.left = (ar.right - wr.left + 6) + 'px';
+    f.style.top = (ar.top - wr.top + ar.height / 2) + 'px';
+    setTimeout(() => f.remove(), 1600);
+  }
+
+  _handleCredits(data) {
+    if (data.channel && data.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    const wrap = document.getElementById('tw-credits');
+    if (!wrap) return;
+    const bitsPill = wrap.querySelector('.tc-bits');
+    const pointsPill = wrap.querySelector('.tc-points');
+    const claimPill = wrap.querySelector('.tc-claim');
+    // One-time wire: clicking a pill focuses the Twitch tab and clicks the
+    // matching summary button there so Twitch's own popover (bits/rewards
+    // center) opens. We don't try to mirror the popover content into UC
+    // — its DOM is huge and dynamic; opening the real one is the simpler
+    // contract.
+    if (!wrap.dataset.wired) {
+      wrap.dataset.wired = '1';
+      const openOnTwitch = async () => {
+        const log = (s, x) => chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'PillClick', args: [s, x ? JSON.stringify(x) : ''] }).catch(() => {});
+        try {
+          const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+          const ch = (this.config.channel || '').toLowerCase();
+          log('tabs', { count: tabs.length, channel: ch, urls: tabs.map((t) => t.url) });
+          const target = tabs.find((t) => {
+            try {
+              const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+              return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+            } catch { return false; }
+          }) || tabs[0];
+          log('target-tab', { id: target?.id, url: target?.url });
+          if (!target?.id) return;
+          await chrome.tabs.update(target.id, { active: true });
+          await chrome.windows.update(target.windowId, { focused: true });
+          const resp = await chrome.tabs.sendMessage(target.id, { type: 'TW_OPEN_REWARDS_POPOVER' }).catch((e) => ({ ok: false, error: e.message }));
+          log('sendMessage-resp', resp);
+        } catch (e) {
+          log('exception', { msg: e.message });
+        }
+      };
+      bitsPill.style.cursor = 'pointer';
+      pointsPill.style.cursor = 'pointer';
+      bitsPill.addEventListener('click', () => openOnTwitch('bits'));
+      pointsPill.addEventListener('click', () => openOnTwitch('points'));
+      // Claim bonus: dispatch TW_CLAIM_BONUS to the matching Twitch tab.
+      // Content script finds the .claimable-bonus__icon button, real-event
+      // clicks it. We DON'T focus the tab — claiming should be silent.
+      claimPill.style.cursor = 'pointer';
+      claimPill.addEventListener('click', async () => {
+        try {
+          const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+          const ch = (this.config.channel || '').toLowerCase();
+          const target = tabs.find((t) => {
+            try {
+              const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+              return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+            } catch { return false; }
+          }) || tabs[0];
+          if (!target?.id) return;
+          await chrome.tabs.sendMessage(target.id, { type: 'TW_CLAIM_BONUS' }).catch(() => {});
+          // Optimistic hide — observer will re-show if claim didn't fire
+          claimPill.classList.add('hidden');
+          // Optimistic +50 flash. Suppress the next ~3s of delta-based
+          // flashes so the post-claim balance update doesn't fire a
+          // second "+50" when Twitch's DOM observer picks up the reward
+          // animation too.
+          this._flashPointsDelta(50);
+          this._suppressFlashesUntil = Date.now() + 3000;
+        } catch {}
+      });
+    }
+    const bitsVal = wrap.querySelector('.tc-bits-val');
+    const pointsVal = wrap.querySelector('.tc-points-val');
+    const pointsIcon = wrap.querySelector('.tc-points-icon');
+
+    // Keep-last-shown: Twitch's points-balance subtree briefly drops the
+    // bits/points text spans during the +10 watch-reward animation. We
+    // remember the last seen value per pill so transient nulls don't
+    // hide the row.
+    let anyShown = false;
+    if (data.bits != null && data.bits !== '') {
+      this._lastBitsText = data.bits;
+    }
+    if (this._lastBitsText != null) {
+      bitsVal.textContent = this._lastBitsText;
+      bitsPill.classList.remove('hidden');
+      anyShown = true;
+    } else {
+      bitsPill.classList.add('hidden');
+    }
+    if (data.points != null && data.points !== '') {
+      // Twitch occasionally swaps the points-balance slot for the watch-streak
+      // widget ("Den 3" / "3 nights streak" / custom copy). That text isn't a
+      // points balance — if we mirror it we show garbage. Gate on: either a
+      // parseable number, or a short string matching "NNN", "N,NN tis.",
+      // "NK", etc. Anything else is treated as transient and dropped.
+      const looksLikeBalance = /^[\d\u00A0\s.,]+(?:\s*(?:tis|k|mil|m)\.?)?$/i.test(data.points);
+      if (looksLikeBalance) {
+        this._lastPointsText = data.points;
+      } else {
+        // Log rejected points values so we can identify what Twitch is
+        // rendering in the slot (watch-streak / sub-streak / etc.) and
+        // later add dedicated handling if needed.
+        try {
+          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'StreakSkip',
+            text: `non-balance points text="${String(data.points).slice(0, 80)}" channel=${data.channel || '—'}` }).catch(() => {});
+        } catch {}
+      }
+      // Explicit null/empty icon from content script → new channel without
+      // a custom icon. Clear the stored icon so the render path below can
+      // reset the DOM to the default (no background image, no has-icon).
+      if (data.pointsIcon) this._lastPointsIcon = data.pointsIcon;
+      else if (data.pointsIcon === null || data.pointsIcon === '') this._lastPointsIcon = null;
+    }
+    if (this._lastPointsText != null) {
+      // Parse numeric value to detect increases (+10 watch reward, +N from
+      // claim) — Twitch formats with comma decimal + Czech "tis."/EN "K"
+      // suffix for thousands. We strip non-breaking spaces too.
+      const parseTwitchNum = (s) => {
+        if (typeof s !== 'string') return null;
+        let raw = s.replace(/[\u00A0\s]/g, '').replace(',', '.').toLowerCase();
+        let mult = 1;
+        if (/(?:tis|k)\.?$/.test(raw)) { mult = 1000; raw = raw.replace(/(?:tis|k)\.?$/, ''); }
+        else if (/(?:mil|m)\.?$/.test(raw)) { mult = 1_000_000; raw = raw.replace(/(?:mil|m)\.?$/, ''); }
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? Math.round(n * mult) : null;
+      };
+      const prevNum = this._lastPointsNum;
+      const newNum = parseTwitchNum(this._lastPointsText);
+      // Precision gate: only accept the numeric delta when neither the
+      // prev NOR the new text was abbreviated (no "tis."/"k"/"mil"/"m"
+      // suffix). Crossing a rounding boundary like 1.4K → 1.5K would
+      // otherwise fire a phantom "+100" that's actually the rounding
+      // artefact of a single +10 tick. We still want +10 flashes for
+      // precise values (< 1000).
+      const isAbbrev = (s) => typeof s === 'string' && /(?:tis|k|mil|m)\.?\s*$/i.test(s.trim());
+      const prevAbbrev = isAbbrev(pointsVal.textContent);
+      const newAbbrev = isAbbrev(this._lastPointsText);
+      pointsVal.textContent = this._lastPointsText;
+      if (this._lastPointsIcon) {
+        pointsIcon.style.backgroundImage = `url(${this.emotes._ea(this._lastPointsIcon)})`;
+        pointsIcon.classList.add('has-icon');
+      } else {
+        // Channel has no custom points icon (e.g. after auto-switch to a
+        // streamer who never set one). Clear any leftover backgroundImage
+        // + class from the previous channel so the default circle glyph
+        // (styled on .tc-points-icon in CSS) shows through.
+        pointsIcon.style.backgroundImage = '';
+        pointsIcon.classList.remove('has-icon');
+      }
+      pointsPill.classList.remove('hidden');
+      anyShown = true;
+      // Numerical delta — but only when both values are precise.
+      // Abbreviated "1,5 tis." has ~100-point imprecision which would
+      // manifest as phantom +100 flashes on boundary crossings.
+      if (prevNum != null && newNum != null && newNum > prevNum && !prevAbbrev && !newAbbrev) {
+        this._flashPointsDelta(newNum - prevNum);
+      }
+      if (newNum != null) this._lastPointsNum = newNum;
+    } else {
+      pointsPill.classList.add('hidden');
+    }
+    if (data.claimAvailable) {
+      // Cancel any pending hide — bonus re-appeared (Twitch sometimes
+      // transiently detaches .claimable-bonus__icon during the +10
+      // animation even though the bonus is still claimable).
+      if (this._claimHideT) { clearTimeout(this._claimHideT); this._claimHideT = null; }
+      claimPill.classList.remove('hidden');
+      anyShown = true;
+    } else if (!claimPill.classList.contains('hidden')) {
+      // Hysteresis: don't yank the button on a single false snapshot.
+      // Give the DOM ~2s to stabilise; if the claim icon is still gone
+      // then, it was really clicked/expired.
+      anyShown = true; // keep row visible during hide delay
+      if (!this._claimHideT) {
+        this._claimHideT = setTimeout(() => {
+          this._claimHideT = null;
+          const p = document.getElementById('tw-credits')?.querySelector('.tc-claim');
+          if (p) p.classList.add('hidden');
+        }, 2000);
+      }
+    }
+    wrap.classList.toggle('hidden', !anyShown);
+  }
+
+  // Map a GQL FETCH_PINS pin object into the highlight-card format
+  // _handleHighlights expects. Centralised so both the periodic poll
+  // and the post-pin-mutation fast-fetch use the same transform.
+  _pinFromGql(p) {
+    const ts = p.sentAt || p.pinnedAt;
+    const em = this.emotes;
+    return {
+      kind: 'pin',
+      text: (p.contentText || '').slice(0, 120) || 'Pinned',
+      pin: {
+        pinnedBy: p.pinnedBy,
+        author: p.author,
+        authorColor: p.authorColor,
+        authorBadges: (p.senderBadges || []).map((b) => {
+          const key = `${b.setID}/${b.version}`;
+          const entry = this._twitchBadges?.[key];
+          const url = entry && typeof entry === 'object' ? entry.url : entry;
+          const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
+          return url ? { url, alt: title } : null;
+        }).filter(Boolean),
+        bodySegments: (p.segments || []).map((s) => {
+          if (s.type === 'emote') {
+            // Emote URL gated by Client-Integrity in GQL, so segments
+            // arrive name-only. Resolve against local emote library
+            // (URL strings, NOT objects — see v3.38.37 fix).
+            const name = s.alt || '';
+            const url =
+              em?.twitchNative?.get(name)
+              || em?.channel7tv?.get(name)
+              || em?.global7tv?.get(name)
+              || em?.bttvEmotes?.get(name)
+              || em?.ffzEmotes?.get(name);
+            if (typeof url === 'string' && url) return { type: 'emote', url, alt: name };
+            return { type: 'text', value: name };
+          }
+          return { type: 'text', value: s.value || '' };
+        }),
+        timeText: ts
+          ? 'odesláno v ' + new Date(ts).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+          : null,
+        pinId: p.pinId,
+      },
+    };
+  }
+
+  // Start a periodic GQL poll for pinned messages on the active Twitch
+  // channel. Runs every 8s (pin state rarely changes faster). Caches
+  // the last result in this._gqlPinCards so _handleHighlights merges
+  // them into whatever DOM-sourced highlight cards are active.
+  _startPinPoll() {
+    if (this._pinPollT) return;
+    this._gqlPinCards = [];
+    const tick = async () => {
+      try {
+        const channel = this.config.channel;
+        if (!channel) return;
+        const resp = await chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel });
+        if (!resp?.ok) { this._gqlPinCards = []; return; }
+        this._gqlPinCards = (resp.pins || []).map((p) => this._pinFromGql(p));
+        // Re-render the banner merging freshly-fetched pins with whatever
+        // DOM-mirror highlights are currently showing.
+        this._rerenderHighlights();
+      } catch {}
+    };
+    tick();
+    this._kickDomHighlightScan();
+    // 4s interval — fast enough to catch new pins promptly without
+    // hammering GQL. Plus on every sidepanel focus (visibilitychange
+    // → visible) kick an immediate tick so coming back from another
+    // tab shows an up-to-date pin right away.
+    this._pinPollT = setInterval(() => {
+      tick();
+      this._kickDomHighlightScan();
+    }, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        tick();
+        this._kickDomHighlightScan();
+      }
+    });
+  }
+
+  // Ask every Twitch tab to snapshot highlight cards NOW and relay them
+  // back via TW_HIGHLIGHTS. Cuts boot-time DOM pin latency from "wait for
+  // next MutationObserver tick" (could be seconds) to one message round
+  // trip (~10-30ms). Works even when chat column is hidden/not scrolling.
+  async _kickDomHighlightScan() {
+    try {
+      const tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' });
+      for (const t of tabs) {
+        try { chrome.tabs.sendMessage(t.id, { type: 'SCAN_HIGHLIGHTS_NOW' }).catch(() => {}); } catch {}
+      }
+    } catch {}
+  }
+
+  // Merge DOM + GQL pin data + last-good cache into a single card.
+  // Each field prefers in order: DOM (current tick) → cache (last-good
+  // DOM snapshot) → GQL (server metadata). Keeps author/badges/time
+  // visible even when DOM flips the pin into its collapsed footerless
+  // state, and keeps real emote URLs visible even when GQL-only data
+  // is what we'd otherwise fall back to.
+  _mergePinCard(domCard, gqlCard) {
+    if (!domCard && !gqlCard) return null;
+    const d = domCard?.pin || {};
+    const g = gqlCard?.pin || {};
+    const cached = this._lastGoodPinCache || {};
+    const pick = (key) => {
+      const dv = d[key];
+      if (Array.isArray(dv) ? dv.length : dv) return dv;
+      const cv = cached[key];
+      if (Array.isArray(cv) ? cv.length : cv) return cv;
+      return g[key] || null;
+    };
+    const pin = {
+      pinnedBy: pick('pinnedBy'),
+      author: pick('author'),
+      authorColor: pick('authorColor'),
+      authorBadges: pick('authorBadges') || [],
+      bodySegments: pick('bodySegments') || [],
+      timeText: pick('timeText'),
+      pinId: d.pinId || g.pinId || cached.pinId,
+    };
+    // Refresh the cache whenever this tick had a DOM extract with a
+    // complete footer (author + time) — that's our gold standard.
+    if (d.author && d.timeText && d.bodySegments?.length) {
+      this._lastGoodPinCache = { ...pin };
+    }
+    const text = (domCard?.text || gqlCard?.text || '').slice(0, 200) || 'Pinned';
+    return { kind: 'pin', text, pin };
+  }
+
+  // Trigger a re-render of the highlights banner using cached non-pin
+  // DOM cards only — pin data is merged inside _handleHighlights from
+  // _gqlPinCards + _lastGoodPinCache. Pushing GQL pins into msg.cards
+  // here (previous behaviour) caused the merge to read GQL body
+  // segments as if they were DOM, clobbering the real emote URLs with
+  // plaintext emote names.
+  _rerenderHighlights() {
+    const msg = {
+      channel: this.config.channel,
+      cards: [...(this._lastDomHighlightCards || [])],
+    };
+    this._rerenderTag = msg;
+    this._handleHighlights(msg);
+  }
+
+  _handleHighlights(msg) {
+    // Channel-scoped: ignore highlights from other open Twitch tabs.
+    if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    // Cache cleanup logic — only runs for DOM-sourced TW_HIGHLIGHTS
+    // messages (not our own _rerenderHighlights callbacks, which carry
+    // the _rerenderTag identity). Splits pin cards out from the rest so
+    // that re-renders never accidentally re-inject stale pins from the
+    // cache (which caused 4x duplicate "Připnuto uživatelem …" banners).
+    // Caching + pin merge. DOM-sourced TW_HIGHLIGHTS message carries
+    // fresh DOM pin data in msg.cards; our own _rerenderHighlights
+    // carries only non-pin cards. Either way we merge per-field with
+    // GQL + cache and produce a single best-of pin card.
+    const isRerender = msg === this._rerenderTag;
+    if (msg.cards) {
+      const domCards = msg.cards;
+      const domPins = isRerender ? [] : domCards.filter((c) => c?.kind === 'pin');
+      if (!isRerender) {
+        this._lastDomHighlightCards = domCards.filter((c) => c?.kind !== 'pin');
+      }
+      const gqlPin = (this._gqlPinCards || [])[0];
+      const domPin = domPins[0];
+      const mergedPin = this._mergePinCard(domPin, gqlPin);
+      const realPins = mergedPin ? [mergedPin] : [];
+      // Mock pins (from /uc pin) stack on top of any real pin so the
+      // user can compare layouts side by side. They auto-expire after
+      // 30s via _mockPinExpiryT.
+      const mockPins = this._mockPinCards || [];
+      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...realPins, ...mockPins] };
+    }
+    const banner = document.getElementById('highlights-banner');
+    if (!banner) return;
+    const cards = (msg.cards || []).filter((c) => c && c.text);
+    if (!cards.length) {
+      banner.classList.add('hidden');
+      banner.innerHTML = '';
+      this._lastHighlightsHash = '';
+      return;
+    }
+    // Idempotency guard: if the rendered cards haven't actually changed
+    // (same kind + text + pin identity + segment URLs), skip the DOM
+    // re-mount. Previously we tore the banner down and rebuilt every 4s
+    // poll tick, which (a) reset the user's collapse toggle click and
+    // (b) looked like a refresh flicker. Hash covers the visible data;
+    // anything else (e.g. timestamp difference between pins) warrants
+    // a rebuild.
+    const hash = cards.map((c) => {
+      const pin = c.pin || {};
+      const segs = (pin.bodySegments || []).map((s) => s.type === 'emote' ? `E:${s.alt}:${s.url || ''}` : `T:${s.value || ''}`).join('|');
+      const badges = (pin.authorBadges || []).map((b) => b.url).join(',');
+      return [
+        c.kind,
+        (c.text || '').slice(0, 200),
+        pin.pinId || '',
+        pin.author || '',
+        pin.authorColor || '',
+        badges,
+        segs,
+        pin.timeText || '',
+      ].join('§');
+    }).join('◊');
+    if (hash === this._lastHighlightsHash) return;
+    this._lastHighlightsHash = hash;
+    banner.classList.remove('hidden', 'has-accent');
+    banner.style.removeProperty('--hl-accent-r');
+    banner.style.removeProperty('--hl-accent-g');
+    banner.style.removeProperty('--hl-accent-b');
+    // Preserve per-pin collapsed state across re-renders so the user's
+    // chevron click isn't undone by the next poll.
+    const preservedCollapse = new Map();
+    for (const old of banner.querySelectorAll('.hl-card.hl-pin .hl-pin-wrap')) {
+      const key = old.dataset.pinKey;
+      if (key) preservedCollapse.set(key, old.classList.contains('collapsed'));
+    }
+    banner.innerHTML = '';
+    this._pendingPinCollapse = preservedCollapse;
+    for (const c of cards) {
+      const item = document.createElement('div');
+      item.className = 'hl-card hl-' + (c.kind || 'generic');
+
+      if (c.kind === 'raid') {
+        // Prominent raid layout: header bar with pulsing rocket + label,
+        // main row with avatar + structured text highlighting raider
+        // and target channel names.
+        item.appendChild(this._buildRaidCard(c));
+      } else if (c.kind === 'pin') {
+        item.appendChild(this._buildPinCard(c));
+      } else {
+        if (c.avatar) {
+          const av = document.createElement('img');
+          av.className = 'hl-avatar';
+          av.src = c.avatar;
+          av.alt = '';
+          item.appendChild(av);
+        } else {
+          const icon = document.createElement('span');
+          icon.className = 'hl-icon';
+          icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
+            : c.kind === 'gift-leaderboard' ? '\u{1F381}'
+            : '\u2728';
+          item.appendChild(icon);
+        }
+        const body = document.createElement('span');
+        body.className = 'hl-body';
+        body.textContent = c.text;
+        item.appendChild(body);
+      }
+      banner.appendChild(item);
+    }
+  }
+
+  _buildPinCard(c) {
+    // Structured pin render — expects c.pin = { pinnedBy, author,
+    // authorColor, authorBadges[], bodySegments[], timeText }.
+    const pin = c.pin || {};
+    const pinnedBy = pin.pinnedBy || 'uživatel';
+    const author = pin.author;
+    const authorColor = this.emotes._sc(pin.authorColor) || '#e6a11a';
+    const timeText = pin.timeText || '';
+
+    // Build body HTML from segments. Twitch's pin DOM keeps body as a
+    // text-fragment so 7TV/BTTV/FFZ emotes arrive as plain text (their
+    // Vue replacer doesn't run inside pin subtrees). Tokenize each text
+    // segment by whitespace and resolve every word against our local
+    // emote library, falling back to linkified text. Plus strip the UC
+    // marker (Braille blank) so it doesn't leak as visible whitespace.
+    const em = this.emotes;
+    // Each emote map stores URL strings directly (not {url: ...} objects),
+    // so the lookup result IS the URL — must not access .url on it.
+    const resolveEmote = (name) =>
+      em?.twitchNative?.get(name)
+      || em?.channel7tv?.get(name)
+      || em?.global7tv?.get(name)
+      || em?.bttvEmotes?.get(name)
+      || em?.ffzEmotes?.get(name)
+      || em?.kickNative?.get(name)
+      || em?.ucEmotes?.get(name);
+    const renderTextWithEmotes = (raw) => {
+      const cleaned = String(raw || '').replace(new RegExp(UC_MARKER, 'g'), '');
+      if (!cleaned) return '';
+      const parts = cleaned.split(/(\s+)/);
+      return parts.map((tok) => {
+        if (!tok) return '';
+        if (/^\s+$/.test(tok)) return em._eh(tok);
+        const url = resolveEmote(tok);
+        if (typeof url === 'string' && url) {
+          return `<img class="emote" src="${em._ea(url)}" alt="${em._eh(tok)}">`;
+        }
+        return em._linkify(tok);
+      }).join('');
+    };
+    const bodyHtml = (() => {
+      if (!pin.bodySegments?.length) return renderTextWithEmotes(c.text || '');
+      return pin.bodySegments.map((s) => {
+        if (s.type === 'emote') {
+          const alt = em._eh(s.alt || '');
+          return `<img class="emote" src="${em._ea(s.url)}" alt="${alt}">`;
+        }
+        return renderTextWithEmotes(s.value || '');
+      }).join('');
+    })();
+
+    // Badges row before author name
+    const badgesHtml = (pin.authorBadges || []).map((b) => (
+      `<img class="hl-pin-badge" src="${this.emotes._ea(b.url)}" alt="${this.emotes._eh(b.alt || '')}" title="${this.emotes._eh(b.alt || '')}">`
+    )).join('');
+
+    const wrap = document.createElement('div');
+    wrap.className = 'hl-pin-wrap';
+
+    wrap.innerHTML = `
+      <div class="hl-pin-head">
+        <span class="hl-pin-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+          </svg>
+        </span>
+        <span class="hl-pin-head-text">
+          Připnuto uživatelem
+          <strong class="hl-pin-head-user">${this.emotes._eh(pinnedBy)}</strong>
+        </span>
+        <button class="hl-pin-btn hl-pin-btn-hide" title="Schovat" aria-label="Schovat">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M12 4c-5.5 0-10 8-10 8s4.5 8 10 8 10-8 10-8-4.5-8-10-8Zm0 14c-4.1 0-7.5-5.2-8.1-6 .6-.8 4-6 8.1-6s7.5 5.2 8.1 6c-.6.8-4 6-8.1 6Z"/>
+            <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/>
+          </svg>
+        </button>
+        <button class="hl-pin-btn hl-pin-btn-toggle" title="Rozbalit" aria-label="Rozbalit">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path class="hl-pin-chev" d="M6 9l6 6 6-6z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hl-pin-body">
+        <div class="hl-pin-body-text">${bodyHtml}</div>
+        ${author || timeText ? `
+          <div class="hl-pin-foot">
+            ${badgesHtml ? `<span class="hl-pin-badges">${badgesHtml}</span>` : ''}
+            ${author ? `<span class="hl-pin-author" style="color:${readableColor(authorColor)}">${this.emotes._eh(author)}</span>` : ''}
+            ${timeText ? `<span class="hl-pin-time">${this.emotes._eh(timeText)}</span>` : ''}
+          </div>
+        ` : ''}
+      </div>
+    `;
+
+    const card = wrap;
+    // Restore the user's previously-toggled collapsed state if this pin
+    // identity matched an earlier render; otherwise start collapsed.
+    const pinKey = pin.pinId || `anon-${pinnedBy}-${author}`;
+    card.dataset.pinKey = pinKey;
+    const wasCollapsed = this._pendingPinCollapse?.get(pinKey);
+    // Default to collapsed on first render; on re-render, honour whatever
+    // the user's last toggle state was (wasCollapsed === false means the
+    // user expanded it manually — keep it expanded).
+    if (wasCollapsed !== false) card.classList.add('collapsed');
+    const toggleBtn = wrap.querySelector('.hl-pin-btn-toggle');
+    const hideBtn = wrap.querySelector('.hl-pin-btn-hide');
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.classList.toggle('collapsed');
+      toggleBtn.title = card.classList.contains('collapsed') ? 'Rozbalit' : 'Sbalit';
+    });
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = wrap.closest('.hl-card');
+      if (host) host.style.display = 'none';
+    });
+
+    // Propagate warm amber/gold accent to the outer banner so
+    // #highlights-banner background matches the pin palette instead
+    // of the default cyan/purple. Value matches our pin-banner
+    // amber (#e6a11a ≈ 230,161,26).
+    setTimeout(() => {
+      const host = wrap.closest('.hl-card');
+      const banner = wrap.closest('#highlights-banner');
+      if (host) {
+        host.classList.add('has-accent');
+        host.style.setProperty('--hl-accent-r', '230');
+        host.style.setProperty('--hl-accent-g', '161');
+        host.style.setProperty('--hl-accent-b', '26');
+      }
+      if (banner) {
+        banner.classList.add('has-accent');
+        banner.style.setProperty('--hl-accent-r', '230');
+        banner.style.setProperty('--hl-accent-g', '161');
+        banner.style.setProperty('--hl-accent-b', '26');
+      }
+    }, 0);
+
+    return wrap;
+  }
+
+  _buildRaidCard(c) {
+    const wrap = document.createElement('div');
+    wrap.className = 'hl-raid-wrap';
+
+    // Header: pulsing rocket + "NÁJEZD" gold-gradient label
+    const header = document.createElement('div');
+    header.className = 'hl-raid-header';
+    header.innerHTML = '<span class="hl-raid-icon" aria-hidden="true">\u{1F680}</span>'
+      + '<span class="hl-raid-label">N\u00C1JEZD</span>';
+    wrap.appendChild(header);
+
+    // Body row: avatar + structured text
+    const row = document.createElement('div');
+    row.className = 'hl-raid-row';
+    if (c.avatar) {
+      const av = document.createElement('img');
+      av.className = 'hl-raid-avatar';
+      av.crossOrigin = 'anonymous';
+      av.src = c.avatar;
+      av.alt = '';
+      // On load, sample a dominant colour from the avatar and apply it
+      // as CSS custom properties on the raid card — gives the banner
+      // a background tuned to the raider's brand without hardcoding
+      // per-channel palettes.
+      av.addEventListener('load', () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 24;
+          canvas.height = 24;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(av, 0, 0, 24, 24);
+          const { data } = ctx.getImageData(0, 0, 24, 24);
+          // Histogram of quantised hues + chroma — picks the DOMINANT
+          // colour instead of averaging (averaging yellow+blue yields
+          // teal which bears no resemblance to either input).
+          const buckets = new Map();
+          for (let i = 0; i < data.length; i += 4) {
+            const pr = data[i], pg = data[i + 1], pb = data[i + 2], pa = data[i + 3];
+            if (pa < 180) continue;
+            const max = Math.max(pr, pg, pb), min = Math.min(pr, pg, pb);
+            const chroma = max - min;
+            if (chroma < 30) continue; // skip grey / near-grey pixels
+            const sum = pr + pg + pb;
+            if (sum < 90 || sum > 680) continue;
+            // Quantise to 6×6×6 RGB cube (216 buckets)
+            const key = ((pr >> 5) * 64) + ((pg >> 5) * 8) + (pb >> 5);
+            const cur = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0, chroma: 0 };
+            cur.r += pr; cur.g += pg; cur.b += pb; cur.n++; cur.chroma += chroma;
+            buckets.set(key, cur);
+          }
+          // Pick bucket with highest (count × avgChroma) — emphasises
+          // a saturated dominant colour over a large grey backdrop.
+          let best = null, bestScore = 0;
+          for (const b of buckets.values()) {
+            const score = b.n * (b.chroma / b.n);
+            if (score > bestScore) { bestScore = score; best = b; }
+          }
+          if (best) {
+            let r = Math.round(best.r / best.n);
+            let g = Math.round(best.g / best.n);
+            let b = Math.round(best.b / best.n);
+            // Raid-specific warmth bias: blend sampled colour 60/40
+            // with raid-red base so cool avatars don't turn the raid
+            // banner into a cold teal callout. Keeps the avatar's
+            // hue recognisable but anchors the palette to "raid".
+            if (c.kind === 'raid') {
+              const RAID_R = 255, RAID_G = 80, RAID_B = 30;
+              r = Math.round(r * 0.6 + RAID_R * 0.4);
+              g = Math.round(g * 0.6 + RAID_G * 0.4);
+              b = Math.round(b * 0.6 + RAID_B * 0.4);
+            }
+            const card = av.closest('.hl-card');
+            if (card) {
+              card.style.setProperty('--hl-accent-r', r);
+              card.style.setProperty('--hl-accent-g', g);
+              card.style.setProperty('--hl-accent-b', b);
+              card.classList.add('has-accent');
+            }
+            // Propagate accent to the outer banner so its own
+            // background/border tunes to the card's palette instead
+            // of the fixed cyan/purple gradient.
+            const banner = av.closest('#highlights-banner');
+            if (banner) {
+              banner.style.setProperty('--hl-accent-r', r);
+              banner.style.setProperty('--hl-accent-g', g);
+              banner.style.setProperty('--hl-accent-b', b);
+              banner.classList.add('has-accent');
+            }
+          }
+        } catch { /* CORS or sample failed — keep default palette */ }
+      }, { once: true });
+      row.appendChild(av);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'hl-raid-body';
+    // Try to parse the Twitch Czech raid callout into structured parts:
+    // "{raider} provádí nájezd na kanál {target} s {N} nájezdníky. Nájezd za +{P} bodů."
+    // English fallback: "{raider} is raiding {target} with {N} viewers. Raid in +{P} points."
+    const m = c.text.match(/^([A-Za-z0-9_]+)[^A-Za-z0-9_]+?([A-Za-z0-9_]+)[^0-9]+?(\d+[\d\s]*)/);
+    if (m) {
+      const raider = m[1];
+      const target = m[2];
+      const viewers = m[3].replace(/\s/g, '');
+      const tail = c.text.match(/\+(\d+[\d\s]*)/);
+      const pts = tail ? tail[1].replace(/\s/g, '') : null;
+      const title = document.createElement('div');
+      title.className = 'hl-raid-title';
+      title.innerHTML = `<strong class="hl-raid-raider">${this.emotes._eh(raider)}</strong>`
+        + ` <span class="hl-raid-arrow">\u2192</span> `
+        + `<strong class="hl-raid-target">${this.emotes._eh(target)}</strong>`;
+      const meta = document.createElement('div');
+      meta.className = 'hl-raid-meta';
+      meta.innerHTML = `<span>\u{1F465} ${viewers}</span>`
+        + (pts ? `<span class="hl-raid-points">\u{2728} +${pts}</span>` : '');
+      body.appendChild(title);
+      body.appendChild(meta);
+    } else {
+      // Fallback — keep the raw text if parsing didn't match the expected shape.
+      body.textContent = c.text;
+    }
+    row.appendChild(body);
+
+    // Close button — dismisses the raid by clicking the matching
+    // close control on Twitch's raid card in the DOM.
+    const close = document.createElement('button');
+    close.className = 'hl-raid-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Zrušit nájezd');
+    close.title = 'Zrušit nájezd';
+    close.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">'
+      + '<path d="M6.414 5 5 6.414l5.588 5.588L5 17.59l1.414 1.414 5.588-5.588 5.588 5.588 1.414-1.414-5.588-5.588 5.588-5.588L17.59 5l-5.588 5.588L6.414 5Z"/></svg>';
+    close.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      // Optimistic hide + ask content script to click Twitch's close.
+      const card = wrap.closest('.hl-card');
+      if (card) card.style.display = 'none';
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        const ch = (this.config.channel || '').toLowerCase();
+        const target = tabs.find((t) => {
+          try {
+            const parts = new URL(t.url).pathname.toLowerCase().split('/').filter(Boolean);
+            return parts[0] === ch || (parts[0] === 'popout' && parts[1] === ch);
+          } catch { return false; }
+        }) || tabs[0];
+        if (target?.id) {
+          chrome.tabs.sendMessage(target.id, { type: 'TW_DISMISS_RAID' }).catch(() => {});
+        }
+      } catch {}
+    });
+    row.appendChild(close);
+
+    wrap.appendChild(row);
+
+    // Countdown progress bar — mirrors vanilla Twitch's raid banner
+    // which shows a depleting timer until the raid executes. Duration
+    // comes from the card (Twitch typically uses 90s); falls back to
+    // 10s for mocks / when we can't parse it out.
+    const durSec = c.raidCountdownSec || 10;
+    const bar = document.createElement('div');
+    bar.className = 'hl-raid-bar';
+    const fill = document.createElement('span');
+    fill.className = 'hl-raid-bar-fill';
+    fill.style.animationDuration = durSec + 's';
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+    return wrap;
+  }
+
+  _handleDomRedeem(data) {
+    if (!data?.username) return;
+    // Only mirror redeems for the currently-connected Twitch channel.
+    const channelMatch = !data.channel
+      || data.channel.toLowerCase() === (this.config.channel || '').toLowerCase();
+    if (!channelMatch) return;
+    const key = `dom-redeem:${data.username.toLowerCase()}|${data.rewardName || ''}|${Math.floor((data.timestamp || Date.now()) / 5000)}`;
+    if (!this._domRedeemSeen) this._domRedeemSeen = new Set();
+    if (this._domRedeemSeen.has(key)) return;
+    this._domRedeemSeen.add(key);
+    if (this._domRedeemSeen.size > 500) {
+      // Simple cap to avoid unbounded growth on long sessions.
+      const first = this._domRedeemSeen.values().next().value;
+      this._domRedeemSeen.delete(first);
+    }
+
+    // Merge path: if IRC already rendered a redeem (with the "Channel Points
+    // Reward" placeholder because IRC doesn't expose reward names) for the
+    // same user in the last ~10s, upgrade its name + cost in place instead
+    // of emitting a duplicate message.
+    const uname = data.username.toLowerCase();
+    const now = data.timestamp || Date.now();
+    const recent = this.chatEl.querySelectorAll('.msg.redeem[data-platform="twitch"]');
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const el = recent[i];
+      const un = el.querySelector('.un');
+      if (!un || un.dataset.username !== uname) continue;
+      const mid = el.dataset.msgId;
+      const cached = mid ? this._msgCache.find((m) => m.id === mid) : null;
+      const ts = cached?.timestamp || 0;
+      if (Math.abs(now - ts) > 10000) continue;
+      // Upgrade reward name and append cost pill
+      const nameEl = el.querySelector('.redeem-body strong');
+      if (nameEl && data.rewardName) nameEl.textContent = data.rewardName;
+      if (data.rewardCost != null && !el.querySelector('.redeem-cost')) {
+        const cost = document.createElement('span');
+        cost.className = 'redeem-cost';
+        cost.textContent = `\u25CE ${data.rewardCost}`;
+        el.appendChild(cost);
+      }
+      if (cached) {
+        if (data.rewardName) cached.rewardName = data.rewardName;
+        if (data.rewardCost != null) cached.rewardCost = data.rewardCost;
+        chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+      }
+      return;
+    }
+
+    this._addMessage({
+      platform: 'twitch',
+      username: data.username,
+      message: data.message || '',
+      color: twitchDefaultColor(data.username),
+      _needsColorLookup: true,
+      timestamp: data.timestamp || Date.now(),
+      id: `dom-redeem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      isRedeem: true,
+      rewardName: data.rewardName || 'Channel Points Reward',
+      rewardCost: data.rewardCost || null,
+      _fromDom: true,
+    });
+  }
+
+  _renderGiftEvent(el, msg) {
+    // Gift icon (SVG, currentColor — tinted by CSS)
+    const icon = document.createElement('span');
+    icon.className = 'gift-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="20 12 20 22 4 22 4 12"/>' +
+      '<rect x="2" y="7" width="20" height="5"/>' +
+      '<line x1="12" y1="22" x2="12" y2="7"/>' +
+      '<path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>' +
+      '<path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>' +
+      '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'gift-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    body.appendChild(un);
+
+    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.giftPlan] || '1';
+
+    if (msg.isGiftBundle) {
+      // "username – darovaná předplatná"  + count pill on right
+      body.appendChild(document.createTextNode(' \u2013 darovaná předplatná'));
+      const count = document.createElement('span');
+      count.className = 'gift-count';
+      count.textContent = `\u00D7${msg.giftCount || 1}`;
+      el.appendChild(body);
+      el.appendChild(count);
+      return;
+    }
+
+    // isSubGift: "Gifted a Tier N Sub to Recipient"
+    const line = document.createElement('div');
+    line.className = 'gift-line';
+    line.appendChild(document.createTextNode('Gifted a '));
+    const tierSpan = document.createElement('strong');
+    tierSpan.textContent = `Tier ${tier}`;
+    line.appendChild(tierSpan);
+    line.appendChild(document.createTextNode(' Sub to '));
+    const recipSpan = document.createElement('strong');
+    recipSpan.textContent = msg.giftRecipient || '?';
+    line.appendChild(recipSpan);
+    body.appendChild(line);
+    el.appendChild(body);
+  }
+
+  _renderSubEvent(el, msg) {
+    const isPrime = String(msg.subPlan || '').toLowerCase() === 'prime';
+    if (isPrime) el.classList.add('prime');
+    else if (msg.subPlan === '2000') el.classList.add('tier-2');
+    else if (msg.subPlan === '3000') el.classList.add('tier-3');
+    const icon = document.createElement('span');
+    icon.className = 'sub-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    // Prime gets a crown SVG (Twitch's Prime branding) instead of the
+    // generic star, so it visually stands apart from Tier 1/2/3 subs.
+    icon.innerHTML = isPrime
+      ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+        + '<path d="M2 7l4 4 6-7 6 7 4-4-2 12H4L2 7zm3 14h14v2H5v-2z"/>'
+        + '</svg>'
+      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+        + '<path d="M12 2l2.9 6.9L22 10l-5.5 4.8L18 22l-6-3.5L6 22l1.5-7.2L2 10l7.1-1.1z"/>'
+        + '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'sub-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    body.appendChild(un);
+
+    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
+    const tierLabel = isPrime ? 'Prime' : `Tier ${tier}`;
+    const line = document.createElement('div');
+    line.className = 'sub-line';
+    const prefix = document.createElement('strong');
+    prefix.textContent = 'Subscribed';
+    line.appendChild(prefix);
+    line.appendChild(document.createTextNode(` with `));
+    const tierSpan = document.createElement('strong');
+    tierSpan.className = isPrime ? 'sub-tier-prime' : 'sub-tier';
+    tierSpan.textContent = tierLabel;
+    line.appendChild(tierSpan);
+    line.appendChild(document.createTextNode('.'));
+    if (msg.subMonths && msg.subMonths > 1) {
+      line.appendChild(document.createTextNode(` They've subscribed for `));
+      const m = document.createElement('strong');
+      m.textContent = `${msg.subMonths} month${msg.subMonths === 1 ? '' : 's'}`;
+      line.appendChild(m);
+      if (msg.subStreak && msg.subStreak > 1) {
+        line.appendChild(document.createTextNode(`, `));
+        const s = document.createElement('strong');
+        s.textContent = `${msg.subStreak} month${msg.subStreak === 1 ? '' : 's'} in a row`;
+        line.appendChild(s);
+      }
+      line.appendChild(document.createTextNode('.'));
+    }
+    body.appendChild(line);
+
+    // Optional attached message body
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'sub-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
+  _renderRedeemEvent(el, msg) {
+    const icon = document.createElement('span');
+    icon.className = 'redeem-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">' +
+      '<path d="M12 2l3 7 7 .5-5.5 4.5L18 21l-6-4-6 4 1.5-7L2 9.5 9 9z"/>' +
+      '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'redeem-body';
+
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    body.appendChild(un);
+    body.appendChild(document.createTextNode(' redeemed '));
+    const rewardSpan = document.createElement('strong');
+    rewardSpan.textContent = msg.rewardName || 'Channel Points Reward';
+    body.appendChild(rewardSpan);
+    el.appendChild(body);
+
+    if (msg.rewardCost != null) {
+      const cost = document.createElement('span');
+      cost.className = 'redeem-cost';
+      cost.textContent = `\u25CE ${msg.rewardCost}`;
+      el.appendChild(cost);
+    }
+
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'redeem-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      el.appendChild(tx);
+    }
+  }
+
   _processMentions(el, platform) {
     if (!el) return;
     // Pattern: start-of-string OR a non-identifier character, then @name.
@@ -4155,18 +6158,72 @@ class UnityChat {
 
         const span = document.createElement('span');
         span.className = 'mention';
-        const entry = this._chatUsers.get(`${platform}:${name.toLowerCase()}`)
-          || this._chatUsers.get(name.toLowerCase());
+        const lname = name.toLowerCase();
+        span.dataset.mentionUser = lname;
+        const entry = this._chatUsers.get(`${platform}:${lname}`)
+          || this._chatUsers.get(lname);
         const color = entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
-          if (sanitized) span.style.color = sanitized;
+          if (sanitized) span.style.color = readableColor(sanitized);
+        } else if (platform === 'twitch') {
+          // Unknown user — they've been @mentioned but haven't spoken in
+          // our session yet. Queue a Twitch color lookup so the mention
+          // retroactively gets their real chat color once resolved.
+          this._enqueueTwitchColorLookup(lname);
         }
         span.textContent = '@' + name;
         frag.appendChild(span);
         last = start + name.length + 1;
       }
 
+      if (!frag) continue;
+      if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+
+    // Pass 2: bare-name mentions (no @ prefix). Scan remaining text nodes
+    // and wrap any whole word that matches an existing chatter in
+    // _chatUsers — restricted so we don't accidentally color generic
+    // words. Plain key check is enough because _chatUsers only contains
+    // entries for users we've actually seen (chat history + scrape +
+    // queued mentions), so common Czech/English words don't collide.
+    const bareRe = /[A-Za-z0-9_]{3,25}/g;
+    const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes2 = [];
+    let n2;
+    while ((n2 = walker2.nextNode())) {
+      // Skip text nodes already inside a .mention (don't re-wrap @mentions)
+      if (n2.parentNode?.classList?.contains('mention')) continue;
+      nodes2.push(n2);
+    }
+    for (const textNode of nodes2) {
+      const text = textNode.nodeValue;
+      if (!text) continue;
+      bareRe.lastIndex = 0;
+      let match;
+      let last = 0;
+      let frag = null;
+      while ((match = bareRe.exec(text)) !== null) {
+        const word = match[0];
+        const lname = word.toLowerCase();
+        const entry = this._chatUsers.get(`${platform}:${lname}`)
+          || this._chatUsers.get(lname);
+        // Require a chatter entry — and skip the message author itself
+        // (their own username appears literally inside the message body
+        // on /me lines, no need to "mention" themselves).
+        if (!entry || !entry.color) continue;
+        if (!frag) frag = document.createDocumentFragment();
+        if (match.index > last) frag.appendChild(document.createTextNode(text.substring(last, match.index)));
+        const span = document.createElement('span');
+        span.className = 'mention bare';
+        span.dataset.mentionUser = lname;
+        const sanitized = this.emotes._sc(entry.color);
+        if (sanitized) span.style.color = readableColor(sanitized);
+        span.textContent = word;
+        frag.appendChild(span);
+        last = match.index + word.length;
+      }
       if (!frag) continue;
       if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
       textNode.parentNode.replaceChild(frag, textNode);
@@ -4338,8 +6395,8 @@ class UnityChat {
       if (!cached) continue;
       const ctx = { platform, author: cached.username || username };
       if (platform === 'twitch') {
-        const emotesTag = cached.replyTo ? null : cached.twitchEmotes;
-        tx.innerHTML = this.emotes.renderTwitch(cached.message, emotesTag, ctx);
+        ctx.emotesOffset = cached.twitchEmotesOffset || 0;
+        tx.innerHTML = this.emotes.renderTwitch(cached.message, cached.twitchEmotes, ctx);
       } else if (platform === 'kick') {
         tx.innerHTML = this.emotes.renderKick(cached.kickContent || cached.message, ctx);
       } else {
@@ -4364,7 +6421,90 @@ class UnityChat {
     }
   }
 
+  // Resolve dedup entry (ids Set + content-key Set) for a message's platform
+  // and current channel. Creates the entry on first use, bumps it to the top
+  // of the LRU, and evicts the oldest entry if we're over the channel cap.
+  // Returns {ids, content} — callers mutate them directly. Returns null if
+  // the platform/channel can't be resolved (let the caller skip dedup).
+  _dedupEntry(msg) {
+    const platform = msg?.platform;
+    if (!platform) return null;
+    let channel;
+    if (platform === 'twitch') channel = this.config.channel;
+    else if (platform === 'youtube') channel = this.config.ytChannel;
+    else if (platform === 'kick') channel = this.config.kickChannel || this.config.channel;
+    if (!channel) return null;
+    const key = platform + ':' + String(channel).toLowerCase();
+    let entry = this._dedupChannels.get(key);
+    if (!entry) {
+      entry = { ids: new Set(), content: new Set() };
+      this._dedupChannels.set(key, entry);
+    }
+    // LRU bump: move key to end (most recent)
+    const lruIdx = this._dedupLRU.indexOf(key);
+    if (lruIdx !== -1) this._dedupLRU.splice(lruIdx, 1);
+    this._dedupLRU.push(key);
+    // Evict oldest if over channel cap
+    while (this._dedupLRU.length > this._dedupMaxChannels) {
+      const oldest = this._dedupLRU.shift();
+      this._dedupChannels.delete(oldest);
+    }
+    return entry;
+  }
+
+  // FIFO trim a channel's Set — Sets preserve insertion order, so dropping
+  // the first N entries removes the oldest. Called after every add.
+  _dedupTrim(set) {
+    const cap = this._dedupMaxPerChannel;
+    if (set.size <= cap) return;
+    const over = set.size - cap;
+    const it = set.values();
+    for (let i = 0; i < over; i++) set.delete(it.next().value);
+  }
+
   _addMessage(msg) {
+    // Defensive drop: a regular chat message with no body is just a
+    // "username:" line with empty text — these were showing up in
+    // production (confirmed in debug logs) from scraped system lines
+    // or IRC edge cases. System events (raid/sub/announcement/gift/
+    // redeem/highlight/cleared/action) have their own renderers that
+    // don't need a body, so we let those through.
+    // Strip UC_MARKER (Braille blank — intentionally NOT whitespace so
+    // Twitch can't normalise it away) before the emptiness check.
+    // Messages may carry their real content in platform-specific fields
+    // (ytRuns for YouTube, kickContent for Kick) even when the plain
+    // `message` string is empty — those must NOT be dropped.
+    const msgProbe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
+    const hasPlatformContent = (msg?.ytRuns?.length > 0) || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
+    const textEmpty = !msgProbe && !hasPlatformContent;
+    const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
+      || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
+      || msg?.isHighlight || msg?._cleared || msg?.isAction;
+    if (textEmpty && !isSystem) {
+      // Log root-cause clues — which source produced an empty message.
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'EmptyMsg',
+          args: [JSON.stringify({
+            platform: msg?.platform,
+            username: msg?.username,
+            id: msg?.id,
+            scraped: !!msg?.scraped,
+            optimistic: !!msg?._optimistic,
+            isAction: !!msg?.isAction,
+            firstMsg: !!msg?.firstMsg,
+            hasReplyTo: !!msg?.replyTo,
+            twitchEmotes: msg?.twitchEmotes,
+            badgesRaw: msg?.badgesRaw,
+            rawType: typeof msg?.message,
+            rawLen: (msg?.message || '').length,
+            rawCodes: [...String(msg?.message || '').slice(0, 16)].map((c) => c.charCodeAt(0)),
+          })],
+        });
+      } catch {}
+      return;
+    }
+
     // First real message dropping in — chat is "live" enough, hide spinner.
     if (!this._loadingClearedByMsg && msg.username) {
       this._loadingClearedByMsg = true;
@@ -4389,19 +6529,19 @@ class UnityChat {
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const prev = this._chatUsers.get(colorKey);
-      // Preserve _fromGQL flag across message updates so we don't re-query a
-      // user we've already resolved. If a new IRC message arrives for a user
-      // whose color was resolved via GQL AND this message has no explicit
-      // color tag (i.e. we're only producing hash fallback), keep the GQL
-      // color — otherwise we'd clobber the correct value with a local guess.
-      const keepGqlColor = prev?._fromGQL && msg._needsColorLookup;
-      const resolvedColor = keepGqlColor ? prev.color : msg.color;
+      // CRITICAL: once we've resolved a user's color via DOM/GQL (the value
+      // already includes Twitch's readability/7TV boost), never downgrade
+      // back to the raw IRC color — even if msg.color is "set" by IRC.
+      // The DOM ground truth IS the rendered color; raw IRC #008000 is just
+      // user input that Twitch+7TV further adjust on display.
+      const resolvedColor = prev?._fromGQL ? (prev.color || msg.color) : msg.color;
       const entry = {
+        ...(prev || {}),
         name: msg.username,
         platform: msg.platform,
         color: resolvedColor,
         badgesRaw: msg.badgesRaw || prev?.badgesRaw || '',
-        _fromGQL: prev?._fromGQL || false,
+        userId: msg.userId || prev?.userId || null,
       };
       if (!prev || prev.color !== resolvedColor || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
         this._chatUsers.set(colorKey, entry);
@@ -4434,14 +6574,15 @@ class UnityChat {
       }
     }
 
-    // Dedup podle ID (cache + live zprávy)
-    if (msg.id) {
-      if (this._seenMsgIds.has(msg.id)) return;
-      this._seenMsgIds.add(msg.id);
-      if (this._seenMsgIds.size > 2000) {
-        const arr = [...this._seenMsgIds];
-        this._seenMsgIds = new Set(arr.slice(-1000));
-      }
+    // Dedup podle ID + content, scoped per-channel via _dedupEntry. LRU caps
+    // total channel count (_dedupMaxChannels) and each channel caps its own
+    // ID/content sets (_dedupMaxPerChannel) so memory stays bounded even on
+    // 8h+ sessions with heavy channel hopping.
+    const dedup = this._dedupEntry(msg);
+    if (msg.id && dedup) {
+      if (dedup.ids.has(msg.id)) return;
+      dedup.ids.add(msg.id);
+      this._dedupTrim(dedup.ids);
     }
 
     // Content-based dedup pro scraped zprávy
@@ -4455,8 +6596,8 @@ class UnityChat {
     const contentKey = msg.username && msg.message
       ? norm(msg.username) + '|' + norm(msg.message)
       : null;
-    if (contentKey) {
-      if (this._seenContentKeys.has(contentKey)) {
+    if (contentKey && dedup) {
+      if (dedup.content.has(contentKey)) {
         if (msg._optimistic) {
           // Optimistic messages always pass through — user can send same text twice
           this._optimisticKeys.set(contentKey, msg.id);
@@ -4474,12 +6615,9 @@ class UnityChat {
           // like !bulgarians always send the same text). Let it through.
         }
       } else {
-        this._seenContentKeys.add(contentKey);
+        dedup.content.add(contentKey);
+        this._dedupTrim(dedup.content);
         if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
-      }
-      if (this._seenContentKeys.size > 2000) {
-        const arr = [...this._seenContentKeys];
-        this._seenContentKeys = new Set(arr.slice(-1000));
       }
     }
 
@@ -4492,12 +6630,24 @@ class UnityChat {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const plainKey = msg.username.toLowerCase();
       const prevEntry = this._chatUsers.get(colorKey);
-      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prevEntry?.badgesRaw || '' };
+      // CRITICAL: preserve resolved state (_fromGQL, _paint, _paintChecked,
+      // userId) from prior lookups. Otherwise every new IRC message wipes
+      // it, the queue refires forever, and renderedColor stays stuck on
+      // the raw IRC color (no DOM/GQL boost, no 7TV paint).
+      const entry = {
+        ...(prevEntry || {}),
+        name: msg.username,
+        platform: msg.platform,
+        // Don't downgrade a GQL/DOM-resolved color back to raw IRC color —
+        // the resolved one already includes Twitch's readability boost.
+        color: prevEntry?._fromGQL ? (prevEntry.color || msg.color) : msg.color,
+        badgesRaw: msg.badgesRaw || prevEntry?.badgesRaw || '',
+        userId: msg.userId || prevEntry?.userId || null,
+      };
       if (msg.color) {
-        const prev = this._chatUsers.get(colorKey);
         this._chatUsers.set(colorKey, entry);
         this._chatUsers.set(plainKey, entry); // for @autocomplete
-        if (!prev || prev.color !== msg.color) {
+        if (!prevEntry || prevEntry.color !== entry.color) {
           if (!this._userColorTimer) {
             this._userColorTimer = setTimeout(() => {
               this._userColorTimer = null;
@@ -4524,10 +6674,13 @@ class UnityChat {
 
     // Učení nativních emotes z příchozích zpráv
     if (msg.platform === 'twitch' && msg.twitchEmotes) {
-      // Pro učení emotes potřebujeme originální pozice - u reply zpráv
-      // je @username stripnutý, ale emote tag má originální pozice.
-      // learnTwitch extrahuje jen name→url mapování, takže OK i s offsetem.
-      this.emotes.learnTwitch(msg.message, msg.twitchEmotes);
+      // Reply messages strip "@username " prefix from message body, but
+      // IRC emote positions still reference the ORIGINAL text including
+      // that prefix. Pass the same offset we use for rendering so we
+      // extract the right substring for the emote name (otherwise we'd
+      // learn garbage like "te" as an alias for :D from a misaligned
+      // reply slice — confirmed in production logs).
+      this.emotes.learnTwitch(msg.message, msg.twitchEmotes, msg.twitchEmotesOffset || 0);
     } else if (msg.platform === 'kick' && msg.kickContent) {
       this.emotes.learnKick(msg.kickContent);
     }
@@ -4583,7 +6736,18 @@ class UnityChat {
     if (msg.superChat) el.classList.add('superchat');
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
-    if (msg.isRaid) el.classList.add('raid');
+    if (msg.isRaid) {
+      el.classList.add('raid');
+      // Prominent header bar matching the announcement style — pulsing
+      // raid icon + RAID label + viewer count. Mirrors vanilla Twitch's
+      // "RAID FROM …" callout so it doesn't get lost in fast chat.
+      const rh = document.createElement('div');
+      rh.className = 'raid-header';
+      const viewers = msg.raidViewers != null ? ` <span class="raid-count">${msg.raidViewers}\u00A0div\u00E1k\u016F</span>` : '';
+      rh.innerHTML = '<span class="raid-icon" aria-hidden="true">\u{1F680}</span>'
+        + '<span class="raid-label">RAID</span>' + viewers;
+      el.appendChild(rh);
+    }
     if (msg.isRaider) el.classList.add('raider-msg');
     if (msg.isSus) el.classList.add('sus-msg');
     if (msg.isAnnouncement) {
@@ -4596,6 +6760,15 @@ class UnityChat {
       header.innerHTML = '<span class="announcement-icon" aria-hidden="true">\u{1F4E3}</span><span class="announcement-label">Announcement</span>';
       el.appendChild(header);
     }
+    const isGift = !!(msg.isGiftBundle || msg.isSubGift);
+    const isSubEvent = !!msg.isSubEvent;
+    const isRedeem = !!msg.isRedeem;
+    const isCustomEvent = isGift || isSubEvent || isRedeem;
+    if (msg.isGiftBundle) el.classList.add('gift-bundle');
+    if (msg.isSubGift) el.classList.add('sub-gift');
+    if (isSubEvent) el.classList.add('sub-event');
+    if (isRedeem) el.classList.add('redeem');
+    if (msg.isHighlight) el.classList.add('highlight');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
     // Cached message that was cleared (timeout/ban/delete) in a previous
     // session — re-apply the visual on render. Live clears go through
@@ -4616,6 +6789,14 @@ class UnityChat {
       (myNick && replyTarget === myNick) ||
       (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
     );
+
+    if (isGift) {
+      this._renderGiftEvent(el, msg);
+    } else if (isSubEvent) {
+      this._renderSubEvent(el, msg);
+    } else if (isRedeem) {
+      this._renderRedeemEvent(el, msg);
+    } else {
 
     // Reply context (Twitch reply-parent tagy)
     if (msg.replyTo) {
@@ -4698,16 +6879,18 @@ class UnityChat {
       const badgeCount = Object.keys(this._twitchBadges).length;
       for (const badge of msg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const url = this._twitchBadges[badge];
+        const entry = this._twitchBadges[badge];
+        const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (!url && badgeCount > 0) {
           console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
         }
         if (url) {
+          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
           const img = document.createElement('img');
           img.className = 'bdg-img';
           img.src = url;
-          img.alt = badge.split('/')[0];
-          img.title = badge.split('/')[0];
+          img.alt = title;
+          img.setAttribute('data-tooltip', title);
           bdg.appendChild(img);
         }
       }
@@ -4720,7 +6903,7 @@ class UnityChat {
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
     // user intent), and we have a paint for this Twitch user. Paint replaces
     // the solid color with a gradient/image + background-clip on the glyphs.
@@ -4747,10 +6930,11 @@ class UnityChat {
 
     const renderCtx = { platform: msg.platform, author: msg.username };
     if (msg.platform === 'twitch') {
-      // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
-      // → pro reply použít jen 7TV/BTTV matching (bez position-based Twitch emotes)
-      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
-      tx.innerHTML = this.emotes.renderTwitch(msg.message, emotesTag, renderCtx);
+      // Reply messages strip the "@username " prefix from the body, but the
+      // emotes tag positions are computed from the ORIGINAL message — shift
+      // by twitchEmotesOffset so subscriber/native emotes resolve in replies.
+      renderCtx.emotesOffset = msg.twitchEmotesOffset || 0;
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, renderCtx);
     } else if (msg.platform === 'kick') {
       tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message, renderCtx);
     } else if (msg.platform === 'youtube' && msg.ytRuns?.length) {
@@ -4790,7 +6974,15 @@ class UnityChat {
       });
     }
 
-    // Hover akce
+    // Hover akce — skip for system events (raid, sub, gift, redeem,
+    // announcement). They aren't user messages: copying their body text
+    // is meaningless and Twitch IRC won't accept a reply to them.
+    const isSystemEvent = msg.isRaid || msg.isAnnouncement
+      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem;
+    if (isSystemEvent) {
+      // Skip the entire actions cluster but keep the closing brace structure
+      // (we still need to fall through to the unread/append/scroll/cache).
+    } else {
     const actions = document.createElement('div');
     actions.className = 'msg-actions';
 
@@ -4837,9 +7029,14 @@ class UnityChat {
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
+    }
+    } // end isSystemEvent guard
 
-    // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu)
-    if (!this.autoScroll) {
+    // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu).
+    // Skip this entire block when prepending *older* messages via lazy scroll-up
+    // hydration — those are not "new", they are pre-existing chat history being
+    // exposed to the viewer.
+    if (!this.autoScroll && !this._hydratingOlder) {
       if (this._unreadCount === 0) {
         // První nová zpráva → vložit separator
         const sep = document.createElement('div');
@@ -4849,11 +7046,34 @@ class UnityChat {
         this.chatEl.appendChild(sep);
       }
       this._unreadCount++;
-      this.scrollBtn.textContent = `↓ ${this._unreadCount} ${this._unreadCount === 1 ? 'nová zpráva' : 'nové zprávy'}`;
+      this.scrollBtn.textContent = `↓ ${this._formatNewMsgCount(this._unreadCount)}`;
       this.scrollBtn.classList.remove('hidden');
     }
 
+    // When autoScroll is off (user scrolled up to read older msgs), lock
+    // scrollTop across the append — even with overflow-anchor:none Chrome
+    // occasionally nudges scrollTop during reflow (scrollbar gutter churn,
+    // image-load height changes, etc). Explicit capture+restore keeps the
+    // user's reading line dead still as new messages stack below.
+    const preserveScroll = !this.autoScroll && !this._hydratingOlder;
+    const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
+
     this.chatEl.appendChild(el);
+
+    // Skip trim/scroll/cache writes while we're prepending *older* msgs via
+    // lazy scroll-up hydration. Those messages are already in _msgCache
+    // (that's where we pulled them from), re-caching would push them to
+    // the end and corrupt chronological order. _trim() would also run
+    // against the fragment instead of the real chat. _scroll() is a no-op
+    // on fragments but harmless — skipping it anyway.
+    if (this._hydratingOlder) return;
+
+    if (preserveScroll && this.chatEl.scrollTop !== prevScrollTop) {
+      // Suppress the scroll handler briefly so our restore doesn't get
+      // re-interpreted as "user paused auto-scroll" when it already was.
+      this._programmaticScrollUntil = performance.now() + 50;
+      this.chatEl.scrollTop = prevScrollTop;
+    }
 
     if (this.msgCount > this.config.maxMessages) this._trim();
     this._scroll();
@@ -4892,6 +7112,10 @@ class UnityChat {
     if (!('firstMsg' in msg)) msg.firstMsg = false;
     if (!('replyTo' in msg)) msg.replyTo = null;
     if (!('twitchEmotes' in msg)) msg.twitchEmotes = null;
+    // _compactMsg strips empty strings to save space — restore message
+    // to '' so the _addMessage empty-body drop fires correctly and we
+    // don't end up with msg.message === undefined inside renderers.
+    if (!('message' in msg)) msg.message = '';
     // Expand string replyTo (legacy compact) to object
     if (typeof msg.replyTo === 'string') {
       msg.replyTo = { id: msg.replyTo, username: null, message: null };
@@ -4921,7 +7145,10 @@ class UnityChat {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el && realMsg.id) el.dataset.msgId = realMsg.id;
-    if (realMsg.id) this._seenMsgIds.add(realMsg.id);
+    if (realMsg.id) {
+      const dedup = this._dedupEntry(realMsg);
+      if (dedup) { dedup.ids.add(realMsg.id); this._dedupTrim(dedup.ids); }
+    }
 
     // Update username color — prefer UnityChat custom color over IRC color
     if (el) {
@@ -4929,24 +7156,30 @@ class UnityChat {
       const resolvedColor = ucColor || realMsg.color;
       if (resolvedColor) {
         const un = el.querySelector('.un');
-        if (un) un.style.color = resolvedColor;
+        if (un) un.style.color = readableColor(resolvedColor);
       }
     }
 
-    // Add badges if the optimistic message didn't have them
-    if (el && realMsg.badgesRaw && !el.querySelector('.bdg')) {
+    // Replace badges with the authoritative IRC-echo set. The optimistic
+    // message seeded its badges from a last-known cache entry which can be
+    // stale (previous channel, session before sub bump, etc.) — we always
+    // overwrite when the real echo lands so visual matches vanilla chat.
+    if (el && realMsg.badgesRaw) {
+      el.querySelectorAll(':scope > .bdg').forEach((n) => n.remove());
       const un = el.querySelector('.un');
       const bdg = document.createElement('span');
       bdg.className = 'bdg';
       for (const badge of realMsg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const url = this._twitchBadges[badge];
+        const entry = this._twitchBadges[badge];
+        const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (url) {
+          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
           const img = document.createElement('img');
           img.className = 'bdg-img';
           img.src = url;
-          img.alt = badge.split('/')[0];
-          img.title = badge.split('/')[0];
+          img.alt = title;
+          img.setAttribute('data-tooltip', title);
           bdg.appendChild(img);
         }
       }
@@ -4958,11 +7191,11 @@ class UnityChat {
       const tx = el.querySelector('.tx');
       if (tx) {
         // Learn new emotes first so renderSegments can find them
-        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
-        const emotesTag = realMsg.replyTo ? null : realMsg.twitchEmotes;
-        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag, {
+        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes, realMsg.twitchEmotesOffset || 0);
+        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, realMsg.twitchEmotes, {
           platform: 'twitch',
           author: realMsg.username,
+          emotesOffset: realMsg.twitchEmotesOffset || 0,
         });
       }
     }
@@ -4976,19 +7209,113 @@ class UnityChat {
       cached.color = ucColor || realMsg.color || cached.color;
       if (realMsg.badgesRaw) cached.badgesRaw = realMsg.badgesRaw;
       if (realMsg.twitchEmotes) cached.twitchEmotes = realMsg.twitchEmotes;
+      if (realMsg.twitchEmotesOffset != null) cached.twitchEmotesOffset = realMsg.twitchEmotesOffset;
       delete cached._optimistic;
       chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
     }
 
-    // Update _chatUsers with the correct color from the real message
+    // Update _chatUsers with the correct color from the real message —
+    // preserve any DOM/GQL-resolved color/paint state so we don't downgrade.
     if (realMsg.color && realMsg.username) {
       const colorKey = `${realMsg.platform}:${realMsg.username.toLowerCase()}`;
-      this._chatUsers.set(colorKey, { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
-      this._chatUsers.set(realMsg.username.toLowerCase(), { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
+      const plainKey = realMsg.username.toLowerCase();
+      const prev = this._chatUsers.get(colorKey);
+      const entry = {
+        ...(prev || {}),
+        name: realMsg.username,
+        platform: realMsg.platform,
+        color: prev?._fromGQL ? (prev.color || realMsg.color) : realMsg.color,
+        userId: realMsg.userId || prev?.userId || null,
+      };
+      this._chatUsers.set(colorKey, entry);
+      this._chatUsers.set(plainKey, entry);
       const myName = (this._platformUsernames[realMsg.platform] || this.config.username || '').toLowerCase();
       if (myName && realMsg.username.toLowerCase() === myName) {
         this._savePlatformColor(realMsg.platform, realMsg.color);
       }
+    }
+  }
+
+  // Prepend a batch of older messages from _msgCache when user scrolls near
+  // the top. Preserves scroll position by measuring scrollHeight before and
+  // after insert and restoring scrollTop via the delta, so the viewport
+  // stays locked on the user's current reading position.
+  async _hydrateOlderMessages() {
+    if (this._hydratingOlder) return;
+    if (!this._msgCache?.length || !(this._hydratedIdx > 0)) return;
+    this._hydratingOlder = true;
+
+    // Show an inline spinner at the very top of the chat so the viewer sees
+    // WHY the scroll just nudged forward. Sits inside chatEl (so its height
+    // counts toward scrollHeight), visible for the ~100-200ms render window,
+    // then swapped for the actual messages. Animation is CSS; the label is
+    // pluralized via _formatNewMsgCount but uses a dedicated "starší zprávy"
+    // wording so users don't confuse it with the "new messages" pill.
+    const spinner = document.createElement('div');
+    spinner.className = 'hydrate-spinner';
+    spinner.innerHTML = '<span class="hs-ring" aria-hidden="true"></span><span class="hs-label">Načítání starších zpráv…</span>';
+    const realChat = this.chatEl;
+    realChat.insertBefore(spinner, realChat.firstChild);
+
+    try {
+      // One-frame delay so the spinner paints before we start the (cheaper,
+      // but still non-trivial) render work. Without this the user sees a
+      // scroll jump with no indicator of what happened.
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      // Capture scroll metrics AFTER the rAF yield, not before — the user
+      // may have scrolled further up during the frame gap. Using a stale
+      // prevTop would mis-place the viewport after prepend and make the
+      // chat look like messages skipped out of order. This snapshot runs
+      // synchronously on the same tick as the work below, so no scroll
+      // event can sneak between capture and restore.
+      const prevHeight = realChat.scrollHeight;
+      const prevTop = realChat.scrollTop;
+
+      const batch = 150;
+      const startIdx = Math.max(0, this._hydratedIdx - batch);
+      const slice = this._msgCache.slice(startIdx, this._hydratedIdx)
+        // Safety re-sort: even if _msgCache arrived out-of-chronological
+        // order (scraped fills, cross-source merges), the prepended batch
+        // itself renders in ascending timestamp order. Otherwise a slice
+        // spanning 17:14 and 17:46 messages would flip their order inside
+        // the newly visible block.
+        .slice()
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+      // Build a detached fragment so we don't trigger layout per insert,
+      // then splice it in front of the oldest currently-rendered msg.
+      // _addMessage appends to this.chatEl, so we temporarily swap chatEl
+      // for a fragment, render into it, then prepend the fragment.
+      const frag = document.createDocumentFragment();
+      this.chatEl = frag;
+      try {
+        for (const m of slice) {
+          try { this._addMessage(this._expandMsg(m)); } catch {}
+        }
+      } finally {
+        this.chatEl = realChat;
+      }
+      spinner.remove();
+      realChat.insertBefore(frag, realChat.firstChild);
+      this._programmaticScrollUntil = performance.now() + 200;
+      const newHeight = realChat.scrollHeight;
+      // Scroll-restore policy:
+      // - User was AT the very top (prevTop < 40px): land them at the top
+      //   of the newly prepended block (scrollTop = 0) so they immediately
+      //   see the freshly-loaded old messages they were asking for.
+      // - User was scrolled mid-chat: keep their current reading line
+      //   fixed by adding the prepended block's height to scrollTop.
+      if (prevTop < 40) {
+        realChat.scrollTop = 0;
+      } else {
+        realChat.scrollTop = prevTop + (newHeight - prevHeight);
+      }
+      this._hydratedIdx = startIdx;
+    } catch (e) {
+      spinner.remove();
+      throw e;
+    } finally {
+      this._hydratingOlder = false;
     }
   }
 
@@ -4998,26 +7325,72 @@ class UnityChat {
       const raw = data[this._cacheKey];
       if (!raw?.length) return;
 
-      // 72h TTL filter
+      // 72h TTL filter + drop legacy "empty body" junk. Earlier versions
+      // cached messages whose scraped text extractor yielded "" — the
+      // compactor then stripped the `message` key so on load they show
+      // up as plain "username:" lines. System events (raid, sub, gift,
+      // redeem, announcement, highlight, cleared, /me) legitimately
+      // have no body, so we keep those.
       const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-      const msgs = raw.filter((m) => !m.timestamp || m.timestamp > cutoff);
+      const msgs = raw.filter((m) => {
+        if (m.timestamp && m.timestamp <= cutoff) return false;
+        const body = typeof m.message === 'string' && m.message.trim();
+        const platformContent = (m.ytRuns?.length > 0)
+          || (typeof m.kickContent === 'string' && m.kickContent.trim().length > 0);
+        const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
+          || m.isGiftBundle || m.isSubGift || m.isRedeem
+          || m.isHighlight || m._cleared || m.isAction;
+        return body || platformContent || isSystem;
+      });
 
-      // Load each message individually — don't let one bad message kill the rest
-      for (const msg of msgs) {
-        try { this._addMessage(this._expandMsg(msg)); } catch {}
+      // Sort by timestamp — _msgCache insertion order can drift from real
+      // chronology when scraped messages (Twitch DOM backfill) arrive late
+      // but carry older timestamps than the live messages already cached.
+      // Without this sort, lazy-scroll-up prepends slice out a chunk whose
+      // internal order mixes 17:14 + 17:46 messages, and the user sees
+      // obvious timeline hops inside a single batch.
+      msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+      // Storage trim: keep at most maxMessages (default 5000) in _msgCache.
+      // Actual DOM render is bounded separately by initialRender (see below)
+      // so we can hold many msgs in memory without paying the render cost
+      // up front. Older msgs load on scroll-up via _hydrateOlderMessages.
+      const storageCap = this.config.maxMessages || 5000;
+      const fullCache = msgs.slice(-storageCap);
+      this._msgCache = fullCache;
+
+      // Boot render: only the most recent initialRender msgs go into the DOM
+      // now. Older msgs live in _msgCache and get prepended on demand when
+      // the user scrolls to the top. This keeps boot under 2s even with a
+      // 5000-msg cache.
+      const renderN = this.config.initialRender || 250;
+      const toRender = fullCache.slice(-renderN);
+      this._hydratedIdx = fullCache.length - toRender.length; // first un-rendered idx in fullCache
+
+      // Chunked insert: yield to the event loop every CHUNK msgs so the UI
+      // thread can paint, scroll, and respond to clicks during hydration.
+      const CHUNK = 40;
+      const yieldNow = () => new Promise((r) => {
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(() => r(), { timeout: 50 });
+        else setTimeout(r, 0);
+      });
+      for (let i = 0; i < toRender.length; i += CHUNK) {
+        const end = Math.min(i + CHUNK, toRender.length);
+        for (let j = i; j < end; j++) {
+          try { this._addMessage(this._expandMsg(toRender[j])); } catch {}
+        }
+        if (end < toRender.length) await yieldNow();
       }
-      // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
-      // Use the raw filtered messages as the authoritative cache
-      this._msgCache = msgs;
 
-      // Populate message history from cached user messages (for ArrowUp/Down)
-      // Match all known username variants + UC-marked messages
+      // Populate message history from cached user messages (for ArrowUp/Down).
+      // We walk the FULL cache here so users get history even from msgs that
+      // aren't rendered yet. Match all known username variants.
       const myNames = new Set();
       if (this.config.username) myNames.add(this.config.username.toLowerCase());
       for (const name of Object.values(this._platformUsernames)) {
         if (name) myNames.add(name.toLowerCase());
       }
-      for (const m of msgs) {
+      for (const m of fullCache) {
         if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
           const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
           if (text) this._msgHistory.push(text);
@@ -5041,6 +7414,21 @@ class UnityChat {
     const c = this.chatEl.children;
     const n = Math.max(0, c.length - this.config.maxMessages);
     for (let i = 0; i < n; i++) c[0].remove();
+    // Keep the lazy-load cursor in sync — N rendered msgs fell off the top,
+    // so the first un-rendered idx in _msgCache advances by N (those rows
+    // are effectively "re-hidden" and become eligible for re-hydration).
+    if (n > 0 && typeof this._hydratedIdx === 'number') {
+      this._hydratedIdx = Math.min((this._msgCache?.length || 0), this._hydratedIdx + n);
+    }
+  }
+
+  // Czech plural rules for the "N new messages" pill. 1 → singular;
+  // 2-4 → few form; 0 + 5+ → many form.
+  _formatNewMsgCount(n) {
+    const abs = Math.abs(n);
+    if (abs === 1) return `${n} nová zpráva`;
+    if (abs >= 2 && abs <= 4) return `${n} nové zprávy`;
+    return `${n} nových zpráv`;
   }
 
   _scroll() {
@@ -5099,7 +7487,7 @@ function _initPlatformBadgeTooltip() {
   }
 
   document.body.addEventListener('mouseover', (e) => {
-    const badge = e.target.closest('.pi[data-tooltip]');
+    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip]');
     if (!badge || badge === currentBadge) return;
     show(badge);
   });

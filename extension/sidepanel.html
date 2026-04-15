@@ -140,6 +140,10 @@
   <!-- Pinned message banner -->
   <div id="pinned-banner" class="hidden"></div>
 
+  <!-- Community highlights (hype train, gift-sub leaderboard) — mirrored
+       from the live Twitch tab DOM by content/twitch.js. -->
+  <div id="highlights-banner" class="hidden"></div>
+
   <!-- Chat -->
   <div id="chat-wrapper">
     <div id="chat"></div>
@@ -160,6 +164,23 @@
       </div>
       <div class="lo-bar" aria-hidden="true"><span></span></div>
     </div>
+  </div>
+
+  <!-- Twitch credit summary mirrored from open Twitch tab — bits +
+       channel-point balance. Hidden until first snapshot arrives. -->
+  <div id="tw-credits" class="hidden" title="Bity a věrnostní body z Twitch tabu">
+    <span class="tc-pill tc-bits hidden">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path fill-rule="evenodd" d="m12 22-9-8 9-13 9 13-9 8Zm-4.844-6.982-1.503-1.336L12 4.514l6.347 9.168-1.503 1.336L12 13l-4.844 2.018Z" clip-rule="evenodd"/></svg>
+      <span class="tc-bits-val">0</span>
+    </span>
+    <span class="tc-pill tc-points hidden">
+      <span class="tc-points-icon" aria-hidden="true"></span>
+      <span class="tc-points-val">0</span>
+    </span>
+    <span class="tc-pill tc-claim hidden" title="Vyzvédněte si bonus kliknutím!">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M20 8h-3V6a3 3 0 0 0-6 0v2H8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM13 6a1 1 0 0 1 2 0v2h-2V6zm5 14H10v-2h8v2zm0-4H10v-2h8v2z"/></svg>
+      <span class="tc-claim-label">Vyzvednout bonus</span>
+    </span>
   </div>
 
   <!-- Input pro odesílání zpráv -->

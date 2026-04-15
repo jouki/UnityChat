@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.26.4
+# UnityChat - Chrome/Opera Extension + Backend v3.37.3
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -395,7 +395,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.26.4**
+- Aktuální: **v3.37.3**
 
 ## Známé limitace / gotchas
 
@@ -556,68 +556,66 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **Multi-stage Dockerfile**: `deps` (devDeps) → `build` (tsc) → `prod-deps` (runtime only) → `runner` (non-root user, healthcheck)
 
 ## Verzové milestones
-- **v1.x** - základní 3 platformy, 7TV emoty, side panel
-- **v2.0** - hover replies, mention highlight, reply context
-- **v2.5** - skutečné Twitch badge images, native reply via GQL
-- **v3.0** - GQL endpoint místo Helix (auth-token cookie), draggable user card fallback
-- **v3.3** - User card v chatter listu, 7TV custom element discovery
-- **v3.5** - Layout sizes, smooth scroll, accent gradient, BETA tag
-- **v3.6** - Pin message + GQL mutace
-- **v3.7** - Klikatelné reply context + flash animace, raid notifications, first-msg
-- **v3.8** - Pinned banner s polling detekcí unpinu
-- **v3.9** - Autocomplete arrow keys + scroll only when overflowing
-- **v3.10** - Twitch chat scrape + boundary detection
-- **v3.11** - Opera verze + Opera-compatible active tab detection
-- **v3.12** - Pop-out button, platform badge tooltipy, single-source `extension/` (chrome+opera merge), build script, backend scaffold (Node.js + Fastify + Drizzle + Postgres)
-- **v3.12.2** - Unified `extension/` bez build kroku: jeden `manifest.json` + `background.js` s runtime `HAS_SIDE_PANEL` feature-detection. Chrome používá native side panel, Opera spadne na popup window. Load unpacked z `extension/` přímo v obou browserech, žádné build skripty, žádný `dist/`.
-- **v3.12.3** - Platform badge tooltip přepsán na JS-positioned `.uc-tooltip` s viewport clamping (fix pro ořez u okrajů side panelu).
-- **v3.12.4** - Opera native sidebar support přes `sidebar_action` manifest key. Opera users si teď mohou připnout UnityChat přímo do Opera levého sidebaru (vedle Messenger/Twitch/atd.). Chrome ignoruje unknown key, používá dál `side_panel`. Popup window fallback zůstává pro Operu jako sekundární entry point.
-- **v3.12.5** - Twitch chat header button (UnityChat logo v chatu, klik otevře side panel), `OPEN_SIDE_PANEL` background handler s user-gesture propagací, `web_accessible_resources` pro ikony. jouki.cz/UnityChat install page: hero s 512px brand logem, funkční platform filtry v preview mockupu, click-to-play audio na StreamElements zprávě, animované FAQ, click-to-copy chrome:// URL.
-- **v3.13–v3.18** - Nickname system (SSE real-time push, DB), per-channel cache (72h TTL), dev mode, @username auto-suggest, per-platform username tracking, YouTube username detekce, optimistic messages, UC button na YouTube, per-platform colors
-- **v3.18.26** - Optimistic → real message upgrade (`_upgradeOptimistic`), `_savePlatformColor` jen pro vlastní zprávy, emotes+badges load PŘED cache
-- **v3.18.29** - Settings UI: merged save button pro nickname+color, readonly username (dev mode), depersonalizované placeholdery, autocomplete=off, status dot tooltipy, odstraněn "Vše" filtr
-- **v3.18.35** - Twitch display-name z IRC (ne login cookie), color save fix, backend rate limit 10s
-- **v3.18.38** - Nickname lookup pro VŠECHNY zprávy (ne jen UC-marked)
-- **v3.19.0** - Message history (ArrowUp/Down jako terminal, max 50, draft preserved)
-- **v3.19.1** - Optimistic badges z posledních známých badges uživatele
-- **v3.19.6** - Copy button (SVG clipboard ikona, trailing space pro emote stacking)
-- **v3.19.7–v3.19.14** - 7TV zero-width emote layering (CSS grid stacking, lookahead pro whitespace)
-- **v3.20.0** - StreamElements !command autocomplete (SE public API), bulgarians easter egg (click-to-play audio)
-- **v3.20.1** - Tab autocomplete: první TAB potvrdí výběr, pak cykluje
-- **v3.20.2** - IRC ACTION (/me) parsing — kurzíva + barva usernamu
-- **v3.21.0** - Right-side message tags (Replying to you, Mentions you, First, Raid, Raider, Sus), /uc mock commands
-- **v3.21.2** - Scraper DOM walker — extrahuje emote alt text pro správný content dedup
-- **v3.21.4** - Raider tag color: yellow-green (#b2e63d)
-- **v3.21.5** - Raider background+border shift to yellow-green
-- **v3.21.6** - `/uc` command autocomplete (raid, raider, first, sus)
-- **v3.22.0–v3.22.5** - UC button toggle (open/close side panel), YouTube native theater button, port-based panel state tracking, window.close() via port
-- **v3.23.0** - UnityChat custom emotes (`ucEmotes` Map, first: CaneBear), preview Fremaner message
-- **v3.23.1** - Retroactive color update po save, Ko-fi link, active-badge styling, nickname API normalizace
-- **v3.23.2–v3.23.3** - Profile sync (`_syncProfile`), `seen_users` tabulka + `POST /users/seen` endpoint, `_syncedProfiles` Set s local dedup (`uc_synced` v chrome.storage.local)
-- **v3.23.4–v3.23.6** - YouTube username detekce: avatar menu click fallback (klik avatar → `#channel-handle` → Escape), content script cache per URL s `MutationObserver` + `popstate` invalidací, settings UI refresh při async příchodu platform username
-- **v3.23.7** - Security hardening: GQL parameterized variables, createElement/textContent místo innerHTML, Kick send přes background `KICK_SEND` + executeScript (ne inline `<script>`), YouTube postMessage se specifickým origin, `CSS.escape()` pro username selektory, `_sc()` sanitizace barev, UC_API na `https://api.jouki.cz`, odstranění raw IP z host_permissions
-- **v3.23.8–v3.23.10** - Color UI: "Barva jména (platform)" label, `_refreshColorUI(platform)`, `_platformDefaultColor(platform)` (YT default #ff0000), custom color → real value / no custom → placeholder s default hex, `_upgradeOptimistic` zachovává UC custom color
-- **v3.23.11** - `GET /users` merged endpoint (seen_users + nicknames), `backend/src/routes/users.ts`
-- **v3.23.12** - Backup utility (`extension/backup.html` + `backup.js`): export/import chrome.storage sync+local, external JS (MV3 CSP), export přes chrome.downloads API (saveAs dialog)
-- **v3.23.13** - Profile sync s local dedup + merged users endpoint, repo public
-- **v3.24.0–v3.24.18** - Streamer Directory fáze 2–5: backend schema (`streamers`, `streamer_tokens` AES-256-GCM, `streamer_sessions`), OAuth flow pro Twitch + YouTube (Google) + Kick (PKCE), public lookup + seen + private `/me`/unlink/logout endpointy, extension "Jsem streamer" page s Link/Unlink UI, auto-switch na změnu tab URL (extension sleduje usera napříč streamery); extracted landing pages do private `jouki/jouki.cz` repo (workflow `trigger-jouki-cz.yml` z UnityChat pushu)
-- **v3.24.19** - YouTube auto-switch funguje na `/watch` live stream stránkách (content script resolvuje channel handle z DOM: `ytd-video-owner-renderer a[href^="/@"]` + JSON-LD fallback); sidepanel použije `resp.channelHandle` jako fallback když URL parsing selže
-- **v3.24.20** - Reset `@mention` autocomplete na auto-switch: `_performAutoSwitch` smaže plain-key entries z `_chatUsers` (ale zachová `platform:username` color cache)
-- **v3.24.21** - Twitch default color palette (15 colors, Chatty-style `(firstChar + lastChar) % 15` hash) místo flat `#9146ff` pro colorless usery
-- **v3.24.22** - Twitch chat colors z GQL: batched `user(login:) { chatColor }` query v `GET_CHAT_COLORS` background handleru, retint DOM přes `data-username` selektor. `_fromGQL: true` flag v `_chatUsers` zabraňuje aby další IRC hash-fallback zprávy clobbernuly resolvnutou barvu
-- **v3.24.23** - Twitch Announcement render (`USERNOTICE msg-id=announcement`): parsed message body, `msg-param-color` (PRIMARY|BLUE|GREEN|ORANGE|PURPLE), bilateral gradient border (PRIMARY duhový rainbow), pulsující megafon ikona, color-tinted glow
-- **v3.24.24** - Color preservation fix (`_fromGQL` přes nové zprávy zachován) + 72h message cache (age-based prune místo 200 count cap) + `maxMessages` bumpnut 500→5000 s migrací + prominentní announcement (bilaterální border-image, pulse)
-- **v3.24.25** - 7TV paints na Twitch nicknamech (LINEAR_GRADIENT, RADIAL_GRADIENT, URL paints + drop-shadows). GQL bulk query `{ cosmetics { paints { ... } } }` načte všech ~1000 paintů najednou (per-paint REST endpoint 404s); per-user paint ID z `/v3/users/twitch/{userId}` cached v `_chatUsers._paint`
-- **v3.24.26** - 7TV paints retroactive pro cached/scraped zprávy: `fetchChatColors` rozšířený o `user.id`, `_flushColorLookups` triggerne paint lookup pro všechny userId
-- **v3.24.27** - `@mention` v textu zprávy bold + colored target user's chat color (`_processMentions` walker v `.tx` po emote renderu)
-- **v3.24.28** - Settings: timestamp toggle (`body.no-timestamps .ts { display:none }`)
-- **v3.25.0–v3.25.7** - Update notification UI: červená pulsující tečka na logu (ne v toolbaru), tooltip anchored left (max-width `min(300px, calc(100vw - 24px))`), template v HTML, logo-wrap s dot+tooltip, cursor revert na default v tooltipu + link hover color feedback
-- **v3.25.8–v3.25.10** - Browser action badge (`chrome.action.setBadgeText`/`setTitle`), speech-bubble arrow (2 stacked triangles outside tooltip), 10s auto-reveal s countdown barem (scaleX origin-left), layout-scaled tooltip přes `--ut-scale` CSS variable (1 / 1.1 / 1.22)
-- **v3.26.0** - Periodic update poll: `chrome.alarms` 15min interval v background, broadcasts `UC_UPDATE_AVAILABLE` message do sidepanelu (auto-reveal jen na false→true); loading overlay: pulsující logo + radial glow + animované "Načítání chatu…" + 3 platform pills (pulse → brand gradient při connected) + bouncing bar
-- **v3.26.1** - Channel switch recykluje boot loading overlay; per-user 7TV emote loadouts (cross-channel personal emotes, retroactive re-render); fulltext toggle v emote autocomplete; emote hover preview (220ms intent) + click-pinned detail card s lazy-fetch metadata (owner, added date, external link)
-- **v3.26.2** - Twitch mod actions: CLEARCHAT (timeout/ban) + CLEARMSG (single delete) parser, greyed out + italic line-through + red pill label ("Timeout (10m)" / "Permanently banned" / "Deleted by mod"), persisted v `_cleared` field v cache
-- **v3.26.3** - "Added by" row v 7TV emote preview (actor_id + timestamp z emote-set entries, cached přes `fetch7tvUser`); auto-scroll race fix (`_programmaticScrollUntil` 150ms window suprimuje scroll events z vlastního scrollu)
-- **v3.26.4** - Chat vibration fix na rychlém chatu: `scrollbar-gutter: stable` + `overflow-anchor: none` na `#chat`, `contain: layout style` na `.msg`, `min-width: 1.75em` placeholder na emote `<img>` aby inline flow reservoval prostor před image decodem. **Aktuální verze**
+
+> Starší milestones (v1.x – v3.34.9) jsou archivovány v `CLAUDE-HISTORY.md`. Níže jen aktivní v3.35.0+.
+>
+> **Logging pravidlo:** Při aktualizaci dokumentace (CLAUDE.md, memory, workflow) zapsat krátký záznam do sekce "Changelog dokumentace" v `CLAUDE-HISTORY.md`. Když CLAUDE.md znovu překročí ~40k znaků, přesunout další blok starších milestones do history.
+
+- **v3.35.0** - **Always-on chat-toggle button**: speech-bubble icon v top navu je vždy injected (ne už jen hidden state), toggle hide/restore. Title + aria-label reflektují stav.
+- **v3.35.1–v3.35.3** - **Empty-body message drop + legacy cache cleanup**: scraper sometimes yields empty message → cached → `_compactMsg` stripuje `""` field → reload `message: undefined` → renders as "username:" blank. Fix: defensive drop v `_addMessage`, `_expandMsg` restoruje `message: ''` default, cache load filter dropne legacy empty entries, scraper strippuje UC_MARKER před emptiness check (Braille blank trim() neodstraní).
+- **v3.35.4** - **Claim pill hysteresis**: +10 animace briefly detachuje `.claimable-bonus__icon` (byť claim dál platí). Hide se odloží 2s — pokud claim zpět during hysteresis, `clearTimeout` zruší hide.
+- **v3.36.0** - **Readable highlight banner** + **raid avatar** + `/uc raidbanner` mock: body wraps (3-line clamp) + avatar sniffnut z inner `<img>` (priorita `jtv_user_pictures`/`profile_image` URLs). Raid kind vlastní red/orange gradient.
+- **v3.36.1** - **Clear highlights banner na auto-switch**: raid card pro aktuální channel po switch na target channel nemá smysl.
+- **v3.36.2–v3.36.3** - **Polished raid highlight**: bilateral red→orange border (match `.msg.raid`), header s pulsing rocket + NÁJEZD gold label, 44px circular avatar s red glow ring, structured `{raider} → {target}` title (color-coded), meta line `👥 viewers · ✨ +points`. Regex parser callout textu s fallback na raw. Plus dynamic background color z avatar dominant color (histogram sampling).
+- **v3.36.4** - **Streamer avatar picker + warm-bias raid tint**: handler prioritizuje channel-owner selektory (`[data-a-target="watch-channel-avatar"]`, `.channel-info-content`, `.metadata-layout__profile-link`, `a[href="/{login}"]`), ne viewer's top-nav. Dominant color histogram (6×6×6 RGB cube weighted by count × chroma) místo RGB average (yellow + blue avg = teal). Raid kind blenduje 60/40 s raid-red pro warm coherence.
+- **v3.36.5** - **Banner parent accent propagation**: CSS vars `--hl-accent-{r,g,b}` propagovány z card na `#highlights-banner` + `.has-accent` class. Outer banner background a border teď tuned na card palette místo fixed cyan/purple.
+- **v3.36.6** - **Countdown bar na raid**: 4px gradient bar pod meta řádkem, `scaleX(1 → 0)` přes `animation-duration = raidCountdownSec || 10`. Themed via accent vars.
+- **v3.36.7** - **Raid dismiss (×) button**: circular close button na right edge raid karty. Click → optimistic hide + `TW_DISMISS_RAID` → content script scanuje community-highlight stack po `leave/close/dismiss/zavřít/odejít/zrušit` buttonu, real-event click → Twitch React zavře card.
+- **v3.36.8–v3.36.11** - **Popover portal fixes (full chain)**: dialog mountnut ale rect 0×0 (`[role="dialog"]` je jen ARIA wrapper, actual rendering v `.tw-balloon` / `.reward-center__content` descendants). `measureDialog` helper scanuje descendants pro largest non-zero rect. Plus dialogSeen flag prevent Phase 2 re-click (by toggle-closnul už open popover). Plus force reflow (`void document.body.offsetHeight`) + 150ms+2rAF delay před Phase 2 click aby parent column stihl reflow.
+- **v3.37.0** - **Pin banner redesign (UC-side `#pinned-banner`)** + **hype-train capture handler**: Twitch-style layout (header "Připnuto uživatelem {user}" + eye/hide + chevron/collapse, expanded body s větším bold textem + author footer "odesláno v HH:MM AM/PM"). Plus content script `CAPTURE_HYPETRAIN_DOM` message pro diagnostický dump DOM struktury hype-train panel.
+- **v3.37.1** - **YouTube/Kick drop fix + bigger loading animations**: empty-body drop zahazoval YT msgs co carry content v `ytRuns` (a Kick v `kickContent`). Teď drop respektuje platform-specific content fields. Plus logo pulse scale rozšířen `0.88↔1.14` + bar animace switchla na `transform: translateX` (compositor thread, nezasekne při hydration).
+- **v3.37.2** - **Pin highlight kind**: community-highlight-stack pins (pinned by other mods) byly rendered jako generic card. Content script classifier `kind: 'pin'` + sidepanel `_buildPinCard` mount Twitch-style pin layout v `#highlights-banner` (start collapsed).
+- **v3.37.3** - **Rich pin content**: extractPinDetails v content scriptu parsuje DOM pro structured data — `pinnedBy`, `author` + color, `authorBadges[]` (img src matching badges.twitch.tv / jtvnw.net/badges), `bodySegments[]` (preserve inline emote `<img>`s, NE stripnout do plain textu), `timeText` regex. Sidepanel render: emote images v body, separate footer row (border-top amber, badges → colored author name → timestamp), warm amber accent (`rgb(230,161,26)`) propaguje na outer `#highlights-banner`.
+- **v3.37.4** - **Boot instrumentation + watchdog auto-dump**: `_bootMark(label)` v sidepanel.js loguje timestamp, ms-since-boot, Δ-since-last a JS heap size pro každou fázi `_init()` (config, user colors, nicknames, UI setup, providers, username detection, 7TV globals, channel emotes+badges, cache load, connectAll, done) + `_hideLoading` / `_updateLoadingPill`. Logs jdou do background přes UC_LOG (persistuje přes service-worker sleep). Background handler `BOOT_WATCH_START` armuje 20s watchdog → pokud `BOOT_WATCH_END` nepřijde (panel freezne), auto-dumpne `unitychat-debug.log` bez user-click. Plus `window.ucDump()` escape hatch pro devtools console (F12 na side panelu) když 💾 button nereaguje.
+- **v3.38.0** - **Per-channel LRU dedup (V8 OOM fix)**: předchozí `_seenMsgIds` / `_seenContentKeys` globální Sets rostly bez triminy per session → crash dump (`0xE0000008` V8 OOM v renderer co hostoval sidepanel.html). Teď `_dedupChannels: Map<"platform:channel", {ids,content}>` — per-channel FIFO cap 250 (25 % nad Twitch DOM cap ~200), per-session LRU cap 150 kanálů (~50 per platforma × 3). Worst-case paměť ~1.5 MB vs. dosavadní unbounded. Channel switch už NEclearuje dedup (feature: při návratu na channel A scraper nerenderuje duplicity z Twitch DOM). Helpers `_dedupEntry(msg)` + `_dedupTrim(set)`. DIAG dump rozšířen o `dedupChannels`, `dedupIdsTotal`, `dedupContentTotal`, `dedupPerChannel` breakdown + `dedupChannelsLRU` order.
+- **v3.38.1** - **Cache hydration fix (77s → <2s boot)**: boot log po v3.38.0 odhalil `+79709ms cache loaded rendered=5000 msgCache=5699` — 77.8s synchronního main-thread blocku během `_loadCachedMessages`. Root cause: v3.24.24 bumpnutý `maxMessages` na 5000 znamenal rendering 5000+ DOM elementů in-row bez yield. Chunked insert přes `requestIdleCallback` (CHUNK=40) zavedený — UI thread dýchá mezi batchi.
+- **v3.38.2** - **Lazy scroll-up load (storage 5000, DOM jen 250)**: split mezi **storage cap** (`maxMessages: 5000`) a **render cap** (`initialRender: 250`). `_hydratedIdx` kurzor + `_hydrateOlderMessages()` prepend z `_msgCache` při scroll nahoru. Scroll-position preservation přes `scrollHeight` delta. `_trim()` bumpne kurzor při DOM cap. Boot cache load ~500-800 ms.
+- **v3.38.3** - **Lazy-load UX polish**: inline `.hydrate-spinner` (brand-orange gradient card + rotating ring + "Načítání starších zpráv…") + `requestAnimationFrame` yield pro paint. Batch size 250 → 150. Unread counter/separator suppression během `_hydratingOlder`. CS plural rules helper `_formatNewMsgCount(n)` — 1/2-4/0+5 varianty.
+- **v3.38.4** - **Hydrate scroll-restore stale-capture fix**: `prevHeight`/`prevTop` zachyceno až PO rAF yieldu. Stale capture přes 16ms gap znamenal že user scroll během yieldu rozhodil restore.
+- **v3.38.5** - **Credits pill: stale icon + watch-streak filter**: (1) channel switch bez custom icon vyčistí `backgroundImage` + `.has-icon`. (2) Watch-streak text filter — regex pustí jen balance-looking text, `StreakSkip` log pro rejected values.
+- **v3.38.6** - **Lazy-hydrate ordering & scroll-restore fix**: (1) `_loadCachedMessages` sortuje `_msgCache` podle timestamp (scraped drift fix). (2) Slice sort před prependem (safety). (3) `_addMessage` early-return před `_trim`/`_scroll`/`_cacheMsg` při `_hydratingOlder`. (4) Scroll-restore — pokud `prevTop < 40 px`, `scrollTop = 0` po prependu.
+- **v3.38.7** - **Scroll-lock při append když user scrolloval pryč**: capture/restore `scrollTop` v `_addMessage` pokud `!autoScroll && !hydratingOlder`. Fix Chrome reflow-induced scroll drift i s `overflow-anchor: none`.
+- **v3.38.8** - **Pin extractor přepsán + DOM diagnostic**: DOM-walk label span + tight word-char capture + body anywhere-label reject + author null-guard + diagnostic Pin log.
+- **v3.38.9** - **Pin extractor iter 2 — short-leaf pinnedBy + time-anchored author**: short leaf element scan pro pinnedBy, time-anchored walk previous siblings pro author, badges fallback.
+- **v3.38.10** - **Pin author: search INSIDE time container**: author žije uvnitř pin footer `<p>`, ne vedle. Dvoustupňový search (inside leaf-first + fallback siblings), `<p>/<div>` akceptovaný jako timeEl.
+- **v3.38.11** - **Pin highlight diagnostic pro collapsed chat**: rozšířené selectory + rate-limited `HighlightDiag` dump (pro tuning). Diagnostic odhalil: Twitch v collapsed chat mode rendruje `.pinned-chat__highlight-card__collapsed` verzi kde **author footer je úplně vynechaný** (pinnedBy + body only).
+- **v3.38.12** - **Auto-expand collapsed pin card** (workaround): content script detekuje `__collapsed` + klikne expand button před extract. Nahrazeno v3.38.13 root fixem.
+- **v3.38.13** - **Hide strategie — (reverted)**: pokus `position: fixed; right: -9999px` vedl k tomu, že Twitch highlight stack byl úplně unmountovaný (log `HighlightDiag` ukázal jen chat-list + wysiwyg, žádný highlight root). Twitch pravděpodobně používá IntersectionObserver a out-of-viewport = unmount.
+- **v3.38.14** - **GQL pin fallback — pin fetch přes Twitch API, nezávislý na DOM**: background `FETCH_PINS` + sidepanel `_startPinPoll()` + merge DOM/GQL cards. Hide CSS zpět na stabilní `width: 0`.
+- **v3.38.15** - **GQL schema fix #1 pro FETCH_PINS** (špatný guess — `message` také neexistuje).
+- **v3.38.16** - **GQL introspection pro PinnedChatMessage** — introspection však Twitch disabled, vrátila `{"data":{}}`.
+- **v3.38.17** - **GQL field probing** (bug: variable name mismatch — všechny probes fail-ovaly na `Variable "n" has invalid value null`).
+- **v3.38.18** - **Probe variable fix + subselection detection**: odhalila že `PinnedChatMessage` má jen `id`, `startsAt`, `endsAt`, `pinnedBy`, `type` ("MOD" scalar). Ostatní 16 kandidátů neexistují → content pinu není dostupný přes anonymní GQL.
+- **v3.38.19** - **DOM+GQL merge strategy for pins**: hybrid, DOM má přednost + GQL fallback pro hidden chat. Probe odstraněn.
+- **v3.38.20** - **Real Twitch schema wired — GetPinnedChat operation**: query přepsaná na real schema s `emoteID` spread. Query failovala na Client-Integrity gate.
+- **v3.38.21** - **emoteID gated by Client-Integrity — resolve by name**: query bez `emoteID` spread, sidepanel resolve emote URL podle text name proti local emote library. Poll 8s → 4s + visibilitychange trigger.
+- **v3.38.22** - **Pin duplication fixes (2 bugy)**: (1) stacking cache duplicity → `_lastDomHighlightCards` filtruje pins out. (2) Mod badge 2× → `authorRow = authorEl.closest('p')` strict scope.
+- **v3.38.23** - **Idempotent pin rerender + collapsed state persistence**: hash visible data + skip re-mount + per-pin collapsed preserve.
+- **v3.38.24** - **Pin merge per-field (no more downgrades)**: `_mergePinCard(dom, gql)` per-field picker, `_lastGoodPinCache` pro sticky expanded data.
+- **v3.38.25** - **Proactive DOM highlight scan (boot latency fix)**: `SCAN_HIGHLIGHTS_NOW` handler + `_kickDomHighlightScan` na boot/tick/visibility.
+- **v3.38.26** - **Fix emote downgrade po polling tick**: `_rerenderHighlights` už neposílá GQL pins v msg.cards; GQL se merguje separately. `isRerender` guard. **Pin flow uzamčen jako stable.**
+- **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: fancy gold gradient, pulsing icon, readable author, pill timestamp.
+- **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + ellipsis na author + `flex-shrink: 0` na timestamp.
+- **v3.38.29** - **Pin body full-width, no author truncation**: padding-left 42→14, author nowrap bez ellipsis.
+- **v3.38.30** - **`/uc pin [text]` mock command** (bug: `args.slice` na stringu místo array).
+- **v3.38.31** - **`/uc pin` body parsing fix**: `parts.slice(1)` místo `args.slice(1)`.
+- **v3.38.32** - **`/uc pin` injection path fix**: inject mock jako DOM card přímým voláním `_handleHighlights`. Mock zmizí po pár vteřin, řešeno v dalších verzích.
+- **v3.38.33** - **Mock pin sticky 30s** (přechodný): `_mockPinUntil` flag suppress real GQL poll. Nahrazeno v3.38.34 aby mock mohl coexistovat s real pinem.
+- **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards`, oba pin sources renderovány vedle sebe.
+- **v3.38.35** - **DOM pin extract iter 3 — direct text nodes + body selector fix**: scan přímých text nodes pro pinner, `.pinned-chat__message` selector pro body.
+- **v3.38.36** - **Pin emote resolve + rounded corners**: tokenize text body for emote lookup (bug: použil `entry?.url` ale maps drží URL string). Border-image → solid border + box-shadow.
+- **v3.38.37** - **Emote map value type fix**: maps drží URL string přímo, ne `{url}` objekt. Resolve fix v `_buildPinCard` + `/uc pin` mocku.
+- **v3.38.38** - **Unify pin path: legacy `#pinned-banner` → `#highlights-banner`**: po klik na UC pin button starý kód renderoval **separate** `#pinned-banner` element (legacy z v3.37.0). Plus parallel GQL `FETCH_PINS` zobrazoval ten samý pin v `#highlights-banner` → 2 cards. Fix: po `PIN_MESSAGE` mutation skip `_showPinnedBanner`, jen `_hidePinnedBanner` + immediate `FETCH_PINS` fetch s rerender → single fancy pin card v highlights banneru. `_pinFromGql(p)` extracted as method (used by polling tick + post-mutation fast-fetch). Plus stejný `entry?.url` → URL string fix v poll path. **Aktuální verze**
 
 ## Release workflow
 

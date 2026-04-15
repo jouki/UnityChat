@@ -42,7 +42,7 @@ body.layout-medium .msg { padding: 4px 12px; line-height: 1.5; }
 body.layout-medium .msg .pi { font-size: 9px; line-height: 16px; padding: 1px 4px; }
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
-body.layout-medium .msg .tx img.emote { height: 2em; }
+body.layout-medium .msg .tx img.emote { height: 2.25em; }
 body.layout-medium #settings .setting-row label { font-size: 12px; }
 body.layout-medium #settings input[type="text"],
 body.layout-medium #settings input[type="color"],
@@ -54,7 +54,7 @@ body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
 body.layout-large .msg .pi { font-size: 10px; line-height: 18px; padding: 1px 5px; }
 body.layout-large .msg .ts { font-size: 12px; }
 body.layout-large .bdg-img { height: 22px; width: 22px; }
-body.layout-large .msg .tx img.emote { height: 2.2em; }
+body.layout-large .msg .tx img.emote { height: 2.5em; }
 body.layout-large #msg-input { font-size: 14px; padding: 8px 10px; }
 body.layout-large .reply-ctx { font-size: 12px; }
 body.layout-large #settings .setting-row label { font-size: 13px; }
@@ -832,8 +832,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   z-index: 1;
 }
 @keyframes lo-logo-pulse {
-  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 12px rgba(255, 140, 0, 0.55)); }
-  50%      { transform: scale(1.06); filter: drop-shadow(0 0 22px rgba(255, 140, 0, 0.85)); }
+  0%, 100% { transform: scale(0.88); filter: drop-shadow(0 0 10px rgba(255, 140, 0, 0.45)); }
+  50%      { transform: scale(1.14); filter: drop-shadow(0 0 28px rgba(255, 140, 0, 0.95)); }
 }
 @keyframes lo-glow-pulse {
   0%, 100% { transform: scale(1);    opacity: 0.7; }
@@ -901,11 +901,13 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   50%      { background: rgba(255, 140, 0, 0.25); border-color: rgba(255, 140, 0, 0.55); color: #ffc25a; }
 }
 
-/* Indeterminate progress bar — bouncing left-to-right slug */
+/* Indeterminate progress bar — bouncing left-to-right slug. Using
+   transform/will-change so the animation stays on the compositor
+   thread even when the main thread is busy hydrating the cache. */
 .lo-bar {
-  width: 140px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  width: 160px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 2px;
   overflow: hidden;
   position: relative;
@@ -913,16 +915,19 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 .lo-bar > span {
   position: absolute;
   top: 0;
-  left: -40%;
+  left: 0;
   height: 100%;
-  width: 40%;
-  background: linear-gradient(90deg, transparent, #ff7a00, #ffc25a, transparent);
+  width: 45%;
+  background: linear-gradient(90deg, transparent 0%, #ff7a00 30%, #ffc25a 55%, #ff7a00 75%, transparent 100%);
   border-radius: 2px;
-  animation: lo-bar-slide 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  transform: translateX(-100%);
+  will-change: transform;
+  animation: lo-bar-slide 1.35s cubic-bezier(0.55, 0.1, 0.45, 0.9) infinite;
+  box-shadow: 0 0 8px rgba(255, 122, 0, 0.55);
 }
 @keyframes lo-bar-slide {
-  0%   { left: -40%; }
-  100% { left: 100%; }
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(355%); }
 }
 
 /* Message */
@@ -948,33 +953,35 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 .msg-actions {
   display: none;
   position: absolute;
-  right: 6px;
-  top: -2px;
+  right: 4px;
+  /* Float the action cluster above the message line so it doesn't sit
+     on top of inline emotes the user wants to hover for the preview. */
+  top: -14px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 1px;
+  padding: 0;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   z-index: 5;
 }
 
 .msg:hover .msg-actions {
   display: flex;
-  gap: 1px;
+  gap: 0;
 }
 
 .msg-action-btn {
   background: none;
   border: none;
   color: var(--text-secondary);
-  width: 26px;
-  height: 24px;
+  width: 20px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   border-radius: 3px;
-  font-size: 14px;
+  font-size: 11px;
 }
 
 .msg-action-btn:hover {
@@ -984,6 +991,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 
 .msg-action-btn svg {
   display: block;
+  width: 11px;
+  height: 11px;
 }
 
 .msg .pi {
@@ -1128,23 +1137,27 @@ body.no-timestamps .msg .ts { display: none; }
     0 0 16px rgba(145, 70, 255, 0.18);
 }
 
-/* PRIMARY = Twitch's rainbow gradient on both edges. `border-image` with
-   `slice: 1` fills each edge strip with the full gradient; top/bottom have
-   zero width so there are no stretched corner artifacts. */
+/* PRIMARY = gold shimmer gradient on both edges (warmer / premium feel
+   than the rainbow). `border-image` with `slice: 1` fills each edge
+   strip with the full gradient; top/bottom have zero width so there
+   are no stretched corner artifacts. */
 .msg.announcement[data-announcement-color="PRIMARY"] {
   border-color: transparent;
+  /* Mirrored: edges darker, middle brighter — gives the strip a "lit
+     from the centre" glint rather than uniform gold. */
   border-image: linear-gradient(
     180deg,
-    #ff4500 0%,
-    #ffaf14 22%,
-    #ffd93d 42%,
-    #00ff87 60%,
-    #00d7ec 80%,
-    #9146ff 100%
+    #8a5a00 0%,
+    #c98a11 20%,
+    #ffd93d 45%,
+    #fff1a8 50%,
+    #ffd93d 55%,
+    #c98a11 80%,
+    #8a5a00 100%
   ) 1;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-    0 0 18px rgba(255, 175, 20, 0.22);
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 0 20px rgba(255, 200, 40, 0.35);
 }
 .msg.announcement[data-announcement-color="BLUE"]   { border-color: #00d7ec; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 215, 236, 0.28); }
 .msg.announcement[data-announcement-color="GREEN"]  { border-color: #00db84; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 219, 132, 0.28); }
@@ -1169,7 +1182,9 @@ body.no-timestamps .msg .ts { display: none; }
   animation: announcement-pulse 2.4s ease-in-out infinite;
 }
 .msg.announcement[data-announcement-color="PRIMARY"] .announcement-label {
-  background: linear-gradient(90deg, #ffd93d, #ff4500, #9146ff, #00d7ec);
+  /* Mirror the border gradient: dark amber edges, bright gold center
+     for consistent "lit from the middle" feel across label + border. */
+  background: linear-gradient(90deg, #8a5a00, #c98a11, #ffd93d, #fff1a8, #ffd93d, #c98a11, #8a5a00);
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
@@ -1180,18 +1195,68 @@ body.no-timestamps .msg .ts { display: none; }
   50%      { transform: scale(1.12); filter: drop-shadow(0 0 8px rgba(255,175,20,0.75)); }
 }
 
-/* Raid */
+/* Raid — same prominence treatment as Announcements: bilateral accent
+   borders + glow + pulsing rocket icon header so it never gets lost in
+   fast chat. */
 .msg.raid {
-  background: rgba(255, 107, 107, 0.12);
-  border-left: 2px solid #ff6b6b;
-  padding-left: 8px;
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.18), rgba(255, 107, 107, 0.06));
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 5px 0 5px;
+  border-image: linear-gradient(180deg, #ff4500 0%, #ff6b6b 50%, #ffaf14 100%) 1;
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 18px rgba(255, 107, 107, 0.32);
 }
-
 .msg.raid:hover {
-  background: rgba(255, 107, 107, 0.2);
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.26), rgba(255, 107, 107, 0.1));
 }
 
-/* (raid-label removed — replaced by right-side .msg-tag system) */
+.raid-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  padding-bottom: 5px;
+  color: #fff;
+  opacity: 0.95;
+}
+.raid-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 107, 107, 0.55));
+  animation: raid-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+.raid-label {
+  background: linear-gradient(90deg, #ffaf14, #ff4500, #ff6b6b);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.raid-count {
+  margin-left: auto;
+  background: rgba(255, 69, 0, 0.18);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: #ffd9c2;
+  text-transform: none;
+}
+@keyframes raid-pulse {
+  0%, 100% { transform: translateX(0) scale(1); filter: drop-shadow(0 0 4px rgba(255,107,107,0.55)); }
+  40%      { transform: translateX(2px) scale(1.18); filter: drop-shadow(0 0 10px rgba(255,107,107,0.85)); }
+}
+
+/* (raid-label legacy comment removed — replaced by header system) */
 
 /* Raider (came from raid) */
 .msg.raider-msg {
@@ -1201,6 +1266,690 @@ body.no-timestamps .msg .ts { display: none; }
 }
 .msg.raider-msg:hover {
   background: rgba(178, 230, 61, 0.22);
+}
+
+/* ==== Community highlights (hype train / gift leaderboard / pinned) ==== */
+#highlights-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: linear-gradient(135deg, rgba(0, 216, 217, 0.14), rgba(145, 70, 255, 0.1));
+  border-bottom: 1px solid rgba(0, 216, 217, 0.3);
+  overflow-x: hidden;
+}
+#highlights-banner.hidden { display: none; }
+.hl-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.92em;
+  color: #e8e8ef;
+  line-height: 1.35;
+}
+.hl-card .hl-icon { flex-shrink: 0; font-size: 1.2em; }
+.hl-card .hl-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.hl-card .hl-body {
+  flex: 1;
+  min-width: 0;
+  /* Multi-line — let the raider/gifter/whatever text wrap instead of
+     being truncated with "…". 3-line clamp caps runaway captions. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hl-card.hl-hype-train {
+  background: linear-gradient(90deg, rgba(0, 216, 217, 0.3), rgba(0, 216, 217, 0.12));
+  box-shadow: 0 0 10px rgba(0, 216, 217, 0.2);
+}
+.hl-card.hl-gift-leaderboard {
+  background: linear-gradient(90deg, rgba(145, 70, 255, 0.28), rgba(145, 70, 255, 0.12));
+}
+/* Raid callout — full width, bilateral red→gold border, pulsing
+   rocket header + structured body (raider → target + viewer count +
+   points). Matches the .msg.raid chat-line treatment so the raid
+   identity reads consistent across both the banner and chat. */
+/* Pin highlight card — fancy amber/gold design with layered glow,
+   bilateral gradient borders, pulsing pin icon, and strong contrast
+   for author names (readableColor() in JS clamps dark hues). */
+.hl-card.hl-pin {
+  display: block;
+  padding: 0;
+  position: relative;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(255, 183, 77, 0.10), transparent 60%),
+    linear-gradient(155deg, rgba(230, 161, 26, 0.18) 0%, rgba(184, 106, 0, 0.08) 55%, rgba(120, 60, 0, 0.04) 100%);
+  /* border-image breaks border-radius in Chrome (spec: ignored when
+     border-image is set). Use a solid amber border + layered box-shadow
+     for the gradient ring effect so the rounded corners stay smooth. */
+  border: 1px solid rgba(230, 161, 26, 0.45);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(255, 195, 80, 0.18),
+    0 0 14px -2px rgba(230, 161, 26, 0.28),
+    0 4px 18px -4px rgba(120, 60, 0, 0.35),
+    inset 0 1px 0 rgba(255, 220, 150, 0.12),
+    inset 0 -1px 0 rgba(120, 60, 0, 0.18);
+  overflow: hidden;
+  animation: hl-pin-glow 5s ease-in-out infinite;
+}
+.hl-card.hl-pin::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 195, 80, 0.55) 30%, rgba(255, 230, 150, 0.85) 50%, rgba(255, 195, 80, 0.55) 70%, transparent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+@keyframes hl-pin-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(255, 195, 80, 0.16),
+      0 0 14px -2px rgba(230, 161, 26, 0.22),
+      0 4px 18px -4px rgba(120, 60, 0, 0.32),
+      inset 0 1px 0 rgba(255, 220, 150, 0.12),
+      inset 0 -1px 0 rgba(120, 60, 0, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(255, 210, 120, 0.30),
+      0 0 22px -2px rgba(255, 195, 80, 0.45),
+      0 6px 24px -4px rgba(120, 60, 0, 0.45),
+      inset 0 1px 0 rgba(255, 235, 180, 0.18),
+      inset 0 -1px 0 rgba(120, 60, 0, 0.18);
+  }
+}
+.hl-pin-wrap { display: block; position: relative; }
+.hl-pin-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  background: linear-gradient(180deg, rgba(255, 183, 77, 0.08), transparent);
+}
+.hl-pin-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: #ffc34d;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(255, 195, 80, 0.55));
+  animation: hl-pin-icon-pulse 2.6s ease-in-out infinite;
+}
+@keyframes hl-pin-icon-pulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 4px rgba(255, 195, 80, 0.55)); }
+  50%      { transform: scale(1.1); filter: drop-shadow(0 0 8px rgba(255, 210, 120, 0.85)); }
+}
+.hl-pin-head-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted, #b5b5c0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.hl-pin-head-user {
+  color: #ffc34d;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12.5px;
+  margin-left: 2px;
+  text-shadow: 0 0 8px rgba(255, 195, 80, 0.4);
+}
+.hl-pin-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #9a9aa6);
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.hl-pin-btn:hover {
+  background: rgba(255, 195, 80, 0.14);
+  color: #ffd680;
+  transform: translateY(-1px);
+}
+.hl-pin-chev { transition: transform 0.22s cubic-bezier(.4,.0,.2,1); transform-origin: 12px 12px; }
+.hl-pin-wrap.collapsed .hl-pin-chev { transform: rotate(-90deg); }
+.hl-pin-body {
+  padding: 4px 14px 12px 14px;
+  overflow: hidden;
+  max-height: 600px;
+  transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.15s ease;
+}
+.hl-pin-wrap.collapsed .hl-pin-body {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+.hl-pin-body-text {
+  font-size: 14.5px;
+  line-height: 1.45;
+  font-weight: 600;
+  color: #f6f2ea;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.hl-pin-body-text a {
+  color: #ffc34d;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 195, 80, 0.5);
+  text-underline-offset: 2px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+.hl-pin-body-text a:hover {
+  color: #ffdc80;
+  text-decoration-color: #ffdc80;
+}
+.hl-pin-body-text img.emote {
+  height: 1.7em;
+  vertical-align: middle;
+  margin: -2px 2px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+/* Author footer: badges + display name + timestamp. Warm divider,
+   padded chip-like rows. Name uses readableColor() in JS + text-shadow
+   for guaranteed contrast against the amber background. */
+.hl-pin-foot {
+  margin-top: 10px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid rgba(255, 195, 80, 0.22);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #b5b5c0);
+  flex-wrap: nowrap;
+  min-width: 0;
+  position: relative;
+}
+.hl-pin-author {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.hl-pin-time {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.hl-pin-foot::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 210, 120, 0.7), transparent);
+  pointer-events: none;
+}
+.hl-pin-badges {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+}
+.hl-pin-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  vertical-align: middle;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+.hl-pin-author {
+  font-weight: 800;
+  font-size: 13.5px;
+  letter-spacing: 0.1px;
+  /* JS applies readableColor() to ensure dark hex colors are
+     brightened enough to read against the amber card. Stacked
+     shadows lock in contrast for any hue. */
+  text-shadow:
+    0 0 6px rgba(0, 0, 0, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.7);
+}
+.hl-pin-time {
+  color: #d4a85a;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: auto;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 195, 80, 0.15);
+  border-radius: 10px;
+  letter-spacing: 0.2px;
+}
+
+.hl-card.hl-raid {
+  display: block;
+  padding: 0;
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.22), rgba(255, 107, 107, 0.07));
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 5px 0 5px;
+  border-image: linear-gradient(180deg, #ff4500 0%, #ff6b6b 50%, #ffaf14 100%) 1;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 14px rgba(255, 107, 107, 0.32);
+}
+.hl-raid-wrap { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
+.hl-raid-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+.hl-raid-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 107, 107, 0.55));
+  animation: raid-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+.hl-raid-label {
+  background: linear-gradient(90deg, #ffaf14, #ff4500, #ff6b6b);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.hl-raid-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hl-raid-avatar {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 107, 107, 0.7);
+  box-shadow: 0 0 10px rgba(255, 107, 107, 0.45);
+}
+.hl-raid-body {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.hl-raid-title {
+  font-size: 0.98em;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hl-raid-raider { color: #ffd9c2; }
+.hl-raid-arrow { color: #ffaf14; margin: 0 4px; font-weight: 900; }
+.hl-raid-target { color: #ffeaa1; }
+.hl-raid-meta {
+  margin-top: 3px;
+  display: flex;
+  gap: 12px;
+  font-size: 0.86em;
+  color: #e0c7a8;
+}
+.hl-raid-meta .hl-raid-points { color: #ffd93d; font-weight: 700; }
+.hl-raid-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  color: #ffd9c2;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  margin-left: auto;
+}
+.hl-raid-close:hover {
+  background: rgba(255, 107, 107, 0.25);
+  color: #fff;
+  transform: scale(1.08);
+}
+.hl-card.hl-raid.has-accent .hl-raid-close {
+  border-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.35);
+}
+.hl-card.hl-raid.has-accent .hl-raid-close:hover {
+  background: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.3);
+}
+/* Countdown progress bar — fills from 100% to 0 over duration, giving
+   a visual sense of the "raid in N seconds" deadline. */
+.hl-raid-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  margin-top: 2px;
+}
+.hl-raid-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #ff6b6b 0%, #ffaf14 50%, #ffd93d 100%);
+  box-shadow: 0 0 6px rgba(255, 175, 20, 0.55);
+  animation: hl-raid-countdown linear forwards;
+  transform-origin: left center;
+}
+@keyframes hl-raid-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+.hl-card.hl-raid.has-accent .hl-raid-bar-fill {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 0%,
+    rgb(255, 175, 20) 60%,
+    rgb(255, 217, 61) 100%
+  );
+  box-shadow: 0 0 6px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.6);
+}
+/* When the card sampled a dominant colour from the avatar, recolor
+   the background + border + glow ring from that accent so the banner
+   feels "themed" to the raider's brand instead of a fixed red/gold. */
+.hl-card.hl-raid.has-accent {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.32),
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.1)
+  );
+  border-image: linear-gradient(
+    180deg,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 0%,
+    rgb(calc(var(--hl-accent-r) * 0.7), calc(var(--hl-accent-g) * 0.7), calc(var(--hl-accent-b) * 0.7)) 50%,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 100%
+  ) 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 14px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.4);
+}
+.hl-card.hl-raid.has-accent .hl-raid-avatar {
+  border-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.8);
+  box-shadow: 0 0 12px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.55);
+}
+
+/* ==== Subscription gift events ==== */
+/* Bundle header: full-width purple pill */
+.msg.gift-bundle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  margin: 4px 0;
+  background: linear-gradient(135deg, rgba(145, 70, 255, 0.28), rgba(145, 70, 255, 0.18));
+  border: 1px solid rgba(145, 70, 255, 0.5);
+  border-radius: 10px;
+  color: #e8dcff;
+  box-shadow: 0 0 16px rgba(145, 70, 255, 0.25);
+}
+.msg.gift-bundle .gift-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(145, 70, 255, 0.35);
+  color: #fff;
+  flex-shrink: 0;
+}
+.msg.gift-bundle .gift-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.gift-bundle .un {
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.gift-bundle .gift-count {
+  font-weight: 700;
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+}
+
+/* Individual subgift line: compact row with purple left border */
+.msg.sub-gift {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  margin: 2px 0;
+  background: rgba(145, 70, 255, 0.06);
+  border-left: 3px solid #9146ff;
+  border-radius: 4px;
+  color: var(--text, #d7d7e0);
+}
+.msg.sub-gift .gift-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: #b78cff;
+  flex-shrink: 0;
+}
+.msg.sub-gift .gift-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.sub-gift .un {
+  font-weight: 700;
+  cursor: pointer;
+  margin-right: 2px;
+}
+.msg.sub-gift .gift-line {
+  font-size: 0.95em;
+  color: var(--text, #c7c7d0);
+  margin-top: 1px;
+}
+.msg.sub-gift .gift-line strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ==== Subscribe / Resubscribe events ==== */
+/* Match the prominence of Announcements / Raids — bilateral accent
+   borders, gentle gradient background, glow, and a tier label that
+   color-codes Tier 1/2/3 (purple/blue/gold) and Prime (cyan). */
+.msg.sub-event {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: linear-gradient(180deg, rgba(145, 70, 255, 0.18), rgba(145, 70, 255, 0.06));
+  border-style: solid;
+  border-color: #9146ff;
+  border-width: 0 5px 0 5px;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(145, 70, 255, 0.25);
+}
+.msg.sub-event:hover {
+  background: linear-gradient(180deg, rgba(145, 70, 255, 0.26), rgba(145, 70, 255, 0.1));
+}
+/* Prime sub gets the Twitch-Prime cyan/blue accent + crown icon so it
+   reads instantly different from a paid Tier 1/2/3 sub. */
+.msg.sub-event.tier-2 {
+  background: linear-gradient(180deg, rgba(0, 215, 236, 0.16), rgba(0, 215, 236, 0.06));
+  border-color: #00d7ec;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 215, 236, 0.25);
+}
+.msg.sub-event.tier-2 .sub-icon { color: #00d7ec; filter: drop-shadow(0 0 4px rgba(0, 215, 236, 0.55)); }
+.msg.sub-event.tier-2 .sub-tier {
+  background: linear-gradient(90deg, #5ce0ee, #00d7ec, #009ec0);
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
+.msg.sub-event.tier-3 {
+  background: linear-gradient(180deg, rgba(255, 179, 30, 0.18), rgba(255, 179, 30, 0.06));
+  border-color: #ffb31e;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(255, 179, 30, 0.3);
+}
+.msg.sub-event.tier-3 .sub-icon { color: #ffd93d; filter: drop-shadow(0 0 4px rgba(255, 179, 30, 0.6)); }
+.msg.sub-event.tier-3 .sub-tier {
+  background: linear-gradient(90deg, #ffe57a, #ffd93d, #ffaf14);
+  background-clip: text; -webkit-background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
+.msg.sub-event.prime {
+  background: linear-gradient(180deg, rgba(0, 173, 239, 0.18), rgba(0, 173, 239, 0.06));
+  border-color: #00adef;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 173, 239, 0.28);
+}
+.msg.sub-event.prime:hover {
+  background: linear-gradient(180deg, rgba(0, 173, 239, 0.28), rgba(0, 173, 239, 0.1));
+}
+.msg.sub-event.prime .sub-icon {
+  color: #00adef;
+  filter: drop-shadow(0 0 4px rgba(0, 173, 239, 0.55));
+}
+.sub-tier {
+  background: linear-gradient(90deg, #b78cff, #9146ff, #7a3ce6);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+}
+.sub-tier-prime {
+  background: linear-gradient(90deg, #00d7ec, #00adef, #0091ff);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+}
+.msg.sub-event .sub-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #b78cff;
+  filter: drop-shadow(0 0 4px rgba(145, 70, 255, 0.5));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg.sub-event .sub-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.sub-event .un {
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.sub-event .sub-line {
+  font-size: 0.95em;
+  color: var(--text, #d0d0da);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.msg.sub-event .sub-line strong {
+  color: #fff;
+  font-weight: 700;
+}
+.msg.sub-event .sub-text {
+  margin-top: 4px;
+  color: var(--text, #d0d0da);
+}
+
+/* ==== Channel Points redeem events ==== */
+.msg.redeem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  margin: 2px 0;
+  background: rgba(145, 70, 255, 0.06);
+  border-left: 3px solid #9146ff;
+  border-radius: 4px;
+}
+.msg.redeem .redeem-icon {
+  color: #b78cff;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.msg.redeem .redeem-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.redeem .un {
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.redeem .redeem-body strong {
+  color: #fff;
+  font-weight: 700;
+}
+.msg.redeem .redeem-cost {
+  font-weight: 600;
+  color: #b78cff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(145, 70, 255, 0.15);
+  flex-shrink: 0;
+}
+.msg.redeem .redeem-text {
+  width: 100%;
+  margin-top: 4px;
+}
+.msg.highlight {
+  background: linear-gradient(90deg, rgba(145, 70, 255, 0.18), rgba(145, 70, 255, 0.04));
+  border-left: 3px solid #9146ff;
+  padding-left: 8px;
 }
 
 /* Suspicious user */
@@ -1286,16 +2035,28 @@ body.no-timestamps .msg .ts { display: none; }
 
 .msg .tx img.emote {
   display: inline-block;
-  height: 1.75em;
+  /* Bumped to match Twitch vanilla (~28px chat emotes) — 1.75em on a 13px
+     base only got to ~23px which read visibly smaller than vanilla. */
+  height: 2em;
   /* Minimum width placeholder so the inline flow reserves space before the
      image loads — without this the text flows through the empty slot and
      reflows (1-pixel-row vibration) when the image pops in. Natural width
      still takes over once the image is decoded. */
-  min-width: 1.75em;
+  min-width: 2em;
   vertical-align: middle;
   margin: -3px 1px;
   object-fit: contain;
 }
+/* OG global Twitch face emotes (:), :D, :O, ;), B), <3, …) ship at a
+   tiny native resolution. Default emote sizing scales them up and they
+   look blurry + visually too big vs vanilla chat. Render closer to
+   their native size. */
+.msg .tx img.emote.emote-tiny {
+  height: 1.25em;
+  min-width: auto;
+}
+body.layout-medium .msg .tx img.emote.emote-tiny { height: 1.4em; }
+body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 
 /* /me (ACTION) messages — italic text in username color */
 .msg.action .tx { font-style: italic; }
@@ -1387,79 +2148,114 @@ body.no-timestamps .msg .ts { display: none; }
 }
 
 /* Pinned message banner */
+/* Pinned message — Twitch-style banner with expandable body.
+   Collapsed: just shows header row with who pinned + chevron.
+   Expanded: shows full message text + author footer. */
 #pinned-banner {
+  display: block;
+  padding: 0;
+  background: var(--bg-secondary, #1a1a23);
+  border-bottom: 1px solid rgba(230, 161, 26, 0.25);
+  box-shadow: 0 0 10px rgba(230, 161, 26, 0.08);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+#pinned-banner.hidden,
+#pinned-banner.dismissed { display: none; }
+
+.pin-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: linear-gradient(160deg, rgba(255, 200, 0, 0.12), rgba(255, 140, 0, 0.12));
-  border-bottom: 1px solid rgba(255, 140, 0, 0.4);
-  box-shadow: inset 0 0 20px rgba(255, 140, 0, 0.06), 0 0 8px rgba(255, 140, 0, 0.15);
-  flex-shrink: 0;
-  font-size: 12px;
-  position: relative;
+  padding: 6px 10px;
+  cursor: default;
 }
-
-#pinned-banner.hidden { display: none; }
-
-#pinned-banner .pin-icon {
-  display: flex;
+.pin-head-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
   align-items: center;
-  gap: 4px;
-  color: var(--accent);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  justify-content: center;
+  color: #e6a11a;
   flex-shrink: 0;
 }
-
-#pinned-banner .pin-content {
+.pin-head-text {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #9999a5);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: 0.2px;
 }
-
-#pinned-banner .pin-time {
-  color: var(--text-muted);
-  font-size: 10px;
-  flex-shrink: 0;
-}
-
-#pinned-banner .pin-user {
+.pin-head-user {
+  color: #e6a11a;
   font-weight: 700;
+}
+.pin-btn {
   flex-shrink: 0;
-}
-
-#pinned-banner .pin-text {
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-#pinned-banner .pin-text img.emote {
-  height: 1.4em;
-  vertical-align: middle;
-}
-
-#pinned-banner .pin-close {
-  background: none;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
   border: none;
-  color: var(--text-muted);
-  font-size: 16px;
+  color: var(--text-muted, #9a9aa6);
   cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-  flex-shrink: 0;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
 }
+.pin-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+#pinned-banner .pin-chev { transition: transform 0.18s ease; }
+#pinned-banner.collapsed .pin-chev { transform: rotate(-90deg); transform-origin: 12px 12px; }
 
-#pinned-banner .pin-close:hover {
-  color: var(--text-primary);
+.pin-body {
+  padding: 2px 12px 10px 40px;
+  overflow: hidden;
+  max-height: 400px;
+  transition: max-height 0.18s ease, padding 0.18s ease, opacity 0.12s ease;
+}
+#pinned-banner.collapsed .pin-body {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+.pin-body-text {
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--text, #e6e6ea);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.pin-body-text a {
+  color: #e6a11a;
+  text-decoration: underline;
+  text-decoration-color: rgba(230, 161, 26, 0.4);
+}
+.pin-body-text a:hover { text-decoration-color: #e6a11a; }
+.pin-body-text img.emote {
+  height: 1.6em;
+  vertical-align: middle;
+  margin: -2px 2px;
+}
+.pin-body-foot {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted, #9a9aa6);
+}
+.pin-author {
+  font-weight: 700;
+}
+.pin-author-meta {
+  font-size: 11px;
 }
 
 /* Unread messages separator */
@@ -1484,6 +2280,157 @@ body.no-timestamps .msg .ts { display: none; }
   background: var(--accent);
   opacity: 0.5;
   margin: 0 8px;
+}
+
+/* ---- Lazy scroll-up hydration spinner ----
+   Shown at the top of the chat while _hydrateOlderMessages prepends an
+   older batch (150 msgs). Lives inside #chat so it contributes to the
+   scrollHeight delta we use to restore the user's reading position. */
+.hydrate-spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 12px;
+  margin: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  background: linear-gradient(135deg, rgba(255, 140, 0, 0.08), rgba(255, 140, 0, 0.02));
+  border: 1px solid rgba(255, 140, 0, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 0 18px rgba(255, 140, 0, 0.08);
+  animation: hs-pulse 1.2s ease-in-out infinite;
+}
+.hydrate-spinner .hs-ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 140, 0, 0.25);
+  border-top-color: var(--accent);
+  animation: hs-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+.hydrate-spinner .hs-label {
+  white-space: nowrap;
+}
+@keyframes hs-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes hs-pulse {
+  0%, 100% { box-shadow: 0 0 18px rgba(255, 140, 0, 0.08); }
+  50%      { box-shadow: 0 0 26px rgba(255, 140, 0, 0.22); }
+}
+
+/* ---- Twitch credits mirror (footer pills above input) ---- */
+#tw-credits {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border, #2a2a35);
+  background: var(--bg-secondary, #1a1a23);
+  font-size: 12px;
+  color: var(--text, #e4e4ea);
+  flex-wrap: wrap;
+}
+#tw-credits.hidden { display: none; }
+
+/* Highlights banner background tunes to the accent of its single
+   featured card (raid avatar sample, etc.). Fallback = the fixed
+   cyan/purple gradient defined earlier. */
+#highlights-banner.has-accent {
+  background: linear-gradient(
+    135deg,
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.22),
+    rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.07)
+  );
+  border-bottom-color: rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.5);
+}
+.tc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tc-pill.hidden { display: none; }
+.tc-bits svg { color: #ffd93d; }
+.tc-points-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.tc-points-icon:not(.has-icon)::before {
+  content: '\25C6'; /* ◆ fallback when channel icon URL hasn't arrived yet */
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  color: #b78cff;
+}
+.tc-points { color: #ffd9c2; }
+.tc-bits   { color: #ffeaa1; }
+/* Claim bonus — solid green like Twitch's own button, pulsing to draw
+   attention when bonus is ready. White text for legibility on the
+   dark-bg side panel. */
+.tc-claim {
+  background: linear-gradient(90deg, #00db84, #00b870);
+  color: #fff !important;
+  font-weight: 700;
+  padding: 4px 12px;
+  box-shadow: 0 0 10px rgba(0, 219, 132, 0.45);
+  animation: tc-claim-pulse 1.6s ease-in-out infinite;
+  white-space: nowrap;
+}
+.tc-claim svg { color: #fff; flex-shrink: 0; }
+.tc-claim-label {
+  display: inline-block;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tc-claim:hover {
+  background: linear-gradient(90deg, #15e89a, #02c47b);
+  box-shadow: 0 0 14px rgba(0, 219, 132, 0.7);
+}
+@keyframes tc-claim-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(0, 219, 132, 0.32); }
+  50%      { box-shadow: 0 0 14px rgba(0, 219, 132, 0.7); }
+}
+/* "+N" horizontal flash — slides from just right of the rightmost
+   visible pill further right, fading. Stays inline with the credits
+   row so it's readable, never overlaps the claim-bonus button
+   (anchor logic in _flashPointsDelta picks the rightmost pill). */
+#tw-credits { position: relative; }
+.tc-points-flash {
+  position: absolute;
+  pointer-events: none;
+  font-weight: 800;
+  font-size: 13px;
+  color: #00db84;
+  text-shadow: 0 0 6px rgba(0, 219, 132, 0.6), 0 0 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  /* translateY(-50%) keeps the flash vertically centered on the row
+     given that we set `top` to the anchor's vertical midpoint. */
+  transform-origin: left center;
+  animation: tc-points-slide 1.5s cubic-bezier(0.2, 0.6, 0.2, 1) forwards;
+}
+@keyframes tc-points-slide {
+  0%   { opacity: 0;   transform: translate(-8px, -50%)  scale(0.85); }
+  15%  { opacity: 1;   transform: translate(0,    -50%)  scale(1.08); }
+  70%  { opacity: 1;   transform: translate(22px, -50%)  scale(1); }
+  100% { opacity: 0;   transform: translate(40px, -50%)  scale(0.95); }
 }
 
 /* ---- Input Area ---- */

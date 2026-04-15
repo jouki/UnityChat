@@ -157,15 +157,40 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // ---- Debug Log (ukládá do Downloads/unitychat-debug.log) ----
-const _logs = [];
+// MV3 service workers sleep after ~30s of inactivity and lose all module
+// state on wake. Persisting to chrome.storage.session keeps the log alive
+// across worker restarts within the same browser session.
+let _logs = [];
+let _logsHydrated = false;
+let _logsSaveT = null;
+let _bootWatchT = null;
+
+async function _hydrateLogs() {
+  if (_logsHydrated) return;
+  try {
+    const r = await chrome.storage.session.get('uc_logs');
+    if (Array.isArray(r.uc_logs)) _logs = r.uc_logs;
+  } catch {}
+  _logsHydrated = true;
+}
+function _scheduleLogPersist() {
+  if (_logsSaveT) return;
+  _logsSaveT = setTimeout(() => {
+    _logsSaveT = null;
+    chrome.storage.session.set({ uc_logs: _logs }).catch(() => {});
+  }, 800);
+}
+
 function ucLog(tag, ...args) {
   const line = `[${new Date().toISOString()}] [${tag}] ${args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ')}`;
   _logs.push(line);
   console.log(line);
   if (_logs.length > 500) _logs.splice(0, _logs.length - 300);
+  _scheduleLogPersist();
 }
 async function dumpLogs() {
-  const text = _logs.join('\n');
+  await _hydrateLogs();
+  const text = _logs.length ? _logs.join('\n') : '(log empty — service worker may have just been restarted; reproduce the issue then re-dump)';
   const url = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
   try {
     await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
@@ -181,8 +206,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // Log relay (z side panelu)
   if (msg.type === 'UC_LOG') {
-    ucLog(msg.tag, ...msg.args);
-    return;
+    _hydrateLogs().then(() => {
+      // Accept either {args:[...]} or {text:"..."} for convenience.
+      if (Array.isArray(msg.args)) ucLog(msg.tag || 'UC', ...msg.args);
+      else if (typeof msg.text === 'string') ucLog(msg.tag || 'UC', msg.text);
+      sendResponse?.({ ok: true });
+    });
+    return true;
+  }
+
+  // Boot watchdog: side panel announces start; if END doesn't arrive within
+  // 20s, we assume it froze and auto-dump the log so the user has something
+  // to share even when the 💾 button stopped responding. The dump runs in
+  // the service worker, which stays alive independently of the panel UI.
+  if (msg.type === 'BOOT_WATCH_START') {
+    clearTimeout(_bootWatchT);
+    ucLog('Boot', 'watchdog armed (20s)');
+    _bootWatchT = setTimeout(() => {
+      ucLog('Boot', 'WATCHDOG FIRED — panel did not report _init done within 20s; auto-dumping logs');
+      dumpLogs();
+    }, 20000);
+    sendResponse?.({ ok: true });
+    return false;
+  }
+  if (msg.type === 'BOOT_WATCH_END') {
+    clearTimeout(_bootWatchT);
+    _bootWatchT = null;
+    ucLog('Boot', 'watchdog cleared — panel reported _init done');
+    sendResponse?.({ ok: true });
+    return false;
   }
 
   // Toggle side panel from content script (UC button in Twitch/YouTube).
@@ -264,6 +316,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'CHECK_PIN') {
     checkPin(msg.channel, msg.messageId)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'FETCH_PINS') {
+    fetchPins(msg.channel)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -426,7 +485,7 @@ async function loadTwitchBadges(channel, roomId) {
     if (gr.ok) {
       for (const b of await gr.json()) {
         for (const v of b.versions || []) {
-          badges[`${b.set_id}/${v.id}`] = v.image_url_1x;
+          badges[`${b.set_id}/${v.id}`] = { url: v.image_url_2x || v.image_url_1x, title: v.title || b.set_id };
         }
       }
     }
@@ -435,7 +494,7 @@ async function loadTwitchBadges(channel, roomId) {
       if (cr.ok) {
         for (const b of await cr.json()) {
           for (const v of b.versions || []) {
-            badges[`${b.set_id}/${v.id}`] = v.image_url_1x;
+            badges[`${b.set_id}/${v.id}`] = { url: v.image_url_2x || v.image_url_1x, title: v.title || b.set_id };
           }
         }
       }
@@ -455,51 +514,113 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
         func: (name) => {
           const lower = name.toLowerCase();
           const log = [];
+          const snippet = (el, max = 180) => {
+            try { return (el.outerHTML || '').slice(0, max).replace(/\s+/g, ' '); }
+            catch { return '<err>'; }
+          };
+          const isVisible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+          };
 
-          // 1. Najdi message container [data-a-user], pak klikni na element s textem username
+          // 7TV uses Vue.js — synthetic .click() is ignored. Real pointer
+          // event sequence (pointerdown → pointerup → click) at the
+          // element's center is what its handlers actually listen for.
+          const realClick = (el) => {
+            const r = el.getBoundingClientRect();
+            const x = r.left + r.width / 2;
+            const y = r.top + r.height / 2;
+            const opts = (extra = {}) => ({
+              bubbles: true, cancelable: true, composed: true,
+              clientX: x, clientY: y, view: window, button: 0, buttons: 1,
+              ...extra,
+            });
+            try { el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts() })); } catch {}
+            try { el.dispatchEvent(new MouseEvent('mousedown', opts())); } catch {}
+            try { el.dispatchEvent(new PointerEvent('pointerup',   { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...opts({ buttons: 0 }) })); } catch {}
+            try { el.dispatchEvent(new MouseEvent('mouseup',   opts({ buttons: 0 }))); } catch {}
+            try { el.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
+            try { el.click(); } catch {}
+          };
+
+          // 0. Preferred path for 7TV: click the .seventv-chat-user wrapper
+          //    (7TV attaches its card-opening click handler to the wrapper,
+          //    not the .seventv-chat-user-username text span). Iterate
+          //    bottom-up so the most recent message wins → its message
+          //    context is visible in the card.
+          const stvWrappers = document.querySelectorAll('.seventv-chat-user');
+          log.push(`stv-wrappers: ${stvWrappers.length}`);
+          let stvMatched = 0;
+          for (let i = stvWrappers.length - 1; i >= 0; i--) {
+            const wrap = stvWrappers[i];
+            const userEl = wrap.querySelector('.seventv-chat-user-username');
+            const txt = (userEl?.textContent || '').trim().toLowerCase();
+            if (txt !== lower) continue;
+            stvMatched++;
+            if (!isVisible(wrap)) {
+              log.push(`stv match #${stvMatched} not visible: ${snippet(wrap, 80)}`);
+              continue;
+            }
+            log.push(`stv click: ${snippet(wrap, 120)}`);
+            // Try the inner username span first — that's where 7TV's
+            // delegated listener is mounted in newer builds. Fall through
+            // to wrapper if needed (kept second click as a safety net).
+            const target = wrap.querySelector('.seventv-chat-user-username') || wrap;
+            realClick(target);
+            return 'clicked:stv-wrap|' + log.join(' | ');
+          }
+          if (stvMatched) log.push(`stv matches but none visible (${stvMatched})`);
+
+          // 1. Twitch native: [data-a-user] container, click text matching username
           const aUserEls = document.querySelectorAll('[data-a-user]');
           log.push(`[data-a-user] count: ${aUserEls.length}`);
+          let aUserMatched = 0;
           for (const container of aUserEls) {
             if (container.dataset.aUser?.toLowerCase() !== lower) continue;
-            // Klikni na element jehož TEXT je přesně username (ne badge/ikona)
+            aUserMatched++;
             for (const el of container.querySelectorAll('button, span, a')) {
               const txt = el.textContent.trim();
               if (txt.toLowerCase() === lower && !el.querySelector('img')) {
-                log.push(`Clicking: <${el.tagName}> "${txt}"`);
+                if (!isVisible(el)) continue;
+                log.push(`a-user click: ${snippet(el, 120)}`);
                 el.click();
-                return 'clicked|' + log.join('; ');
+                return 'clicked:a-user|' + log.join(' | ');
               }
             }
-            log.push('Container found but no text-matching element');
           }
+          if (aUserMatched) log.push(`a-user matches but no visible text-only inside (${aUserMatched})`);
 
-          // 2. Text search v chat zprávách (přeskočit viewer list)
+          // 2. Text search across chat-line / 7TV / native containers
           const lines = document.querySelectorAll(
             '[class*="chat-line"], [class*="seventv"], [data-a-target="chat-line-message"]'
           );
           log.push(`chat-lines: ${lines.length}`);
+          let textTried = 0;
           for (const line of lines) {
             for (const el of line.querySelectorAll('span, button')) {
               if (el.closest('.chatter-list-item')) continue;
               const txt = el.textContent.trim().toLowerCase();
-              if (txt === lower && el.offsetParent !== null) {
-                log.push(`Found text: <${el.tagName} class="${el.className}">`);
-                el.click();
-                return 'clicked:text|' + log.join('; ');
-              }
+              if (txt !== lower) continue;
+              textTried++;
+              if (!isVisible(el)) continue;
+              log.push(`text click: ${snippet(el, 120)}`);
+              el.click();
+              return 'clicked:text|' + log.join(' | ');
             }
           }
+          log.push(`text matches: ${textTried}`);
 
-          return 'not_found|' + log.join('; ');
+          return 'not_found|' + log.join(' | ');
         },
         args: [username]
       });
 
       const res = results?.[0]?.result || '';
-      ucLog('UserCard', 'executeScript result:', res);
+      ucLog('UserCard', `[${username}] executeScript result:`, res);
       if (res.startsWith('clicked')) return;
     } catch (e) {
-      ucLog('UserCard', 'executeScript error:', e.message);
+      ucLog('UserCard', `[${username}] executeScript error:`, e.message);
     }
 
     // Fallback 2: hledat v 7TV Shadow DOM
@@ -648,6 +769,124 @@ async function checkPin(channel, pinIdOrMsgId) {
     const stillPinned = edges.some(e => e.node?.id === pinIdOrMsgId);
     ucLog('Pin', `CheckPin: edges=${edges.length}, target=${pinIdOrMsgId}, stillPinned=${stillPinned}, ids=${JSON.stringify(edges.map(e => e.node?.id))}`);
     return { ok: true, stillPinned };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// FETCH_PINS: authoritative source for pin cards via Twitch GQL. Works
+// regardless of chat UI visibility — DOM mirror would otherwise miss the
+// pin when Twitch unmounts the highlight stack (hide-not-collapse + chat
+// column width 0). Returns structured pin info the sidepanel renders into
+// the highlights banner as kind:'pin' cards.
+async function fetchPins(channel) {
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  if (!channel) return { ok: false, error: 'no channel' };
+  try {
+    const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+    const headers = {
+      'Client-Id': CLIENT_ID,
+      'Content-Type': 'application/json',
+      ...(cookie?.value ? { Authorization: 'OAuth ' + cookie.value } : {})
+    };
+    // Query pulls the pinner (via pinnedBy), message sender + badges,
+    // message content with rich fragments (emotes carry ID we can resolve
+    // to CDN URLs), pin timestamp and duration. Schema is reasonably
+    // stable but Twitch occasionally renames fields — errors surface in
+    // the Pin log for re-tuning.
+    // Schema mirrors the real Twitch web UI "GetPinnedChat" operation
+    // (captured from Network tab). Key discovery: message content lives
+    // under `pinnedMessage`, NOT `message` (which was our earlier wrong
+    // guess). Emote ID field is `emoteID` on MessageFragment content,
+    // and sender badges are exposed via `displayBadges` with setID +
+    // version pairs we map through the per-channel _twitchBadges cache.
+    const r = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        operationName: 'GetPinnedChat',
+        query: `query GetPinnedChat($name: String!) {
+          channel(name: $name) {
+            id
+            pinnedChatMessages {
+              edges {
+                node {
+                  id
+                  type
+                  startsAt
+                  endsAt
+                  updatedAt
+                  pinnedBy { id displayName }
+                  pinnedMessage {
+                    id
+                    sentAt
+                    content {
+                      text
+                      fragments {
+                        text
+                        content {
+                          __typename
+                        }
+                      }
+                    }
+                    sender {
+                      id
+                      chatColor
+                      displayName
+                      displayBadges { setID version }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`,
+        variables: { name: channel }
+      })
+    });
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const data = await r.json();
+    if (data.errors?.length) {
+      ucLog('Pin', 'FetchPins GQL errors:', JSON.stringify(data.errors));
+      return { ok: false, error: 'GQL ' + data.errors[0].message };
+    }
+    const edges = data.data?.channel?.pinnedChatMessages?.edges || [];
+    const pins = edges.map((e) => {
+      const n = e.node || {};
+      const pinnedBy = n.pinnedBy || {};
+      const pm = n.pinnedMessage || {};
+      const sender = pm.sender || {};
+      const fragments = pm.content?.fragments || [];
+      const segments = fragments.map((f) => {
+        // Emote ID (c.emoteID) is Client-Integrity-gated in GQL — our
+        // anonymous fetch can only see __typename. Flag emote fragments
+        // and let the sidepanel resolve the URL from its Twitch/BTTV/
+        // FFZ/7TV emote library by name. Unknown emote names render as
+        // plain text which is at least readable.
+        const c = f.content;
+        if (c?.__typename === 'Emote' && f.text) {
+          return { type: 'emote', alt: f.text };
+        }
+        return { type: 'text', value: f.text || '' };
+      });
+      const badges = (sender.displayBadges || []).map((b) => ({
+        setID: b.setID,
+        version: b.version,
+      }));
+      return {
+        pinId: n.id,
+        endsAt: n.endsAt,
+        pinnedAt: n.startsAt,
+        pinnedBy: pinnedBy.displayName || null,
+        author: sender.displayName || null,
+        authorUserId: sender.id || null,
+        authorColor: sender.chatColor || null,
+        senderBadges: badges,
+        segments,
+        contentText: pm.content?.text || '',
+        sentAt: pm.sentAt || null,
+      };
+    });
+    return { ok: true, pins };
   } catch (e) {
     return { ok: false, error: e.message };
   }
