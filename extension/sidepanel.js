@@ -6195,6 +6195,10 @@ class UnityChat {
     if (!('firstMsg' in msg)) msg.firstMsg = false;
     if (!('replyTo' in msg)) msg.replyTo = null;
     if (!('twitchEmotes' in msg)) msg.twitchEmotes = null;
+    // _compactMsg strips empty strings to save space — restore message
+    // to '' so the _addMessage empty-body drop fires correctly and we
+    // don't end up with msg.message === undefined inside renderers.
+    if (!('message' in msg)) msg.message = '';
     // Expand string replyTo (legacy compact) to object
     if (typeof msg.replyTo === 'string') {
       msg.replyTo = { id: msg.replyTo, username: null, message: null };
@@ -6318,9 +6322,21 @@ class UnityChat {
       const raw = data[this._cacheKey];
       if (!raw?.length) return;
 
-      // 72h TTL filter
+      // 72h TTL filter + drop legacy "empty body" junk. Earlier versions
+      // cached messages whose scraped text extractor yielded "" — the
+      // compactor then stripped the `message` key so on load they show
+      // up as plain "username:" lines. System events (raid, sub, gift,
+      // redeem, announcement, highlight, cleared, /me) legitimately
+      // have no body, so we keep those.
       const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-      const msgs = raw.filter((m) => !m.timestamp || m.timestamp > cutoff);
+      const msgs = raw.filter((m) => {
+        if (m.timestamp && m.timestamp <= cutoff) return false;
+        const body = typeof m.message === 'string' && m.message.trim();
+        const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
+          || m.isGiftBundle || m.isSubGift || m.isRedeem
+          || m.isHighlight || m._cleared || m.isAction;
+        return body || isSystem;
+      });
 
       // Load each message individually — don't let one bad message kill the rest
       for (const msg of msgs) {
