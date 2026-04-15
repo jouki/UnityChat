@@ -794,6 +794,12 @@ async function fetchPins(channel) {
     // to CDN URLs), pin timestamp and duration. Schema is reasonably
     // stable but Twitch occasionally renames fields — errors surface in
     // the Pin log for re-tuning.
+    // Twitch GQL schema: PinnedChatMessage entity holds pin metadata
+    // (id, startsAt, endsAt, pinnedBy); actual sender + message content
+    // live in a nested `message` subselection. Diagnostics from v3.38.14
+    // revealed we were querying direct fields that don't exist. Corrected
+    // per real schema — sender.chatColor / content.fragments nested in
+    // message, Emote uses `id` not `emoteID`, Cheermote has `prefix` only.
     const r = await fetch('https://gql.twitch.tv/gql', {
       method: 'POST', headers,
       body: JSON.stringify({
@@ -803,19 +809,21 @@ async function fetchPins(channel) {
               edges {
                 node {
                   id
+                  startsAt
                   endsAt
-                  pinnedAt
                   pinnedBy { id login displayName }
-                  sender { id login displayName chatColor }
-                  senderBadges { setID version }
-                  content {
-                    text
-                    fragments {
+                  message {
+                    id
+                    sender { id login displayName chatColor }
+                    content {
                       text
-                      content {
-                        __typename
-                        ... on Emote { emoteID token }
-                        ... on Cheermote { bitsAmount prefix tier }
+                      fragments {
+                        text
+                        content {
+                          __typename
+                          ... on Emote { id token }
+                          ... on Cheermote { prefix }
+                        }
                       }
                     }
                   }
@@ -836,29 +844,32 @@ async function fetchPins(channel) {
     const edges = data.data?.channel?.pinnedChatMessages?.edges || [];
     const pins = edges.map((e) => {
       const n = e.node || {};
-      const sender = n.sender || {};
+      const message = n.message || {};
+      const sender = message.sender || {};
       const pinnedBy = n.pinnedBy || {};
-      const fragments = n.content?.fragments || [];
+      const fragments = message.content?.fragments || [];
       const segments = fragments.map((f) => {
         const c = f.content;
-        if (c?.__typename === 'Emote' && c.emoteID) {
-          return { type: 'emote', url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.emoteID}/default/dark/2.0`, alt: c.token || f.text || '' };
+        if (c?.__typename === 'Emote' && c.id) {
+          return { type: 'emote', url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.id}/default/dark/2.0`, alt: c.token || f.text || '' };
         }
         return { type: 'text', value: f.text || '' };
       });
-      const badges = (n.senderBadges || []).map((b) => ({ setID: b.setID, version: b.version }));
       return {
         pinId: n.id,
         endsAt: n.endsAt,
-        pinnedAt: n.pinnedAt,
+        pinnedAt: n.startsAt,
         pinnedBy: pinnedBy.displayName || pinnedBy.login || null,
         author: sender.displayName || sender.login || null,
         authorLogin: sender.login || null,
         authorUserId: sender.id || null,
         authorColor: sender.chatColor || null,
-        senderBadges: badges,
+        // Sender badges not available as direct field on PinnedChatMessage;
+        // sidepanel falls back to _twitchBadges channel cache using sender
+        // login → recent-chat mapping if needed.
+        senderBadges: [],
         segments,
-        contentText: n.content?.text || '',
+        contentText: message.content?.text || '',
       };
     });
     return { ok: true, pins };
