@@ -1177,7 +1177,9 @@ body.no-timestamps .msg .ts { display: none; }
   animation: announcement-pulse 2.4s ease-in-out infinite;
 }
 .msg.announcement[data-announcement-color="PRIMARY"] .announcement-label {
-  background: linear-gradient(90deg, #ffeaa1, #ffd93d, #ffb31e, #ffd93d, #ffeaa1);
+  /* Mirror the border gradient: dark amber edges, bright gold center
+     for consistent "lit from the middle" feel across label + border. */
+  background: linear-gradient(90deg, #8a5a00, #c98a11, #ffd93d, #fff1a8, #ffd93d, #c98a11, #8a5a00);
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
