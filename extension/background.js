@@ -794,42 +794,12 @@ async function fetchPins(channel) {
     // to CDN URLs), pin timestamp and duration. Schema is reasonably
     // stable but Twitch occasionally renames fields — errors surface in
     // the Pin log for re-tuning.
-    // Twitch disabled introspection on their public GQL endpoint (prev
-    // attempt returned empty __type). Fallback: probe candidate fields
-    // one at a time. Each failing field generates a GQL error we can
-    // identify; fields that don't error are real. Runs once per session.
-    if (!fetchPins._probed) {
-      fetchPins._probed = true;
-      const candidates = [
-        'type', 'text', 'body', 'contentText', 'rawText', 'html',
-        'messageID', 'messageId', 'pinnedMessageID', 'chatMessageID',
-        'sender', 'user', 'author', 'fromUser', 'sourceUser',
-        'fragments', 'emotes',
-      ];
-      for (const field of candidates) {
-        try {
-          const pr = await fetch('https://gql.twitch.tv/gql', {
-            method: 'POST', headers,
-            body: JSON.stringify({
-              query: `query($name:String!){channel(name:$name){pinnedChatMessages{edges{node{${field}}}}}}`,
-              variables: { name: channel }
-            }),
-          });
-          const pdata = await pr.json();
-          const err = pdata?.errors?.[0]?.message || '';
-          if (/Cannot query field/.test(err)) {
-            // field is NOT on PinnedChatMessage — skip, don't spam log
-          } else if (/requires a subselection|must not have a sub selection|has no sub/i.test(err)) {
-            ucLog('Pin', `PROBE ${field}: EXISTS (object, needs subselection — err: ${err.slice(0, 120)})`);
-          } else if (err) {
-            ucLog('Pin', `PROBE ${field}: ??? err: ${err.slice(0, 200)}`);
-          } else {
-            const sample = pdata?.data?.channel?.pinnedChatMessages?.edges?.[0]?.node || null;
-            ucLog('Pin', `PROBE ${field}: EXISTS (scalar) — sample=${JSON.stringify(sample)}`);
-          }
-        } catch (pe) { /* ignore */ }
-      }
-    }
+    // v3.38.18 probe confirmed: PinnedChatMessage exposes only id,
+    // startsAt, endsAt, pinnedBy, type (scalar "MOD"). No sender,
+    // no content, no message ref. Content + sender must come from
+    // the DOM mirror or elsewhere — log this once for posterity.
+    // If we later get the real Twitch web query (from user's Network
+    // tab capture), we'll wire it here.
     // Minimal working query (id/startsAt/endsAt/pinnedBy confirmed in
     // earlier diagnostics). Fields that previously errored (sender,
     // content, message, senderBadges, pinnedAt) are not direct on

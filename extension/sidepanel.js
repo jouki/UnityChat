@@ -5294,13 +5294,20 @@ class UnityChat {
   _handleHighlights(msg) {
     // Channel-scoped: ignore highlights from other open Twitch tabs.
     if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
-    // If this call came from a TW_HIGHLIGHTS message (has .cards) and isn't
-    // a re-render triggered by _rerenderHighlights, cache the DOM cards
-    // (minus pins — those come from GQL) so we can merge next pin tick.
+    // DOM cards (from TW_HIGHLIGHTS) take precedence over GQL fallback
+    // because DOM has full sender + content + badges + emotes that the
+    // anonymous GQL query can't return. GQL-sourced cards only fill in
+    // when chat is hidden (DOM scrape can't reach the pin card) — they
+    // show pinner + timestamp + "Pinned" placeholder body so the user
+    // at least knows a pin exists.
     if (msg.cards && msg !== this._rerenderTag) {
-      this._lastDomHighlightCards = msg.cards.filter((c) => c && c.kind !== 'pin');
-      // Append fresh GQL pin cards to this render
-      msg = { ...msg, cards: [...this._lastDomHighlightCards, ...(this._gqlPinCards || [])] };
+      const domCards = msg.cards;
+      const hasDomPin = domCards.some((c) => c?.kind === 'pin');
+      this._lastDomHighlightCards = domCards;
+      // Only inject GQL pins when DOM has no pin of its own (chat hidden /
+      // unmounted). Otherwise DOM pin wins.
+      const gqlPins = hasDomPin ? [] : (this._gqlPinCards || []);
+      msg = { ...msg, cards: [...domCards, ...gqlPins] };
     }
     const banner = document.getElementById('highlights-banner');
     if (!banner) return;
