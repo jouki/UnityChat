@@ -3785,9 +3785,22 @@ class UnityChat {
         broadcasterId: this.config._roomId || null
       });
       if (resp?.ok) {
-        this._showPinnedBanner(msg);
-        // Sledovat pin entity ID z odpovědi (ne původní message ID)
-        this._startPinWatcher(resp.pinId || msg.id);
+        // Hide the legacy #pinned-banner — pin will surface in
+        // #highlights-banner via the next FETCH_PINS poll tick (≤4s),
+        // unified with all other pinned messages from any source.
+        this._hidePinnedBanner();
+        // Trigger a fast pin poll so the banner shows up promptly
+        // instead of waiting up to 4s for the next interval.
+        chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel: this.config.channel })
+          .then((r) => {
+            if (r?.ok) {
+              this._gqlPinCards = (r.pins || []).map((p) => this._pinFromGql(p));
+              this._lastHighlightsHash = '';
+              this._rerenderHighlights();
+            }
+          })
+          .catch(() => {});
+        this._sys('Pin: zpráva připnuta — banner se zobrazí za chvíli.');
       } else {
         this._sys(`Pin: ${resp?.error || 'selhalo'}`);
       }
@@ -5312,6 +5325,51 @@ class UnityChat {
     wrap.classList.toggle('hidden', !anyShown);
   }
 
+  // Map a GQL FETCH_PINS pin object into the highlight-card format
+  // _handleHighlights expects. Centralised so both the periodic poll
+  // and the post-pin-mutation fast-fetch use the same transform.
+  _pinFromGql(p) {
+    const ts = p.sentAt || p.pinnedAt;
+    const em = this.emotes;
+    return {
+      kind: 'pin',
+      text: (p.contentText || '').slice(0, 120) || 'Pinned',
+      pin: {
+        pinnedBy: p.pinnedBy,
+        author: p.author,
+        authorColor: p.authorColor,
+        authorBadges: (p.senderBadges || []).map((b) => {
+          const key = `${b.setID}/${b.version}`;
+          const entry = this._twitchBadges?.[key];
+          const url = entry && typeof entry === 'object' ? entry.url : entry;
+          const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
+          return url ? { url, alt: title } : null;
+        }).filter(Boolean),
+        bodySegments: (p.segments || []).map((s) => {
+          if (s.type === 'emote') {
+            // Emote URL gated by Client-Integrity in GQL, so segments
+            // arrive name-only. Resolve against local emote library
+            // (URL strings, NOT objects — see v3.38.37 fix).
+            const name = s.alt || '';
+            const url =
+              em?.twitchNative?.get(name)
+              || em?.channel7tv?.get(name)
+              || em?.global7tv?.get(name)
+              || em?.bttvEmotes?.get(name)
+              || em?.ffzEmotes?.get(name);
+            if (typeof url === 'string' && url) return { type: 'emote', url, alt: name };
+            return { type: 'text', value: name };
+          }
+          return { type: 'text', value: s.value || '' };
+        }),
+        timeText: ts
+          ? 'odesláno v ' + new Date(ts).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+          : null,
+        pinId: p.pinId,
+      },
+    };
+  }
+
   // Start a periodic GQL poll for pinned messages on the active Twitch
   // channel. Runs every 8s (pin state rarely changes faster). Caches
   // the last result in this._gqlPinCards so _handleHighlights merges
@@ -5325,55 +5383,7 @@ class UnityChat {
         if (!channel) return;
         const resp = await chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel });
         if (!resp?.ok) { this._gqlPinCards = []; return; }
-        this._gqlPinCards = (resp.pins || []).map((p) => {
-          const ts = p.sentAt || p.pinnedAt;
-          return {
-            kind: 'pin',
-            text: (p.contentText || '').slice(0, 120) || 'Pinned',
-            pin: {
-              pinnedBy: p.pinnedBy,
-              author: p.author,
-              authorColor: p.authorColor,
-              // GQL-sourced badges carry setID/version; map via
-              // _twitchBadges (loaded per channel from IVR) to get the
-              // image URL + human title for tooltip rendering.
-              authorBadges: (p.senderBadges || [])
-                .map((b) => {
-                  const key = `${b.setID}/${b.version}`;
-                  const entry = this._twitchBadges?.[key];
-                  const url = entry && typeof entry === 'object' ? entry.url : entry;
-                  const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
-                  return url ? { url, alt: title } : null;
-                }).filter(Boolean),
-              bodySegments: (p.segments || []).map((s) => {
-                if (s.type === 'emote') {
-                  // Emote arrived WITHOUT a URL (GQL emoteID gated by
-                  // Client-Integrity). Resolve by name against our local
-                  // emote maps — Twitch native, 7TV global+channel, BTTV,
-                  // FFZ. Channel-specific custom emotes hit first since
-                  // pin content typically references the streamer's own.
-                  const name = s.alt || '';
-                  const em = this.emotes;
-                  const entry =
-                    em?.twitchNative?.get(name)
-                    || em?.channel7tv?.get(name)
-                    || em?.global7tv?.get(name)
-                    || em?.bttvEmotes?.get(name)
-                    || em?.ffzEmotes?.get(name);
-                  if (entry?.url) return { type: 'emote', url: entry.url, alt: name };
-                  // Unknown emote — render as readable text with brackets
-                  // so it's still visible as reference.
-                  return { type: 'text', value: name };
-                }
-                return { type: 'text', value: s.value || '' };
-              }),
-              timeText: ts
-                ? 'odesláno v ' + new Date(ts).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
-                : null,
-              pinId: p.pinId,
-            },
-          };
-        });
+        this._gqlPinCards = (resp.pins || []).map((p) => this._pinFromGql(p));
         // Re-render the banner merging freshly-fetched pins with whatever
         // DOM-mirror highlights are currently showing.
         this._rerenderHighlights();

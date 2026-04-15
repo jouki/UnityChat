@@ -614,7 +614,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards`, oba pin sources renderovány vedle sebe.
 - **v3.38.35** - **DOM pin extract iter 3 — direct text nodes + body selector fix**: scan přímých text nodes pro pinner, `.pinned-chat__message` selector pro body.
 - **v3.38.36** - **Pin emote resolve + rounded corners**: tokenize text body for emote lookup (bug: použil `entry?.url` ale maps drží URL string). Border-image → solid border + box-shadow.
-- **v3.38.37** - **Emote map value type fix**: emote maps (`channel7tv`, `global7tv`, `bttvEmotes`, `ffzEmotes`, `twitchNative`, `kickNative`, `ucEmotes`) ukládají **URL string přímo**, ne `{url}` objekt. Můj `entry?.url` v3.38.36 vracel `undefined` → resolve always failed → emote text. Fix: `const url = resolveEmote(name)` + check `typeof url === 'string'`. Stejný fix v `/uc pin` mocku. **Aktuální verze**
+- **v3.38.37** - **Emote map value type fix**: maps drží URL string přímo, ne `{url}` objekt. Resolve fix v `_buildPinCard` + `/uc pin` mocku.
+- **v3.38.38** - **Unify pin path: legacy `#pinned-banner` → `#highlights-banner`**: po klik na UC pin button starý kód renderoval **separate** `#pinned-banner` element (legacy z v3.37.0). Plus parallel GQL `FETCH_PINS` zobrazoval ten samý pin v `#highlights-banner` → 2 cards. Fix: po `PIN_MESSAGE` mutation skip `_showPinnedBanner`, jen `_hidePinnedBanner` + immediate `FETCH_PINS` fetch s rerender → single fancy pin card v highlights banneru. `_pinFromGql(p)` extracted as method (used by polling tick + post-mutation fast-fetch). Plus stejný `entry?.url` → URL string fix v poll path. **Aktuální verze**
 
 ## Release workflow
 
