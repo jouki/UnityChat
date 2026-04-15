@@ -17,7 +17,8 @@ const DEFAULTS = {
   kick: true,
   // Soft render cap — chat should hold ~72h of activity, cache is the source
   // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
-  maxMessages: 500,
+  maxMessages: 5000,       // storage cap — how many msgs we keep in _msgCache (72h TTL still applies)
+  initialRender: 250,      // how many render into DOM on boot; older load on scroll-up
   username: '',
   layout: 'small',
   showTimestamps: true,
@@ -2154,6 +2155,11 @@ class UnityChat {
     this._cacheTimer = null;
     this._twitchBadges = {};
     this._chatUsers = new Map();  // username → { name, platform, color }
+    // Lazy-load cursor: index into _msgCache of the first un-rendered msg.
+    // Boot renders only the last `initialRender` msgs; scroll-up triggers
+    // _hydrateOlderMessages which prepends batches of 250 from _msgCache.
+    this._hydratedIdx = 0;
+    this._hydratingOlder = false;
     // Per-channel LRU dedup. Map<"platform:channel", {ids:Set, content:Set}>.
     // Each channel holds its own dedup sets so switching channels and coming
     // back doesn't duplicate messages still in the target's DOM. LRU eviction
@@ -2488,14 +2494,13 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
-      // v3.38.1 migration: the v3.24.24 bump to 5000 caused 77s synchronous
-      // cache-hydration blocks (measured in prod logs). Force configs back
-      // down to the current DEFAULT cap so existing users aren't stuck with
-      // an unusable boot time.
-      if ((this.config.maxMessages || 0) > DEFAULTS.maxMessages) {
+      // Older configs have maxMessages baked in — bring them up to the new
+      // default so existing users benefit from the 72h cache + lazy load.
+      if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
         this.config.maxMessages = DEFAULTS.maxMessages;
         this._saveConfig();
       }
+      if (!this.config.initialRender) this.config.initialRender = DEFAULTS.initialRender;
     } catch {}
   }
 
@@ -2816,6 +2821,7 @@ class UnityChat {
     $('btn-clear-cache').addEventListener('click', () => {
       chrome.storage.local.remove(this._cacheKey);
       this._msgCache = [];
+      this._hydratedIdx = 0;
       this._dedupChannels.clear();
       this._dedupLRU.length = 0;
       this.chatEl.innerHTML = '';
@@ -2841,6 +2847,12 @@ class UnityChat {
       this.autoScroll = atBottom;
       if (atBottom) {
         this._clearUnread();
+      }
+      // Lazy load older messages when user scrolls near the top. Keeps boot
+      // fast (only initialRender msgs in DOM) while letting heavy scrollers
+      // reach the full 72h cache on demand.
+      if (el.scrollTop < 200 && this._hydratedIdx > 0 && !this._hydratingOlder) {
+        this._hydrateOlderMessages();
       }
     });
     this.scrollBtn.addEventListener('click', () => {
@@ -3429,6 +3441,7 @@ class UnityChat {
     this.chatEl.innerHTML = '';
     this.msgCount = 0;
     this._msgCache = [];
+    this._hydratedIdx = 0;
     this._optimisticKeys = new Map();
     this._isModOnChannel = false; // re-detect from badges on new channel
     // Recycle the boot-time loading overlay during channel switch — same
@@ -6828,6 +6841,48 @@ class UnityChat {
     }
   }
 
+  // Prepend a batch of older messages from _msgCache when user scrolls near
+  // the top. Preserves scroll position by measuring scrollHeight before and
+  // after insert and restoring scrollTop via the delta, so the viewport
+  // stays locked on the user's current reading position.
+  async _hydrateOlderMessages() {
+    if (this._hydratingOlder) return;
+    if (!this._msgCache?.length || !(this._hydratedIdx > 0)) return;
+    this._hydratingOlder = true;
+    try {
+      const batch = 250;
+      const startIdx = Math.max(0, this._hydratedIdx - batch);
+      const slice = this._msgCache.slice(startIdx, this._hydratedIdx);
+      // Build a detached fragment so we don't trigger layout per insert,
+      // then splice it in front of the oldest currently-rendered msg.
+      // _addMessage appends to this.chatEl, so we temporarily swap chatEl
+      // for a fragment, render into it, then prepend the fragment.
+      const frag = document.createDocumentFragment();
+      const realChat = this.chatEl;
+      this.chatEl = frag;
+      try {
+        for (const m of slice) {
+          try { this._addMessage(this._expandMsg(m)); } catch {}
+        }
+      } finally {
+        this.chatEl = realChat;
+      }
+      // Capture scroll metrics BEFORE insert so we can restore the view.
+      const prevHeight = realChat.scrollHeight;
+      const prevTop = realChat.scrollTop;
+      realChat.insertBefore(frag, realChat.firstChild);
+      // Jump scrollTop forward by the height of the newly prepended block
+      // so the user's current reading line stays put (suppress the auto-
+      // scroll handler during this nudge).
+      this._programmaticScrollUntil = performance.now() + 200;
+      const newHeight = realChat.scrollHeight;
+      realChat.scrollTop = prevTop + (newHeight - prevHeight);
+      this._hydratedIdx = startIdx;
+    } finally {
+      this._hydratingOlder = false;
+    }
+  }
+
   async _loadCachedMessages() {
     try {
       const data = await chrome.storage.local.get(this._cacheKey);
@@ -6852,18 +6907,24 @@ class UnityChat {
         return body || platformContent || isSystem;
       });
 
-      // Trim to maxMessages so we never render more than the user-configured
-      // cap. Previous behaviour rendered the entire TTL-filtered set (could
-      // be 5000+ on long sessions) synchronously — measured 77s of blocked
-      // main thread on a 5000-msg hydration which tripped the boot watchdog.
-      const cap = this.config.maxMessages || 500;
-      const toRender = msgs.slice(-cap);
-      this._msgCache = toRender;
+      // Storage trim: keep at most maxMessages (default 5000) in _msgCache.
+      // Actual DOM render is bounded separately by initialRender (see below)
+      // so we can hold many msgs in memory without paying the render cost
+      // up front. Older msgs load on scroll-up via _hydrateOlderMessages.
+      const storageCap = this.config.maxMessages || 5000;
+      const fullCache = msgs.slice(-storageCap);
+      this._msgCache = fullCache;
+
+      // Boot render: only the most recent initialRender msgs go into the DOM
+      // now. Older msgs live in _msgCache and get prepended on demand when
+      // the user scrolls to the top. This keeps boot under 2s even with a
+      // 5000-msg cache.
+      const renderN = this.config.initialRender || 250;
+      const toRender = fullCache.slice(-renderN);
+      this._hydratedIdx = fullCache.length - toRender.length; // first un-rendered idx in fullCache
 
       // Chunked insert: yield to the event loop every CHUNK msgs so the UI
       // thread can paint, scroll, and respond to clicks during hydration.
-      // Tradeoff: first batch is visible fast, remaining batches trickle in
-      // over ~1-2s instead of blocking for tens of seconds.
       const CHUNK = 40;
       const yieldNow = () => new Promise((r) => {
         if (typeof requestIdleCallback === 'function') requestIdleCallback(() => r(), { timeout: 50 });
@@ -6877,14 +6938,15 @@ class UnityChat {
         if (end < toRender.length) await yieldNow();
       }
 
-      // Populate message history from cached user messages (for ArrowUp/Down)
-      // Match all known username variants + UC-marked messages
+      // Populate message history from cached user messages (for ArrowUp/Down).
+      // We walk the FULL cache here so users get history even from msgs that
+      // aren't rendered yet. Match all known username variants.
       const myNames = new Set();
       if (this.config.username) myNames.add(this.config.username.toLowerCase());
       for (const name of Object.values(this._platformUsernames)) {
         if (name) myNames.add(name.toLowerCase());
       }
-      for (const m of toRender) {
+      for (const m of fullCache) {
         if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
           const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
           if (text) this._msgHistory.push(text);
@@ -6908,6 +6970,12 @@ class UnityChat {
     const c = this.chatEl.children;
     const n = Math.max(0, c.length - this.config.maxMessages);
     for (let i = 0; i < n; i++) c[0].remove();
+    // Keep the lazy-load cursor in sync — N rendered msgs fell off the top,
+    // so the first un-rendered idx in _msgCache advances by N (those rows
+    // are effectively "re-hidden" and become eligible for re-hydration).
+    if (n > 0 && typeof this._hydratedIdx === 'number') {
+      this._hydratedIdx = Math.min((this._msgCache?.length || 0), this._hydratedIdx + n);
+    }
   }
 
   _scroll() {
