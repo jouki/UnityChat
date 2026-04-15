@@ -734,13 +734,14 @@ class EmoteManager {
       // ship at a much lower native resolution than channel/subscriber
       // emotes — scaling them up to our standard chat-emote size makes
       // them blurry and pushes them visually out of proportion with
-      // vanilla Twitch. Detect by the small-integer ID inside the
-      // jtvnw v2 URL and tag with .emote-tiny so CSS shrinks them.
-      // Threshold 100 covers the OG face set without touching modern
-      // subscriber emotes (whose IDs are in the millions).
+      // vanilla Twitch. Detect by NAME (stable across ID-system changes:
+      // <3 went from low ID to 555555584) AND require a Twitch CDN URL
+      // so BTTV/FFZ/7TV emotes that happen to share the same name (e.g.
+      // someone's BTTV ":D") don't get shrunk — they live on different
+      // domains.
       let cls = 'emote';
-      const tinyMatch = (s.url || '').match(/\/emoticons\/v2\/(\d{1,3})\/default/);
-      if (tinyMatch && parseInt(tinyMatch[1], 10) <= 100) cls += ' emote-tiny';
+      const isTwitchCdn = /static-cdn\.jtvnw\.net\/emoticons\//.test(s.url || '');
+      if (isTwitchCdn && _isTwitchOgFaceName(s.value)) cls += ' emote-tiny';
       const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}" title="${alt}">`;
       if (s.zw) {
         if (!stackOpen) out.push('<span class="emote-stack">');
@@ -957,6 +958,20 @@ function twitchDefaultColor(username) {
   const n = username.toLowerCase();
   const sum = n.charCodeAt(0) + n.charCodeAt(n.length - 1);
   return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
+}
+
+// Twitch's "Global Emotes" panel ships these legacy face emotes at a tiny
+// native resolution — upscaling makes them blurry. We render them smaller
+// to match vanilla chat. Stable across ID renumbering (e.g. <3 = 555555584).
+const _TWITCH_OG_FACE_NAMES = new Set([
+  ':)', ':(', ':D', ':P', ':p', ':o', ':O', ';)', ';P', ';p',
+  'B)', 'b)', ':|', ':/', ':\\', ':7', ':S', ':s', ':z', ':Z',
+  'R)', 'r)', '<3', 'O_o', 'o_O', 'O_O', '8)',
+  ':-)', ':-(', ':-D', ':-P', ':-p', ':-O', ':-o',
+  '#/', ':?',
+]);
+function _isTwitchOgFaceName(name) {
+  return _TWITCH_OG_FACE_NAMES.has(name);
 }
 
 // Twitch's vanilla chat lightens dark user colors on dark backgrounds so they
