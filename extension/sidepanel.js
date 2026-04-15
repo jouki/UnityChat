@@ -731,6 +731,22 @@ class NicknameManager {
 // Twitch IRC Provider
 // =============================================================
 
+// Twitch's default username-color palette — used by the vanilla web client
+// when a user hasn't picked a custom color. Order + algorithm RE'd from
+// Twitch source (matches what Chatty and tmi.js ship). Without this, every
+// colorless user renders in the same brand purple fallback.
+const TWITCH_DEFAULT_COLORS = [
+  '#FF0000', '#0000FF', '#008000', '#B22222', '#FF7F50',
+  '#9ACD32', '#FF4500', '#2E8B57', '#DAA520', '#D2691E',
+  '#5F9EA0', '#1E90FF', '#FF69B4', '#8A2BE2', '#00FF7F',
+];
+function twitchDefaultColor(username) {
+  if (!username) return '#9146ff';
+  const n = username.toLowerCase();
+  const sum = n.charCodeAt(0) + n.charCodeAt(n.length - 1);
+  return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
+}
+
 class TwitchProvider {
   constructor() {
     this.ws = null;
@@ -814,7 +830,7 @@ class TwitchProvider {
 
     let message = after.substring(ci + 1);
     const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
-    const color = tags.color || '#9146ff';
+    const color = tags.color || twitchDefaultColor(username);
 
     // Detect /me (CTCP ACTION): \x01ACTION text\x01
     let isAction = false;
