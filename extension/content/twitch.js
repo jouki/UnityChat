@@ -135,7 +135,10 @@
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      hideTwitchChatVisually(false);
+      // Toggle: hide chat if currently shown, show if hidden. Mirrors
+      // the UC toolbar button so the user has a chat-toggle available
+      // from anywhere on the Twitch tab, regardless of UC state.
+      hideTwitchChatVisually(!ucChatHidden);
     });
     return btn;
   }
@@ -197,8 +200,11 @@
   let restoreBtnObserver = null;
   function setupRestoreBtnObserver() {
     if (restoreBtnObserver) return;
+    // Always-on observer — keep the chat-toggle button present in the
+    // top nav regardless of chat hidden state. The button acts as a
+    // toggle: hides when chat is visible, restores when hidden.
     restoreBtnObserver = new MutationObserver(() => {
-      if (ucChatHidden) ensureRestoreButton();
+      ensureRestoreButton();
     });
     restoreBtnObserver.observe(document.body, { childList: true, subtree: true });
   }
@@ -244,11 +250,16 @@
         ucWithChatObserver.disconnect();
         ucWithChatObserver = null;
       }
-      removeRestoreButton();
-      if (restoreBtnObserver) {
-        restoreBtnObserver.disconnect();
-        restoreBtnObserver = null;
-      }
+      // Keep the chat-toggle button + its observer alive — button now
+      // works as a toggle, visible regardless of hidden state.
+    }
+    // Reflect new state on the button (title + aria-label) so hover
+    // hint makes sense in both directions.
+    const restoreBtn = document.getElementById(UC_RESTORE_BTN_ID);
+    if (restoreBtn) {
+      const label = ucChatHidden ? 'Zobrazit Twitch chat' : 'Schovat Twitch chat';
+      restoreBtn.title = label;
+      restoreBtn.setAttribute('aria-label', label);
     }
   }
 
@@ -1230,6 +1241,11 @@
     setupSbalitIntercept();
     setupHighlightsObserver();
     setupCreditsObserver();
+    // Always-on chat-toggle button in the top nav — hides chat when
+    // visible, restores when hidden. Observer keeps it re-injected
+    // across SPA navigations and Twitch re-renders.
+    ensureRestoreButton();
+    setupRestoreBtnObserver();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', setupAll, { once: true });
