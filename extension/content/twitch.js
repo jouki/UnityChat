@@ -471,17 +471,18 @@
         };
         let attempts = 0;
         const maxPhase1 = 24; // 24 × 50ms = 1200ms
-        const retryAt = new Set([8, 16]); // re-click at ~400ms and ~800ms
+        const retryAt = new Set([8, 16]); // re-click if dialog STILL hasn't appeared
+        let dialogSeen = false;
         const checkDialog = () => {
           attempts++;
           const dlg = document.querySelector(dialogSel);
           if (dlg) {
-            // Twitch mounts the dialog element before laying it out;
-            // an initial getBoundingClientRect yields zeros. Keep
-            // polling until it has real dimensions so we can portal
-            // to the right coords.
+            dialogSeen = true;
             const rr0 = dlg.getBoundingClientRect();
             if (rr0.width < 4 || rr0.height < 4) {
+              // Dialog mounted but 0-size — its parent (hidden chat
+              // column) has width:0. Don't re-click (would toggle it
+              // closed) — just keep polling for dims.
               if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
             } else {
               const info = portalIfNeeded(dlg);
@@ -490,14 +491,15 @@
               return;
             }
           }
-          if (retryAt.has(attempts)) { log('phase1-reclick', { attempts }); rec(); }
+          // Only re-click when Twitch hasn't mounted the dialog AT ALL
+          // — clicking again while it's open would toggle it closed.
+          if (!dialogSeen && retryAt.has(attempts)) { log('phase1-reclick', { attempts }); rec(); }
           if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
-          // Phase 2 fallback: popover didn't open with the chat still
-          // hidden — lift hide, WAIT for the chat column to actually
-          // re-flow with real width (otherwise React popover mounts
-          // inside a 0-width parent and its bounding rect stays 0),
-          // then re-click, then poll, portal, re-hide.
-          log('fallback-lift', { attempts });
+          // Phase 2 fallback: lift hide so the parent column reflows
+          // to real width. If dialog is ALREADY mounted (just 0-size),
+          // DON'T re-click — the lift + reflow alone will give it
+          // dimensions. Only re-click if dialog never mounted at all.
+          log('fallback-lift', { attempts, dialogSeen });
           if (wasHidden) {
             const style = document.getElementById(UC_HIDE_STYLE_ID);
             if (style) style.remove();
@@ -510,9 +512,11 @@
             void document.body.offsetHeight;
           }
 
-          // Wait ~150ms (2 animation frames + pad) for the chat column
-          // to settle with real width before dispatching the click.
           const doClickAndPoll = () => {
+            // Dialog already open (0-size waiting for reflow) — skip
+            // the click, it would toggle close. Lift + reflow above
+            // is enough.
+            if (dialogSeen) { log('phase2-no-reclick-dialog-open'); return; }
             try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
             const rb = btn.getBoundingClientRect();
             const cx = rb.left + rb.width / 2, cy = rb.top + rb.height / 2;
