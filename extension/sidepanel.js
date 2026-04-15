@@ -5303,14 +5303,34 @@ class UnityChat {
       } catch {}
     };
     tick();
+    this._kickDomHighlightScan();
     // 4s interval — fast enough to catch new pins promptly without
     // hammering GQL. Plus on every sidepanel focus (visibilitychange
     // → visible) kick an immediate tick so coming back from another
     // tab shows an up-to-date pin right away.
-    this._pinPollT = setInterval(tick, 4000);
+    this._pinPollT = setInterval(() => {
+      tick();
+      this._kickDomHighlightScan();
+    }, 4000);
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') tick();
+      if (document.visibilityState === 'visible') {
+        tick();
+        this._kickDomHighlightScan();
+      }
     });
+  }
+
+  // Ask every Twitch tab to snapshot highlight cards NOW and relay them
+  // back via TW_HIGHLIGHTS. Cuts boot-time DOM pin latency from "wait for
+  // next MutationObserver tick" (could be seconds) to one message round
+  // trip (~10-30ms). Works even when chat column is hidden/not scrolling.
+  async _kickDomHighlightScan() {
+    try {
+      const tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' });
+      for (const t of tabs) {
+        try { chrome.tabs.sendMessage(t.id, { type: 'SCAN_HIGHLIGHTS_NOW' }).catch(() => {}); } catch {}
+      }
+    } catch {}
   }
 
   // Merge DOM + GQL pin data + last-good cache into a single card.

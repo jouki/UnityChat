@@ -301,6 +301,20 @@
       return;
     }
 
+    if (msg.type === 'SCAN_HIGHLIGHTS_NOW') {
+      // Proactive scan on demand — sidepanel calls this right after
+      // boot / tab switch to avoid waiting for a MutationObserver tick.
+      // relayHighlights handles hash dedup + TW_HIGHLIGHTS message.
+      // Force-bust the dedup cache so the scan always emits, even if
+      // a mutation tick already pushed the same hash.
+      try {
+        lastHighlightHash = '';
+        if (typeof relayHighlights === 'function') relayHighlights();
+      } catch {}
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg.type === 'OPEN_USER_CARD') {
       const name = msg.username.toLowerCase();
       const safeName = CSS.escape(name);
