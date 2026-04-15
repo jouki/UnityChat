@@ -826,6 +826,47 @@
       });
     } catch { /* extension context gone */ }
   }
+  // ---- Twitch credits mirror (bits balance + channel-point balance + icon) ----
+  // Anonymous IRC can't pull these via PubSub/Helix — they're behind OAuth.
+  // Mirroring the rendered .community-points-summary widget from the Twitch
+  // tab is the only anonymous-safe path. We extract: bits string, channel-point
+  // balance string, and the channel-point icon URL (channels can customize it).
+  let lastCreditsHash = '';
+  function snapshotCredits() {
+    const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
+    if (!summary) return null;
+    const bitsEl = summary.querySelector('[data-test-selector="bits-balance-string"]');
+    const pointsEl = summary.querySelector('[data-test-selector="copo-balance-string"]');
+    const iconEl = summary.querySelector('img.image--D5HXC, img[src*="channel-points-icons"]');
+    return {
+      bits: bitsEl ? (bitsEl.textContent || '').trim() : null,
+      points: pointsEl ? (pointsEl.textContent || '').trim() : null,
+      pointsIcon: iconEl?.src || null,
+      channel: currentTwitchChannel(),
+    };
+  }
+  function relayCredits() {
+    const snap = snapshotCredits();
+    if (!snap) return;
+    const hash = `${snap.bits || ''}|${snap.points || ''}|${snap.pointsIcon || ''}|${snap.channel || ''}`;
+    if (hash === lastCreditsHash) return;
+    lastCreditsHash = hash;
+    try { chrome.runtime.sendMessage({ type: 'TW_CREDITS', data: snap }); } catch {}
+  }
+  let creditsObserver = null;
+  function setupCreditsObserver() {
+    if (creditsObserver) return;
+    creditsObserver = new MutationObserver(() => {
+      if (creditsObserver._t) return;
+      creditsObserver._t = setTimeout(() => {
+        creditsObserver._t = null;
+        relayCredits();
+      }, 400);
+    });
+    creditsObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    setTimeout(relayCredits, 1500);
+  }
+
   function setupHighlightsObserver() {
     if (highlightObserver) return;
     highlightObserver = new MutationObserver(() => {
@@ -847,6 +888,7 @@
     setupRedeemObserver();
     setupSbalitIntercept();
     setupHighlightsObserver();
+    setupCreditsObserver();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', setupAll, { once: true });

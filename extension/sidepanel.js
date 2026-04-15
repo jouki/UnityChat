@@ -2265,6 +2265,7 @@ class UnityChat {
     this._wireBackgroundUpdateListener();
     // Hover/click preview card for emotes inside chat messages.
     this._setupEmotePreview();
+    this._scheduleColorRevalidation();
   }
 
   async _checkForUpdate() {
@@ -2332,6 +2333,8 @@ class UnityChat {
         this._handleDomRedeem(msg.data);
       } else if (msg?.type === 'TW_HIGHLIGHTS') {
         this._handleHighlights(msg);
+      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
+        this._handleCredits(msg.data);
       }
     });
   }
@@ -4610,6 +4613,104 @@ class UnityChat {
     push('Last 30 cached messages (slim)', recent);
 
     return out.join('\n\n');
+  }
+
+  // Mirror the Twitch credits widget (bits + channel-points) from an open
+  // Twitch tab. Anonymous IRC has no way to get either balance — the only
+  // anonymous-safe path is to scrape the rendered DOM.
+  // Twitch picks default colors from a hash palette for users without a
+  // custom hex set. That hash is per-session, so when the streamer (or
+  // viewer) refreshes the Twitch page, those defaults can flip. Our
+  // cached _fromGQL state would otherwise stick the old color forever.
+  // Periodically re-snapshot DOM colors for currently-rendered Twitch
+  // users and overwrite cache + retint when changed. DOM lookup is free.
+  _scheduleColorRevalidation() {
+    if (this._colorRevalT) return;
+    const tick = async () => {
+      this._colorRevalT = null;
+      try {
+        const seen = new Set();
+        const usernames = [];
+        this.chatEl.querySelectorAll('.un[data-platform="twitch"]').forEach((un) => {
+          const u = un.dataset.username;
+          if (!u || seen.has(u)) return;
+          seen.add(u);
+          usernames.push(u);
+        });
+        if (!usernames.length) return;
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        for (const tab of tabs) {
+          if (!tab.id) continue;
+          let r;
+          try { r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames }); }
+          catch { continue; }
+          if (!r?.ok || !r.colors) continue;
+          for (const [login, col] of Object.entries(r.colors)) {
+            if (!col) continue;
+            const key = `twitch:${login}`;
+            const prev = this._chatUsers.get(key);
+            if (prev?.color === col) continue;
+            const entry = {
+              ...(prev || {}),
+              name: prev?.name || login,
+              platform: 'twitch',
+              color: col,
+              _fromGQL: true,
+            };
+            this._chatUsers.set(key, entry);
+            this._chatUsers.set(login, entry);
+            const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+            for (const un of this.chatEl.querySelectorAll(sel)) {
+              const msgId = un.closest('.msg')?.dataset.msgId;
+              const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+              const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+              if (ucProfile?.color) continue;
+              un.style.color = readableColor(col);
+            }
+            const msel = `.mention[data-mention-user="${CSS.escape(login)}"]`;
+            for (const mn of this.chatEl.querySelectorAll(msel)) {
+              mn.style.color = readableColor(col);
+            }
+          }
+        }
+      } catch {}
+      // Re-arm — every 5 min while the panel is alive
+      this._colorRevalT = setTimeout(tick, 5 * 60 * 1000);
+    };
+    // First tick after 90s (give initial lookups time to settle), then 5min
+    this._colorRevalT = setTimeout(tick, 90 * 1000);
+  }
+
+  _handleCredits(data) {
+    if (data.channel && data.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    const wrap = document.getElementById('tw-credits');
+    if (!wrap) return;
+    const bitsPill = wrap.querySelector('.tc-bits');
+    const pointsPill = wrap.querySelector('.tc-points');
+    const bitsVal = wrap.querySelector('.tc-bits-val');
+    const pointsVal = wrap.querySelector('.tc-points-val');
+    const pointsIcon = wrap.querySelector('.tc-points-icon');
+
+    let anyShown = false;
+    if (data.bits != null && data.bits !== '') {
+      bitsVal.textContent = data.bits;
+      bitsPill.classList.remove('hidden');
+      anyShown = true;
+    } else {
+      bitsPill.classList.add('hidden');
+    }
+    if (data.points != null && data.points !== '') {
+      pointsVal.textContent = data.points;
+      if (data.pointsIcon) {
+        pointsIcon.style.backgroundImage = `url(${this.emotes._ea(data.pointsIcon)})`;
+        pointsIcon.classList.add('has-icon');
+      }
+      pointsPill.classList.remove('hidden');
+      anyShown = true;
+    } else {
+      pointsPill.classList.add('hidden');
+    }
+    wrap.classList.toggle('hidden', !anyShown);
   }
 
   _handleHighlights(msg) {
