@@ -153,6 +153,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === 'GET_CHAT_COLORS') {
+    fetchChatColors(msg.usernames || [])
+      .then((colors) => sendResponse({ ok: true, colors }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg.type === 'LOAD_BADGES') {
     ucLog('Badges', 'Loading for channel:', msg.channel, 'roomId:', msg.roomId);
     loadTwitchBadges(msg.channel, msg.roomId)
@@ -273,6 +279,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// Fetch Twitch chat colors for up to 100 logins in one GQL request using
+// field aliases (Twitch's `user(login:)` doesn't accept a list). chatColor
+// is a public field — works without auth-token. Returns {loginLower: '#hex'}.
+async function fetchChatColors(usernames) {
+  if (!Array.isArray(usernames) || !usernames.length) return {};
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+  const headers = {
+    'Client-Id': CLIENT_ID,
+    'Content-Type': 'application/json',
+    ...(cookie?.value ? { Authorization: 'OAuth ' + cookie.value } : {}),
+  };
+  const logins = [...new Set(usernames.map((u) => String(u).toLowerCase().replace(/^@/, '')))]
+    .filter((u) => /^[a-z0-9_]{1,25}$/.test(u))
+    .slice(0, 100);
+  if (!logins.length) return {};
+
+  const varDefs = logins.map((_, i) => `$l${i}: String!`).join(', ');
+  const aliases = logins.map((_, i) => `u${i}: user(login: $l${i}) { login chatColor }`).join(' ');
+  const query = `query (${varDefs}) { ${aliases} }`;
+  const variables = Object.fromEntries(logins.map((l, i) => [`l${i}`, l]));
+
+  const r = await fetch('https://gql.twitch.tv/gql', {
+    method: 'POST', headers,
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await r.json().catch(() => ({}));
+  const data = json?.data || {};
+  const out = {};
+  for (const k of Object.keys(data)) {
+    const u = data[k];
+    if (u?.login && u?.chatColor) out[u.login.toLowerCase()] = u.chatColor;
+  }
+  return out;
+}
 
 async function loadTwitchBadges(channel, roomId) {
   const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';

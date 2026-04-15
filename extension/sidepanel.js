@@ -830,7 +830,8 @@ class TwitchProvider {
 
     let message = after.substring(ci + 1);
     const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
-    const color = tags.color || twitchDefaultColor(username);
+    const ircColor = tags.color;
+    const color = ircColor || twitchDefaultColor(username);
 
     // Detect /me (CTCP ACTION): \x01ACTION text\x01
     let isAction = false;
@@ -872,6 +873,11 @@ class TwitchProvider {
       username,
       message: cleanMessage,
       color,
+      // When IRC didn't carry a color= tag we fell back to the hash palette.
+      // Signal that the listener should look up the real Twitch chat color
+      // via GQL so we can retro-apply it (hash may differ from the user's
+      // actual stored color assigned by Twitch).
+      _needsColorLookup: !ircColor,
       timestamp: Date.now(),
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
@@ -3235,7 +3241,85 @@ class UnityChat {
     this._scroll();
   }
 
+  // Twitch's hash fallback may not match the color Twitch actually stores for
+  // each user (modern Twitch assigns once at first chat, not from username).
+  // Queue a GQL lookup for any Twitch chatter we haven't resolved via GQL yet;
+  // debounced batch resolver updates _chatUsers + live DOM once the real color
+  // arrives, so cached + freshly-rendered messages both retint to match vanilla.
+  _enqueueTwitchColorLookup(username) {
+    if (!username) return;
+    const u = username.toLowerCase();
+    const key = `twitch:${u}`;
+    const cached = this._chatUsers.get(key);
+    if (cached?._fromGQL) return;
+    if (!this._colorQueue) this._colorQueue = new Set();
+    if (this._colorQueue.has(u)) return;
+    this._colorQueue.add(u);
+    if (!this._colorQueueTimer) {
+      this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 700);
+    }
+  }
+
+  async _flushColorLookups() {
+    this._colorQueueTimer = null;
+    if (!this._colorQueue || !this._colorQueue.size) return;
+    const batch = [...this._colorQueue].slice(0, 100);
+    for (const u of batch) this._colorQueue.delete(u);
+    let resp;
+    try {
+      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: batch });
+    } catch { return; }
+    if (!resp?.ok || !resp.colors) return;
+
+    let dirty = false;
+    for (const login of batch) {
+      const color = resp.colors[login];
+      const key = `twitch:${login}`;
+      const prev = this._chatUsers.get(key);
+      // Even if GQL returned no color (user has none), mark as resolved so we
+      // don't re-query. Keep the existing (hash) color as display fallback.
+      const entry = {
+        name: prev?.name || login,
+        platform: 'twitch',
+        color: color || prev?.color,
+        badgesRaw: prev?.badgesRaw || '',
+        _fromGQL: true,
+      };
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(login, entry);
+      dirty = true;
+
+      // Retint already-rendered usernames (skip ones overridden by nickname)
+      if (color) {
+        const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+        for (const un of this.chatEl.querySelectorAll(sel)) {
+          const msgId = un.closest('.msg')?.dataset.msgId;
+          const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+          const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+          if (ucProfile?.color) continue;
+          un.style.color = color;
+        }
+      }
+    }
+    if (dirty && !this._userColorTimer) {
+      this._userColorTimer = setTimeout(() => {
+        this._userColorTimer = null;
+        chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+      }, 1500);
+    }
+    if (this._colorQueue.size > 0) {
+      this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 1500);
+    }
+  }
+
   _addMessage(msg) {
+    // Kick off async color resolution for Twitch chatters — hash fallback or
+    // IRC color may not match what Twitch's own client shows, so we reconcile
+    // via public GQL chatColor field for any user we haven't resolved yet.
+    if (msg.platform === 'twitch' && msg.username && !msg._optimistic) {
+      this._enqueueTwitchColorLookup(msg.username);
+    }
+
     // Track color + badges BEFORE dedup (echo gets deduped but we still want the data)
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
