@@ -4249,7 +4249,8 @@ class UnityChat {
         // Mock pin banner injection. Uses the current user profile as
         // both pinner and author so colors + badges pick up whatever
         // the user has cached locally. Body = everything after "/uc pin".
-        const body = args.slice(1).join(' ').trim() || 'Mock pin — připnutá zpráva pro testování.';
+        // args is the raw string passed in, so use parts.slice(1).
+        const body = parts.slice(1).join(' ').trim() || 'Mock pin — připnutá zpráva pro testování.';
         // Split body into word-level segments, resolve any known emote
         // names via the full emote library (Twitch native, 7TV, BTTV,
         // FFZ) so mocks with real emote tokens render as images.

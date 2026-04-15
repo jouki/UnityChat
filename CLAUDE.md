@@ -607,7 +607,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.27** - **Pin banner visual polish (jen CSS + readableColor)**: fancy gold gradient, pulsing icon, readable author, pill timestamp.
 - **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + ellipsis na author + `flex-shrink: 0` na timestamp.
 - **v3.38.29** - **Pin body full-width, no author truncation**: padding-left 42→14, author nowrap bez ellipsis.
-- **v3.38.30** - **`/uc pin [text]` mock command**: nový mock pro testování pin banneru. Push mock pin do `_gqlPinCards` + `_rerenderHighlights`. Body je vše za `/uc pin` (default: "Mock pin — připnutá zpráva pro testování."). Tokenize na word-level + resolve emote names proti full emote library (channel 7TV → global 7TV → BTTV → FFZ → Twitch native) → real emote obrázky v mocku. Pinner + author = current user; color z `_platformColors.twitch`; badges z `_myBadgesCache` (mapped přes `_twitchBadges` cache). Timestamp = current local HH:MM. Plus entry v autocomplete (`/uc pin`). **Aktuální verze**
+- **v3.38.30** - **`/uc pin [text]` mock command** (bug: `args.slice` na stringu místo array).
+- **v3.38.31** - **`/uc pin` fix**: `args` v `_handleUcCommand` je raw string, ne array → `args.slice(1).join(' ')` nevracel body. Fix: `parts.slice(1).join(' ')` (parts je splitted array dostupná v funkci scope). **Aktuální verze**
 
 ## Release workflow
 
