@@ -4920,6 +4920,15 @@ class UnityChat {
       };
       const prevNum = this._lastPointsNum;
       const newNum = parseTwitchNum(this._lastPointsText);
+      // Precision gate: only accept the numeric delta when neither the
+      // prev NOR the new text was abbreviated (no "tis."/"k"/"mil"/"m"
+      // suffix). Crossing a rounding boundary like 1.4K → 1.5K would
+      // otherwise fire a phantom "+100" that's actually the rounding
+      // artefact of a single +10 tick. We still want +10 flashes for
+      // precise values (< 1000).
+      const isAbbrev = (s) => typeof s === 'string' && /(?:tis|k|mil|m)\.?\s*$/i.test(s.trim());
+      const prevAbbrev = isAbbrev(pointsVal.textContent);
+      const newAbbrev = isAbbrev(this._lastPointsText);
       pointsVal.textContent = this._lastPointsText;
       if (this._lastPointsIcon) {
         pointsIcon.style.backgroundImage = `url(${this.emotes._ea(this._lastPointsIcon)})`;
@@ -4927,8 +4936,10 @@ class UnityChat {
       }
       pointsPill.classList.remove('hidden');
       anyShown = true;
-      // Numerical delta only (text-equality would miss "1,5 tis."→"1,5 tis.")
-      if (prevNum != null && newNum != null && newNum > prevNum) {
+      // Numerical delta — but only when both values are precise.
+      // Abbreviated "1,5 tis." has ~100-point imprecision which would
+      // manifest as phantom +100 flashes on boundary crossings.
+      if (prevNum != null && newNum != null && newNum > prevNum && !prevAbbrev && !newAbbrev) {
         this._flashPointsDelta(newNum - prevNum);
       }
       if (newNum != null) this._lastPointsNum = newNum;
