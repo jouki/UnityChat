@@ -5356,8 +5356,12 @@ class UnityChat {
       }
     }
 
-    // Add badges if the optimistic message didn't have them
-    if (el && realMsg.badgesRaw && !el.querySelector('.bdg')) {
+    // Replace badges with the authoritative IRC-echo set. The optimistic
+    // message seeded its badges from a last-known cache entry which can be
+    // stale (previous channel, session before sub bump, etc.) — we always
+    // overwrite when the real echo lands so visual matches vanilla chat.
+    if (el && realMsg.badgesRaw) {
+      el.querySelectorAll(':scope > .bdg').forEach((n) => n.remove());
       const un = el.querySelector('.un');
       const bdg = document.createElement('span');
       bdg.className = 'bdg';
