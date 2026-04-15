@@ -608,7 +608,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.28** - **Pin footer one-line**: `flex-wrap: nowrap` + ellipsis na author + `flex-shrink: 0` na timestamp.
 - **v3.38.29** - **Pin body full-width, no author truncation**: padding-left 42→14, author nowrap bez ellipsis.
 - **v3.38.30** - **`/uc pin [text]` mock command** (bug: `args.slice` na stringu místo array).
-- **v3.38.31** - **`/uc pin` fix**: `args` v `_handleUcCommand` je raw string, ne array → `args.slice(1).join(' ')` nevracel body. Fix: `parts.slice(1).join(' ')` (parts je splitted array dostupná v funkci scope). **Aktuální verze**
+- **v3.38.31** - **`/uc pin` body parsing fix**: `parts.slice(1)` místo `args.slice(1)`.
+- **v3.38.32** - **`/uc pin` injection path fix**: push do `_gqlPinCards` + `_rerenderHighlights` neprojevoval mock protože `_lastGoodPinCache` (z předchozího reálného pinu) vyhrál v merge nad GQL. Fix: inject mock jako **DOM-highlights card** přímo přes `_handleHighlights({cards: [mockPin, ...]})` + hash bust. Mock je v `domPins` → `_mergePinCard(domPin, gqlPin)` pick DOM wins → banner rendruje mock + cache refreshne. Příští real DOM scan ho nahradí (expected). **Aktuální verze**
 
 ## Release workflow
 

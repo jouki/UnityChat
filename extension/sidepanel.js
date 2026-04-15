@@ -4302,11 +4302,18 @@ class UnityChat {
             pinId: 'mock-' + Date.now(),
           },
         };
-        // Push into _gqlPinCards so _handleHighlights merge treats it as
-        // the source of truth (as if GQL returned this pin). Re-render
-        // bumps last-good cache via its normal path.
-        this._gqlPinCards = [mockPin];
-        this._rerenderHighlights();
+        // Inject via the normal DOM-highlights path so the mock wins
+        // the merge: pushing it into _gqlPinCards alone would be
+        // overridden by _lastGoodPinCache if a real pin was visible
+        // earlier. Feeding it as a TW_HIGHLIGHTS card makes it the
+        // domPin for this tick → merge picks its fields first, cache
+        // refreshes, banner renders the mock. A subsequent DOM scan
+        // will replace it with the real pin, which is fine.
+        this._lastHighlightsHash = '';
+        this._handleHighlights({
+          channel: this.config.channel,
+          cards: [mockPin, ...(this._lastDomHighlightCards || [])],
+        });
         this._sys(`/uc pin: mock pin banner injected (body="${body.slice(0, 60)}${body.length > 60 ? '…' : ''}")`);
         break;
       }
