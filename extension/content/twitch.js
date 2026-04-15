@@ -141,9 +141,34 @@
   }
 
   function findTopNavActions() {
-    return document.querySelector('.top-nav__actions')
-      || document.querySelector('[data-a-target="top-nav-user-menu-toggle"]')?.closest('div[class]')?.parentElement
-      || document.querySelector('.top-nav .Layout-sc-1xcs6mc-0');
+    // Twitch has refactored .top-nav several times — try semantic selectors
+    // first, then fall back to walking up from the user avatar / menu
+    // button (which we can identify reliably by data-a-target attrs).
+    const directSelectors = [
+      '.top-nav__actions',
+      '[data-a-target="top-nav-actions-container"]',
+      '[data-test-selector="top-nav__actions-container"]',
+    ];
+    for (const sel of directSelectors) {
+      const el = document.querySelector(sel);
+      if (el) return el;
+    }
+    const anchor = document.querySelector('[data-a-target="user-menu-toggle"]')
+      || document.querySelector('[data-a-target="top-nav-avatar"]')
+      || document.querySelector('[data-a-target="top-nav-account-menu"]')
+      || document.querySelector('[aria-label*="Account" i][role="button"]')
+      || document.querySelector('[data-test-selector="top-nav-search-input"]')
+      || document.querySelector('header [data-a-target="login-button"]');
+    if (!anchor) return null;
+    // Walk up to the first flex row that holds multiple siblings — that's
+    // the actions strip (avatar + bell + bits + ads + …).
+    let p = anchor.parentElement;
+    while (p && p !== document.body) {
+      const style = getComputedStyle(p);
+      if (style.display === 'flex' && p.children.length >= 2 && p.offsetHeight < 60) return p;
+      p = p.parentElement;
+    }
+    return null;
   }
 
   function ensureRestoreButton() {
@@ -151,8 +176,17 @@
     if (!actions) return;
     if (document.getElementById(UC_RESTORE_BTN_ID)) return;
     const btn = buildRestoreButton();
-    // Insert as the first child so it lands left of the user menu / bell.
-    actions.insertBefore(btn, actions.firstChild);
+    // Land the button immediately left of the avatar / user-menu wrapper.
+    const avatar = actions.querySelector('[data-a-target="user-menu-toggle"]')
+      || actions.querySelector('[data-a-target="top-nav-avatar"]')
+      || actions.querySelector('[data-a-target="top-nav-account-menu"]');
+    let target = avatar;
+    while (target && target.parentElement !== actions) target = target.parentElement;
+    if (target) {
+      actions.insertBefore(btn, target);
+    } else {
+      actions.appendChild(btn);
+    }
   }
 
   function removeRestoreButton() {
