@@ -611,7 +611,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.31** - **`/uc pin` body parsing fix**: `parts.slice(1)` místo `args.slice(1)`.
 - **v3.38.32** - **`/uc pin` injection path fix**: inject mock jako DOM card přímým voláním `_handleHighlights`. Mock zmizí po pár vteřin, řešeno v dalších verzích.
 - **v3.38.33** - **Mock pin sticky 30s** (přechodný): `_mockPinUntil` flag suppress real GQL poll. Nahrazeno v3.38.34 aby mock mohl coexistovat s real pinem.
-- **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards` array, real pin (DOM+GQL merged) + mock pins se renderují vedle sebe v banneru. Auto-expire mock po 30s. Real pin polling pokračuje normálně. Channel switch resetuje mock + clearTimeout. **Aktuální verze**
+- **v3.38.34** - **Mock pin stackuje s reálným pinem**: separate `_mockPinCards`, oba pin sources renderovány vedle sebe.
+- **v3.38.35** - **DOM pin extract iter 3 — direct text nodes + body selector fix**: diagnostic dump z UC-pinned message ukázal Twitch struktura `<p>[textNode "Připnuto uživatelem "][span badge][textNode "Jouki728"]</p>` + `<p class="pinned-chat__message">[body]</p>`. (1) **pinnedBy** předtím `textContent` slepoval header + body do "Jouki728peepoHey" v collapsed wrapper-div (≤60 chars passed filter, regex zabral až do "peepoHey"). Nový algoritmus: scan DIRECT child text nodes elementu (skip descendants), pokud první matchuje label, pinner je za label v same element direct text. Plus tighter regex `[A-Za-z0-9_]{2,25}\b` (Twitch username chars + length cap). (2) **Body chyběl**: selector `[class*="pinned-chat-message"]` (hyphen) nematchoval real class `pinned-chat__message` (underscore). Přidány `.pinned-chat__message` + `[class*="pinned-chat__message"]`. **Aktuální verze**
 
 ## Release workflow
 

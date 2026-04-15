@@ -1284,29 +1284,46 @@
     const allText = (card.textContent || '').trim();
     const labelRe = /P[řr]ipnuto uživatelem/i;
 
-    // 1. Pinned-by: scan for a SHORT leaf-ish element whose trimmed text
-    //    matches exactly "Připnuto uživatelem <name>". Using a leaf with
-    //    short text dodges the textContent-concatenation trap where body
-    //    text ("DONO:") gets glued to the pinner name without whitespace.
-    //    Example flat-text: "Připnuto uživatelem MeewileDONO:" — here
-    //    every long ancestor contains the body too; only the pure header
-    //    element has short text like "Připnuto uživatelem Meewile".
-    for (const el of card.querySelectorAll('span, p, div, a')) {
-      const t = (el.textContent || '').trim();
-      if (!labelRe.test(t)) continue;
-      if (t.length > 60) continue; // short = header only
-      const m = t.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_-]+)/iu);
-      if (m && m[1].length >= 2 && m[1].length <= 30) {
-        out.pinnedBy = m[1];
+    // 1. Pinned-by: real Twitch DOM (per diagnostic dumps) renders the
+    //    header as a single <p> whose DIRECT child nodes look like:
+    //
+    //      [textNode "Připnuto uživatelem "]
+    //      [<span> with mod badge <img>]
+    //      [textNode "Jouki728"]
+    //
+    //    The pinner name is the LAST text node inside that element, NOT
+    //    something we can pull from textContent (which concatenates with
+    //    descendant body text on cards where Twitch puts header + body
+    //    in the same wrapper, e.g. "Připnuto uživatelem Jouki728peepoHey").
+    //
+    //    Algorithm: find the element whose first non-empty direct text
+    //    node starts with the label, then concatenate any further direct
+    //    text nodes (skipping descendant text) — that's the pinner.
+    for (const el of card.querySelectorAll('p, span, div')) {
+      const directTexts = [];
+      for (const n of el.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE) directTexts.push(n.textContent || '');
+      }
+      const joined = directTexts.join('').trim();
+      if (!joined || !labelRe.test(joined)) continue;
+      // The label sits in the first text node; subsequent direct text
+      // nodes hold the pinner name.
+      const labelMatch = joined.match(/^\s*P[řr]ipnuto uživatelem\s*(.*)$/iu);
+      if (!labelMatch) continue;
+      const tail = (labelMatch[1] || '').trim();
+      if (!tail) continue;
+      // Tail should be just the username (Twitch usernames are 4–25 chars,
+      // [a-zA-Z0-9_]). Greedy capture to first whitespace/punct boundary.
+      const nameMatch = tail.match(/^([A-Za-z0-9_]{2,25})\b/);
+      if (nameMatch) {
+        out.pinnedBy = nameMatch[1];
         break;
       }
     }
-    // Fallback: whole-card regex (tight word-char capture).
+    // Fallback: whole-card regex with strict word-boundary tail.
     if (!out.pinnedBy) {
-      const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+([\p{L}\p{N}_-]+)/iu);
-      if (pbMatch && pbMatch[1].length >= 2 && pbMatch[1].length <= 30) {
-        out.pinnedBy = pbMatch[1];
-      }
+      const pbMatch = allText.match(/P[řr]ipnuto uživatelem\s+([A-Za-z0-9_]{2,25})\b/i);
+      if (pbMatch) out.pinnedBy = pbMatch[1];
     }
 
     // 2. Author — pin footer has the message author as a separate span
@@ -1445,6 +1462,12 @@
     //    body content qualifies.
     const bodySelectors = [
       '[data-test-selector="pinned-chat-message-body"]',
+      // Real Twitch class is "pinned-chat__message" (double underscore,
+      // not hyphen). The previous "pinned-chat-message" selector never
+      // matched anything, so body extraction always fell through to the
+      // text-length fallback which often picked the wrong element.
+      '.pinned-chat__message',
+      '[class*="pinned-chat__message"]',
       '[class*="pinned-chat-message"] [class*="message-body"]',
       '.pinned-chat-message__body',
       '[class*="PinnedChatMessage"] [class*="body"]',
