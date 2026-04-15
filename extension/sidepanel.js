@@ -2546,6 +2546,7 @@ class UnityChat {
           'redeem', 'highlight',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
+          'raidbanner',
         ];
         const prefix = (text === '/uc' ? '' : partial).toLowerCase();
         const matches = (prefix ? UC_CMDS.filter((c) => c.startsWith(prefix)) : UC_CMDS).map((c) => '/uc ' + c);
@@ -4058,6 +4059,22 @@ class UnityChat {
       case 'delete':
         this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
         break;
+      case 'raidbanner': {
+        // Inject a synthetic TW_HIGHLIGHTS card so the raid banner
+        // renders without waiting for a real raid. Text + avatar shape
+        // mirrors what the content script extracts from Twitch DOM.
+        const raider = (text && text !== 'test message') ? text : 'Karpo_cz';
+        this._handleHighlights({
+          channel: this.config.channel,
+          cards: [{
+            kind: 'raid',
+            text: `${raider} provádí nájezd na kanál Lessinka s 195 nájezdníky. Nájezd za +250 bodů.`,
+            avatar: 'https://static-cdn.jtvnw.net/jtv_user_pictures/robdiesalot-profile_image-300x300.png',
+          }],
+        });
+        this._sys('/uc raidbanner: mock raid banner injected');
+        break;
+      }
       case 'claim': {
         // Mock the claim-bonus pill showing up in the credits footer.
         // Injects a synthetic TW_CREDITS snapshot via _handleCredits.
@@ -4082,7 +4099,7 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name]`);
     }
   }
 
@@ -5047,15 +5064,26 @@ class UnityChat {
     for (const c of cards) {
       const item = document.createElement('div');
       item.className = 'hl-card hl-' + (c.kind || 'generic');
-      const icon = document.createElement('span');
-      icon.className = 'hl-icon';
-      icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
-        : c.kind === 'gift-leaderboard' ? '\u{1F381}'
-        : '\u2728';
+      // Avatar first (if present) — raids and some highlights embed the
+      // channel's profile image. Fall back to text-icon otherwise.
+      if (c.avatar) {
+        const av = document.createElement('img');
+        av.className = 'hl-avatar';
+        av.src = c.avatar;
+        av.alt = '';
+        item.appendChild(av);
+      } else {
+        const icon = document.createElement('span');
+        icon.className = 'hl-icon';
+        icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
+          : c.kind === 'gift-leaderboard' ? '\u{1F381}'
+          : c.kind === 'raid' ? '\u{1F680}'
+          : '\u2728';
+        item.appendChild(icon);
+      }
       const body = document.createElement('span');
       body.className = 'hl-body';
       body.textContent = c.text;
-      item.appendChild(icon);
       item.appendChild(body);
       banner.appendChild(item);
     }
@@ -5597,7 +5625,13 @@ class UnityChat {
     // or IRC edge cases. System events (raid/sub/announcement/gift/
     // redeem/highlight/cleared/action) have their own renderers that
     // don't need a body, so we let those through.
-    const textEmpty = !msg?.message || !String(msg.message).trim();
+    // Strip UC_MARKER (Braille blank — intentionally NOT whitespace so
+    // Twitch can't normalise it away) before the emptiness check, and
+    // strip literal Braille blank chars too. Otherwise a message like
+    // "⠀" alone parses as "non-empty" here but renders as empty after
+    // the marker-strip path at line ~5814 kicks in.
+    const msgProbe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
+    const textEmpty = !msgProbe;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isHighlight || msg?._cleared || msg?.isAction;

@@ -1277,21 +1277,33 @@ body.no-timestamps .msg .ts { display: none; }
 .hl-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 10px;
+  padding: 8px 10px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
   font-size: 0.92em;
   color: #e8e8ef;
-  line-height: 1.3;
+  line-height: 1.35;
 }
-.hl-card .hl-icon { flex-shrink: 0; font-size: 1.1em; }
+.hl-card .hl-icon { flex-shrink: 0; font-size: 1.2em; }
+.hl-card .hl-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
 .hl-card .hl-body {
   flex: 1;
   min-width: 0;
+  /* Multi-line — let the raider/gifter/whatever text wrap instead of
+     being truncated with "…". 3-line clamp caps runaway captions. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hl-card.hl-hype-train {
   background: linear-gradient(90deg, rgba(0, 216, 217, 0.3), rgba(0, 216, 217, 0.12));
@@ -1299,6 +1311,10 @@ body.no-timestamps .msg .ts { display: none; }
 }
 .hl-card.hl-gift-leaderboard {
   background: linear-gradient(90deg, rgba(145, 70, 255, 0.28), rgba(145, 70, 255, 0.12));
+}
+.hl-card.hl-raid {
+  background: linear-gradient(90deg, rgba(255, 107, 107, 0.28), rgba(255, 175, 20, 0.1));
+  box-shadow: 0 0 12px rgba(255, 107, 107, 0.25);
 }
 
 /* ==== Subscription gift events ==== */

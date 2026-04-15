@@ -715,12 +715,14 @@
         const frags = line.querySelectorAll('.text-fragment, .mention-fragment, [class*="text-fragment"]');
         for (const f of frags) text += walk(f);
       }
-      text = text.replace(/\s+/g, ' ').trim();
+      // Strip UC_MARKER (Braille blank, U+2800) before emptiness check
+      // — trim() alone doesn't recognise it as whitespace, so marker-
+      // only extractions would pass through as garbage.
+      text = text.replace(/\u2800/g, '').replace(/\s+/g, ' ').trim();
 
-      // Last-resort fallback: full line text minus username.
       if (!text) {
         const fullText = (line.textContent || '').trim();
-        text = fullText.replace(username, '').replace(/^[\s:]+/, '').trim();
+        text = fullText.replace(username, '').replace(/\u2800/g, '').replace(/^[\s:]+/, '').trim();
       }
       if (!text) continue;
 
@@ -1074,18 +1076,33 @@
     for (const el of kept) {
       const text = (el.textContent || '').trim();
       if (!text) continue;
-      // Final text-level dedup — handles duplicate cards that show up via
-      // two distinct selectors with the same content.
       const key = text.slice(0, 120);
       if (seenTexts.has(key)) continue;
       seenTexts.add(key);
-      // Classify. Hype train has progress / minutes text; gift sub has
-      // "Tier" / "subs"; pinned messages have distinctive classes.
       const isHypeTrain = /hype\s*train|hype\s*raid|úr\.|%\b/i.test(text)
         || /hype/i.test(el.className || '');
+      const isRaid = /n[aá]jezd|raid/i.test(text) || /raid/i.test(el.className || '');
       const isGiftLeaderboard = /gift/i.test(text) || /gift/i.test(el.className || '');
-      const kind = isHypeTrain ? 'hype-train' : (isGiftLeaderboard ? 'gift-leaderboard' : 'generic');
-      cards.push({ kind, text: text.slice(0, 400), html: el.outerHTML.slice(0, 4000) });
+      const kind = isRaid ? 'raid'
+        : isHypeTrain ? 'hype-train'
+        : isGiftLeaderboard ? 'gift-leaderboard'
+        : 'generic';
+      // Pull the first channel-style avatar image out of the card if
+      // present — raid notices embed the raider's profile pic.
+      let avatar = null;
+      const imgs = el.querySelectorAll('img[src]');
+      for (const img of imgs) {
+        const src = img.src || '';
+        // Skip tiny Twitch icons (badges, arrows) — avatars have profile-image-style paths
+        if (/profile_image|jtvnw\.net\/jtv_user_pictures|userlogos|cdn-prod\.twitch\.tv\/ttv-boxart/i.test(src)) {
+          avatar = src;
+          break;
+        }
+        // Fall back to first square-ish img with size >=24
+        const r = img.getBoundingClientRect();
+        if (r.width >= 24 && Math.abs(r.width - r.height) < 4) { avatar = src; break; }
+      }
+      cards.push({ kind, text: text.slice(0, 400), avatar, html: el.outerHTML.slice(0, 4000) });
     }
     return cards;
   }
