@@ -6710,6 +6710,14 @@ class UnityChat {
 
     this.chatEl.appendChild(el);
 
+    // Skip trim/scroll/cache writes while we're prepending *older* msgs via
+    // lazy scroll-up hydration. Those messages are already in _msgCache
+    // (that's where we pulled them from), re-caching would push them to
+    // the end and corrupt chronological order. _trim() would also run
+    // against the fragment instead of the real chat. _scroll() is a no-op
+    // on fragments but harmless — skipping it anyway.
+    if (this._hydratingOlder) return;
+
     if (this.msgCount > this.config.maxMessages) this._trim();
     this._scroll();
 
@@ -6908,7 +6916,14 @@ class UnityChat {
 
       const batch = 150;
       const startIdx = Math.max(0, this._hydratedIdx - batch);
-      const slice = this._msgCache.slice(startIdx, this._hydratedIdx);
+      const slice = this._msgCache.slice(startIdx, this._hydratedIdx)
+        // Safety re-sort: even if _msgCache arrived out-of-chronological
+        // order (scraped fills, cross-source merges), the prepended batch
+        // itself renders in ascending timestamp order. Otherwise a slice
+        // spanning 17:14 and 17:46 messages would flip their order inside
+        // the newly visible block.
+        .slice()
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
       // Build a detached fragment so we don't trigger layout per insert,
       // then splice it in front of the oldest currently-rendered msg.
@@ -6925,13 +6940,19 @@ class UnityChat {
       }
       spinner.remove();
       realChat.insertBefore(frag, realChat.firstChild);
-      // Jump scrollTop forward by the height of the newly prepended block
-      // (spinner was removed, messages inserted) so the user's current
-      // reading line stays put. Suppress the auto-scroll handler during
-      // this nudge.
       this._programmaticScrollUntil = performance.now() + 200;
       const newHeight = realChat.scrollHeight;
-      realChat.scrollTop = prevTop + (newHeight - prevHeight);
+      // Scroll-restore policy:
+      // - User was AT the very top (prevTop < 40px): land them at the top
+      //   of the newly prepended block (scrollTop = 0) so they immediately
+      //   see the freshly-loaded old messages they were asking for.
+      // - User was scrolled mid-chat: keep their current reading line
+      //   fixed by adding the prepended block's height to scrollTop.
+      if (prevTop < 40) {
+        realChat.scrollTop = 0;
+      } else {
+        realChat.scrollTop = prevTop + (newHeight - prevHeight);
+      }
       this._hydratedIdx = startIdx;
     } catch (e) {
       spinner.remove();
@@ -6964,6 +6985,14 @@ class UnityChat {
           || m.isHighlight || m._cleared || m.isAction;
         return body || platformContent || isSystem;
       });
+
+      // Sort by timestamp — _msgCache insertion order can drift from real
+      // chronology when scraped messages (Twitch DOM backfill) arrive late
+      // but carry older timestamps than the live messages already cached.
+      // Without this sort, lazy-scroll-up prepends slice out a chunk whose
+      // internal order mixes 17:14 + 17:46 messages, and the user sees
+      // obvious timeline hops inside a single batch.
+      msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
       // Storage trim: keep at most maxMessages (default 5000) in _msgCache.
       // Actual DOM render is bounded separately by initialRender (see below)
