@@ -4737,6 +4737,22 @@ class UnityChat {
     this._colorRevalT = setTimeout(tick, 90 * 1000);
   }
 
+  // Float a "+N" pill above the points balance so the +10 watch-reward
+  // tick (and bonus claims) get visible feedback. Caller supplies the
+  // already-computed delta; we just animate.
+  _flashPointsDelta(delta) {
+    const wrap = document.getElementById('tw-credits');
+    if (!wrap) return;
+    const anchor = wrap.querySelector('.tc-points');
+    if (!anchor) return;
+    const f = document.createElement('span');
+    f.className = 'tc-points-flash';
+    f.textContent = `+${delta.toLocaleString('cs-CZ')}`;
+    anchor.appendChild(f);
+    // Remove after the CSS animation finishes (1.5s).
+    setTimeout(() => f.remove(), 1600);
+  }
+
   _handleCredits(data) {
     if (data.channel && data.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
     const wrap = document.getElementById('tw-credits');
@@ -4814,6 +4830,21 @@ class UnityChat {
       bitsPill.classList.add('hidden');
     }
     if (data.points != null && data.points !== '') {
+      // Parse numeric value to detect increases (+10 watch reward, +N from
+      // claim) — Twitch formats with comma decimal + Czech "tis."/EN "K"
+      // suffix for thousands. We strip non-breaking spaces too.
+      const parseTwitchNum = (s) => {
+        if (typeof s !== 'string') return null;
+        let raw = s.replace(/[\u00A0\s]/g, '').replace(',', '.').toLowerCase();
+        let mult = 1;
+        if (/(?:tis|k)\.?$/.test(raw)) { mult = 1000; raw = raw.replace(/(?:tis|k)\.?$/, ''); }
+        else if (/(?:mil|m)\.?$/.test(raw)) { mult = 1_000_000; raw = raw.replace(/(?:mil|m)\.?$/, ''); }
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? Math.round(n * mult) : null;
+      };
+      const prevText = pointsVal.textContent;
+      const prevNum = this._lastPointsNum;
+      const newNum = parseTwitchNum(data.points);
       pointsVal.textContent = data.points;
       if (data.pointsIcon) {
         pointsIcon.style.backgroundImage = `url(${this.emotes._ea(data.pointsIcon)})`;
@@ -4821,6 +4852,10 @@ class UnityChat {
       }
       pointsPill.classList.remove('hidden');
       anyShown = true;
+      if (prevNum != null && newNum != null && newNum > prevNum && data.points !== prevText) {
+        this._flashPointsDelta(newNum - prevNum);
+      }
+      if (newNum != null) this._lastPointsNum = newNum;
     } else {
       pointsPill.classList.add('hidden');
     }

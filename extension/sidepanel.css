@@ -1908,6 +1908,27 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   0%, 100% { box-shadow: 0 0 6px rgba(0, 219, 132, 0.32); }
   50%      { box-shadow: 0 0 14px rgba(0, 219, 132, 0.7); }
 }
+/* "+N" floating delta over the points pill (watch-reward + claim) */
+.tc-points { position: relative; }
+.tc-points-flash {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  font-weight: 800;
+  font-size: 13px;
+  color: #00db84;
+  text-shadow: 0 0 6px rgba(0, 219, 132, 0.6), 0 0 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  animation: tc-points-float 1.5s cubic-bezier(0.2, 0.6, 0.2, 1) forwards;
+}
+@keyframes tc-points-float {
+  0%   { opacity: 0;   transform: translate(-50%, 4px)  scale(0.85); }
+  15%  { opacity: 1;   transform: translate(-50%, -4px) scale(1.08); }
+  70%  { opacity: 1;   transform: translate(-50%, -22px) scale(1); }
+  100% { opacity: 0;   transform: translate(-50%, -36px) scale(0.95); }
+}
 
 /* ---- Input Area ---- */
 
