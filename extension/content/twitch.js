@@ -658,6 +658,45 @@
       return;
     }
 
+    if (msg.type === 'CAPTURE_HYPETRAIN_DOM') {
+      // Diagnostic: dump both the collapsed hype-train card and the
+      // expanded panel (if currently open) so the sidepanel can
+      // analyse structure and know what to mirror / click.
+      try {
+        const pick = (sel) => {
+          const el = document.querySelector(sel);
+          return el ? el.outerHTML.slice(0, 8000) : null;
+        };
+        const found = {};
+        found.cardDirect = pick('[class*="hype-train"], [class*="HypeTrain"], [data-test-selector*="hype" i]');
+        found.cardViaHighlight = (() => {
+          const stacks = document.querySelectorAll('.community-highlight-stack__card, [class*="community-highlight"]');
+          for (const s of stacks) {
+            if (/hype|úr\.|%/i.test(s.textContent || '')) return s.outerHTML.slice(0, 8000);
+          }
+          return null;
+        })();
+        // Any open popover dialog (click the card → Twitch opens expanded detail)
+        found.openDialog = pick('[role="dialog"][aria-labelledby*="hype" i], [role="dialog"][class*="hype" i], [class*="hype-train"][class*="details"], [class*="hype-train"][class*="expanded"]');
+        // Catch-all: any dialog currently open
+        const allDlg = document.querySelectorAll('[role="dialog"]');
+        found.allDialogs = Array.from(allDlg).map((d, i) => ({
+          idx: i,
+          ariaLabelledBy: d.getAttribute('aria-labelledby'),
+          textPreview: (d.textContent || '').slice(0, 160),
+          html: d.outerHTML.slice(0, 4000),
+        }));
+        try {
+          chrome.runtime.sendMessage({
+            type: 'UC_LOG', tag: 'HypeTrain',
+            args: [JSON.stringify(found, null, 2)],
+          });
+        } catch {}
+        sendResponse({ ok: true, found });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'TW_DISMISS_RAID') {
       try {
         // Find the raid/nájezd card in the community-highlight stack

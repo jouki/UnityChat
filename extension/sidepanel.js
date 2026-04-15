@@ -3716,41 +3716,77 @@ class UnityChat {
     const banner = document.getElementById('pinned-banner');
     if (!banner) return;
 
-    // Vyrenderovat zprávu v banneru
     const ts = new Date(msg.timestamp);
-    const time = `${ts.getHours().toString().padStart(2, '0')}:${ts.getMinutes().toString().padStart(2, '0')}`;
+    const h = ts.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = ((h + 11) % 12 + 1).toString().padStart(2, '0');
+    const mm = ts.getMinutes().toString().padStart(2, '0');
+    const time = `${h12}:${mm} ${ampm}`;
 
     let body;
     if (msg.platform === 'twitch') {
-      const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
-      body = this.emotes.renderTwitch(msg.message, emotesTag);
+      body = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username, emotesOffset: msg.twitchEmotesOffset || 0 });
     } else if (msg.platform === 'kick') {
       body = this.emotes.renderKick(msg.kickContent || msg.message);
     } else {
       body = this.emotes.renderPlain(msg.message);
     }
 
+    const pinnedBy = msg.pinnedBy || msg.username;
+    const authorColor = this.emotes._sc(msg.color) || '#e6a11a';
+
     banner.innerHTML = `
-      <div class="pin-icon">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-          <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
-        </svg>
-        <span>Připnuto</span>
+      <div class="pin-head">
+        <span class="pin-head-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+          </svg>
+        </span>
+        <span class="pin-head-text">
+          Připnuto uživatelem
+          <strong class="pin-head-user" style="color:${authorColor}">${this.emotes._eh(pinnedBy)}</strong>
+        </span>
+        <button class="pin-btn pin-btn-hide" title="Schovat" aria-label="Schovat připnutou zprávu">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path d="M12 4c-5.5 0-10 8-10 8s4.5 8 10 8 10-8 10-8-4.5-8-10-8Zm0 14c-4.1 0-7.5-5.2-8.1-6 .6-.8 4-6 8.1-6s7.5 5.2 8.1 6c-.6.8-4 6-8.1 6Z"/>
+            <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/>
+          </svg>
+        </button>
+        <button class="pin-btn pin-btn-toggle" title="Rozbalit" aria-label="Rozbalit">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+            <path class="pin-chev" d="M6 9l6 6 6-6z"/>
+          </svg>
+        </button>
       </div>
-      <div class="pin-content">
-        <span class="pin-time">${time}</span>
-        <span class="pin-user" style="color:${this.emotes._sc(msg.color)}">${this.emotes._eh(msg.username)}:</span>
-        <span class="pin-text">${body}</span>
+      <div class="pin-body">
+        <div class="pin-body-text">${body}</div>
+        <div class="pin-body-foot">
+          <span class="pin-author" style="color:${authorColor}">${this.emotes._eh(msg.username)}</span>
+          <span class="pin-author-meta">odesláno v ${time}</span>
+        </div>
       </div>
-      <button class="pin-close" title="Odepnout">&times;</button>
     `;
-    banner.classList.remove('hidden');
+    banner.classList.remove('hidden', 'collapsed', 'dismissed');
 
-    banner.querySelector('.pin-close').addEventListener('click', () => {
-      this._hidePinnedBanner();
+    const toggleBtn = banner.querySelector('.pin-btn-toggle');
+    const hideBtn = banner.querySelector('.pin-btn-hide');
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      banner.classList.toggle('collapsed');
+      toggleBtn.setAttribute('title', banner.classList.contains('collapsed') ? 'Rozbalit' : 'Sbalit');
     });
+    // Hide = local dismiss (message stays pinned on Twitch; our polling
+    // will re-show it if the pin is still active AND user reloads).
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      banner.classList.add('dismissed');
+      this._dismissedPinId = msg.id;
+    });
+    // Don't re-open if user manually dismissed this pin within this session
+    if (this._dismissedPinId && this._dismissedPinId === msg.id) {
+      banner.classList.add('dismissed');
+    }
 
-    // Bez lokálního timeru - banner zmizí když polling detekuje unpin
     clearTimeout(this._pinTimer);
   }
 
