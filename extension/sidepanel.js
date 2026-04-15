@@ -880,6 +880,8 @@ class TwitchProvider {
       // via GQL so we can retro-apply it (hash may differ from the user's
       // actual stored color assigned by Twitch).
       _needsColorLookup: !ircColor,
+      // Twitch numeric user-id — needed to look up 7TV profile (nickname paint).
+      userId: tags['user-id'] || null,
       timestamp: Date.now(),
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
@@ -935,6 +937,7 @@ class TwitchProvider {
         message,
         color,
         _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
@@ -1472,6 +1475,133 @@ class YouTubeProvider {
     this._apiFails = 0;
     this._usePageRefresh = false;
     if (!internal) this.onStatus?.('disconnected');
+  }
+}
+
+// =============================================================
+// 7TV Paints — cosmetic nickname styling (gradients / images / shadows)
+// =============================================================
+
+// Paint definitions are static — one global in-memory cache keyed by paint_id
+// so multiple users with the same paint share a single fetch. Survives auto-
+// switches because paints are not per-channel.
+const _7TV_PAINTS = new Map();
+
+// Decode 7TV's 32-bit RGBA integer (R<<24 | G<<16 | B<<8 | A) to a CSS color.
+// JSON surfaces these as signed ints for values with R >= 0x80, so coerce to
+// unsigned via `>>> 0` before shifting.
+function _7tvIntToRgba(n) {
+  if (n === null || n === undefined) return null;
+  const u = n >>> 0;
+  const r = (u >>> 24) & 0xff;
+  const g = (u >>> 16) & 0xff;
+  const b = (u >>> 8) & 0xff;
+  const a = ((u & 0xff) / 255).toFixed(3);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Convert a 7TV paint definition into a CSS-ready style object. Supported
+// functions: LINEAR_GRADIENT, RADIAL_GRADIENT, URL (image). Drop shadows
+// stack into a `filter` string. Text fill is transparent so background-clip
+// reveals the paint across the glyph shapes.
+function _7tvPaintToCss(paint) {
+  if (!paint) return null;
+  const fn = paint.function || paint.kind || '';
+  const stops = (paint.stops || [])
+    .map((s) => {
+      const col = _7tvIntToRgba(s.color);
+      if (!col) return null;
+      const pos = (Number(s.at) * 100).toFixed(2) + '%';
+      return `${col} ${pos}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+
+  let background = null;
+  if (fn === 'LINEAR_GRADIENT' && stops) {
+    const angle = Number(paint.angle) || 0;
+    background = paint.repeat
+      ? `repeating-linear-gradient(${angle}deg, ${stops})`
+      : `linear-gradient(${angle}deg, ${stops})`;
+  } else if (fn === 'RADIAL_GRADIENT' && stops) {
+    const shape = paint.shape || 'ellipse';
+    background = paint.repeat
+      ? `repeating-radial-gradient(${shape} at center, ${stops})`
+      : `radial-gradient(${shape} at center, ${stops})`;
+  } else if (fn === 'URL' && paint.image_url) {
+    background = `url("${paint.image_url}") center / cover`;
+  } else if (paint.color !== null && paint.color !== undefined) {
+    // Solid paint — rare, but keep the code path honest.
+    const col = _7tvIntToRgba(paint.color);
+    if (col) background = col;
+  }
+  if (!background) return null;
+
+  let filter = '';
+  if (Array.isArray(paint.shadows) && paint.shadows.length) {
+    filter = paint.shadows
+      .map((s) => {
+        const col = _7tvIntToRgba(s.color) || 'rgba(0,0,0,0.5)';
+        const x = Number(s.x_offset) || 0;
+        const y = Number(s.y_offset) || 0;
+        const r = Number(s.radius) || 0;
+        return `drop-shadow(${x}px ${y}px ${r}px ${col})`;
+      })
+      .join(' ');
+  }
+
+  return { background, filter };
+}
+
+// Apply a paint CSS object to a DOM element (the .un username span). Writes
+// inline styles so we can coexist with and override the per-user `color`
+// set by the normal color resolver. Pass `null` css to strip a paint.
+function _7tvApplyPaintStyles(el, css) {
+  if (!el) return;
+  if (!css) {
+    el.style.background = '';
+    el.style.backgroundClip = '';
+    el.style.webkitBackgroundClip = '';
+    el.style.webkitTextFillColor = '';
+    el.style.filter = '';
+    return;
+  }
+  el.style.background = css.background;
+  el.style.backgroundClip = 'text';
+  el.style.webkitBackgroundClip = 'text';
+  el.style.webkitTextFillColor = 'transparent';
+  if (css.filter) el.style.filter = css.filter;
+}
+
+async function _7tvFetchPaint(paintId) {
+  if (!paintId) return null;
+  if (_7TV_PAINTS.has(paintId)) return _7TV_PAINTS.get(paintId);
+  try {
+    const r = await fetch(`https://7tv.io/v3/cosmetics/paints/${paintId}`);
+    if (!r.ok) { _7TV_PAINTS.set(paintId, null); return null; }
+    const paint = await r.json();
+    _7TV_PAINTS.set(paintId, paint);
+    return paint;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve the paint attached to a Twitch user via their Twitch numeric ID.
+// Returns the full paint definition (or null). Does NOT cache per-user —
+// that's the caller's job (via _chatUsers).
+async function _7tvFetchUserPaint(twitchUserId) {
+  if (!twitchUserId) return null;
+  try {
+    const r = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    // Shape: { user: { style: { paint_id } } } or { style: { paint_id } }
+    const user = data?.user || data;
+    const paintId = user?.style?.paint_id;
+    return paintId ? _7tvFetchPaint(paintId) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -3350,12 +3480,79 @@ class UnityChat {
     }
   }
 
+  // 7TV paint lookup — each Twitch user gets queried at most once per session
+  // (per-user paint ID resolved via /users/twitch/{id}, then paint def cached
+  // globally). Debounced flush with concurrency-bounded fan-out.
+  _enqueue7tvPaintLookup(userId, username) {
+    if (!userId || !username) return;
+    const key = `twitch:${String(username).toLowerCase()}`;
+    const cached = this._chatUsers.get(key);
+    if (cached?._paintChecked) return;
+    if (!this._paintQueue) this._paintQueue = [];
+    if (!this._paintSeen) this._paintSeen = new Set();
+    if (this._paintSeen.has(key)) return;
+    this._paintSeen.add(key);
+    this._paintQueue.push({ userId: String(userId), username: String(username).toLowerCase() });
+    if (!this._paintQueueTimer) {
+      this._paintQueueTimer = setTimeout(() => this._flush7tvPaints().catch(() => {}), 800);
+    }
+  }
+
+  async _flush7tvPaints() {
+    this._paintQueueTimer = null;
+    if (!this._paintQueue?.length) return;
+    // Pull a small concurrency batch; re-scheduled if more remain.
+    const batch = this._paintQueue.splice(0, 20);
+
+    await Promise.allSettled(batch.map(async ({ userId, username }) => {
+      const key = `twitch:${username}`;
+      const prev = this._chatUsers.get(key) || { name: username, platform: 'twitch' };
+      const paint = await _7tvFetchUserPaint(userId);
+      const entry = { ...prev, _paintChecked: true };
+      if (paint) {
+        entry._paint = paint;
+        this._applyPaintToRenderedMessages(username, paint);
+      } else {
+        // Negative result still stored so we skip re-query next time.
+        entry._paint = null;
+      }
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(username, entry);
+    }));
+
+    if (!this._userColorTimer) {
+      this._userColorTimer = setTimeout(() => {
+        this._userColorTimer = null;
+        chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+      }, 1500);
+    }
+
+    if (this._paintQueue.length > 0) {
+      this._paintQueueTimer = setTimeout(() => this._flush7tvPaints().catch(() => {}), 1500);
+    }
+  }
+
+  _applyPaintToRenderedMessages(username, paint) {
+    const css = _7tvPaintToCss(paint);
+    if (!css) return;
+    const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(username)}"]`;
+    for (const un of this.chatEl.querySelectorAll(sel)) {
+      // Respect user-set UnityChat nickname color override
+      const msgId = un.closest('.msg')?.dataset.msgId;
+      const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+      const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+      if (ucProfile?.color) continue;
+      _7tvApplyPaintStyles(un, css);
+    }
+  }
+
   _addMessage(msg) {
     // Kick off async color resolution for Twitch chatters — hash fallback or
     // IRC color may not match what Twitch's own client shows, so we reconcile
     // via public GQL chatColor field for any user we haven't resolved yet.
     if (msg.platform === 'twitch' && msg.username && !msg._optimistic) {
       this._enqueueTwitchColorLookup(msg.username);
+      if (msg.userId) this._enqueue7tvPaintLookup(msg.userId, msg.username);
     }
 
     // Track color + badges BEFORE dedup (echo gets deduped but we still want the data)
@@ -3679,8 +3876,16 @@ class UnityChat {
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = ucProfile?.color || this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`)?.color || msg.color;
+    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
+    // user intent), and we have a paint for this Twitch user. Paint replaces
+    // the solid color with a gradient/image + background-clip on the glyphs.
+    if (msg.platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
+      const css = _7tvPaintToCss(chatUserEntry._paint);
+      if (css) _7tvApplyPaintStyles(un, css);
+    }
     un.textContent = ucProfile?.nickname || msg.username;
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
