@@ -38,6 +38,10 @@ class EmoteManager {
     this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
     this.ucEmotes = new Map();     // name -> url (UnityChat custom emotes)
     this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
+    // Per-user "personal" 7TV emote loadouts so a chatter's own emotes
+    // resolve in foreign channels too. Key: `${platform}:${loginLower}`,
+    // value: Map(emoteName → { url, zw }).
+    this.userEmotes = new Map();
     this._globalLoaded = false;
 
     // UnityChat custom emotes (bundled in extension/emotes/)
@@ -210,6 +214,101 @@ class EmoteManager {
     return count;
   }
 
+  // Register a Twitch user's personal 7TV emote loadout (the emote_set
+  // returned by /v3/users/twitch/{id}). Looked up during render so when
+  // the user types one of their emotes in any channel — even when not
+  // their own — it still resolves to an image instead of plain text.
+  learnUserEmotes(platform, login, emoteSet) {
+    if (!login || !emoteSet?.emotes?.length) return;
+    const map = new Map();
+    for (const e of emoteSet.emotes) {
+      const url = this._build7tvUrl(e?.data || e);
+      if (!e?.name || !url) continue;
+      const flags = (e?.data?.flags ?? e?.flags) || 0;
+      map.set(e.name, { url, zw: !!(flags & 1) });
+    }
+    if (map.size) this.userEmotes.set(`${platform}:${String(login).toLowerCase()}`, map);
+  }
+
+  // Lookup an emote by name on a specific user's personal loadout.
+  // Returns { url, zw } or null. Used as the highest-priority lookup
+  // during render so foreign-channel personal emotes win over globals.
+  _getUserEmote(platform, login, name) {
+    if (!login) return null;
+    const m = this.userEmotes.get(`${platform}:${String(login).toLowerCase()}`);
+    return m?.get(name) || null;
+  }
+
+  // Identify which provider an emote came from based on its CDN URL.
+  // Returns { source, id, hires } or null. id is fetched from the URL,
+  // hires is a swapped-up resolution variant for the preview card.
+  _emoteSourceFromUrl(url) {
+    if (!url) return null;
+    let m;
+    if ((m = url.match(/cdn\.7tv\.app\/emote\/([A-Za-z0-9]+)/))) {
+      return { source: '7TV', id: m[1], hires: url.replace(/\/[0-9]x\.(webp|avif|gif|png)/, '/4x.$1') };
+    }
+    if ((m = url.match(/cdn\.betterttv\.net\/emote\/([a-f0-9]+)/i))) {
+      return { source: 'BTTV', id: m[1], hires: url.replace(/\/[0-9]x(?:$|\?)/, '/3x') };
+    }
+    if ((m = url.match(/cdn\.frankerfacez\.com\/emote\/(\d+)\/(\d+)/))) {
+      return { source: 'FFZ', id: m[1], hires: url.replace(/\/(\d+)$/, '/4') };
+    }
+    if ((m = url.match(/static-cdn\.jtvnw\.net\/emoticons\/v2\/([^/]+)/))) {
+      return { source: 'Twitch', id: m[1], hires: url.replace(/\/[0-9.]+$/, '/3.0') };
+    }
+    if ((m = url.match(/files\.kick\.com\/emotes\/(\d+)/))) {
+      return { source: 'Kick', id: m[1], hires: url };
+    }
+    if (url.startsWith('chrome-extension://')) return { source: 'UnityChat', id: null, hires: url };
+    return null;
+  }
+
+  // Lazy-fetch full emote metadata for the click-to-pin preview card.
+  // Returns { owner, ownerAvatar, addedAt, externalUrl } or null. Per-source
+  // public APIs, no auth needed.
+  async fetchEmoteDetails(source, id) {
+    if (!id) return null;
+    try {
+      if (source === '7TV') {
+        const r = await fetch(`https://7tv.io/v3/emotes/${id}`);
+        if (!r.ok) return null;
+        const d = await r.json();
+        return {
+          owner: d.owner?.display_name || d.owner?.username || null,
+          ownerAvatar: d.owner?.avatar_url || null,
+          addedAt: d.created_at ? new Date(d.created_at) : null,
+          externalUrl: `https://7tv.app/emotes/${id}`,
+        };
+      }
+      if (source === 'BTTV') {
+        const r = await fetch(`https://api.betterttv.net/3/emotes/${id}`);
+        if (!r.ok) return null;
+        const d = await r.json();
+        return {
+          owner: d.user?.displayName || d.user?.name || null,
+          ownerAvatar: d.user?.providerId
+            ? `https://cdn.betterttv.net/provider/twitch/${d.user.providerId}` : null,
+          addedAt: null,
+          externalUrl: `https://betterttv.com/emotes/${id}`,
+        };
+      }
+      if (source === 'FFZ') {
+        const r = await fetch(`https://api.frankerfacez.com/v1/emote/${id}`);
+        if (!r.ok) return null;
+        const d = await r.json();
+        const e = d?.emote || {};
+        return {
+          owner: e.owner?.display_name || e.owner?.name || null,
+          ownerAvatar: null,
+          addedAt: e.created_at ? new Date(e.created_at) : null,
+          externalUrl: `https://www.frankerfacez.com/emoticon/${id}`,
+        };
+      }
+    } catch {}
+    return null;
+  }
+
   _build7tvUrl(emote) {
     const host = emote.data?.host || emote.host;
     if (!host?.url) return null;
@@ -281,17 +380,22 @@ class EmoteManager {
   /**
    * Tab autocomplete - hledá ve všech zdrojích emotes (case insensitive).
    */
-  findCompletions(prefix) {
+  findCompletions(prefix, opts) {
     if (!prefix) return [];
     const lower = prefix.toLowerCase();
+    const fulltext = !!opts?.fulltext;
     const results = [];
     const seen = new Set();
 
-    // Pořadí: 7TV channel → 7TV global → BTTV → FFZ → Twitch → Kick
+    // Pořadí: 7TV channel → 7TV global → BTTV → FFZ → Twitch → Kick → UC
     const maps = [this.channel7tv, this.global7tv, this.bttvEmotes, this.ffzEmotes, this.twitchNative, this.kickNative, this.ucEmotes];
+    const matchFn = fulltext
+      ? (n) => n.toLowerCase().includes(lower)
+      : (n) => n.toLowerCase().startsWith(lower);
+
     for (const map of maps) {
       for (const name of map.keys()) {
-        if (name.toLowerCase().startsWith(lower) && !seen.has(name)) {
+        if (matchFn(name) && !seen.has(name)) {
           results.push(name);
           seen.add(name);
         }
@@ -299,6 +403,10 @@ class EmoteManager {
     }
 
     results.sort((a, b) => {
+      // Prefix matches always rank above contains matches in fulltext mode
+      const aPrefix = a.toLowerCase().startsWith(lower);
+      const bPrefix = b.toLowerCase().startsWith(lower);
+      if (aPrefix !== bPrefix) return aPrefix ? -1 : 1;
       const aExact = a.startsWith(prefix);
       const bExact = b.startsWith(prefix);
       if (aExact !== bExact) return aExact ? -1 : 1;
@@ -314,11 +422,23 @@ class EmoteManager {
    * Převede pole segmentů na finální HTML.
    * Textové segmenty projdou 7TV matching, emote segmenty se zachovají.
    */
-  renderSegments(segments) {
+  renderSegments(segments, ctx) {
+    const platform = ctx?.platform || null;
+    const author = ctx?.author || null;
     const out = [];
+    // Per-message helper: highest priority is the message author's personal
+    // 7TV emote loadout (so KombatWombatt's emotes resolve in foreign chats).
+    const userLookup = (name) => this._getUserEmote(platform, author, name);
+
     for (const seg of segments) {
       if (seg.type === 'emote') {
-        // 3rd party (7TV/BTTV/FFZ) overrides platform emotes
+        // Per-author personal emotes WIN over channel/global. 3rd-party
+        // (7TV/BTTV/FFZ) still overrides platform-native (Twitch native).
+        const personal = userLookup(seg.value);
+        if (personal) {
+          out.push({ type: 'emote', value: seg.value, url: personal.url, zw: personal.zw });
+          continue;
+        }
         const thirdParty = this.channel7tv.get(seg.value) || this.global7tv.get(seg.value)
           || this.bttvEmotes.get(seg.value) || this.ffzEmotes.get(seg.value);
         if (thirdParty) {
@@ -328,9 +448,14 @@ class EmoteManager {
         }
         continue;
       }
-      // Text: 7TV/BTTV/FFZ → platform native → UC custom
+      // Text: per-author → 7TV/BTTV/FFZ → platform native → UC custom
       const parts = seg.value.split(/(\s+)/);
       for (const part of parts) {
+        const personal = userLookup(part);
+        if (personal) {
+          out.push({ type: 'emote', value: part, url: personal.url, zw: personal.zw });
+          continue;
+        }
         const url = this._get7tv(part)
           || this.twitchNative.get(part) || this.kickNative.get(part);
         if (url) {
@@ -345,18 +470,20 @@ class EmoteManager {
 
   /**
    * Twitch zpráva - parsuje IRC emotes tag + 7TV.
+   * `ctx` (optional): { platform, author } — author login enables per-user
+   * 7TV personal emote resolution across channels.
    */
-  renderTwitch(text, emotesTag) {
+  renderTwitch(text, emotesTag, ctx) {
     const segments = this._splitTwitchEmotes(text, emotesTag);
-    return this.renderSegments(segments);
+    return this.renderSegments(segments, ctx);
   }
 
   /**
    * Kick zpráva - parsuje HTML content (zachovává <img> emotes) + 7TV.
    */
-  renderKick(htmlContent) {
+  renderKick(htmlContent, ctx) {
     const segments = this._parseKickHtml(htmlContent);
-    return this.renderSegments(segments);
+    return this.renderSegments(segments, ctx);
   }
 
   /**
@@ -1610,21 +1737,26 @@ async function _7tvFetchPaint(paintId) {
   return _7TV_PAINTS.get(paintId) || null;
 }
 
-// Resolve the paint attached to a Twitch user via their Twitch numeric ID.
-// Returns the full paint definition (or null). Does NOT cache per-user —
-// that's the caller's job (via _chatUsers).
-async function _7tvFetchUserPaint(twitchUserId) {
-  if (!twitchUserId) return null;
+// Resolve the 7TV cosmetics + emote-set assigned to a Twitch user (by their
+// Twitch numeric ID). Returns { paint, emoteSet } where paint is the full
+// definition or null, emoteSet is the raw 7TV emote-set object (with .emotes
+// array) or null. The user's emote set is what they "carry" to other
+// channels — typing their own emote there is still valid.
+async function _7tvFetchUserData(twitchUserId) {
+  if (!twitchUserId) return { paint: null, emoteSet: null };
   try {
     const r = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
-    if (!r.ok) return null;
+    if (!r.ok) return { paint: null, emoteSet: null };
     const data = await r.json();
-    // Shape: { user: { style: { paint_id } } } or { style: { paint_id } }
     const user = data?.user || data;
     const paintId = user?.style?.paint_id;
-    return paintId ? _7tvFetchPaint(paintId) : null;
+    const paint = paintId ? await _7tvFetchPaint(paintId) : null;
+    // Top-level `emote_set` on the platform-binding response is the channel
+    // emote set the user has assigned for Twitch (their personal "loadout").
+    const emoteSet = data?.emote_set || null;
+    return { paint, emoteSet };
   } catch {
-    return null;
+    return { paint: null, emoteSet: null };
   }
 }
 
@@ -1818,6 +1950,8 @@ class UnityChat {
     // Subscribe to background's 15-min alarm broadcasts so a long-open
     // panel still updates in real time when a new version drops.
     this._wireBackgroundUpdateListener();
+    // Hover/click preview card for emotes inside chat messages.
+    this._setupEmotePreview();
   }
 
   async _checkForUpdate() {
@@ -2383,13 +2517,27 @@ class UnityChat {
         .sort(([, a], [, b]) => a.name.localeCompare(b.name))
         .map(([, u]) => '@' + u.name.replace(/^@/, ''));
     } else {
-      // Emote autocomplete
-      matches = this.emotes.findCompletions(partial);
+      // Emote autocomplete — honors the per-session "Fulltext" toggle
+      matches = this.emotes.findCompletions(partial, { fulltext: this._acFulltext });
     }
     if (!matches.length) { this._acHide(); return; }
 
-    this._ac = { start: ws, end: pos, index: 0, matches };
+    this._ac = { start: ws, end: pos, index: 0, matches, prefix: partial, kind: partial.startsWith('@') ? 'user' : 'emote' };
     this._acApply();
+  }
+
+  // Re-run the search against the same prefix with the (possibly toggled)
+  // fulltext flag and re-render the suggest panel in place. Used when the
+  // user clicks the "Fulltext" checkbox while the panel is open.
+  _acRefilter() {
+    const ac = this._ac;
+    if (!ac || ac.kind !== 'emote' || !ac.prefix) return;
+    const next = this.emotes.findCompletions(ac.prefix, { fulltext: this._acFulltext });
+    if (!next.length) { this._acHide(); return; }
+    ac.matches = next;
+    ac.index = 0;
+    ac._winStart = 0;
+    this._acRender();
   }
 
   _acApply() {
@@ -2449,6 +2597,13 @@ class UnityChat {
     const winEnd = Math.min(winStart + VISIBLE, total);
 
     let html = '';
+    // Fulltext-search toggle row (only for emote completion, not @user) —
+    // when checked, future findCompletions() calls match by `includes`
+    // rather than `startsWith`, so middle-of-name matches show up too.
+    if (ac.kind === 'emote') {
+      const checked = this._acFulltext ? ' checked' : '';
+      html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
+    }
     for (let i = winStart; i < winEnd; i++) {
       const name = ac.matches[i];
       const sel = i === idx ? ' selected' : '';
@@ -2480,6 +2635,21 @@ class UnityChat {
 
     el.innerHTML = html;
     el.classList.remove('hidden');
+
+    // Wire fulltext checkbox — toggles persistent flag and re-runs the
+    // current search, so the panel refilters live without retyping.
+    const ftBox = el.querySelector('#es-fulltext');
+    if (ftBox) {
+      ftBox.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this._acFulltext = ftBox.checked;
+        this._acRefilter();
+        this.msgInput.focus();
+      });
+      // Don't let mousedown on the label steal focus from the textarea.
+      const lbl = el.querySelector('.es-toggle');
+      if (lbl) lbl.addEventListener('mousedown', (e) => e.preventDefault());
+    }
 
     // Detekce overflow + nastavení CSS variable pro scroll animaci
     el.querySelectorAll('.es-item').forEach((item) => {
@@ -2780,6 +2950,11 @@ class UnityChat {
     this._seenContentKeys = new Set();
     this._optimisticKeys = new Map();
     this._isModOnChannel = false; // re-detect from badges on new channel
+    // Recycle the boot-time loading overlay during channel switch — same
+    // pattern fits: cache hydrating + new providers connecting + first
+    // message of the new channel hides it.
+    this._loadingClearedByMsg = false;
+    this._showLoading();
     // Clear @mention autocomplete — old streamer's chatters should not show up
     // as suggestions on the new channel. Keep "platform:username" keys so the
     // color cache survives (users who chat across streams keep their color).
@@ -3716,7 +3891,7 @@ class UnityChat {
     await Promise.allSettled(batch.map(async ({ userId, username }) => {
       const key = `twitch:${username}`;
       const prev = this._chatUsers.get(key) || { name: username, platform: 'twitch' };
-      const paint = await _7tvFetchUserPaint(userId);
+      const { paint, emoteSet } = await _7tvFetchUserData(userId);
       const entry = { ...prev, _paintChecked: true };
       if (paint) {
         entry._paint = paint;
@@ -3724,6 +3899,14 @@ class UnityChat {
       } else {
         // Negative result still stored so we skip re-query next time.
         entry._paint = null;
+      }
+      // Personal emote loadout: register so the user's emotes resolve in any
+      // channel, not just their own. e.g. KombatWombatt typing kombatwDefeated
+      // outside his channel still renders the emote. Re-render any of their
+      // already-displayed messages so the change is retroactive too.
+      if (emoteSet?.emotes?.length) {
+        this.emotes.learnUserEmotes('twitch', username, emoteSet);
+        this._reRenderMessagesForUser('twitch', username);
       }
       this._chatUsers.set(key, entry);
       this._chatUsers.set(username, entry);
@@ -3789,6 +3972,179 @@ class UnityChat {
       if (!frag) continue;
       if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
       textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
+
+  // ---- Emote preview card (hover quick / click pinned + details) -------
+
+  _setupEmotePreview() {
+    if (this._emotePreviewWired) return;
+    this._emotePreviewWired = true;
+
+    // Delegated hover-intent over emote <img> inside chat message bodies.
+    this.chatEl.addEventListener('mouseover', (e) => {
+      const img = e.target?.closest?.('.tx .emote');
+      if (!img) return;
+      clearTimeout(this._emoteHoverT);
+      this._emoteHoverT = setTimeout(() => this._showEmotePreview(img, false), 220);
+    });
+    this.chatEl.addEventListener('mouseout', (e) => {
+      const img = e.target?.closest?.('.tx .emote');
+      if (!img) return;
+      clearTimeout(this._emoteHoverT);
+      // Pinned (clicked) preview survives mouseout — only dismissed on
+      // click outside or another emote click.
+      if (!this._emotePreviewPinned) this._hideEmotePreview();
+    });
+    // Click an emote → pin the preview + lazy-fetch full metadata
+    this.chatEl.addEventListener('click', (e) => {
+      const img = e.target?.closest?.('.tx .emote');
+      if (!img) return;
+      e.stopPropagation();
+      clearTimeout(this._emoteHoverT);
+      this._showEmotePreview(img, true);
+    });
+    // Click outside dismisses the pinned preview
+    document.addEventListener('mousedown', (e) => {
+      if (!this._emotePreviewPinned) return;
+      const card = document.getElementById('emote-preview');
+      if (!card || card.classList.contains('hidden')) return;
+      if (card === e.target || card.contains(e.target)) return;
+      if (e.target?.closest?.('.tx .emote')) return; // click on another emote handled above
+      this._hideEmotePreview();
+    });
+  }
+
+  _hideEmotePreview() {
+    this._emotePreviewPinned = false;
+    const card = document.getElementById('emote-preview');
+    if (card) card.classList.add('hidden');
+  }
+
+  async _showEmotePreview(img, pinned) {
+    const url = img.src;
+    const name = img.alt || img.title || '';
+    const meta = this.emotes._emoteSourceFromUrl(url);
+    let card = document.getElementById('emote-preview');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'emote-preview';
+      card.className = 'emote-preview';
+      document.body.appendChild(card);
+    }
+    card.classList.remove('hidden');
+    this._emotePreviewPinned = !!pinned;
+    card.classList.toggle('pinned', !!pinned);
+
+    const sourceLabel = meta?.source || 'Emote';
+    const sourceClass = sourceLabel.toLowerCase().replace(/[^a-z]/g, '');
+    const hires = meta?.hires || url;
+    const ehName = this.emotes._eh(name);
+    const eaHires = this.emotes._ea(hires);
+
+    card.innerHTML = `
+      <div class="ep-img-wrap">
+        <img class="ep-img" src="${eaHires}" alt="">
+      </div>
+      <div class="ep-name">
+        <span class="ep-name-text">${ehName}</span>
+        <span class="ep-source ep-src-${sourceClass}">${sourceLabel}</span>
+      </div>
+      <div class="ep-detail">${pinned
+        ? '<span class="ep-loading">Načítám detaily…</span>'
+        : '<span class="ep-hint">Klikni pro detaily</span>'}</div>
+    `;
+
+    // Position above the emote (keeps card inside the side panel even
+    // when emote is at the very bottom). Falls back below if no room above.
+    this._positionEmotePreview(card, img);
+
+    // Pinned mode: lazy-fetch source details and re-render the .ep-detail
+    // block with owner + date + external link.
+    if (pinned && meta?.id) {
+      try {
+        const d = await this.emotes.fetchEmoteDetails(meta.source, meta.id);
+        // Card may have been dismissed while we awaited
+        if (!this._emotePreviewPinned || card.classList.contains('hidden')) return;
+        const detail = card.querySelector('.ep-detail');
+        if (!d || !detail) {
+          if (detail) detail.innerHTML = '<span class="ep-hint">Žádné další detaily</span>';
+          return;
+        }
+        const rows = [];
+        if (d.owner) {
+          const avatar = d.ownerAvatar
+            ? `<img class="ep-avatar" src="${this.emotes._ea(d.ownerAvatar)}" alt="">`
+            : '<span class="ep-avatar ep-avatar-blank"></span>';
+          rows.push(`<div class="ep-row"><span class="ep-label">By</span>${avatar}<span class="ep-owner">${this.emotes._eh(d.owner)}</span></div>`);
+        }
+        if (d.addedAt instanceof Date && !isNaN(d.addedAt)) {
+          const fmt = d.addedAt.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
+          rows.push(`<div class="ep-row"><span class="ep-label">Added</span><span>${fmt}</span></div>`);
+        }
+        if (d.externalUrl) {
+          rows.push(`<a class="ep-extlink" href="${this.emotes._ea(d.externalUrl)}" target="_blank" rel="noopener">Otevřít na ${sourceLabel} ↗</a>`);
+        }
+        detail.innerHTML = rows.length ? rows.join('') : '<span class="ep-hint">Žádné další detaily</span>';
+        // Layout may have grown — reposition.
+        this._positionEmotePreview(card, img);
+      } catch {}
+    }
+
+    // Also include the source link in the name row when known
+    if (!pinned) {
+      // Name row already rendered, leave compact in hover mode
+    }
+  }
+
+  _positionEmotePreview(card, anchor) {
+    if (!card || !anchor) return;
+    // Reset to measure unbiased
+    card.style.position = 'fixed';
+    card.style.left = '0px';
+    card.style.top = '0px';
+    requestAnimationFrame(() => {
+      const r = anchor.getBoundingClientRect();
+      const cw = card.offsetWidth;
+      const ch = card.offsetHeight;
+      const margin = 6;
+      // Prefer ABOVE (per request — sidebar avoids bottom-clipping)
+      let y = r.top - ch - margin;
+      if (y < 4) y = r.bottom + margin; // fallback below
+      let x = r.left + r.width / 2 - cw / 2;
+      x = Math.max(4, Math.min(x, window.innerWidth - cw - 4));
+      card.style.left = `${Math.round(x)}px`;
+      card.style.top = `${Math.round(y)}px`;
+    });
+  }
+
+  // Re-render text bodies of all already-displayed messages from a given
+  // (platform, username) pair. Triggered when we learn the user's personal
+  // 7TV emote set after their messages have already been rendered, so the
+  // freshly-known emotes light up retroactively instead of only on future
+  // messages.
+  _reRenderMessagesForUser(platform, username) {
+    const u = String(username).toLowerCase();
+    const sel = `.un[data-platform="${CSS.escape(platform)}"][data-username="${CSS.escape(u)}"]`;
+    for (const un of this.chatEl.querySelectorAll(sel)) {
+      const msgEl = un.closest('.msg');
+      if (!msgEl) continue;
+      const tx = msgEl.querySelector('.tx');
+      if (!tx) continue;
+      const msgId = msgEl.dataset.msgId;
+      const cached = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+      if (!cached) continue;
+      const ctx = { platform, author: cached.username || username };
+      if (platform === 'twitch') {
+        const emotesTag = cached.replyTo ? null : cached.twitchEmotes;
+        tx.innerHTML = this.emotes.renderTwitch(cached.message, emotesTag, ctx);
+      } else if (platform === 'kick') {
+        tx.innerHTML = this.emotes.renderKick(cached.kickContent || cached.message, ctx);
+      } else {
+        continue;
+      }
+      // @mention spans need re-applying since innerHTML wiped them.
+      this._processMentions(tx, platform);
     }
   }
 
@@ -4175,13 +4531,14 @@ class UnityChat {
       tx.style.color = un.style.color;
     }
 
+    const renderCtx = { platform: msg.platform, author: msg.username };
     if (msg.platform === 'twitch') {
       // Reply zprávy mají stripnutý @username prefix → pozice z emotes tagu nesedí
       // → pro reply použít jen 7TV/BTTV matching (bez position-based Twitch emotes)
       const emotesTag = msg.replyTo ? null : msg.twitchEmotes;
-      tx.innerHTML = this.emotes.renderTwitch(msg.message, emotesTag);
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, emotesTag, renderCtx);
     } else if (msg.platform === 'kick') {
-      tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message);
+      tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message, renderCtx);
     } else if (msg.platform === 'youtube' && msg.ytRuns?.length) {
       tx.innerHTML = this.emotes.renderYouTube(msg.ytRuns);
     } else {
@@ -4389,7 +4746,10 @@ class UnityChat {
         // Learn new emotes first so renderSegments can find them
         this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
         const emotesTag = realMsg.replyTo ? null : realMsg.twitchEmotes;
-        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag);
+        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag, {
+          platform: 'twitch',
+          author: realMsg.username,
+        });
       }
     }
 

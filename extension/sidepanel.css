@@ -1571,6 +1571,166 @@ body.no-timestamps .msg .ts { display: none; }
 
 #emote-suggest.hidden { display: none; }
 
+/* Fulltext toggle row at the top of the suggest panel — opt-in switch
+   from "starts with" matching to "contains" matching. */
+.es-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  user-select: none;
+}
+.es-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.es-toggle:hover { color: var(--text-primary); }
+
+/* ---- Emote preview card (hover/click) ---- */
+.emote-preview {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  max-width: 220px;
+  padding: 10px 10px 8px;
+  background: linear-gradient(180deg, rgba(22, 22, 28, 0.98), rgba(14, 14, 18, 0.98));
+  border: 1px solid rgba(255, 140, 0, 0.35);
+  border-radius: 8px;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.7),
+    0 0 18px rgba(255, 140, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  /* Subtle entrance — JS doesn't toggle, but matches overall polish */
+  animation: ep-pop 0.16s ease-out;
+}
+.emote-preview.hidden { display: none; }
+@keyframes ep-pop {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.emote-preview .ep-img-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100px;
+  height: 100px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  padding: 4px;
+}
+.emote-preview .ep-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.emote-preview .ep-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+  word-break: break-word;
+  max-width: 100%;
+}
+.emote-preview .ep-source {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 140, 0, 0.18);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.emote-preview .ep-src-7tv     { background: rgba(45, 175, 250, 0.18); color: #58c1ff; }
+.emote-preview .ep-src-bttv    { background: rgba(216, 27, 96, 0.18); color: #ff6f9b; }
+.emote-preview .ep-src-ffz     { background: rgba(38, 132, 255, 0.18); color: #6aa8ff; }
+.emote-preview .ep-src-twitch  { background: rgba(145, 70, 255, 0.18); color: #b18cff; }
+.emote-preview .ep-src-kick    { background: rgba(83, 252, 24, 0.18); color: #87f04a; }
+
+.emote-preview .ep-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.emote-preview .ep-hint,
+.emote-preview .ep-loading {
+  font-style: italic;
+  opacity: 0.65;
+}
+.emote-preview .ep-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  line-height: 1.4;
+}
+.emote-preview .ep-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+.emote-preview .ep-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.emote-preview .ep-avatar-blank {
+  background: rgba(255, 255, 255, 0.08);
+}
+.emote-preview .ep-owner {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.emote-preview .ep-extlink {
+  color: var(--accent);
+  font-size: 10px;
+  text-decoration: none;
+  padding-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 2px;
+  transition: color 0.12s;
+}
+.emote-preview .ep-extlink:hover {
+  color: #ffe28a;
+  text-shadow: 0 0 6px rgba(255, 200, 0, 0.35);
+}
+
+/* Click-pinned mode is visually slightly stronger: thicker accent border */
+.emote-preview.pinned {
+  border-color: rgba(255, 140, 0, 0.65);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.75),
+    0 0 22px rgba(255, 140, 0, 0.28);
+}
+
 .es-item {
   display: flex;
   align-items: center;
