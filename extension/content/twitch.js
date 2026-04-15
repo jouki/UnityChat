@@ -353,8 +353,13 @@
           }
           log('hide-lift-mods-restored', { modCount });
         }
-        const r = btn.getBoundingClientRect();
-        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        // Scroll button into view if off-screen — Twitch's React popover
+        // handler may bail when the trigger has zero intersection.
+        try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+        const r2 = btn.getBoundingClientRect();
+        const x = r2.left + r2.width / 2, y = r2.top + r2.height / 2;
+        log('btn-after-scroll', { x, y, w: r2.width, h: r2.height, vw: window.innerWidth, vh: window.innerHeight });
+
         const opts = (extra = {}) => ({
           bubbles: true, cancelable: true, composed: true,
           clientX: x, clientY: y, view: window, button: 0, buttons: 1, ...extra,
@@ -366,6 +371,37 @@
         try { btn.dispatchEvent(new MouseEvent('click',     opts({ buttons: 0 }))); } catch {}
         try { btn.click(); } catch {}
         log('clicks-dispatched');
+
+        // Last-resort: invoke React's own onClick prop directly. React
+        // stores it on the DOM element under a __reactProps$* key. Vue
+        // uses _vnode/_props. This bypasses Twitch's click-guard if any.
+        try {
+          const reactKey = Object.keys(btn).find((k) => k.startsWith('__reactProps$'));
+          if (reactKey && typeof btn[reactKey]?.onClick === 'function') {
+            btn[reactKey].onClick({ preventDefault() {}, stopPropagation() {}, currentTarget: btn, target: btn, type: 'click' });
+            log('react-onclick-invoked');
+          } else {
+            log('no-react-onclick', { reactKey });
+          }
+        } catch (e) { log('react-onclick-err', { msg: e.message }); }
+
+        // Always poll for dialog (regardless of hidden state) so we can
+        // verify whether the popover actually opened — the user might
+        // see it briefly off-screen otherwise and we wouldn't know.
+        const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
+        let attemptsAll = 0;
+        const checkDialog = () => {
+          attemptsAll++;
+          const dlg = document.querySelector(dialogSel);
+          if (dlg) {
+            const rr = dlg.getBoundingClientRect();
+            log('post-click-dialog', { attempts: attemptsAll, x: rr.left, y: rr.top, w: rr.width, h: rr.height, computed: getComputedStyle(dlg).display });
+            return;
+          }
+          if (attemptsAll < 20) setTimeout(checkDialog, 100);
+          else log('post-click-no-dialog', { attempts: attemptsAll });
+        };
+        setTimeout(checkDialog, 50);
 
         if (wasHidden) {
           // Wait for the popover dialog to appear, then watch for its
