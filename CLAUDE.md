@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.36.11
+# UnityChat - Chrome/Opera Extension + Backend v3.37.3
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -395,7 +395,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.36.11**
+- Aktuální: **v3.37.3**
 
 ## Známé limitace / gotchas
 
@@ -678,7 +678,11 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.36.5** - **Banner parent accent propagation**: CSS vars `--hl-accent-{r,g,b}` propagovány z card na `#highlights-banner` + `.has-accent` class. Outer banner background a border teď tuned na card palette místo fixed cyan/purple.
 - **v3.36.6** - **Countdown bar na raid**: 4px gradient bar pod meta řádkem, `scaleX(1 → 0)` přes `animation-duration = raidCountdownSec || 10`. Themed via accent vars.
 - **v3.36.7** - **Raid dismiss (×) button**: circular close button na right edge raid karty. Click → optimistic hide + `TW_DISMISS_RAID` → content script scanuje community-highlight stack po `leave/close/dismiss/zavřít/odejít/zrušit` buttonu, real-event click → Twitch React zavře card.
-- **v3.36.8–v3.36.11** - **Popover portal fixes (full chain)**: dialog mountnut ale rect 0×0 (`[role="dialog"]` je jen ARIA wrapper, actual rendering v `.tw-balloon` / `.reward-center__content` descendants). `measureDialog` helper scanuje descendants pro largest non-zero rect. Plus dialogSeen flag prevent Phase 2 re-click (by toggle-closnul už open popover). Plus force reflow (`void document.body.offsetHeight`) + 150ms+2rAF delay před Phase 2 click aby parent column stihl reflow. **Aktuální verze**
+- **v3.36.8–v3.36.11** - **Popover portal fixes (full chain)**: dialog mountnut ale rect 0×0 (`[role="dialog"]` je jen ARIA wrapper, actual rendering v `.tw-balloon` / `.reward-center__content` descendants). `measureDialog` helper scanuje descendants pro largest non-zero rect. Plus dialogSeen flag prevent Phase 2 re-click (by toggle-closnul už open popover). Plus force reflow (`void document.body.offsetHeight`) + 150ms+2rAF delay před Phase 2 click aby parent column stihl reflow.
+- **v3.37.0** - **Pin banner redesign (UC-side `#pinned-banner`)** + **hype-train capture handler**: Twitch-style layout (header "Připnuto uživatelem {user}" + eye/hide + chevron/collapse, expanded body s větším bold textem + author footer "odesláno v HH:MM AM/PM"). Plus content script `CAPTURE_HYPETRAIN_DOM` message pro diagnostický dump DOM struktury hype-train panel.
+- **v3.37.1** - **YouTube/Kick drop fix + bigger loading animations**: empty-body drop zahazoval YT msgs co carry content v `ytRuns` (a Kick v `kickContent`). Teď drop respektuje platform-specific content fields. Plus logo pulse scale rozšířen `0.88↔1.14` + bar animace switchla na `transform: translateX` (compositor thread, nezasekne při hydration).
+- **v3.37.2** - **Pin highlight kind**: community-highlight-stack pins (pinned by other mods) byly rendered jako generic card. Content script classifier `kind: 'pin'` + sidepanel `_buildPinCard` mount Twitch-style pin layout v `#highlights-banner` (start collapsed).
+- **v3.37.3** - **Rich pin content**: extractPinDetails v content scriptu parsuje DOM pro structured data — `pinnedBy`, `author` + color, `authorBadges[]` (img src matching badges.twitch.tv / jtvnw.net/badges), `bodySegments[]` (preserve inline emote `<img>`s, NE stripnout do plain textu), `timeText` regex. Sidepanel render: emote images v body, separate footer row (border-top amber, badges → colored author name → timestamp), warm amber accent (`rgb(230,161,26)`) propaguje na outer `#highlights-banner`. **Aktuální verze**
 
 ## Release workflow
 
