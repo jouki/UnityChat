@@ -5249,6 +5249,19 @@ class UnityChat {
     }
     row.appendChild(body);
     wrap.appendChild(row);
+
+    // Countdown progress bar — mirrors vanilla Twitch's raid banner
+    // which shows a depleting timer until the raid executes. Duration
+    // comes from the card (Twitch typically uses 90s); falls back to
+    // 10s for mocks / when we can't parse it out.
+    const durSec = c.raidCountdownSec || 10;
+    const bar = document.createElement('div');
+    bar.className = 'hl-raid-bar';
+    const fill = document.createElement('span');
+    fill.className = 'hl-raid-bar-fill';
+    fill.style.animationDuration = durSec + 's';
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
     return wrap;
   }
 

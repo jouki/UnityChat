@@ -1390,6 +1390,38 @@ body.no-timestamps .msg .ts { display: none; }
   color: #e0c7a8;
 }
 .hl-raid-meta .hl-raid-points { color: #ffd93d; font-weight: 700; }
+/* Countdown progress bar — fills from 100% to 0 over duration, giving
+   a visual sense of the "raid in N seconds" deadline. */
+.hl-raid-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  margin-top: 2px;
+}
+.hl-raid-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #ff6b6b 0%, #ffaf14 50%, #ffd93d 100%);
+  box-shadow: 0 0 6px rgba(255, 175, 20, 0.55);
+  animation: hl-raid-countdown linear forwards;
+  transform-origin: left center;
+}
+@keyframes hl-raid-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+.hl-card.hl-raid.has-accent .hl-raid-bar-fill {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b)) 0%,
+    rgb(255, 175, 20) 60%,
+    rgb(255, 217, 61) 100%
+  );
+  box-shadow: 0 0 6px rgba(var(--hl-accent-r), var(--hl-accent-g), var(--hl-accent-b), 0.6);
+}
 /* When the card sampled a dominant colour from the avatar, recolor
    the background + border + glow ring from that accent so the banner
    feels "themed" to the raider's brand instead of a fixed red/gold. */
