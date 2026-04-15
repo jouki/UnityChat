@@ -42,7 +42,7 @@ body.layout-medium .msg { padding: 4px 12px; line-height: 1.5; }
 body.layout-medium .msg .pi { font-size: 9px; line-height: 16px; padding: 1px 4px; }
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
-body.layout-medium .msg .tx img.emote { height: 2em; }
+body.layout-medium .msg .tx img.emote { height: 2.25em; }
 body.layout-medium #settings .setting-row label { font-size: 12px; }
 body.layout-medium #settings input[type="text"],
 body.layout-medium #settings input[type="color"],
@@ -54,7 +54,7 @@ body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
 body.layout-large .msg .pi { font-size: 10px; line-height: 18px; padding: 1px 5px; }
 body.layout-large .msg .ts { font-size: 12px; }
 body.layout-large .bdg-img { height: 22px; width: 22px; }
-body.layout-large .msg .tx img.emote { height: 2.2em; }
+body.layout-large .msg .tx img.emote { height: 2.5em; }
 body.layout-large #msg-input { font-size: 14px; padding: 8px 10px; }
 body.layout-large .reply-ctx { font-size: 12px; }
 body.layout-large #settings .setting-row label { font-size: 13px; }
@@ -1503,12 +1503,14 @@ body.no-timestamps .msg .ts { display: none; }
 
 .msg .tx img.emote {
   display: inline-block;
-  height: 1.75em;
+  /* Bumped to match Twitch vanilla (~28px chat emotes) — 1.75em on a 13px
+     base only got to ~23px which read visibly smaller than vanilla. */
+  height: 2em;
   /* Minimum width placeholder so the inline flow reserves space before the
      image loads — without this the text flows through the empty slot and
      reflows (1-pixel-row vibration) when the image pops in. Natural width
      still takes over once the image is decoded. */
-  min-width: 1.75em;
+  min-width: 2em;
   vertical-align: middle;
   margin: -3px 1px;
   object-fit: contain;

@@ -2171,11 +2171,19 @@ class UnityChat {
       if (Array.isArray(r.uc_synced)) this._syncedProfiles = new Set(r.uc_synced);
     } catch {}
 
-    // Load persisted user colors
+    // Load persisted user colors. Sanitize stale state from prior buggy
+    // builds: an entry can have _fromGQL=true while .color is still a raw
+    // IRC hex (#rrggbb). That combo blocks future lookups (the queue
+    // skips _fromGQL entries) so the user is stuck with the raw color
+    // forever. Drop _fromGQL on those so a fresh lookup can re-resolve.
     try {
       const d = await chrome.storage.local.get('uc_user_colors');
       if (d.uc_user_colors) {
         for (const [k, v] of Object.entries(d.uc_user_colors)) {
+          if (v && typeof v === 'object' && v._fromGQL && typeof v.color === 'string'
+              && /^#[0-9a-fA-F]{6}$/.test(v.color)) {
+            v._fromGQL = false;
+          }
           this._chatUsers.set(k, v);
         }
       }
@@ -4294,15 +4302,23 @@ class UnityChat {
       // don't re-query. Keep the existing (hash) color as display fallback.
       // userId gets captured too so we can kick off 7TV paint lookups for
       // users whose messages didn't carry a user-id (cached schema, scrape).
+      // Only mark _fromGQL when we actually got a non-null color from GQL.
+      // If GQL had nothing (user has no custom Twitch color in their settings),
+      // leave _fromGQL false so DOM lookup can keep trying — DOM is the
+      // ground truth for the rendered color (incl. Twitch's readability
+      // boost) and may resolve on a later flush once the user's row is
+      // visible in the Twitch tab. Without this, any user whose first
+      // resolution attempt missed got stuck with raw IRC color forever.
+      const resolvedColor = color || prev?.color;
       const entry = {
         name: prev?.name || login,
         platform: 'twitch',
-        color: color || prev?.color,
+        color: resolvedColor,
         badgesRaw: prev?.badgesRaw || '',
         userId: userId || prev?.userId || null,
         _paint: prev?._paint,
         _paintChecked: prev?._paintChecked || false,
-        _fromGQL: true,
+        _fromGQL: !!color,
       };
       this._chatUsers.set(key, entry);
       this._chatUsers.set(login, entry);
