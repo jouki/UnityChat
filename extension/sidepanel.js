@@ -119,7 +119,7 @@ class EmoteManager {
       const gr = await fetch('https://api.betterttv.net/3/cached/emotes/global');
       if (gr.ok) {
         for (const e of await gr.json()) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
           count++;
         }
       }
@@ -130,7 +130,7 @@ class EmoteManager {
       if (cr.ok) {
         const data = await cr.json();
         for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/1x`);
+          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
           count++;
         }
       }
@@ -159,7 +159,7 @@ class EmoteManager {
     };
     for (const [id, name] of Object.entries(globals)) {
       if (!this.twitchNative.has(name)) {
-        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
       }
     }
   }
@@ -191,7 +191,7 @@ class EmoteManager {
           for (const e of (product.emotes || [])) {
             if (e.token && !this.twitchNative.has(e.token)) {
               this.twitchNative.set(e.token,
-                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`);
+                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0`);
               count++;
             }
           }
@@ -209,7 +209,8 @@ class EmoteManager {
     const parseSet = (sets) => {
       for (const setId in sets) {
         for (const e of sets[setId].emoticons || []) {
-          const url = e.urls?.['1'] || e.urls?.['2'];
+          // Prefer 2x for hi-DPI sharpness; fall back to 4x then 1x.
+          const url = e.urls?.['2'] || e.urls?.['4'] || e.urls?.['1'];
           if (url) {
             this.ffzEmotes.set(e.name, url.startsWith('//') ? `https:${url}` : url);
             count++;
@@ -380,10 +381,15 @@ class EmoteManager {
     const host = emote.data?.host || emote.host;
     if (!host?.url) return null;
 
-    // Preferovat WebP (animované), fallback na AVIF, pak cokoliv
+    // Prefer 2x for hi-DPI sharpness — we render at ~28–32px CSS, so 1x
+    // (typically 32px native) gets browser-upscaled and goes blurry on
+    // high-DPI displays. 2x (~64px) downscales cleanly. WebP first
+    // (animations + smaller bytes), then AVIF, then any 2x, then 1x.
     const file =
-      host.files?.find((f) => f.name === '1x.webp') ||
       host.files?.find((f) => f.name === '2x.webp') ||
+      host.files?.find((f) => f.name === '2x.avif') ||
+      host.files?.find((f) => f.name?.startsWith('2x')) ||
+      host.files?.find((f) => f.name === '1x.webp') ||
       host.files?.find((f) => f.name === '1x.avif') ||
       host.files?.find((f) => f.name?.startsWith('1x')) ||
       host.files?.[0];
@@ -428,7 +434,7 @@ class EmoteManager {
       const name = text.substring(s, e + 1);
       if (name && !this.twitchNative.has(name)) {
         this.twitchNative.set(name,
-          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
       }
     }
   }
@@ -623,7 +629,7 @@ class EmoteManager {
         type: 'emote',
         value: name,
         // OPRAVENÁ URL - správná doména jtvnw.net
-        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/1.0`
+        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/2.0`
       });
       last = p.end;
     }
