@@ -3925,6 +3925,9 @@ class UnityChat {
       case 'resub':
         this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 6, subStreak: 6 });
         break;
+      case 'prime':
+        this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: 'Prime', subMonths: 13, subStreak: 2 });
+        break;
       case 'subgift':
         this._addMessage({ ...base, message: '', isSubGift: true, giftPlan: '1000', giftRecipient: text === 'test message' ? 'RecipientUser' : text });
         break;
@@ -3955,7 +3958,7 @@ class UnityChat {
         this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
         break;
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
     }
   }
 
@@ -4754,13 +4757,20 @@ class UnityChat {
   }
 
   _renderSubEvent(el, msg) {
+    const isPrime = String(msg.subPlan || '').toLowerCase() === 'prime';
+    if (isPrime) el.classList.add('prime');
     const icon = document.createElement('span');
     icon.className = 'sub-icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML =
-      '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">' +
-      '<path d="M12 2l2.9 6.9L22 10l-5.5 4.8L18 22l-6-3.5L6 22l1.5-7.2L2 10l7.1-1.1z"/>' +
-      '</svg>';
+    // Prime gets a crown SVG (Twitch's Prime branding) instead of the
+    // generic star, so it visually stands apart from Tier 1/2/3 subs.
+    icon.innerHTML = isPrime
+      ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+        + '<path d="M2 7l4 4 6-7 6 7 4-4-2 12H4L2 7zm3 14h14v2H5v-2z"/>'
+        + '</svg>'
+      : '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+        + '<path d="M12 2l2.9 6.9L22 10l-5.5 4.8L18 22l-6-3.5L6 22l1.5-7.2L2 10l7.1-1.1z"/>'
+        + '</svg>';
     el.appendChild(icon);
 
     const body = document.createElement('div');
@@ -4778,12 +4788,18 @@ class UnityChat {
     body.appendChild(un);
 
     const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
+    const tierLabel = isPrime ? 'Prime' : `Tier ${tier}`;
     const line = document.createElement('div');
     line.className = 'sub-line';
     const prefix = document.createElement('strong');
     prefix.textContent = 'Subscribed';
     line.appendChild(prefix);
-    line.appendChild(document.createTextNode(` with Tier ${tier}.`));
+    line.appendChild(document.createTextNode(` with `));
+    const tierSpan = document.createElement('strong');
+    tierSpan.className = isPrime ? 'sub-tier-prime' : 'sub-tier';
+    tierSpan.textContent = tierLabel;
+    line.appendChild(tierSpan);
+    line.appendChild(document.createTextNode('.'));
     if (msg.subMonths && msg.subMonths > 1) {
       line.appendChild(document.createTextNode(` They've subscribed for `));
       const m = document.createElement('strong');

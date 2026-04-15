@@ -1389,6 +1389,25 @@ body.no-timestamps .msg .ts { display: none; }
   border-left: 3px solid #9146ff;
   border-radius: 4px;
 }
+/* Prime sub gets the Twitch-Prime cyan/blue accent + crown icon so it
+   reads instantly different from a paid Tier 1/2/3 sub. */
+.msg.sub-event.prime {
+  background: linear-gradient(180deg, rgba(0, 173, 239, 0.16), rgba(0, 173, 239, 0.06));
+  border-left-color: #00adef;
+  box-shadow: 0 0 14px rgba(0, 173, 239, 0.18);
+}
+.msg.sub-event.prime .sub-icon {
+  color: #00adef;
+  filter: drop-shadow(0 0 4px rgba(0, 173, 239, 0.55));
+}
+.sub-tier-prime {
+  background: linear-gradient(90deg, #00d7ec, #00adef, #0091ff);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+}
 .msg.sub-event .sub-icon {
   display: inline-flex;
   width: 24px;
