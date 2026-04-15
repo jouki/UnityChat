@@ -5347,13 +5347,46 @@ class UnityChat {
     if (!cards.length) {
       banner.classList.add('hidden');
       banner.innerHTML = '';
+      this._lastHighlightsHash = '';
       return;
     }
+    // Idempotency guard: if the rendered cards haven't actually changed
+    // (same kind + text + pin identity + segment URLs), skip the DOM
+    // re-mount. Previously we tore the banner down and rebuilt every 4s
+    // poll tick, which (a) reset the user's collapse toggle click and
+    // (b) looked like a refresh flicker. Hash covers the visible data;
+    // anything else (e.g. timestamp difference between pins) warrants
+    // a rebuild.
+    const hash = cards.map((c) => {
+      const pin = c.pin || {};
+      const segs = (pin.bodySegments || []).map((s) => s.type === 'emote' ? `E:${s.alt}:${s.url || ''}` : `T:${s.value || ''}`).join('|');
+      const badges = (pin.authorBadges || []).map((b) => b.url).join(',');
+      return [
+        c.kind,
+        (c.text || '').slice(0, 200),
+        pin.pinId || '',
+        pin.author || '',
+        pin.authorColor || '',
+        badges,
+        segs,
+        pin.timeText || '',
+      ].join('§');
+    }).join('◊');
+    if (hash === this._lastHighlightsHash) return;
+    this._lastHighlightsHash = hash;
     banner.classList.remove('hidden', 'has-accent');
     banner.style.removeProperty('--hl-accent-r');
     banner.style.removeProperty('--hl-accent-g');
     banner.style.removeProperty('--hl-accent-b');
+    // Preserve per-pin collapsed state across re-renders so the user's
+    // chevron click isn't undone by the next poll.
+    const preservedCollapse = new Map();
+    for (const old of banner.querySelectorAll('.hl-card.hl-pin .hl-pin-wrap')) {
+      const key = old.dataset.pinKey;
+      if (key) preservedCollapse.set(key, old.classList.contains('collapsed'));
+    }
     banner.innerHTML = '';
+    this._pendingPinCollapse = preservedCollapse;
     for (const c of cards) {
       const item = document.createElement('div');
       item.className = 'hl-card hl-' + (c.kind || 'generic');
@@ -5455,7 +5488,15 @@ class UnityChat {
     `;
 
     const card = wrap;
-    card.classList.add('collapsed');
+    // Restore the user's previously-toggled collapsed state if this pin
+    // identity matched an earlier render; otherwise start collapsed.
+    const pinKey = pin.pinId || `anon-${pinnedBy}-${author}`;
+    card.dataset.pinKey = pinKey;
+    const wasCollapsed = this._pendingPinCollapse?.get(pinKey);
+    // Default to collapsed on first render; on re-render, honour whatever
+    // the user's last toggle state was (wasCollapsed === false means the
+    // user expanded it manually — keep it expanded).
+    if (wasCollapsed !== false) card.classList.add('collapsed');
     const toggleBtn = wrap.querySelector('.hl-pin-btn-toggle');
     const hideBtn = wrap.querySelector('.hl-pin-btn-hide');
     toggleBtn.addEventListener('click', (e) => {
