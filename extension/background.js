@@ -155,7 +155,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'GET_CHAT_COLORS') {
     fetchChatColors(msg.usernames || [])
-      .then((colors) => sendResponse({ ok: true, colors }))
+      .then((users) => sendResponse({ ok: true, users }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
@@ -298,7 +298,7 @@ async function fetchChatColors(usernames) {
   if (!logins.length) return {};
 
   const varDefs = logins.map((_, i) => `$l${i}: String!`).join(', ');
-  const aliases = logins.map((_, i) => `u${i}: user(login: $l${i}) { login chatColor }`).join(' ');
+  const aliases = logins.map((_, i) => `u${i}: user(login: $l${i}) { id login chatColor }`).join(' ');
   const query = `query (${varDefs}) { ${aliases} }`;
   const variables = Object.fromEntries(logins.map((l, i) => [`l${i}`, l]));
 
@@ -308,10 +308,14 @@ async function fetchChatColors(usernames) {
   });
   const json = await r.json().catch(() => ({}));
   const data = json?.data || {};
+  // Returns { login: { color, id } } — caller uses color for rendering and
+  // id to kick off 7TV paint resolution for users whose msg objects didn't
+  // carry a user-id (e.g. cached/scraped messages from an older schema).
   const out = {};
   for (const k of Object.keys(data)) {
     const u = data[k];
-    if (u?.login && u?.chatColor) out[u.login.toLowerCase()] = u.chatColor;
+    if (!u?.login) continue;
+    out[u.login.toLowerCase()] = { color: u.chatColor || null, id: u.id || null };
   }
   return out;
 }

@@ -3437,20 +3437,27 @@ class UnityChat {
     try {
       resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: batch });
     } catch { return; }
-    if (!resp?.ok || !resp.colors) return;
+    if (!resp?.ok || !resp.users) return;
 
     let dirty = false;
     for (const login of batch) {
-      const color = resp.colors[login];
+      const info = resp.users[login] || {};
+      const color = info.color;
+      const userId = info.id;
       const key = `twitch:${login}`;
       const prev = this._chatUsers.get(key);
       // Even if GQL returned no color (user has none), mark as resolved so we
       // don't re-query. Keep the existing (hash) color as display fallback.
+      // userId gets captured too so we can kick off 7TV paint lookups for
+      // users whose messages didn't carry a user-id (cached schema, scrape).
       const entry = {
         name: prev?.name || login,
         platform: 'twitch',
         color: color || prev?.color,
         badgesRaw: prev?.badgesRaw || '',
+        userId: userId || prev?.userId || null,
+        _paint: prev?._paint,
+        _paintChecked: prev?._paintChecked || false,
         _fromGQL: true,
       };
       this._chatUsers.set(key, entry);
@@ -3467,6 +3474,13 @@ class UnityChat {
           if (ucProfile?.color) continue;
           un.style.color = color;
         }
+      }
+
+      // Kick off 7TV paint resolution — covers the gap where cached/scraped
+      // messages don't have a user-id of their own. One-shot per user thanks
+      // to _paintChecked guard inside _enqueue7tvPaintLookup.
+      if (userId && !entry._paintChecked) {
+        this._enqueue7tvPaintLookup(userId, login);
       }
     }
     if (dirty && !this._userColorTimer) {
@@ -3552,7 +3566,14 @@ class UnityChat {
     // via public GQL chatColor field for any user we haven't resolved yet.
     if (msg.platform === 'twitch' && msg.username && !msg._optimistic) {
       this._enqueueTwitchColorLookup(msg.username);
-      if (msg.userId) this._enqueue7tvPaintLookup(msg.userId, msg.username);
+      if (msg.userId) {
+        this._enqueue7tvPaintLookup(msg.userId, msg.username);
+      } else {
+        // Message didn't carry a user-id (older cache schema / scrape). Use
+        // any user-id we resolved in a prior GQL round so paints still fire.
+        const entry = this._chatUsers.get(`twitch:${msg.username.toLowerCase()}`);
+        if (entry?.userId) this._enqueue7tvPaintLookup(entry.userId, msg.username);
+      }
     }
 
     // Track color + badges BEFORE dedup (echo gets deduped but we still want the data)
