@@ -2295,6 +2295,7 @@ class UnityChat {
     // Hover/click preview card for emotes inside chat messages.
     this._setupEmotePreview();
     this._scheduleColorRevalidation();
+    this._pullCredits();
   }
 
   async _checkForUpdate() {
@@ -4740,6 +4741,27 @@ class UnityChat {
   // Float a "+N" pill above the points balance so the +10 watch-reward
   // tick (and bonus claims) get visible feedback. Caller supplies the
   // already-computed delta; we just animate.
+  // Ask all open Twitch tabs to push their current credits snapshot
+  // immediately — the in-tab MutationObserver may have already settled
+  // before our sidepanel opened, leaving us with no pill until the next
+  // organic DOM mutation (typically the +10 watch-reward tick ~5 min
+  // later). Retries a few times during page hydration.
+  async _pullCredits() {
+    const ask = async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+        for (const tab of tabs) {
+          if (!tab.id) continue;
+          chrome.tabs.sendMessage(tab.id, { type: 'GET_CREDITS' }).catch(() => {});
+        }
+      } catch {}
+    };
+    // Initial ask, then a couple of retries during Twitch's hydration
+    // window in case the summary subtree wasn't mounted yet.
+    ask();
+    [1500, 4000, 9000].forEach((ms) => setTimeout(ask, ms));
+  }
+
   _flashPointsDelta(delta) {
     const wrap = document.getElementById('tw-credits');
     if (!wrap) return;

@@ -321,6 +321,22 @@
       return true;
     }
 
+    if (msg.type === 'GET_CREDITS') {
+      // Sidepanel just opened — give it whatever the current snapshot
+      // is right now, bypassing the dedup cache so it gets sent even if
+      // we already relayed this exact value to a previous (now-dead)
+      // sidepanel context.
+      try {
+        const snap = snapshotCredits();
+        if (snap) {
+          lastCreditsHash = ''; // force next observer fire to also relay
+          chrome.runtime.sendMessage({ type: 'TW_CREDITS', data: snap }).catch(() => {});
+        }
+        sendResponse({ ok: true, data: snap });
+      } catch (e) { sendResponse({ ok: false, error: e.message }); }
+      return;
+    }
+
     if (msg.type === 'TW_CLAIM_BONUS') {
       try {
         let target = null;
