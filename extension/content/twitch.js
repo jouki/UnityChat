@@ -216,15 +216,24 @@
       if (!style) {
         style = document.createElement('style');
         style.id = UC_HIDE_STYLE_ID;
+        // Hide-not-collapse strategy: older approach used width:0, but Twitch's
+        // internal layout watchers (ResizeObserver on the chat column) treat
+        // 0-width as a real collapse signal and switch pin cards / community
+        // highlights into their compact rendering mode (no author footer,
+        // truncated body). That broke UC's pin mirror. Instead we now float
+        // the chat column off-screen via position:fixed + right:-9999px.
+        // offsetWidth stays at its natural value so Twitch's collapse
+        // detection doesn't trigger; the column is simply invisible.
         style.textContent = `
           .channel-root__right-column,
           [data-a-target="right-column"],
           .right-column {
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            overflow: hidden !important;
+            position: fixed !important;
+            top: 0 !important;
+            right: -9999px !important;
+            height: 100vh !important;
             visibility: hidden !important;
+            pointer-events: none !important;
           }
         `;
         document.documentElement.appendChild(style);
@@ -586,10 +595,15 @@
                 if (!style) {
                   style = document.createElement('style');
                   style.id = UC_HIDE_STYLE_ID;
+                  // Off-screen via position:fixed — keeps offsetWidth intact
+                  // so Twitch's ResizeObserver doesn't treat us as a collapse.
                   style.textContent = `
                     .channel-root__right-column, [data-a-target="right-column"], .right-column {
-                      width: 0 !important; min-width: 0 !important; max-width: 0 !important;
-                      overflow: hidden !important; visibility: hidden !important;
+                      position: fixed !important;
+                      top: 0 !important; right: -9999px !important;
+                      height: 100vh !important;
+                      visibility: hidden !important;
+                      pointer-events: none !important;
                     }
                   `;
                   document.documentElement.appendChild(style);
