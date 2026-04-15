@@ -441,9 +441,26 @@
           setTimeout(() => document.addEventListener('click', onDocClick, true), 200);
         };
 
-        // Phase 1: poll briefly for dialog WITHOUT lifting hide
+        // Phase 1: poll up to 1.2s for dialog WITHOUT lifting hide. When
+        // the sidepanel has focus the Twitch tab is backgrounded and
+        // Chrome throttles React's scheduler — the popover can take
+        // 500-800ms to mount. Re-dispatch the click at a couple of
+        // checkpoints to nudge React if it hasn't picked up the first
+        // click yet.
+        const rec = () => {
+          const rb = btn.getBoundingClientRect();
+          const cx2 = rb.left + rb.width / 2, cy2 = rb.top + rb.height / 2;
+          const mopts = (extra = {}) => ({ bubbles: true, cancelable: true, composed: true, clientX: cx2, clientY: cy2, view: window, button: 0, buttons: 1, ...extra });
+          try { btn.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts() })); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('mousedown', mopts())); } catch {}
+          try { btn.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts({ buttons: 0 }) })); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('mouseup', mopts({ buttons: 0 }))); } catch {}
+          try { btn.dispatchEvent(new MouseEvent('click', mopts({ buttons: 0 }))); } catch {}
+          try { btn.click(); } catch {}
+        };
         let attempts = 0;
-        const maxPhase1 = 6; // 6 × 50ms = 300ms — should be enough for React render
+        const maxPhase1 = 24; // 24 × 50ms = 1200ms
+        const retryAt = new Set([8, 16]); // re-click at ~400ms and ~800ms
         const checkDialog = () => {
           attempts++;
           const dlg = document.querySelector(dialogSel);
@@ -453,6 +470,7 @@
             wireDismiss(dlg);
             return;
           }
+          if (retryAt.has(attempts)) { log('phase1-reclick', { attempts }); rec(); }
           if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
           // Phase 2 fallback: popover didn't open — lift hide briefly,
           // re-dispatch click, poll again, portal + re-hide.
