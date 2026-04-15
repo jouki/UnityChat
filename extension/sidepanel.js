@@ -944,6 +944,50 @@ function twitchDefaultColor(username) {
   return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
 }
 
+// Twitch's vanilla chat lightens dark user colors on dark backgrounds so they
+// stay legible (DarkRed #8B0000 → a visible red, etc.). We mirror that: lift
+// the HSL Lightness floor to 0.5 and ceiling to 0.85 so both extremes read well.
+const _READABLE_CACHE = new Map();
+function readableColor(input) {
+  if (!input) return input;
+  if (_READABLE_CACHE.has(input)) return _READABLE_CACHE.get(input);
+  const hex = /^#[0-9a-fA-F]{6}$/.test(input) ? input : null;
+  if (!hex) { _READABLE_CACHE.set(input, input); return input; }
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  let h = 0, s = 0;
+  if (d) {
+    s = l < 0.5 ? d / (max + min) : d / (2 - max - min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  const minL = 0.5, maxL = 0.88;
+  let nL = l;
+  if (l < minL) nL = minL;
+  else if (l > maxL) nL = maxL;
+  if (nL === l) { _READABLE_CACHE.set(input, hex); return hex; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  const q = nL < 0.5 ? nL * (1 + s) : nL + s - nL * s;
+  const p = 2 * nL - q;
+  const nr = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
+  const ng = Math.round(hue2rgb(p, q, h) * 255);
+  const nb = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
+  const out = '#' + [nr, ng, nb].map(x => x.toString(16).padStart(2, '0')).join('');
+  _READABLE_CACHE.set(input, out);
+  return out;
+}
+
 class TwitchProvider {
   constructor() {
     this.ws = null;
@@ -2461,7 +2505,7 @@ class UnityChat {
           const newNick = profile?.nickname || null;
           this.chatEl.querySelectorAll('.un').forEach((un) => {
             if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
-              un.style.color = resolvedColor;
+              un.style.color = readableColor(resolvedColor);
               if (newNick) { un.textContent = newNick; un.title = uname; }
               else { un.textContent = uname; un.title = ''; }
             }
@@ -3289,7 +3333,7 @@ class UnityChat {
     if (myName) {
       this.chatEl.querySelectorAll('.un').forEach((un) => {
         if (un.dataset.platform === platform && un.dataset.username === myName) {
-          un.style.color = color;
+          un.style.color = readableColor(color);
         }
       });
     }
@@ -3574,7 +3618,7 @@ class UnityChat {
       if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
         un.textContent = nickname;
         un.title = username;
-        if (color) un.style.color = color;
+        if (color) un.style.color = readableColor(color);
       }
     });
   }
@@ -4129,7 +4173,7 @@ class UnityChat {
           const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
           const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
           if (ucProfile?.color) continue;
-          un.style.color = color;
+          un.style.color = readableColor(color);
         }
       }
 
@@ -4241,7 +4285,7 @@ class UnityChat {
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
-    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     body.appendChild(un);
 
     const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.giftPlan] || '1';
@@ -4293,7 +4337,7 @@ class UnityChat {
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
-    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     body.appendChild(un);
 
     const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
@@ -4350,7 +4394,7 @@ class UnityChat {
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
-    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     body.appendChild(un);
     body.appendChild(document.createTextNode(' redeemed '));
     const rewardSpan = document.createElement('strong');
@@ -4987,7 +5031,7 @@ class UnityChat {
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
     // user intent), and we have a paint for this Twitch user. Paint replaces
     // the solid color with a gradient/image + background-clip on the glyphs.
@@ -5197,7 +5241,7 @@ class UnityChat {
       const resolvedColor = ucColor || realMsg.color;
       if (resolvedColor) {
         const un = el.querySelector('.un');
-        if (un) un.style.color = resolvedColor;
+        if (un) un.style.color = readableColor(resolvedColor);
       }
     }
 
