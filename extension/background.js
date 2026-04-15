@@ -157,15 +157,39 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // ---- Debug Log (ukládá do Downloads/unitychat-debug.log) ----
-const _logs = [];
+// MV3 service workers sleep after ~30s of inactivity and lose all module
+// state on wake. Persisting to chrome.storage.session keeps the log alive
+// across worker restarts within the same browser session.
+let _logs = [];
+let _logsHydrated = false;
+let _logsSaveT = null;
+
+async function _hydrateLogs() {
+  if (_logsHydrated) return;
+  try {
+    const r = await chrome.storage.session.get('uc_logs');
+    if (Array.isArray(r.uc_logs)) _logs = r.uc_logs;
+  } catch {}
+  _logsHydrated = true;
+}
+function _scheduleLogPersist() {
+  if (_logsSaveT) return;
+  _logsSaveT = setTimeout(() => {
+    _logsSaveT = null;
+    chrome.storage.session.set({ uc_logs: _logs }).catch(() => {});
+  }, 800);
+}
+
 function ucLog(tag, ...args) {
   const line = `[${new Date().toISOString()}] [${tag}] ${args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ')}`;
   _logs.push(line);
   console.log(line);
   if (_logs.length > 500) _logs.splice(0, _logs.length - 300);
+  _scheduleLogPersist();
 }
 async function dumpLogs() {
-  const text = _logs.join('\n');
+  await _hydrateLogs();
+  const text = _logs.length ? _logs.join('\n') : '(log empty — service worker may have just been restarted; reproduce the issue then re-dump)';
   const url = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
   try {
     await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
@@ -181,8 +205,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // Log relay (z side panelu)
   if (msg.type === 'UC_LOG') {
-    ucLog(msg.tag, ...msg.args);
-    return;
+    _hydrateLogs().then(() => {
+      // Accept either {args:[...]} or {text:"..."} for convenience.
+      if (Array.isArray(msg.args)) ucLog(msg.tag || 'UC', ...msg.args);
+      else if (typeof msg.text === 'string') ucLog(msg.tag || 'UC', msg.text);
+      sendResponse?.({ ok: true });
+    });
+    return true;
   }
 
   // Toggle side panel from content script (UC button in Twitch/YouTube).

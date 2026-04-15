@@ -2460,9 +2460,13 @@ class UnityChat {
       // (color/paint mismatches, missing scrape, badge attribution, …).
       try {
         const diag = await this._buildDiagnostics();
-        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: diag });
+        // Await the UC_LOG round-trip so the diag is in the array BEFORE
+        // we trigger the file dump (otherwise the download race-loses).
+        await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: diag });
       } catch (e) {
-        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
+        try {
+          await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
+        } catch {}
       }
       chrome.runtime.sendMessage({ type: 'DUMP_LOGS' });
     });
