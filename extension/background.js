@@ -484,51 +484,90 @@ async function openUserCard(tabId, username, platform, channel, broadcasterId) {
         func: (name) => {
           const lower = name.toLowerCase();
           const log = [];
+          const snippet = (el, max = 180) => {
+            try { return (el.outerHTML || '').slice(0, max).replace(/\s+/g, ' '); }
+            catch { return '<err>'; }
+          };
+          const isVisible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && el.offsetParent !== null;
+          };
 
-          // 1. Najdi message container [data-a-user], pak klikni na element s textem username
+          // 0. Preferred path for 7TV: click the .seventv-chat-user wrapper
+          //    (7TV attaches its card-opening click handler to the wrapper,
+          //    not the .seventv-chat-user-username text span). Iterate
+          //    bottom-up so the most recent message wins → its message
+          //    context is visible in the card. Also check 7TV viewer list
+          //    container is excluded (we want chat-line wrappers only).
+          const stvWrappers = document.querySelectorAll('.seventv-chat-user');
+          log.push(`stv-wrappers: ${stvWrappers.length}`);
+          let stvMatched = 0;
+          for (let i = stvWrappers.length - 1; i >= 0; i--) {
+            const wrap = stvWrappers[i];
+            const userEl = wrap.querySelector('.seventv-chat-user-username');
+            const txt = (userEl?.textContent || '').trim().toLowerCase();
+            if (txt !== lower) continue;
+            stvMatched++;
+            if (!isVisible(wrap)) {
+              log.push(`stv match #${stvMatched} not visible: ${snippet(wrap, 80)}`);
+              continue;
+            }
+            log.push(`stv click: ${snippet(wrap, 120)}`);
+            wrap.click();
+            return 'clicked:stv-wrap|' + log.join(' | ');
+          }
+          if (stvMatched) log.push(`stv matches but none visible (${stvMatched})`);
+
+          // 1. Twitch native: [data-a-user] container, click text matching username
           const aUserEls = document.querySelectorAll('[data-a-user]');
           log.push(`[data-a-user] count: ${aUserEls.length}`);
+          let aUserMatched = 0;
           for (const container of aUserEls) {
             if (container.dataset.aUser?.toLowerCase() !== lower) continue;
-            // Klikni na element jehož TEXT je přesně username (ne badge/ikona)
+            aUserMatched++;
             for (const el of container.querySelectorAll('button, span, a')) {
               const txt = el.textContent.trim();
               if (txt.toLowerCase() === lower && !el.querySelector('img')) {
-                log.push(`Clicking: <${el.tagName}> "${txt}"`);
+                if (!isVisible(el)) continue;
+                log.push(`a-user click: ${snippet(el, 120)}`);
                 el.click();
-                return 'clicked|' + log.join('; ');
+                return 'clicked:a-user|' + log.join(' | ');
               }
             }
-            log.push('Container found but no text-matching element');
           }
+          if (aUserMatched) log.push(`a-user matches but no visible text-only inside (${aUserMatched})`);
 
-          // 2. Text search v chat zprávách (přeskočit viewer list)
+          // 2. Text search across chat-line / 7TV / native containers
           const lines = document.querySelectorAll(
             '[class*="chat-line"], [class*="seventv"], [data-a-target="chat-line-message"]'
           );
           log.push(`chat-lines: ${lines.length}`);
+          let textTried = 0;
           for (const line of lines) {
             for (const el of line.querySelectorAll('span, button')) {
               if (el.closest('.chatter-list-item')) continue;
               const txt = el.textContent.trim().toLowerCase();
-              if (txt === lower && el.offsetParent !== null) {
-                log.push(`Found text: <${el.tagName} class="${el.className}">`);
-                el.click();
-                return 'clicked:text|' + log.join('; ');
-              }
+              if (txt !== lower) continue;
+              textTried++;
+              if (!isVisible(el)) continue;
+              log.push(`text click: ${snippet(el, 120)}`);
+              el.click();
+              return 'clicked:text|' + log.join(' | ');
             }
           }
+          log.push(`text matches: ${textTried}`);
 
-          return 'not_found|' + log.join('; ');
+          return 'not_found|' + log.join(' | ');
         },
         args: [username]
       });
 
       const res = results?.[0]?.result || '';
-      ucLog('UserCard', 'executeScript result:', res);
+      ucLog('UserCard', `[${username}] executeScript result:`, res);
       if (res.startsWith('clicked')) return;
     } catch (e) {
-      ucLog('UserCard', 'executeScript error:', e.message);
+      ucLog('UserCard', `[${username}] executeScript error:`, e.message);
     }
 
     // Fallback 2: hledat v 7TV Shadow DOM
