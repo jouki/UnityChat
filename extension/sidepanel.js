@@ -3481,9 +3481,11 @@ class UnityChat {
       twCredits.querySelectorAll('.tc-pill').forEach((p) => p.classList.add('hidden'));
     }
     this._pullCredits();
-    // Reset GQL pin cards on channel switch — old channel's pin is gone.
+    // Reset pin state on channel switch — old channel's pin is gone.
     this._gqlPinCards = [];
     this._lastDomHighlightCards = [];
+    this._lastGoodPinCache = null;
+    this._lastHighlightsHash = '';
 
     // Clear the highlight banner (raid / hype / gifts / pinned cards)
     // — the raid card that triggered this auto-switch is no longer
@@ -5311,6 +5313,42 @@ class UnityChat {
     });
   }
 
+  // Merge DOM + GQL pin data + last-good cache into a single card.
+  // Each field prefers in order: DOM (current tick) → cache (last-good
+  // DOM snapshot) → GQL (server metadata). Keeps author/badges/time
+  // visible even when DOM flips the pin into its collapsed footerless
+  // state, and keeps real emote URLs visible even when GQL-only data
+  // is what we'd otherwise fall back to.
+  _mergePinCard(domCard, gqlCard) {
+    if (!domCard && !gqlCard) return null;
+    const d = domCard?.pin || {};
+    const g = gqlCard?.pin || {};
+    const cached = this._lastGoodPinCache || {};
+    const pick = (key) => {
+      const dv = d[key];
+      if (Array.isArray(dv) ? dv.length : dv) return dv;
+      const cv = cached[key];
+      if (Array.isArray(cv) ? cv.length : cv) return cv;
+      return g[key] || null;
+    };
+    const pin = {
+      pinnedBy: pick('pinnedBy'),
+      author: pick('author'),
+      authorColor: pick('authorColor'),
+      authorBadges: pick('authorBadges') || [],
+      bodySegments: pick('bodySegments') || [],
+      timeText: pick('timeText'),
+      pinId: d.pinId || g.pinId || cached.pinId,
+    };
+    // Refresh the cache whenever this tick had a DOM extract with a
+    // complete footer (author + time) — that's our gold standard.
+    if (d.author && d.timeText && d.bodySegments?.length) {
+      this._lastGoodPinCache = { ...pin };
+    }
+    const text = (domCard?.text || gqlCard?.text || '').slice(0, 200) || 'Pinned';
+    return { kind: 'pin', text, pin };
+  }
+
   // Merge cached non-pin DOM cards with whatever pin source wins
   // (DOM if recent, otherwise GQL) and re-render the highlights banner.
   _rerenderHighlights() {
@@ -5333,12 +5371,20 @@ class UnityChat {
     if (msg.cards && msg !== this._rerenderTag) {
       const domCards = msg.cards;
       const domPins = domCards.filter((c) => c?.kind === 'pin');
-      // Stash ONLY non-pin cards — pins always come fresh from either
-      // this DOM tick or the GQL poll, never from the cache.
       this._lastDomHighlightCards = domCards.filter((c) => c?.kind !== 'pin');
-      // Prefer DOM pins when they exist (DOM has full sender + content +
-      // badges + emotes); else use GQL fallback.
-      const pins = domPins.length ? domPins : (this._gqlPinCards || []);
+      // Pin merge strategy: DOM and GQL each have strengths/weaknesses.
+      //   DOM expanded  → author + badges + time + real emote URLs
+      //   DOM collapsed → pinner + body text only (author row unmounted)
+      //   GQL           → pinner + author + color + badges + time, BUT
+      //                   emotes as name-only (Client-Integrity gate)
+      // Twitch auto-toggles DOM pin between expanded/collapsed every
+      // few seconds, which used to downgrade the banner each time.
+      // Now we merge per-field, keeping the last non-empty value for
+      // each so once expanded data is seen, it sticks.
+      const gqlPin = (this._gqlPinCards || [])[0];
+      const domPin = domPins[0];
+      const mergedPin = this._mergePinCard(domPin, gqlPin);
+      const pins = mergedPin ? [mergedPin] : [];
       msg = { ...msg, cards: [...this._lastDomHighlightCards, ...pins] };
     }
     const banner = document.getElementById('highlights-banner');
