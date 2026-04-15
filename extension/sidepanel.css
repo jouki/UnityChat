@@ -1132,23 +1132,23 @@ body.no-timestamps .msg .ts { display: none; }
     0 0 16px rgba(145, 70, 255, 0.18);
 }
 
-/* PRIMARY = Twitch's rainbow gradient on both edges. `border-image` with
-   `slice: 1` fills each edge strip with the full gradient; top/bottom have
-   zero width so there are no stretched corner artifacts. */
+/* PRIMARY = gold shimmer gradient on both edges (warmer / premium feel
+   than the rainbow). `border-image` with `slice: 1` fills each edge
+   strip with the full gradient; top/bottom have zero width so there
+   are no stretched corner artifacts. */
 .msg.announcement[data-announcement-color="PRIMARY"] {
   border-color: transparent;
   border-image: linear-gradient(
     180deg,
-    #ff4500 0%,
-    #ffaf14 22%,
-    #ffd93d 42%,
-    #00ff87 60%,
-    #00d7ec 80%,
-    #9146ff 100%
+    #ffeaa1 0%,
+    #ffd93d 25%,
+    #ffb31e 50%,
+    #ffd93d 75%,
+    #ffeaa1 100%
   ) 1;
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-    0 0 18px rgba(255, 175, 20, 0.22);
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 0 20px rgba(255, 200, 40, 0.35);
 }
 .msg.announcement[data-announcement-color="BLUE"]   { border-color: #00d7ec; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 215, 236, 0.28); }
 .msg.announcement[data-announcement-color="GREEN"]  { border-color: #00db84; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 219, 132, 0.28); }
@@ -1173,7 +1173,7 @@ body.no-timestamps .msg .ts { display: none; }
   animation: announcement-pulse 2.4s ease-in-out infinite;
 }
 .msg.announcement[data-announcement-color="PRIMARY"] .announcement-label {
-  background: linear-gradient(90deg, #ffd93d, #ff4500, #9146ff, #00d7ec);
+  background: linear-gradient(90deg, #ffeaa1, #ffd93d, #ffb31e, #ffd93d, #ffeaa1);
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;

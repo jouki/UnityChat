@@ -4040,8 +4040,31 @@ class UnityChat {
       case 'delete':
         this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
         break;
+      case 'claim': {
+        // Mock the claim-bonus pill showing up in the credits footer.
+        // Injects a synthetic TW_CREDITS snapshot via _handleCredits.
+        const channel = this.config.channel || '';
+        this._handleCredits({
+          bits: '0',
+          points: '1,5 tis.',
+          pointsIcon: null,
+          claimAvailable: true,
+          channel,
+        });
+        this._sys('/uc claim: mock claim pill visible');
+        break;
+      }
+      case 'points10': {
+        // Mock the +10 watch-reward flash (no balance change needed).
+        this._flashPointsDelta(10);
+        break;
+      }
+      case 'points50': {
+        this._flashPointsDelta(50);
+        break;
+      }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50`);
     }
   }
 
