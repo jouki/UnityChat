@@ -766,31 +766,50 @@
   // These live in Twitch's DOM, not IRC. Observer watches the highlights
   // container and relays structured snapshots to the sidepanel, which
   // renders a compact version at the top of its own chat.
+  // Prefer the inner card class — that's the actual content unit. Falling
+  // back to broader matches when the card class isn't present.
   const HIGHLIGHT_SELECTORS = [
-    '.community-highlight-stack',
-    '[class*="community-highlight"]',
+    '.community-highlight-stack__card',
+    '.community-highlight',
     '[data-test-selector*="community-highlight"]',
-    '[data-a-target*="highlight-stack"]',
   ];
   let highlightObserver = null;
   let lastHighlightHash = '';
   function snapshotHighlights() {
     const cards = [];
-    const seen = new Set();
+    const seenEls = new Set();
+    const seenTexts = new Set();
+    // Collect all candidate elements first
+    const allCandidates = [];
     for (const sel of HIGHLIGHT_SELECTORS) {
       document.querySelectorAll(sel).forEach((el) => {
-        if (seen.has(el)) return;
-        seen.add(el);
-        const text = (el.textContent || '').trim();
-        if (!text) return;
-        // Classify. Hype train has progress / minutes text; gift sub has
-        // "Tier" / "subs"; pinned messages have distinctive classes.
-        const isHypeTrain = /hype\s*train|hype\s*raid|úr\.|%\b/i.test(text)
-          || /hype/i.test(el.className || '');
-        const isGiftLeaderboard = /gift/i.test(text) || /gift/i.test(el.className || '');
-        const kind = isHypeTrain ? 'hype-train' : (isGiftLeaderboard ? 'gift-leaderboard' : 'generic');
-        cards.push({ kind, text: text.slice(0, 400), html: el.outerHTML.slice(0, 4000) });
+        if (!seenEls.has(el)) {
+          seenEls.add(el);
+          allCandidates.push(el);
+        }
       });
+    }
+    // Drop ancestors of other candidates — keep only the innermost matches
+    // so a wrapping container and its inner card don't both emit. Also
+    // drop descendants of already-kept elements.
+    const kept = allCandidates.filter((el) =>
+      !allCandidates.some((other) => other !== el && el.contains(other))
+    );
+    for (const el of kept) {
+      const text = (el.textContent || '').trim();
+      if (!text) continue;
+      // Final text-level dedup — handles duplicate cards that show up via
+      // two distinct selectors with the same content.
+      const key = text.slice(0, 120);
+      if (seenTexts.has(key)) continue;
+      seenTexts.add(key);
+      // Classify. Hype train has progress / minutes text; gift sub has
+      // "Tier" / "subs"; pinned messages have distinctive classes.
+      const isHypeTrain = /hype\s*train|hype\s*raid|úr\.|%\b/i.test(text)
+        || /hype/i.test(el.className || '');
+      const isGiftLeaderboard = /gift/i.test(text) || /gift/i.test(el.className || '');
+      const kind = isHypeTrain ? 'hype-train' : (isGiftLeaderboard ? 'gift-leaderboard' : 'generic');
+      cards.push({ kind, text: text.slice(0, 400), html: el.outerHTML.slice(0, 4000) });
     }
     return cards;
   }
