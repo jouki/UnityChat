@@ -287,6 +287,22 @@ class EmoteManager {
   // Identify which provider an emote came from based on its CDN URL.
   // Returns { source, id, hires } or null. id is fetched from the URL,
   // hires is a swapped-up resolution variant for the preview card.
+  // Diagnostic: log every short-name emote hit (≤3 chars) once per
+  // (name, source) so we can pin down stray entries like "te" being
+  // matched out of one of the loaded maps.
+  _logShortEmoteHit(name, source, url, platform, author) {
+    if (!this._shortHitsLogged) this._shortHitsLogged = new Set();
+    const key = `${name}|${source}`;
+    if (this._shortHitsLogged.has(key)) return;
+    this._shortHitsLogged.add(key);
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UC_LOG', tag: 'ShortEmote',
+        args: [`name="${name}" source=${source} url=${url} platform=${platform} author=${author}`],
+      });
+    } catch {}
+  }
+
   _emoteSourceFromUrl(url) {
     if (!url) return null;
     let m;
@@ -527,11 +543,24 @@ class EmoteManager {
         const personal = userLookup(part);
         if (personal) {
           out.push({ type: 'emote', value: part, url: personal.url, zw: personal.zw });
+          if (part.length <= 3 && part.length > 0 && /\S/.test(part)) {
+            this._logShortEmoteHit?.(part, 'personal', personal.url, platform, author);
+          }
           continue;
         }
-        const url = this._get7tv(part)
-          || this.twitchNative.get(part) || this.kickNative.get(part);
+        let url = null;
+        let source = null;
+        if ((url = this.channel7tv.get(part))) source = 'channel7tv';
+        else if ((url = this.global7tv.get(part))) source = 'global7tv';
+        else if ((url = this.bttvEmotes.get(part))) source = 'bttv';
+        else if ((url = this.ffzEmotes.get(part))) source = 'ffz';
+        else if ((url = this.ucEmotes.get(part))) source = 'uc';
+        else if ((url = this.twitchNative.get(part))) source = 'twitchNative';
+        else if ((url = this.kickNative.get(part))) source = 'kickNative';
         if (url) {
+          if (part.length <= 3 && /\S/.test(part)) {
+            this._logShortEmoteHit?.(part, source, url, platform, author);
+          }
           out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
           out.push({ type: 'text', value: part });
@@ -4592,6 +4621,33 @@ class UnityChat {
       push('Twitch DOM color snapshot per open tab', tabReports);
     } catch (e) {
       push('tabs query error', e.message);
+    }
+
+    // Sweep all loaded emote maps for ≤3-char names — these are the most
+    // likely culprits for "why did this short word get rendered as an
+    // emote". Lists name + URL per source.
+    try {
+      const sources = [
+        ['channel7tv',   this.emotes?.channel7tv],
+        ['global7tv',    this.emotes?.global7tv],
+        ['bttvEmotes',   this.emotes?.bttvEmotes],
+        ['ffzEmotes',    this.emotes?.ffzEmotes],
+        ['ucEmotes',     this.emotes?.ucEmotes],
+        ['twitchNative', this.emotes?.twitchNative],
+        ['kickNative',   this.emotes?.kickNative],
+      ];
+      const shortByName = {};
+      for (const [src, map] of sources) {
+        if (!map?.forEach) continue;
+        map.forEach((url, name) => {
+          if (typeof name !== 'string' || name.length > 3 || !name.length) return;
+          if (!shortByName[name]) shortByName[name] = {};
+          shortByName[name][src] = url;
+        });
+      }
+      push('Short-name (≤3 chars) emote entries across all maps', shortByName);
+    } catch (e) {
+      push('short-emote sweep error', e.message);
     }
 
     // Recent messages snapshot — last 30 msgs with key flags
