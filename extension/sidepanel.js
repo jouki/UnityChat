@@ -5076,29 +5076,88 @@ class UnityChat {
     for (const c of cards) {
       const item = document.createElement('div');
       item.className = 'hl-card hl-' + (c.kind || 'generic');
-      // Avatar first (if present) — raids and some highlights embed the
-      // channel's profile image. Fall back to text-icon otherwise.
-      if (c.avatar) {
-        const av = document.createElement('img');
-        av.className = 'hl-avatar';
-        av.src = c.avatar;
-        av.alt = '';
-        item.appendChild(av);
+
+      if (c.kind === 'raid') {
+        // Prominent raid layout: header bar with pulsing rocket + label,
+        // main row with avatar + structured text highlighting raider
+        // and target channel names.
+        item.appendChild(this._buildRaidCard(c));
       } else {
-        const icon = document.createElement('span');
-        icon.className = 'hl-icon';
-        icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
-          : c.kind === 'gift-leaderboard' ? '\u{1F381}'
-          : c.kind === 'raid' ? '\u{1F680}'
-          : '\u2728';
-        item.appendChild(icon);
+        if (c.avatar) {
+          const av = document.createElement('img');
+          av.className = 'hl-avatar';
+          av.src = c.avatar;
+          av.alt = '';
+          item.appendChild(av);
+        } else {
+          const icon = document.createElement('span');
+          icon.className = 'hl-icon';
+          icon.textContent = c.kind === 'hype-train' ? '\u{1F682}'
+            : c.kind === 'gift-leaderboard' ? '\u{1F381}'
+            : '\u2728';
+          item.appendChild(icon);
+        }
+        const body = document.createElement('span');
+        body.className = 'hl-body';
+        body.textContent = c.text;
+        item.appendChild(body);
       }
-      const body = document.createElement('span');
-      body.className = 'hl-body';
-      body.textContent = c.text;
-      item.appendChild(body);
       banner.appendChild(item);
     }
+  }
+
+  _buildRaidCard(c) {
+    const wrap = document.createElement('div');
+    wrap.className = 'hl-raid-wrap';
+
+    // Header: pulsing rocket + "NÁJEZD" gold-gradient label
+    const header = document.createElement('div');
+    header.className = 'hl-raid-header';
+    header.innerHTML = '<span class="hl-raid-icon" aria-hidden="true">\u{1F680}</span>'
+      + '<span class="hl-raid-label">N\u00C1JEZD</span>';
+    wrap.appendChild(header);
+
+    // Body row: avatar + structured text
+    const row = document.createElement('div');
+    row.className = 'hl-raid-row';
+    if (c.avatar) {
+      const av = document.createElement('img');
+      av.className = 'hl-raid-avatar';
+      av.src = c.avatar;
+      av.alt = '';
+      row.appendChild(av);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'hl-raid-body';
+    // Try to parse the Twitch Czech raid callout into structured parts:
+    // "{raider} provádí nájezd na kanál {target} s {N} nájezdníky. Nájezd za +{P} bodů."
+    // English fallback: "{raider} is raiding {target} with {N} viewers. Raid in +{P} points."
+    const m = c.text.match(/^([A-Za-z0-9_]+)[^A-Za-z0-9_]+?([A-Za-z0-9_]+)[^0-9]+?(\d+[\d\s]*)/);
+    if (m) {
+      const raider = m[1];
+      const target = m[2];
+      const viewers = m[3].replace(/\s/g, '');
+      const tail = c.text.match(/\+(\d+[\d\s]*)/);
+      const pts = tail ? tail[1].replace(/\s/g, '') : null;
+      const title = document.createElement('div');
+      title.className = 'hl-raid-title';
+      title.innerHTML = `<strong class="hl-raid-raider">${this.emotes._eh(raider)}</strong>`
+        + ` <span class="hl-raid-arrow">\u2192</span> `
+        + `<strong class="hl-raid-target">${this.emotes._eh(target)}</strong>`;
+      const meta = document.createElement('div');
+      meta.className = 'hl-raid-meta';
+      meta.innerHTML = `<span>\u{1F465} ${viewers}</span>`
+        + (pts ? `<span class="hl-raid-points">\u{2728} +${pts}</span>` : '');
+      body.appendChild(title);
+      body.appendChild(meta);
+    } else {
+      // Fallback — keep the raw text if parsing didn't match the expected shape.
+      body.textContent = c.text;
+    }
+    row.appendChild(body);
+    wrap.appendChild(row);
+    return wrap;
   }
 
   _handleDomRedeem(data) {

@@ -1312,10 +1312,84 @@ body.no-timestamps .msg .ts { display: none; }
 .hl-card.hl-gift-leaderboard {
   background: linear-gradient(90deg, rgba(145, 70, 255, 0.28), rgba(145, 70, 255, 0.12));
 }
+/* Raid callout — full width, bilateral red→gold border, pulsing
+   rocket header + structured body (raider → target + viewer count +
+   points). Matches the .msg.raid chat-line treatment so the raid
+   identity reads consistent across both the banner and chat. */
 .hl-card.hl-raid {
-  background: linear-gradient(90deg, rgba(255, 107, 107, 0.28), rgba(255, 175, 20, 0.1));
-  box-shadow: 0 0 12px rgba(255, 107, 107, 0.25);
+  display: block;
+  padding: 0;
+  background: linear-gradient(180deg, rgba(255, 107, 107, 0.22), rgba(255, 107, 107, 0.07));
+  border-style: solid;
+  border-color: transparent;
+  border-width: 0 5px 0 5px;
+  border-image: linear-gradient(180deg, #ff4500 0%, #ff6b6b 50%, #ffaf14 100%) 1;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 14px rgba(255, 107, 107, 0.32);
 }
+.hl-raid-wrap { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; }
+.hl-raid-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+.hl-raid-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 107, 107, 0.55));
+  animation: raid-pulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+.hl-raid-label {
+  background: linear-gradient(90deg, #ffaf14, #ff4500, #ff6b6b);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.hl-raid-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hl-raid-avatar {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 107, 107, 0.7);
+  box-shadow: 0 0 10px rgba(255, 107, 107, 0.45);
+}
+.hl-raid-body {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+.hl-raid-title {
+  font-size: 0.98em;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hl-raid-raider { color: #ffd9c2; }
+.hl-raid-arrow { color: #ffaf14; margin: 0 4px; font-weight: 900; }
+.hl-raid-target { color: #ffeaa1; }
+.hl-raid-meta {
+  margin-top: 3px;
+  display: flex;
+  gap: 12px;
+  font-size: 0.86em;
+  color: #e0c7a8;
+}
+.hl-raid-meta .hl-raid-points { color: #ffd93d; font-weight: 700; }
 
 /* ==== Subscription gift events ==== */
 /* Bundle header: full-width purple pill */
