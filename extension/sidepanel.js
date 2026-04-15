@@ -2405,6 +2405,10 @@ class UnityChat {
         this._handleHighlights(msg);
       } else if (msg?.type === 'TW_CREDITS' && msg.data) {
         this._handleCredits(msg.data);
+      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
+        // Twitch fired a floating "+N" reward animation — content script
+        // caught it from DOM mutations. We just flash the amount.
+        this._flashPointsDelta(msg.amount);
       }
     });
   }

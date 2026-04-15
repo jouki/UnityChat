@@ -332,8 +332,15 @@
         } catch {}
       };
       try {
-        const wasHidden = ucChatHidden;
-        log('start', { wasHidden, url: location.href });
+        // Check the DOM directly — our ucChatHidden flag resets after
+        // extension reload, but the <style> element we appended to
+        // documentElement + the stripped --with-chat modifiers can
+        // survive the reload (the isolated world dies but the DOM we
+        // mutated is the page's DOM). So rely on actual state, not flag.
+        const styleEl = document.getElementById(UC_HIDE_STYLE_ID);
+        const anyStripped = document.querySelector('[data-uc-with-chat="1"]');
+        const wasHidden = !!styleEl || !!anyStripped;
+        log('start', { wasHidden, flagSaid: ucChatHidden, hasStyle: !!styleEl, hasStrippedMods: !!anyStripped, url: location.href });
         const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
         log('summary-lookup', { found: !!summary, html: summary ? summary.outerHTML.slice(0, 200) : null });
         if (!summary) { sendResponse({ ok: false, error: 'no_summary' }); return; }
@@ -1087,10 +1094,35 @@
     lastCreditsHash = hash;
     try { chrome.runtime.sendMessage({ type: 'TW_CREDITS', data: snap }); } catch {}
   }
+  // Detect Twitch's floating "+N" reward animation inside the summary
+  // subtree. When Twitch fires the +10 watch reward, a small transient
+  // element with text "+10" (or similar) appears near the points icon.
+  // We catch it by walking added nodes' text content; if it matches the
+  // "+N" pattern we relay a fixed delta event to the sidepanel.
+  function scanForRewardFlash(nodeList) {
+    for (const n of nodeList) {
+      if (n.nodeType !== Node.ELEMENT_NODE && n.nodeType !== Node.TEXT_NODE) continue;
+      const txt = (n.textContent || '').trim();
+      if (!txt || txt.length > 10) continue;
+      const m = /^\+\s*(\d{1,4})\s*$/.exec(txt);
+      if (!m) continue;
+      const amount = parseInt(m[1], 10);
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 5000) continue;
+      try { chrome.runtime.sendMessage({ type: 'TW_POINTS_DELTA', amount }); } catch {}
+      return true;
+    }
+    return false;
+  }
+
   let creditsObserver = null;
   function setupCreditsObserver() {
     if (creditsObserver) return;
-    creditsObserver = new MutationObserver(() => {
+    creditsObserver = new MutationObserver((mutations) => {
+      // Fast path: scan added nodes for Twitch's reward flash — needs
+      // synchronous detection so we catch it before Twitch tears it down.
+      for (const m of mutations) {
+        if (m.addedNodes?.length) scanForRewardFlash(m.addedNodes);
+      }
       if (creditsObserver._t) return;
       creditsObserver._t = setTimeout(() => {
         creditsObserver._t = null;
