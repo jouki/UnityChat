@@ -596,7 +596,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.16** - **GQL introspection pro PinnedChatMessage** — introspection však Twitch disabled, vrátila `{"data":{}}`.
 - **v3.38.17** - **GQL field probing** (bug: variable name mismatch — všechny probes fail-ovaly na `Variable "n" has invalid value null`).
 - **v3.38.18** - **Probe variable fix + subselection detection**: odhalila že `PinnedChatMessage` má jen `id`, `startsAt`, `endsAt`, `pinnedBy`, `type` ("MOD" scalar). Ostatní 16 kandidátů neexistují → content pinu není dostupný přes anonymní GQL.
-- **v3.38.19** - **DOM+GQL merge strategy for pins**: konečný závěr z v3.38.18 probe — anonymní GQL neumí pin content. Hybrid: když DOM mirror zachytí pin card (chat visible), použije se full obsah; když DOM pin není (chat hidden, highlight stack unmountován), GQL doplní metadata-only fallback (pinner + time + "Pinned" placeholder body) aby user věděl že pin existuje. Probe loop odstraněn (known results). Pro real Twitch GQL schema je potřeba capture z Twitch web UI Network tab — TODO po user-provided payload. **Aktuální verze**
+- **v3.38.19** - **DOM+GQL merge strategy for pins**: hybrid, DOM má přednost + GQL fallback pro hidden chat. Probe odstraněn.
+- **v3.38.20** - **Real Twitch schema wired — GetPinnedChat operation**: user zachytil skutečný response z Twitch web UI Network tab. Klíč: message content je v `node.pinnedMessage` (ne `message`). Query přepsaná na real schema — `pinnedMessage.content.text + fragments { content { ... on Emote { emoteID } } }`, `pinnedMessage.sender { id chatColor displayName displayBadges { setID version } }`, `pinnedMessage.sentAt`. Operation name `GetPinnedChat` (matches Twitch's own). Mapper pulluje full data: emote URLs z emoteID, sender color + badges (mapped přes `_twitchBadges` cache na image URLs). Pin banner teď má kompletní obsah bez ohledu na chat UI visibility. **Aktuální verze**
 
 ## Release workflow
 

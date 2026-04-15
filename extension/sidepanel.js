@@ -5246,34 +5246,37 @@ class UnityChat {
         if (!channel) return;
         const resp = await chrome.runtime.sendMessage({ type: 'FETCH_PINS', channel });
         if (!resp?.ok) { this._gqlPinCards = []; return; }
-        this._gqlPinCards = (resp.pins || []).map((p) => ({
-          kind: 'pin',
-          text: (p.contentText || '').slice(0, 120) || 'Pinned',
-          pin: {
-            pinnedBy: p.pinnedBy,
-            author: p.author,
-            authorColor: p.authorColor,
-            // GQL-sourced badges carry setID/version; sidepanel maps via
-            // _twitchBadges (already loaded per channel from IVR) to get
-            // the image URL + title when rendering.
-            authorBadges: (p.senderBadges || [])
-              .map((b) => {
-                const key = `${b.setID}/${b.version}`;
-                const entry = this._twitchBadges?.[key];
-                const url = entry && typeof entry === 'object' ? entry.url : entry;
-                const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
-                return url ? { url, alt: title } : null;
-              }).filter(Boolean),
-            bodySegments: (p.segments || []).map((s) => {
-              if (s.type === 'emote') return { type: 'emote', url: s.url, alt: s.alt };
-              return { type: 'text', value: s.value || '' };
-            }),
-            timeText: p.pinnedAt
-              ? 'odesláno v ' + new Date(p.pinnedAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
-              : null,
-            pinId: p.pinId,
-          },
-        }));
+        this._gqlPinCards = (resp.pins || []).map((p) => {
+          const ts = p.sentAt || p.pinnedAt;
+          return {
+            kind: 'pin',
+            text: (p.contentText || '').slice(0, 120) || 'Pinned',
+            pin: {
+              pinnedBy: p.pinnedBy,
+              author: p.author,
+              authorColor: p.authorColor,
+              // GQL-sourced badges carry setID/version; map via
+              // _twitchBadges (loaded per channel from IVR) to get the
+              // image URL + human title for tooltip rendering.
+              authorBadges: (p.senderBadges || [])
+                .map((b) => {
+                  const key = `${b.setID}/${b.version}`;
+                  const entry = this._twitchBadges?.[key];
+                  const url = entry && typeof entry === 'object' ? entry.url : entry;
+                  const title = (entry && typeof entry === 'object' && entry.title) || b.setID;
+                  return url ? { url, alt: title } : null;
+                }).filter(Boolean),
+              bodySegments: (p.segments || []).map((s) => {
+                if (s.type === 'emote') return { type: 'emote', url: s.url, alt: s.alt };
+                return { type: 'text', value: s.value || '' };
+              }),
+              timeText: ts
+                ? 'odesláno v ' + new Date(ts).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+                : null,
+              pinId: p.pinId,
+            },
+          };
+        });
         // Re-render the banner merging freshly-fetched pins with whatever
         // DOM-mirror highlights are currently showing.
         this._rerenderHighlights();

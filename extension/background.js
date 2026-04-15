@@ -794,29 +794,48 @@ async function fetchPins(channel) {
     // to CDN URLs), pin timestamp and duration. Schema is reasonably
     // stable but Twitch occasionally renames fields — errors surface in
     // the Pin log for re-tuning.
-    // v3.38.18 probe confirmed: PinnedChatMessage exposes only id,
-    // startsAt, endsAt, pinnedBy, type (scalar "MOD"). No sender,
-    // no content, no message ref. Content + sender must come from
-    // the DOM mirror or elsewhere — log this once for posterity.
-    // If we later get the real Twitch web query (from user's Network
-    // tab capture), we'll wire it here.
-    // Minimal working query (id/startsAt/endsAt/pinnedBy confirmed in
-    // earlier diagnostics). Fields that previously errored (sender,
-    // content, message, senderBadges, pinnedAt) are not direct on
-    // PinnedChatMessage — introspection above should reveal the real
-    // names so we can wire content + sender on the next iteration.
+    // Schema mirrors the real Twitch web UI "GetPinnedChat" operation
+    // (captured from Network tab). Key discovery: message content lives
+    // under `pinnedMessage`, NOT `message` (which was our earlier wrong
+    // guess). Emote ID field is `emoteID` on MessageFragment content,
+    // and sender badges are exposed via `displayBadges` with setID +
+    // version pairs we map through the per-channel _twitchBadges cache.
     const r = await fetch('https://gql.twitch.tv/gql', {
       method: 'POST', headers,
       body: JSON.stringify({
-        query: `query ($name: String!) {
+        operationName: 'GetPinnedChat',
+        query: `query GetPinnedChat($name: String!) {
           channel(name: $name) {
+            id
             pinnedChatMessages {
               edges {
                 node {
                   id
+                  type
                   startsAt
                   endsAt
-                  pinnedBy { id login displayName }
+                  updatedAt
+                  pinnedBy { id displayName }
+                  pinnedMessage {
+                    id
+                    sentAt
+                    content {
+                      text
+                      fragments {
+                        text
+                        content {
+                          __typename
+                          ... on Emote { emoteID }
+                        }
+                      }
+                    }
+                    sender {
+                      id
+                      chatColor
+                      displayName
+                      displayBadges { setID version }
+                    }
+                  }
                 }
               }
             }
@@ -835,21 +854,36 @@ async function fetchPins(channel) {
     const pins = edges.map((e) => {
       const n = e.node || {};
       const pinnedBy = n.pinnedBy || {};
+      const pm = n.pinnedMessage || {};
+      const sender = pm.sender || {};
+      const fragments = pm.content?.fragments || [];
+      const segments = fragments.map((f) => {
+        const c = f.content;
+        if (c?.__typename === 'Emote' && c.emoteID) {
+          return {
+            type: 'emote',
+            url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.emoteID}/default/dark/2.0`,
+            alt: f.text || '',
+          };
+        }
+        return { type: 'text', value: f.text || '' };
+      });
+      const badges = (sender.displayBadges || []).map((b) => ({
+        setID: b.setID,
+        version: b.version,
+      }));
       return {
         pinId: n.id,
         endsAt: n.endsAt,
         pinnedAt: n.startsAt,
-        pinnedBy: pinnedBy.displayName || pinnedBy.login || null,
-        // Sender + content populated once introspection log reveals the
-        // actual field names on PinnedChatMessage. Sidepanel can fall
-        // back to DOM mirror or _twitchBadges cache while we wait.
-        author: null,
-        authorLogin: null,
-        authorUserId: null,
-        authorColor: null,
-        senderBadges: [],
-        segments: [],
-        contentText: '',
+        pinnedBy: pinnedBy.displayName || null,
+        author: sender.displayName || null,
+        authorUserId: sender.id || null,
+        authorColor: sender.chatColor || null,
+        senderBadges: badges,
+        segments,
+        contentText: pm.content?.text || '',
+        sentAt: pm.sentAt || null,
       };
     });
     return { ok: true, pins };
