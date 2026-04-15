@@ -1300,34 +1300,50 @@
         if (txt === out.pinnedBy) authorEl = null;
       }
     }
-    // Secondary heuristic: walk every colored span; pick the bottom-most
-    // one that sits near "odesláno v" in the DOM order.
+    // Secondary heuristic: find the "odesláno v / sent at" container
+    // (usually the footer <p>), then look for a styled short-text span
+    // holding the author name. Pin footer layout: <p>[badges] <span
+    // class="chatter-name"><span style="color:X">Name</span></span>
+    // odesláno v HH:MM</p> — so the author lives INSIDE the time
+    // container, not beside it.
     if (!authorEl) {
       const timeRe = /odesl[áa]no v|sent at/i;
-      const allSpans = Array.from(card.querySelectorAll('span, a'));
-      // Find an element whose text matches "odesláno v ..." — author
-      // should be its preceding sibling or close ancestor's child.
+      const isAuthorish = (s) => {
+        const t = (s.textContent || '').trim();
+        if (!t || t.length > 30) return false;
+        if (labelRe.test(t)) return false;
+        if (timeRe.test(t)) return false;
+        const styled = !!s.style?.color || /user|author|username|display|chatter/i.test(s.className || '');
+        return styled || /^[\p{L}\p{N}_-]+$/u.test(t);
+      };
+      // Find the footer container (any element whose own text contains
+      // "odesláno v" and is short enough to be a footer line).
       let timeEl = null;
-      for (const el of allSpans) {
+      for (const el of card.querySelectorAll('p, div, span, a')) {
         const t = (el.textContent || '').trim();
-        if (timeRe.test(t) && t.length < 40) { timeEl = el; break; }
+        if (!timeRe.test(t)) continue;
+        if (t.length > 80) continue;
+        timeEl = el; break;
       }
       if (timeEl) {
-        // Walk backwards from timeEl looking for a short colored username.
-        const container = timeEl.parentElement || card;
-        const sibs = Array.from(container.querySelectorAll('span, a'));
-        const idx = sibs.indexOf(timeEl);
-        for (let i = idx - 1; i >= 0; i--) {
-          const s = sibs[i];
-          const t = (s.textContent || '').trim();
-          if (!t || t.length > 30) continue;
-          if (labelRe.test(t)) continue;
-          if (timeRe.test(t)) continue;
-          // Prefer spans with inline color style or username-ish classes.
-          const styled = !!s.style?.color || /user|author|username|display/i.test(s.className || '');
-          if (styled || /^[\p{L}\p{N}_-]+$/u.test(t)) {
-            authorEl = s;
-            break;
+        // Step 1: search INSIDE the footer for a styled short-text span.
+        const innerCandidates = Array.from(timeEl.querySelectorAll('span, a'));
+        // Prefer the innermost colored span (most specific). Walk leaf-first:
+        // spans with no element children first, then broader.
+        const leafFirst = innerCandidates.filter((s) => s.childElementCount === 0);
+        const rest = innerCandidates.filter((s) => s.childElementCount > 0);
+        for (const s of [...leafFirst, ...rest]) {
+          if (isAuthorish(s)) { authorEl = s; break; }
+        }
+        // Step 2: walk backward across preceding siblings (for layouts
+        // where author sits next to, not inside, the time container).
+        if (!authorEl) {
+          const container = timeEl.parentElement || card;
+          const sibs = Array.from(container.querySelectorAll('span, a'));
+          const idx = sibs.indexOf(timeEl);
+          const startFrom = idx === -1 ? sibs.length - 1 : idx - 1;
+          for (let i = startFrom; i >= 0; i--) {
+            if (isAuthorish(sibs[i])) { authorEl = sibs[i]; break; }
           }
         }
       }
