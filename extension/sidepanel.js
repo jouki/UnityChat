@@ -2454,9 +2454,18 @@ class UnityChat {
         height: 720
       });
     });
-    $('btn-dump').addEventListener('click', () =>
-      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' })
-    );
+    $('btn-dump').addEventListener('click', async () => {
+      // Build a rich diagnostics report and prepend it to the log dump so
+      // a single download answers the most common debugging questions
+      // (color/paint mismatches, missing scrape, badge attribution, …).
+      try {
+        const diag = await this._buildDiagnostics();
+        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: diag });
+      } catch (e) {
+        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
+      }
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' });
+    });
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
     );
@@ -4355,6 +4364,132 @@ class UnityChat {
   // vanilla chat DOM and relayed it here. Twitch IRC does NOT carry text-less
   // redemptions (community goals, "unlock emote", etc.) — only PubSub does,
   // and that's OAuth-gated. DOM mirroring is the anonymous-safe workaround.
+  // ---- Diagnostics dump (attached to debug log on 💾 click) ----
+  // Aim: a single download contains enough state for someone (Claude, me)
+  // to answer "why is user X colored Y / why is paint missing / why is
+  // scrape skipping messages" without further round-trips with the user.
+  async _buildDiagnostics() {
+    const out = [];
+    const push = (label, val) => out.push(`### ${label}\n${typeof val === 'string' ? val : JSON.stringify(val, null, 2)}`);
+
+    push('UnityChat version', chrome.runtime.getManifest().version);
+    push('Channel / config', {
+      channel: this.config.channel,
+      ytChannel: this.config.ytChannel,
+      username: this.config.username,
+      platforms: { tw: this.config.twitch, yt: this.config.youtube, ki: this.config.kick },
+      maxMessages: this.config.maxMessages,
+      layout: this.config.layout,
+      _platformUsernames: this._platformUsernames,
+      _isModOnChannel: this._isModOnChannel,
+    });
+
+    // Connection status
+    push('Provider connection state', {
+      twitch: { connected: !!this.twitch?.connected, channel: this.twitch?.channel },
+      kick: { connected: !!this.kick?.connected, channel: this.kick?.channel },
+      youtube: { connected: !!this.youtube?.connected, channel: this.youtube?.channel },
+    });
+
+    // Cache sizes
+    push('Cache stats', {
+      msgCacheSize: this._msgCache?.length || 0,
+      msgCacheOldest: this._msgCache?.[0]?.timestamp,
+      msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
+      seenMsgIds: this._seenMsgIds?.size || 0,
+      seenContentKeys: this._seenContentKeys?.size || 0,
+      chatUsersEntries: this._chatUsers?.size || 0,
+      twitchBadgesLoaded: Object.keys(this._twitchBadges || {}).length,
+      sevenTvPaintsLoaded: (typeof _7TV_PAINTS !== 'undefined') ? Object.keys(_7TV_PAINTS).length : 'n/a',
+      sevenTvUserCacheSize: this.emotes?._sevenTvUserCache?.size || 0,
+      emoteAdditions: this.emotes?._emoteAdditions?.size || 0,
+    });
+
+    // Per-user color/paint state for everyone currently rendered in chat
+    const renderedUsers = new Map();
+    this.chatEl.querySelectorAll('.un[data-platform="twitch"]').forEach((un) => {
+      const u = un.dataset.username;
+      if (!u || renderedUsers.has(u)) return;
+      const entry = this._chatUsers.get(`twitch:${u}`) || this._chatUsers.get(u);
+      const computed = un.style.color || getComputedStyle(un).color;
+      const hasPaintBg = !!un.style.backgroundImage;
+      renderedUsers.set(u, {
+        renderedColor: computed,
+        hasPaintBackground: hasPaintBg,
+        entryColor: entry?.color,
+        entryUserId: entry?.userId,
+        entryFromGQL: !!entry?._fromGQL,
+        entryPaintChecked: !!entry?._paintChecked,
+        entryPaintNonNull: !!entry?._paint,
+        entryPaintFunction: entry?._paint?.function,
+      });
+    });
+    push('Twitch users currently rendered (color + paint state)', Object.fromEntries(renderedUsers));
+
+    // Persistent storage snapshots
+    try {
+      const local = await chrome.storage.local.get(['uc_user_colors', 'uc_synced', 'uc_update', 'uc_msg_history']);
+      const ucColors = local.uc_user_colors || {};
+      // Slim down: just keys + paint flags, full color is huge
+      const slim = {};
+      for (const [k, v] of Object.entries(ucColors)) {
+        if (!v || typeof v !== 'object') continue;
+        slim[k] = {
+          color: v.color,
+          userId: v.userId,
+          fromGQL: !!v._fromGQL,
+          paintChecked: !!v._paintChecked,
+          paint: v._paint ? { function: v._paint.function, id: v._paint.id } : null,
+        };
+      }
+      push('chrome.storage.local.uc_user_colors (slim)', slim);
+      push('chrome.storage.local.uc_synced size', (local.uc_synced || []).length || 0);
+      push('chrome.storage.local.uc_update', local.uc_update || null);
+    } catch (e) {
+      push('storage.local read error', e.message);
+    }
+
+    // For each rendered Twitch user, ask the active Twitch tab what the
+    // vanilla DOM thinks their color is. This is the gold-standard for
+    // "what should our chat show".
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+      const usernames = [...renderedUsers.keys()];
+      const tabReports = [];
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        let r = null;
+        try {
+          r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames });
+        } catch (e) { r = { error: e.message }; }
+        tabReports.push({ url: tab.url, ok: !!r?.ok, colors: r?.colors || null, error: r?.error });
+      }
+      push('Twitch DOM color snapshot per open tab', tabReports);
+    } catch (e) {
+      push('tabs query error', e.message);
+    }
+
+    // Recent messages snapshot — last 30 msgs with key flags
+    const recent = (this._msgCache || []).slice(-30).map((m) => ({
+      ts: m.timestamp,
+      platform: m.platform,
+      username: m.username,
+      color: m.color,
+      hasReplyTo: !!m.replyTo,
+      hasTwitchEmotes: !!m.twitchEmotes,
+      twitchEmotesOffset: m.twitchEmotesOffset,
+      isRedeem: !!m.isRedeem,
+      isAnnouncement: !!m.isAnnouncement,
+      isSubEvent: !!m.isSubEvent,
+      isGiftBundle: !!m.isGiftBundle,
+      isSubGift: !!m.isSubGift,
+      msgPreview: (m.message || '').slice(0, 80),
+    }));
+    push('Last 30 cached messages (slim)', recent);
+
+    return out.join('\n\n');
+  }
+
   _handleHighlights(msg) {
     // Channel-scoped: ignore highlights from other open Twitch tabs.
     if (msg.channel && msg.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
