@@ -5131,8 +5131,28 @@ class UnityChat {
       bitsPill.classList.add('hidden');
     }
     if (data.points != null && data.points !== '') {
-      this._lastPointsText = data.points;
+      // Twitch occasionally swaps the points-balance slot for the watch-streak
+      // widget ("Den 3" / "3 nights streak" / custom copy). That text isn't a
+      // points balance — if we mirror it we show garbage. Gate on: either a
+      // parseable number, or a short string matching "NNN", "N,NN tis.",
+      // "NK", etc. Anything else is treated as transient and dropped.
+      const looksLikeBalance = /^[\d\u00A0\s.,]+(?:\s*(?:tis|k|mil|m)\.?)?$/i.test(data.points);
+      if (looksLikeBalance) {
+        this._lastPointsText = data.points;
+      } else {
+        // Log rejected points values so we can identify what Twitch is
+        // rendering in the slot (watch-streak / sub-streak / etc.) and
+        // later add dedicated handling if needed.
+        try {
+          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'StreakSkip',
+            text: `non-balance points text="${String(data.points).slice(0, 80)}" channel=${data.channel || '—'}` }).catch(() => {});
+        } catch {}
+      }
+      // Explicit null/empty icon from content script → new channel without
+      // a custom icon. Clear the stored icon so the render path below can
+      // reset the DOM to the default (no background image, no has-icon).
       if (data.pointsIcon) this._lastPointsIcon = data.pointsIcon;
+      else if (data.pointsIcon === null || data.pointsIcon === '') this._lastPointsIcon = null;
     }
     if (this._lastPointsText != null) {
       // Parse numeric value to detect increases (+10 watch reward, +N from
@@ -5162,6 +5182,13 @@ class UnityChat {
       if (this._lastPointsIcon) {
         pointsIcon.style.backgroundImage = `url(${this.emotes._ea(this._lastPointsIcon)})`;
         pointsIcon.classList.add('has-icon');
+      } else {
+        // Channel has no custom points icon (e.g. after auto-switch to a
+        // streamer who never set one). Clear any leftover backgroundImage
+        // + class from the previous channel so the default circle glyph
+        // (styled on .tc-points-icon in CSS) shows through.
+        pointsIcon.style.backgroundImage = '';
+        pointsIcon.classList.remove('has-icon');
       }
       pointsPill.classList.remove('hidden');
       anyShown = true;
