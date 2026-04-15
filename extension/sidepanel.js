@@ -4134,14 +4134,76 @@ class UnityChat {
     if (!this._colorQueue || !this._colorQueue.size) return;
     const batch = [...this._colorQueue].slice(0, 100);
     for (const u of batch) this._colorQueue.delete(u);
+
+    // Phase 1: try DOM scrape on any open Twitch tab first. Rendered
+    // colors already reflect whatever the vanilla chat picked (real Twitch
+    // chat color including user-set hex, not a hash palette guess) and the
+    // lookup is free (no network). Only usernames still missing after this
+    // fall through to GQL.
+    const domColors = {};
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://*.twitch.tv/*' });
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        const missing = batch.filter((u) => !domColors[u]);
+        if (!missing.length) break;
+        let r;
+        try {
+          r = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_COLORS', usernames: missing });
+        } catch { continue; }
+        if (r?.ok && r.colors) Object.assign(domColors, r.colors);
+      }
+    } catch { /* tabs perm or no matching tab */ }
+
+    // Apply DOM-resolved colors and drop them from the GQL batch.
+    const pendingGql = [];
+    for (const login of batch) {
+      const col = domColors[login];
+      if (!col) { pendingGql.push(login); continue; }
+      const key = `twitch:${login}`;
+      const prev = this._chatUsers.get(key);
+      const entry = {
+        name: prev?.name || login,
+        platform: 'twitch',
+        color: col,
+        badgesRaw: prev?.badgesRaw || '',
+        userId: prev?.userId || null,
+        _paint: prev?._paint,
+        _paintChecked: prev?._paintChecked || false,
+        _fromGQL: true,
+      };
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(login, entry);
+      const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+      for (const un of this.chatEl.querySelectorAll(sel)) {
+        const msgId = un.closest('.msg')?.dataset.msgId;
+        const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+        const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+        if (ucProfile?.color) continue;
+        un.style.color = readableColor(col);
+      }
+    }
+    if (!pendingGql.length) {
+      if (this._colorQueue.size > 0) {
+        this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 1500);
+      }
+      if (!this._userColorTimer) {
+        this._userColorTimer = setTimeout(() => {
+          this._userColorTimer = null;
+          chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+        }, 1500);
+      }
+      return;
+    }
+
     let resp;
     try {
-      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: batch });
+      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: pendingGql });
     } catch { return; }
     if (!resp?.ok || !resp.users) return;
 
     let dirty = false;
-    for (const login of batch) {
+    for (const login of pendingGql) {
       const info = resp.users[login] || {};
       const color = info.color;
       const userId = info.id;

@@ -126,6 +126,15 @@
       return true;
     }
 
+    if (msg.type === 'GET_DOM_COLORS') {
+      try {
+        sendResponse({ ok: true, colors: getDomColors(msg.usernames || []) });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+      return;
+    }
+
     if (msg.type === 'SCRAPE_CHAT') {
       try {
         sendResponse({ ok: true, messages: scrapeMessages() });
@@ -142,6 +151,32 @@
       return true;
     }
   });
+
+  // Resolve rendered username colors from the live Twitch/7TV chat DOM. The
+  // .seventv-chat-user wrapper carries an inline style="color: rgb(...)" that
+  // reflects whatever color Twitch+7TV decided on (Twitch's real chat color,
+  // including any user-custom hex — this is stricter than hash palette guesses).
+  function getDomColors(usernames) {
+    const want = new Set((usernames || []).map((u) => String(u).toLowerCase()));
+    if (!want.size) return {};
+    const out = {};
+    // 7TV path
+    document.querySelectorAll('.seventv-chat-user').forEach((el) => {
+      const uEl = el.querySelector('.seventv-chat-user-username');
+      const name = (uEl?.textContent || '').trim().toLowerCase();
+      if (!name || !want.has(name) || out[name]) return;
+      const col = el.style.color;
+      if (col) out[name] = col;
+    });
+    // Native Twitch path: .chat-author__display-name carries inline color
+    document.querySelectorAll('.chat-author__display-name, [data-a-target="chat-message-username"]').forEach((el) => {
+      const name = (el.textContent || '').trim().toLowerCase();
+      if (!name || !want.has(name) || out[name]) return;
+      const col = el.style.color;
+      if (col) out[name] = col;
+    });
+    return out;
+  }
 
   function scrapeMessages() {
     const messages = [];
