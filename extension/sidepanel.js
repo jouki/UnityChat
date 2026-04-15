@@ -4806,6 +4806,53 @@ class UnityChat {
       if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
       textNode.parentNode.replaceChild(frag, textNode);
     }
+
+    // Pass 2: bare-name mentions (no @ prefix). Scan remaining text nodes
+    // and wrap any whole word that matches an existing chatter in
+    // _chatUsers — restricted so we don't accidentally color generic
+    // words. Plain key check is enough because _chatUsers only contains
+    // entries for users we've actually seen (chat history + scrape +
+    // queued mentions), so common Czech/English words don't collide.
+    const bareRe = /[A-Za-z0-9_]{3,25}/g;
+    const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes2 = [];
+    let n2;
+    while ((n2 = walker2.nextNode())) {
+      // Skip text nodes already inside a .mention (don't re-wrap @mentions)
+      if (n2.parentNode?.classList?.contains('mention')) continue;
+      nodes2.push(n2);
+    }
+    for (const textNode of nodes2) {
+      const text = textNode.nodeValue;
+      if (!text) continue;
+      bareRe.lastIndex = 0;
+      let match;
+      let last = 0;
+      let frag = null;
+      while ((match = bareRe.exec(text)) !== null) {
+        const word = match[0];
+        const lname = word.toLowerCase();
+        const entry = this._chatUsers.get(`${platform}:${lname}`)
+          || this._chatUsers.get(lname);
+        // Require a chatter entry — and skip the message author itself
+        // (their own username appears literally inside the message body
+        // on /me lines, no need to "mention" themselves).
+        if (!entry || !entry.color) continue;
+        if (!frag) frag = document.createDocumentFragment();
+        if (match.index > last) frag.appendChild(document.createTextNode(text.substring(last, match.index)));
+        const span = document.createElement('span');
+        span.className = 'mention bare';
+        span.dataset.mentionUser = lname;
+        const sanitized = this.emotes._sc(entry.color);
+        if (sanitized) span.style.color = readableColor(sanitized);
+        span.textContent = word;
+        frag.appendChild(span);
+        last = match.index + word.length;
+      }
+      if (!frag) continue;
+      if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
   }
 
   // ---- Emote preview card (hover quick / click pinned + details) -------
