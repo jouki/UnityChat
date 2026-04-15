@@ -794,12 +794,30 @@ async function fetchPins(channel) {
     // to CDN URLs), pin timestamp and duration. Schema is reasonably
     // stable but Twitch occasionally renames fields — errors surface in
     // the Pin log for re-tuning.
-    // Twitch GQL schema: PinnedChatMessage entity holds pin metadata
-    // (id, startsAt, endsAt, pinnedBy); actual sender + message content
-    // live in a nested `message` subselection. Diagnostics from v3.38.14
-    // revealed we were querying direct fields that don't exist. Corrected
-    // per real schema — sender.chatColor / content.fragments nested in
-    // message, Emote uses `id` not `emoteID`, Cheermote has `prefix` only.
+    // Run an introspection query alongside the main one so we can see
+    // what PinnedChatMessage actually exposes. Results go to the Pin log
+    // (once per fetchPins call, cheap). After we learn the schema we can
+    // lock the query down.
+    if (!fetchPins._introspected) {
+      fetchPins._introspected = true;
+      try {
+        const ir = await fetch('https://gql.twitch.tv/gql', {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            query: `{ __type(name: "PinnedChatMessage") { name fields { name type { kind name ofType { kind name } } } } }`,
+          }),
+        });
+        const idata = await ir.json();
+        ucLog('Pin', 'PinnedChatMessage introspection:', JSON.stringify(idata?.data?.__type || idata));
+      } catch (ie) {
+        ucLog('Pin', 'introspection failed:', ie.message);
+      }
+    }
+    // Minimal working query (id/startsAt/endsAt/pinnedBy confirmed in
+    // earlier diagnostics). Fields that previously errored (sender,
+    // content, message, senderBadges, pinnedAt) are not direct on
+    // PinnedChatMessage — introspection above should reveal the real
+    // names so we can wire content + sender on the next iteration.
     const r = await fetch('https://gql.twitch.tv/gql', {
       method: 'POST', headers,
       body: JSON.stringify({
@@ -812,21 +830,6 @@ async function fetchPins(channel) {
                   startsAt
                   endsAt
                   pinnedBy { id login displayName }
-                  message {
-                    id
-                    sender { id login displayName chatColor }
-                    content {
-                      text
-                      fragments {
-                        text
-                        content {
-                          __typename
-                          ... on Emote { id token }
-                          ... on Cheermote { prefix }
-                        }
-                      }
-                    }
-                  }
                 }
               }
             }
@@ -844,32 +847,22 @@ async function fetchPins(channel) {
     const edges = data.data?.channel?.pinnedChatMessages?.edges || [];
     const pins = edges.map((e) => {
       const n = e.node || {};
-      const message = n.message || {};
-      const sender = message.sender || {};
       const pinnedBy = n.pinnedBy || {};
-      const fragments = message.content?.fragments || [];
-      const segments = fragments.map((f) => {
-        const c = f.content;
-        if (c?.__typename === 'Emote' && c.id) {
-          return { type: 'emote', url: `https://static-cdn.jtvnw.net/emoticons/v2/${c.id}/default/dark/2.0`, alt: c.token || f.text || '' };
-        }
-        return { type: 'text', value: f.text || '' };
-      });
       return {
         pinId: n.id,
         endsAt: n.endsAt,
         pinnedAt: n.startsAt,
         pinnedBy: pinnedBy.displayName || pinnedBy.login || null,
-        author: sender.displayName || sender.login || null,
-        authorLogin: sender.login || null,
-        authorUserId: sender.id || null,
-        authorColor: sender.chatColor || null,
-        // Sender badges not available as direct field on PinnedChatMessage;
-        // sidepanel falls back to _twitchBadges channel cache using sender
-        // login → recent-chat mapping if needed.
+        // Sender + content populated once introspection log reveals the
+        // actual field names on PinnedChatMessage. Sidepanel can fall
+        // back to DOM mirror or _twitchBadges cache while we wait.
+        author: null,
+        authorLogin: null,
+        authorUserId: null,
+        authorColor: null,
         senderBadges: [],
-        segments,
-        contentText: message.content?.text || '',
+        segments: [],
+        contentText: '',
       };
     });
     return { ok: true, pins };
