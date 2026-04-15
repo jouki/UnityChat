@@ -492,8 +492,11 @@
           }
           if (retryAt.has(attempts)) { log('phase1-reclick', { attempts }); rec(); }
           if (attempts < maxPhase1) { setTimeout(checkDialog, 50); return; }
-          // Phase 2 fallback: popover didn't open — lift hide briefly,
-          // re-dispatch click, poll again, portal + re-hide.
+          // Phase 2 fallback: popover didn't open with the chat still
+          // hidden — lift hide, WAIT for the chat column to actually
+          // re-flow with real width (otherwise React popover mounts
+          // inside a 0-width parent and its bounding rect stays 0),
+          // then re-click, then poll, portal, re-hide.
           log('fallback-lift', { attempts });
           if (wasHidden) {
             const style = document.getElementById(UC_HIDE_STYLE_ID);
@@ -503,18 +506,25 @@
                 el.classList.add(t.modifier);
               }
             }
+            // Force a sync reflow so next rAF reads real dimensions.
+            void document.body.offsetHeight;
           }
-          // Re-click after lift
-          try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
-          const rb = btn.getBoundingClientRect();
-          const cx = rb.left + rb.width / 2, cy = rb.top + rb.height / 2;
-          const mopts = (extra = {}) => ({ bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: window, button: 0, buttons: 1, ...extra });
-          try { btn.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts() })); } catch {}
-          try { btn.dispatchEvent(new MouseEvent('mousedown', mopts())); } catch {}
-          try { btn.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts({ buttons: 0 }) })); } catch {}
-          try { btn.dispatchEvent(new MouseEvent('mouseup', mopts({ buttons: 0 }))); } catch {}
-          try { btn.dispatchEvent(new MouseEvent('click', mopts({ buttons: 0 }))); } catch {}
-          try { btn.click(); } catch {}
+
+          // Wait ~150ms (2 animation frames + pad) for the chat column
+          // to settle with real width before dispatching the click.
+          const doClickAndPoll = () => {
+            try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch {}
+            const rb = btn.getBoundingClientRect();
+            const cx = rb.left + rb.width / 2, cy = rb.top + rb.height / 2;
+            const mopts = (extra = {}) => ({ bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: window, button: 0, buttons: 1, ...extra });
+            try { btn.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts() })); } catch {}
+            try { btn.dispatchEvent(new MouseEvent('mousedown', mopts())); } catch {}
+            try { btn.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, pointerType: 'mouse', isPrimary: true, ...mopts({ buttons: 0 }) })); } catch {}
+            try { btn.dispatchEvent(new MouseEvent('mouseup', mopts({ buttons: 0 }))); } catch {}
+            try { btn.dispatchEvent(new MouseEvent('click', mopts({ buttons: 0 }))); } catch {}
+            try { btn.click(); } catch {}
+          };
+          setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(doClickAndPoll)), 150);
 
           let attempts2 = 0;
           const checkDialog2 = () => {
