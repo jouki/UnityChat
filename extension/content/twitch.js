@@ -866,8 +866,21 @@
   function snapshotCredits() {
     const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
     if (!summary) return null;
-    const bitsEl = summary.querySelector('[data-test-selector="bits-balance-string"]');
-    const pointsEl = summary.querySelector('[data-test-selector="copo-balance-string"]');
+    // Multiple known selectors — Twitch's class hashes change but the
+    // data-test-selector attrs are reasonably stable. We also fall back to
+    // looking at the .ScAnimatedNumber-* spans inside the summary in
+    // document order: convention is bits first, then channel-points.
+    const bitsEl = summary.querySelector('[data-test-selector="bits-balance-string"], [data-a-target="bits-balance-text"]');
+    let pointsEl = summary.querySelector('[data-test-selector="copo-balance-string"], [data-a-target="copo-balance-text"]');
+    if (!pointsEl) {
+      const animSpans = summary.querySelectorAll('[class*="ScAnimatedNumber"]');
+      // Skip the bits one if we found it
+      for (const s of animSpans) {
+        if (bitsEl && bitsEl.contains(s)) continue;
+        pointsEl = s;
+        break;
+      }
+    }
     const iconEl = summary.querySelector('img.image--D5HXC, img[src*="channel-points-icons"]');
     // Claim-bonus button: appears periodically as a visible button near
     // the points summary with aria-label like "Claim Bonus" / "Vyzvédněte
@@ -922,7 +935,12 @@
       }, 400);
     });
     creditsObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-    setTimeout(relayCredits, 1500);
+    // Twitch lazy-loads the community-points-summary subtree (and the
+    // points balance often arrives a beat later than bits). Stagger
+    // several early scrapes so we don't get stuck on a partial snapshot
+    // when the MutationObserver settled on something else (e.g. the
+    // page added many unrelated nodes between balance updates).
+    [800, 2000, 4000, 8000, 16000].forEach((ms) => setTimeout(relayCredits, ms));
   }
 
   function setupHighlightsObserver() {
