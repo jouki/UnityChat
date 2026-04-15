@@ -5103,19 +5103,19 @@ class UnityChat {
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const prev = this._chatUsers.get(colorKey);
-      // Preserve _fromGQL flag across message updates so we don't re-query a
-      // user we've already resolved. If a new IRC message arrives for a user
-      // whose color was resolved via GQL AND this message has no explicit
-      // color tag (i.e. we're only producing hash fallback), keep the GQL
-      // color — otherwise we'd clobber the correct value with a local guess.
-      const keepGqlColor = prev?._fromGQL && msg._needsColorLookup;
-      const resolvedColor = keepGqlColor ? prev.color : msg.color;
+      // CRITICAL: once we've resolved a user's color via DOM/GQL (the value
+      // already includes Twitch's readability/7TV boost), never downgrade
+      // back to the raw IRC color — even if msg.color is "set" by IRC.
+      // The DOM ground truth IS the rendered color; raw IRC #008000 is just
+      // user input that Twitch+7TV further adjust on display.
+      const resolvedColor = prev?._fromGQL ? (prev.color || msg.color) : msg.color;
       const entry = {
+        ...(prev || {}),
         name: msg.username,
         platform: msg.platform,
         color: resolvedColor,
         badgesRaw: msg.badgesRaw || prev?.badgesRaw || '',
-        _fromGQL: prev?._fromGQL || false,
+        userId: msg.userId || prev?.userId || null,
       };
       if (!prev || prev.color !== resolvedColor || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
         this._chatUsers.set(colorKey, entry);
@@ -5734,11 +5734,21 @@ class UnityChat {
       chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
     }
 
-    // Update _chatUsers with the correct color from the real message
+    // Update _chatUsers with the correct color from the real message —
+    // preserve any DOM/GQL-resolved color/paint state so we don't downgrade.
     if (realMsg.color && realMsg.username) {
       const colorKey = `${realMsg.platform}:${realMsg.username.toLowerCase()}`;
-      this._chatUsers.set(colorKey, { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
-      this._chatUsers.set(realMsg.username.toLowerCase(), { name: realMsg.username, platform: realMsg.platform, color: realMsg.color });
+      const plainKey = realMsg.username.toLowerCase();
+      const prev = this._chatUsers.get(colorKey);
+      const entry = {
+        ...(prev || {}),
+        name: realMsg.username,
+        platform: realMsg.platform,
+        color: prev?._fromGQL ? (prev.color || realMsg.color) : realMsg.color,
+        userId: realMsg.userId || prev?.userId || null,
+      };
+      this._chatUsers.set(colorKey, entry);
+      this._chatUsers.set(plainKey, entry);
       const myName = (this._platformUsernames[realMsg.platform] || this.config.username || '').toLowerCase();
       if (myName && realMsg.username.toLowerCase() === myName) {
         this._savePlatformColor(realMsg.platform, realMsg.color);
