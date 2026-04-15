@@ -17,7 +17,7 @@ const DEFAULTS = {
   kick: true,
   // Soft render cap — chat should hold ~72h of activity, cache is the source
   // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
-  maxMessages: 5000,
+  maxMessages: 500,
   username: '',
   layout: 'small',
   showTimestamps: true,
@@ -2488,9 +2488,11 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
-      // One-time migration: older configs have maxMessages=500 baked in, bump
-      // them to the new default so existing users benefit from the 72h cache.
-      if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
+      // v3.38.1 migration: the v3.24.24 bump to 5000 caused 77s synchronous
+      // cache-hydration blocks (measured in prod logs). Force configs back
+      // down to the current DEFAULT cap so existing users aren't stuck with
+      // an unusable boot time.
+      if ((this.config.maxMessages || 0) > DEFAULTS.maxMessages) {
         this.config.maxMessages = DEFAULTS.maxMessages;
         this._saveConfig();
       }
@@ -6850,13 +6852,30 @@ class UnityChat {
         return body || platformContent || isSystem;
       });
 
-      // Load each message individually — don't let one bad message kill the rest
-      for (const msg of msgs) {
-        try { this._addMessage(this._expandMsg(msg)); } catch {}
+      // Trim to maxMessages so we never render more than the user-configured
+      // cap. Previous behaviour rendered the entire TTL-filtered set (could
+      // be 5000+ on long sessions) synchronously — measured 77s of blocked
+      // main thread on a 5000-msg hydration which tripped the boot watchdog.
+      const cap = this.config.maxMessages || 500;
+      const toRender = msgs.slice(-cap);
+      this._msgCache = toRender;
+
+      // Chunked insert: yield to the event loop every CHUNK msgs so the UI
+      // thread can paint, scroll, and respond to clicks during hydration.
+      // Tradeoff: first batch is visible fast, remaining batches trickle in
+      // over ~1-2s instead of blocking for tens of seconds.
+      const CHUNK = 40;
+      const yieldNow = () => new Promise((r) => {
+        if (typeof requestIdleCallback === 'function') requestIdleCallback(() => r(), { timeout: 50 });
+        else setTimeout(r, 0);
+      });
+      for (let i = 0; i < toRender.length; i += CHUNK) {
+        const end = Math.min(i + CHUNK, toRender.length);
+        for (let j = i; j < end; j++) {
+          try { this._addMessage(this._expandMsg(toRender[j])); } catch {}
+        }
+        if (end < toRender.length) await yieldNow();
       }
-      // Merge with _msgCache (which _cacheMsg may have already populated during _addMessage)
-      // Use the raw filtered messages as the authoritative cache
-      this._msgCache = msgs;
 
       // Populate message history from cached user messages (for ArrowUp/Down)
       // Match all known username variants + UC-marked messages
@@ -6865,7 +6884,7 @@ class UnityChat {
       for (const name of Object.values(this._platformUsernames)) {
         if (name) myNames.add(name.toLowerCase());
       }
-      for (const m of msgs) {
+      for (const m of toRender) {
         if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
           const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
           if (text) this._msgHistory.push(text);
