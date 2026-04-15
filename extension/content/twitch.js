@@ -182,28 +182,36 @@
       const colorEl = line.querySelector('.seventv-chat-user, [data-a-user]') || userEl;
       const color = colorEl?.style?.color || '#9146ff';
 
-      // Body - zkusit více selektorů, include emote alt text
-      const bodyEl = line.querySelector(
-        '.seventv-message-body, .text-fragment, [data-a-target="chat-message-text"], ' +
+      // Walk DOM (include img alt text — emotes are <img> with alt=emoteName)
+      const walk = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          if (node.tagName === 'IMG') return ' ' + (node.alt || '') + ' ';
+          let t = '';
+          for (const c of node.childNodes) t += walk(c);
+          return t;
+        }
+        return '';
+      };
+
+      // Body: prefer outermost message container (has ALL fragments as children).
+      // Twitch native chat splits message into multiple .text-fragment + .mention-fragment
+      // spans — picking just the first one (querySelector default) would truncate.
+      let text = '';
+      const container = line.querySelector(
+        '.seventv-message-body, [data-a-target="chat-message-text"], ' +
         '[class*="message-body"], [class*="message-content"]'
       );
-      let text = '';
-      if (bodyEl) {
-        // Walk DOM to include img alt text (emotes are <img> with alt=emoteName)
-        const walk = (node) => {
-          if (node.nodeType === Node.TEXT_NODE) return node.textContent;
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            if (node.tagName === 'IMG') return ' ' + (node.alt || '') + ' ';
-            let t = '';
-            for (const c of node.childNodes) t += walk(c);
-            return t;
-          }
-          return '';
-        };
-        text = walk(bodyEl).replace(/\s+/g, ' ').trim();
+      if (container) {
+        text = walk(container);
+      } else {
+        // No container — concatenate all known fragment types in document order.
+        const frags = line.querySelectorAll('.text-fragment, .mention-fragment, [class*="text-fragment"]');
+        for (const f of frags) text += walk(f);
       }
+      text = text.replace(/\s+/g, ' ').trim();
 
-      // Fallback - vzít celý text linky a odečíst username
+      // Last-resort fallback: full line text minus username.
       if (!text) {
         const fullText = (line.textContent || '').trim();
         text = fullText.replace(username, '').replace(/^[\s:]+/, '').trim();

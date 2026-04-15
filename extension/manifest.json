@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.23.12",
+  "version": "3.24.28",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",
@@ -81,6 +81,10 @@
     {
       "resources": ["icons/icon16.png", "icons/icon48.png", "icons/icon128.png"],
       "matches": ["*://*.twitch.tv/*", "*://*.youtube.com/*"]
+    },
+    {
+      "resources": ["streamer.html"],
+      "matches": ["https://jouki.cz/*", "https://api.jouki.cz/*"]
     }
   ]
 }

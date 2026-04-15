@@ -153,6 +153,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  if (msg.type === 'GET_CHAT_COLORS') {
+    fetchChatColors(msg.usernames || [])
+      .then((users) => sendResponse({ ok: true, users }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
   if (msg.type === 'LOAD_BADGES') {
     ucLog('Badges', 'Loading for channel:', msg.channel, 'roomId:', msg.roomId);
     loadTwitchBadges(msg.channel, msg.roomId)
@@ -233,23 +239,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: async (slug, text) => {
+      func: async (slug, text, replyMeta) => {
         try {
           const ch = await (await fetch('/api/v2/channels/' + encodeURIComponent(slug))).json();
           const cid = ch?.chatroom?.id;
           if (!cid) return { ok: false, error: 'Chatroom nenalezen' };
           const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||'');
+          const body = replyMeta
+            ? {
+                content: text,
+                type: 'reply',
+                metadata: {
+                  original_message: { id: replyMeta.messageId, content: replyMeta.message || '' }
+                }
+              }
+            : { content: text, type: 'message' };
           const r = await fetch('/api/v2/messages/send/' + cid, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
-            body: JSON.stringify({ content: text, type: 'message' })
+            body: JSON.stringify(body)
           });
           if (r.ok) return { ok: true };
           if (r.status === 403) return { ok: false, error: 'Nejsi přihlášen na Kick' };
-          return { ok: false, error: 'HTTP ' + r.status };
+          const bodyText = await r.text().catch(() => '');
+          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}` };
         } catch (e) { return { ok: false, error: e.message }; }
       },
-      args: [msg.slug, msg.text]
+      args: [msg.slug, msg.text, msg.replyMeta || null]
     }).then(results => {
       sendResponse(results?.[0]?.result || { ok: false, error: 'executeScript failed' });
     }).catch(e => sendResponse({ ok: false, error: e.message }));
@@ -263,6 +279,46 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// Fetch Twitch chat colors for up to 100 logins in one GQL request using
+// field aliases (Twitch's `user(login:)` doesn't accept a list). chatColor
+// is a public field — works without auth-token. Returns {loginLower: '#hex'}.
+async function fetchChatColors(usernames) {
+  if (!Array.isArray(usernames) || !usernames.length) return {};
+  const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  const cookie = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+  const headers = {
+    'Client-Id': CLIENT_ID,
+    'Content-Type': 'application/json',
+    ...(cookie?.value ? { Authorization: 'OAuth ' + cookie.value } : {}),
+  };
+  const logins = [...new Set(usernames.map((u) => String(u).toLowerCase().replace(/^@/, '')))]
+    .filter((u) => /^[a-z0-9_]{1,25}$/.test(u))
+    .slice(0, 100);
+  if (!logins.length) return {};
+
+  const varDefs = logins.map((_, i) => `$l${i}: String!`).join(', ');
+  const aliases = logins.map((_, i) => `u${i}: user(login: $l${i}) { id login chatColor }`).join(' ');
+  const query = `query (${varDefs}) { ${aliases} }`;
+  const variables = Object.fromEntries(logins.map((l, i) => [`l${i}`, l]));
+
+  const r = await fetch('https://gql.twitch.tv/gql', {
+    method: 'POST', headers,
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await r.json().catch(() => ({}));
+  const data = json?.data || {};
+  // Returns { login: { color, id } } — caller uses color for rendering and
+  // id to kick off 7TV paint resolution for users whose msg objects didn't
+  // carry a user-id (e.g. cached/scraped messages from an older schema).
+  const out = {};
+  for (const k of Object.keys(data)) {
+    const u = data[k];
+    if (!u?.login) continue;
+    out[u.login.toLowerCase()] = { color: u.chatColor || null, id: u.id || null };
+  }
+  return out;
+}
 
 async function loadTwitchBadges(channel, roomId) {
   const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';

@@ -15,9 +15,12 @@ const DEFAULTS = {
   twitch: true,
   youtube: true,
   kick: true,
-  maxMessages: 500,
+  // Soft render cap — chat should hold ~72h of activity, cache is the source
+  // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
+  maxMessages: 5000,
   username: '',
-  layout: 'small'
+  layout: 'small',
+  showTimestamps: true,
 };
 
 // =============================================================
@@ -114,6 +117,71 @@ class EmoteManager {
       }
     } catch {}
     console.log(`[BTTV] ${count} emotes loaded`);
+    return count;
+  }
+
+  loadTwitchGlobals() {
+    // Popular Twitch global emotes (ID → token). Pre-populated for autocomplete.
+    const globals = {
+      '25': 'Kappa', '354': '4Head', '86': 'BibleThump', '1902': 'Keepo',
+      '425618': 'LUL', '41': 'Kreygasm', '305954156': 'PogChamp', '88': 'PogChamp',
+      '52': 'SMOrc', '360': 'FailFish', '245': 'ResidentSleeper',
+      '64138': 'SeemsGood', '65': 'FrankerZ', '148793': 'BlessRNG',
+      '171104': 'TriHard', '28087': 'WutFace', '58765': 'NotLikeThis',
+      '81274': 'VoHiYo', '55339': 'KappaHD', '55338': 'KappaPride',
+      '30259': 'HeyGuys', '90076': 'PJSalt', '4339': 'EleGiggle',
+      '114836': 'Jebaited', '115234': 'OpieOP', '68856': 'MingLee',
+      '74510': 'OMGScoots', '307609315': 'Prayge', '196892': 'TwitchUnity',
+      '160394': 'PunchTrees', '120232': 'MrDestructoid', '69': 'PJSugar',
+      '33': 'DansGame', '9803': 'CoolCat', '34': 'GingerPower',
+      '56': 'BatChest', '57': 'SwiftRage', '58': 'StoneLightning',
+      '59': 'TheRinger', '80': 'OpieOP', '81': 'DBstyle',
+      '112290': 'TheTarFu', '90': 'HassanChop', '305954156': 'PogChamp'
+    };
+    for (const [id, name] of Object.entries(globals)) {
+      if (!this.twitchNative.has(name)) {
+        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/1.0`);
+      }
+    }
+  }
+
+  async loadTwitchChannel(channelLogin) {
+    let count = 0;
+    try {
+      const resp = await fetch('https://gql.twitch.tv/gql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+        },
+        body: JSON.stringify({
+          query: `query($login: String!) {
+            user(login: $login) {
+              subscriptionProducts {
+                emotes { id token }
+              }
+            }
+          }`,
+          variables: { login: channelLogin }
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const products = data.data?.user?.subscriptionProducts || [];
+        for (const product of products) {
+          for (const e of (product.emotes || [])) {
+            if (e.token && !this.twitchNative.has(e.token)) {
+              this.twitchNative.set(e.token,
+                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/1.0`);
+              count++;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Twitch] Channel emotes error:', err);
+    }
+    console.log(`[Twitch] ${count} channel emotes loaded`);
     return count;
   }
 
@@ -250,13 +318,21 @@ class EmoteManager {
     const out = [];
     for (const seg of segments) {
       if (seg.type === 'emote') {
-        out.push(seg);
+        // 3rd party (7TV/BTTV/FFZ) overrides platform emotes
+        const thirdParty = this.channel7tv.get(seg.value) || this.global7tv.get(seg.value)
+          || this.bttvEmotes.get(seg.value) || this.ffzEmotes.get(seg.value);
+        if (thirdParty) {
+          out.push({ type: 'emote', value: seg.value, url: thirdParty, zw: this.zeroWidth.has(seg.value) });
+        } else {
+          out.push(seg);
+        }
         continue;
       }
-      // Rozdělit text na slova, zachovat mezery
+      // Text: 7TV/BTTV/FFZ → platform native → UC custom
       const parts = seg.value.split(/(\s+)/);
       for (const part of parts) {
-        const url = this._get7tv(part);
+        const url = this._get7tv(part)
+          || this.twitchNative.get(part) || this.kickNative.get(part);
         if (url) {
           out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
         } else {
@@ -452,7 +528,7 @@ class EmoteManager {
         // Whitespace between base and ZW emote — skip (don't close stack)
         if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
         if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        out.push(this._eh(s.value));
+        out.push(this._linkify(s.value));
         continue;
       }
       const alt = this._ea(s.value);
@@ -476,6 +552,23 @@ class EmoteManager {
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+  }
+
+  _linkify(s) {
+    const urlRe = /https?:\/\/[^\s<>'")\]]+/g;
+    let last = 0;
+    let out = '';
+    let m;
+    while ((m = urlRe.exec(s)) !== null) {
+      if (m.index > last) out += this._eh(s.substring(last, m.index));
+      const url = m[0].replace(/[.,;:!?]+$/, '');
+      urlRe.lastIndex = m.index + url.length;
+      out += `<a href="${this._ea(url)}" target="_blank" rel="noopener">${this._eh(url)}</a>`;
+      last = m.index + url.length;
+    }
+    if (last === 0) return this._eh(s);
+    if (last < s.length) out += this._eh(s.substring(last));
+    return out;
   }
 
   _ea(s) {
@@ -641,6 +734,22 @@ class NicknameManager {
 // Twitch IRC Provider
 // =============================================================
 
+// Twitch's default username-color palette — used by the vanilla web client
+// when a user hasn't picked a custom color. Order + algorithm RE'd from
+// Twitch source (matches what Chatty and tmi.js ship). Without this, every
+// colorless user renders in the same brand purple fallback.
+const TWITCH_DEFAULT_COLORS = [
+  '#FF0000', '#0000FF', '#008000', '#B22222', '#FF7F50',
+  '#9ACD32', '#FF4500', '#2E8B57', '#DAA520', '#D2691E',
+  '#5F9EA0', '#1E90FF', '#FF69B4', '#8A2BE2', '#00FF7F',
+];
+function twitchDefaultColor(username) {
+  if (!username) return '#9146ff';
+  const n = username.toLowerCase();
+  const sum = n.charCodeAt(0) + n.charCodeAt(n.length - 1);
+  return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
+}
+
 class TwitchProvider {
   constructor() {
     this.ws = null;
@@ -724,7 +833,8 @@ class TwitchProvider {
 
     let message = after.substring(ci + 1);
     const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
-    const color = tags.color || '#9146ff';
+    const ircColor = tags.color;
+    const color = ircColor || twitchDefaultColor(username);
 
     // Detect /me (CTCP ACTION): \x01ACTION text\x01
     let isAction = false;
@@ -766,6 +876,13 @@ class TwitchProvider {
       username,
       message: cleanMessage,
       color,
+      // When IRC didn't carry a color= tag we fell back to the hash palette.
+      // Signal that the listener should look up the real Twitch chat color
+      // via GQL so we can retro-apply it (hash may differ from the user's
+      // actual stored color assigned by Twitch).
+      _needsColorLookup: !ircColor,
+      // Twitch numeric user-id — needed to look up 7TV profile (nickname paint).
+      userId: tags['user-id'] || null,
       timestamp: Date.now(),
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
@@ -778,12 +895,14 @@ class TwitchProvider {
 
   _parseNotice(raw) {
     let tags = {};
+    let rest = raw;
     if (raw.startsWith('@')) {
       const si = raw.indexOf(' ');
       for (const t of raw.substring(1, si).split(';')) {
         const eq = t.indexOf('=');
         if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
       }
+      rest = raw.substring(si + 1);
     }
     const msgId = tags['msg-id'];
     if (msgId === 'raid') {
@@ -797,6 +916,35 @@ class TwitchProvider {
         timestamp: Date.now(),
         id: tags.id || crypto.randomUUID(),
         isRaid: true
+      });
+      return;
+    }
+    if (msgId === 'announcement') {
+      // USERNOTICE #channel :message text — grab the body after the command+channel.
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni === -1) return;
+      const after = rest.substring(uni + 10);
+      const ci = after.indexOf(':');
+      const message = ci !== -1 ? after.substring(ci + 1) : '';
+      if (!message) return;
+      const username = tags['display-name'] || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      // PRIMARY | BLUE | GREEN | ORANGE | PURPLE — used by CSS to pick accent color.
+      const ann = (tags['msg-param-color'] || 'PRIMARY').toUpperCase();
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message,
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isAnnouncement: true,
+        announcementColor: ann,
       });
     }
   }
@@ -908,8 +1056,28 @@ class KickProvider {
       if (data.type !== 'message' && data.type !== 'reply') return;
 
       const username = data.sender?.username || 'Unknown';
+      const senderId = data.sender?.id || null;
       const color = data.sender?.identity?.color || '#53fc18';
-      const content = data.content || '';
+      let content = data.content || '';
+
+      // Parse native Kick reply metadata
+      let replyTo = null;
+      if (data.type === 'reply' && data.metadata) {
+        const origMsg = data.metadata.original_message;
+        const origSender = data.metadata.original_sender;
+        if (origMsg && origSender) {
+          replyTo = {
+            id: origMsg.id,
+            username: origSender.username,
+            message: origMsg.content || null,
+            platform: 'kick'
+          };
+          // Strip leading @username prefix if Kick added one
+          const at = `@${origSender.username}`;
+          if (content.startsWith(at + ' ')) content = content.substring(at.length + 1);
+          else if (content.startsWith(at)) content = content.substring(at.length);
+        }
+      }
 
       const badges = [];
       if (data.sender?.is_broadcaster) badges.push('\uD83C\uDFA4');
@@ -919,12 +1087,14 @@ class KickProvider {
       this.onMessage?.({
         platform: 'kick',
         username,
+        senderId,
         kickContent: content, // surový HTML obsah pro EmoteManager
         message: this._textOnly(content), // plain text fallback
         color,
         badges,
         timestamp: Date.now(),
-        id: data.id || crypto.randomUUID()
+        id: data.id || crypto.randomUUID(),
+        replyTo
       });
     } catch {}
   }
@@ -1310,6 +1480,155 @@ class YouTubeProvider {
 }
 
 // =============================================================
+// 7TV Paints — cosmetic nickname styling (gradients / images / shadows)
+// =============================================================
+
+// Paint definitions are static — one global in-memory cache keyed by paint_id
+// so multiple users with the same paint share a single fetch. Survives auto-
+// switches because paints are not per-channel.
+const _7TV_PAINTS = new Map();
+
+// Decode 7TV's 32-bit RGBA integer (R<<24 | G<<16 | B<<8 | A) to a CSS color.
+// JSON surfaces these as signed ints for values with R >= 0x80, so coerce to
+// unsigned via `>>> 0` before shifting.
+function _7tvIntToRgba(n) {
+  if (n === null || n === undefined) return null;
+  const u = n >>> 0;
+  const r = (u >>> 24) & 0xff;
+  const g = (u >>> 16) & 0xff;
+  const b = (u >>> 8) & 0xff;
+  const a = ((u & 0xff) / 255).toFixed(3);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// Convert a 7TV paint definition into a CSS-ready style object. Supported
+// functions: LINEAR_GRADIENT, RADIAL_GRADIENT, URL (image). Drop shadows
+// stack into a `filter` string. Text fill is transparent so background-clip
+// reveals the paint across the glyph shapes.
+function _7tvPaintToCss(paint) {
+  if (!paint) return null;
+  const fn = paint.function || paint.kind || '';
+  const stops = (paint.stops || [])
+    .map((s) => {
+      const col = _7tvIntToRgba(s.color);
+      if (!col) return null;
+      const pos = (Number(s.at) * 100).toFixed(2) + '%';
+      return `${col} ${pos}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+
+  let background = null;
+  if (fn === 'LINEAR_GRADIENT' && stops) {
+    const angle = Number(paint.angle) || 0;
+    background = paint.repeat
+      ? `repeating-linear-gradient(${angle}deg, ${stops})`
+      : `linear-gradient(${angle}deg, ${stops})`;
+  } else if (fn === 'RADIAL_GRADIENT' && stops) {
+    const shape = paint.shape || 'ellipse';
+    background = paint.repeat
+      ? `repeating-radial-gradient(${shape} at center, ${stops})`
+      : `radial-gradient(${shape} at center, ${stops})`;
+  } else if (fn === 'URL' && paint.image_url) {
+    background = `url("${paint.image_url}") center / cover`;
+  } else if (paint.color !== null && paint.color !== undefined) {
+    // Solid paint — rare, but keep the code path honest.
+    const col = _7tvIntToRgba(paint.color);
+    if (col) background = col;
+  }
+  if (!background) return null;
+
+  let filter = '';
+  if (Array.isArray(paint.shadows) && paint.shadows.length) {
+    filter = paint.shadows
+      .map((s) => {
+        const col = _7tvIntToRgba(s.color) || 'rgba(0,0,0,0.5)';
+        const x = Number(s.x_offset) || 0;
+        const y = Number(s.y_offset) || 0;
+        const r = Number(s.radius) || 0;
+        return `drop-shadow(${x}px ${y}px ${r}px ${col})`;
+      })
+      .join(' ');
+  }
+
+  return { background, filter };
+}
+
+// Apply a paint CSS object to a DOM element (the .un username span). Writes
+// inline styles so we can coexist with and override the per-user `color`
+// set by the normal color resolver. Pass `null` css to strip a paint.
+function _7tvApplyPaintStyles(el, css) {
+  if (!el) return;
+  if (!css) {
+    el.style.background = '';
+    el.style.backgroundClip = '';
+    el.style.webkitBackgroundClip = '';
+    el.style.webkitTextFillColor = '';
+    el.style.filter = '';
+    return;
+  }
+  el.style.background = css.background;
+  el.style.backgroundClip = 'text';
+  el.style.webkitBackgroundClip = 'text';
+  el.style.webkitTextFillColor = 'transparent';
+  if (css.filter) el.style.filter = css.filter;
+}
+
+// 7TV's REST API doesn't expose per-paint GETs (/v3/cosmetics/paints/{id}
+// 404s). The only way to get paint definitions is a bulk GQL query that
+// returns all ~1000 paints in one shot (~300KB). We fire it lazily on the
+// first paint lookup and every caller shares the same in-flight promise.
+let _7TV_PAINTS_LOADED = false;
+let _7TV_PAINTS_LOADING = null;
+
+async function _7tvLoadAllPaints() {
+  if (_7TV_PAINTS_LOADED) return;
+  if (_7TV_PAINTS_LOADING) return _7TV_PAINTS_LOADING;
+  _7TV_PAINTS_LOADING = (async () => {
+    try {
+      const query = `{ cosmetics { paints { id kind name function color stops { at color } repeat angle shape image_url shadows { x_offset y_offset radius color } } } }`;
+      const r = await fetch('https://7tv.io/v3/gql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      const json = await r.json();
+      const paints = json?.data?.cosmetics?.paints || [];
+      for (const p of paints) if (p?.id) _7TV_PAINTS.set(p.id, p);
+      _7TV_PAINTS_LOADED = true;
+    } catch (e) {
+      // Allow a retry on next lookup
+      _7TV_PAINTS_LOADING = null;
+    }
+  })();
+  return _7TV_PAINTS_LOADING;
+}
+
+async function _7tvFetchPaint(paintId) {
+  if (!paintId) return null;
+  if (!_7TV_PAINTS_LOADED) await _7tvLoadAllPaints();
+  return _7TV_PAINTS.get(paintId) || null;
+}
+
+// Resolve the paint attached to a Twitch user via their Twitch numeric ID.
+// Returns the full paint definition (or null). Does NOT cache per-user —
+// that's the caller's job (via _chatUsers).
+async function _7tvFetchUserPaint(twitchUserId) {
+  if (!twitchUserId) return null;
+  try {
+    const r = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
+    if (!r.ok) return null;
+    const data = await r.json();
+    // Shape: { user: { style: { paint_id } } } or { style: { paint_id } }
+    const user = data?.user || data;
+    const paintId = user?.style?.paint_id;
+    return paintId ? _7tvFetchPaint(paintId) : null;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================
 // UnityChat - Hlavní aplikace
 // =============================================================
 
@@ -1333,7 +1652,9 @@ class UnityChat {
     this._seenContentKeys = new Set(); // pro scrape dedup (username + text)
     this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
+    this._isModOnChannel = false; // viewer has moderator/broadcaster badge on current Twitch channel
     this._platformColors = {};    // per-platform user color (from IRC/API)
+    this._syncedProfiles = new Set(); // platform:username pairs already synced with API
     this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
     this._msgHistory = [];         // sent message history (newest last)
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
@@ -1376,6 +1697,11 @@ class UnityChat {
     if (this.config._platformColors) {
       this._platformColors = { ...this.config._platformColors };
     }
+    try {
+      const r = await chrome.storage.local.get('uc_synced');
+      if (Array.isArray(r.uc_synced)) this._syncedProfiles = new Set(r.uc_synced);
+    } catch {}
+
     // Load persisted user colors
     try {
       const d = await chrome.storage.local.get('uc_user_colors');
@@ -1427,12 +1753,14 @@ class UnityChat {
     // Load emotes + badges FIRST so cached messages render with correct emotes/badges.
     // Use Promise.allSettled — one failing source shouldn't block the rest.
     try {
+      this.emotes.loadTwitchGlobals();
       await this.emotes.loadGlobal();
       if (this.config._roomId) {
         await Promise.allSettled([
           this.emotes.loadChannel('twitch', this.config._roomId),
           this.emotes.loadBTTV(this.config._roomId),
           this.emotes.loadFFZ(this.config._roomId),
+          this.emotes.loadTwitchChannel(this.config.channel),
           this._loadTwitchBadges(this.config._roomId)
         ]);
       }
@@ -1447,6 +1775,38 @@ class UnityChat {
     this._connectAll();
     console.log('[UC] init: connected, starting detect loop');
     this._detectLoop();
+    // Fire-and-forget update check against the public landing page manifest.
+    this._checkForUpdate().catch(() => {});
+  }
+
+  async _checkForUpdate() {
+    try {
+      const current = chrome.runtime.getManifest().version;
+      const resp = await fetch('https://jouki.cz/download/manifest.json', { cache: 'no-store' });
+      if (!resp.ok) return;
+      const remote = await resp.json();
+      const latest = remote?.version;
+      if (!latest || !this._isNewerVersion(latest, current)) return;
+      // Show update indicator
+      const wrap = document.getElementById('update-wrap');
+      const num = document.getElementById('ut-version-num');
+      if (wrap) wrap.classList.remove('hidden');
+      if (num) num.textContent = latest;
+    } catch {}
+  }
+
+  _isNewerVersion(remote, current) {
+    const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const a = parse(remote);
+    const b = parse(current);
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
   }
 
   // ---- Config ----
@@ -1455,6 +1815,12 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
+      // One-time migration: older configs have maxMessages=500 baked in, bump
+      // them to the new default so existing users benefit from the 72h cache.
+      if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
+        this.config.maxMessages = DEFAULTS.maxMessages;
+        this._saveConfig();
+      }
     } catch {}
   }
 
@@ -1469,9 +1835,9 @@ class UnityChat {
   _setupUI() {
     const $ = (id) => document.getElementById(id);
 
-    $('input-channel').value = this.config.channel;
-    $('input-kick-channel').value = this.config.kickChannel || this.config.channel;
-    $('input-yt-channel').value = this.config.ytChannel || this.config.channel;
+    $('input-channel').value = this.config.channel || '';
+    $('input-kick-channel').value = this.config.kickChannel || '';
+    $('input-yt-channel').value = this.config.ytChannel || '';
     $('input-username').value = this.config.username || '';
     // Pre-populate nickname from cache
     if (this.config.username) {
@@ -1491,6 +1857,17 @@ class UnityChat {
       this._saveConfig();
       this._applyLayout();
     });
+    // Timestamp visibility — CSS-only toggle, no re-render needed
+    const tsBox = $('chk-timestamps');
+    if (tsBox) {
+      tsBox.checked = this.config.showTimestamps !== false;
+      this._applyTimestampVisibility();
+      tsBox.addEventListener('change', () => {
+        this.config.showTimestamps = tsBox.checked;
+        this._saveConfig();
+        this._applyTimestampVisibility();
+      });
+    }
     // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
       this.msgInput.style.height = 'auto';
@@ -1574,9 +1951,11 @@ class UnityChat {
       }
       this._saveConfig();
     });
-    $('chk-twitch').checked = this.config.twitch;
-    $('chk-youtube').checked = this.config.youtube;
-    $('chk-kick').checked = this.config.kick;
+    // Platform checkboxes were removed — force all three on so cached configs
+    // with stale `false` values don't silently disable a platform.
+    this.config.twitch = true;
+    this.config.youtube = true;
+    this.config.kick = true;
 
     $('btn-popout').addEventListener('click', () => {
       chrome.windows.create({
@@ -1683,13 +2062,10 @@ class UnityChat {
     });
 
     $('btn-connect').addEventListener('click', () => {
-      this.config.channel = $('input-channel').value.trim() || DEFAULTS.channel;
-      this.config.kickChannel = $('input-kick-channel').value.trim() || this.config.channel;
-      this.config.ytChannel = $('input-yt-channel').value.trim() || this.config.channel;
+      this.config.channel = $('input-channel').value.trim();
+      this.config.kickChannel = $('input-kick-channel').value.trim();
+      this.config.ytChannel = $('input-yt-channel').value.trim();
       this.config.username = $('input-username').value.trim();
-      this.config.twitch = $('chk-twitch').checked;
-      this.config.youtube = $('chk-youtube').checked;
-      this.config.kick = $('chk-kick').checked;
       this._saveConfig();
       this._disconnectAll();
       this.emotes.channel7tv.clear();
@@ -1701,6 +2077,17 @@ class UnityChat {
       this.chatEl.innerHTML = '';
       this.msgCount = 0;
     });
+
+    // "Jsem streamer" button — opens streamer.html in a new tab.
+    // Stop propagation so click doesn't toggle the <details> section.
+    const imStreamerBtn = $('btn-im-streamer');
+    if (imStreamerBtn) {
+      imStreamerBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
+      });
+    }
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {
@@ -1797,16 +2184,21 @@ class UnityChat {
       }
       // Message history (ArrowUp/Down when no autocomplete is active)
       if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
-        e.preventDefault();
-        if (this._msgHistoryIdx === -1) {
-          // Start browsing — save current draft
+        if (this._msgHistoryIdx !== -1) {
+          e.preventDefault();
+          if (this._msgHistoryIdx > 0) this._msgHistoryIdx--;
+          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+          this.msgInput.setSelectionRange(0, 0);
+          return;
+        }
+        if (this._isCursorOnFirstLine()) {
+          e.preventDefault();
           this._msgHistoryDraft = this.msgInput.value;
           this._msgHistoryIdx = this._msgHistory.length - 1;
-        } else if (this._msgHistoryIdx > 0) {
-          this._msgHistoryIdx--;
+          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+          this.msgInput.setSelectionRange(0, 0);
+          return;
         }
-        this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-        return;
       }
       if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
         e.preventDefault();
@@ -1814,10 +2206,11 @@ class UnityChat {
           this._msgHistoryIdx++;
           this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
         } else {
-          // Past the end — restore draft
           this._msgHistoryIdx = -1;
           this.msgInput.value = this._msgHistoryDraft;
         }
+        const len = this.msgInput.value.length;
+        this.msgInput.setSelectionRange(len, len);
         return;
       }
       if (e.key === 'Escape') {
@@ -2024,6 +2417,30 @@ class UnityChat {
     if (el) el.classList.add('hidden');
   }
 
+  // ---- Cursor line detection ----
+
+  _isCursorOnFirstLine() {
+    const ta = this.msgInput;
+    if (ta.selectionStart === 0) return true;
+    if (!ta.value) return true;
+    if (!this._lineMirror) {
+      this._lineMirror = document.createElement('div');
+      this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
+      document.body.appendChild(this._lineMirror);
+    }
+    const m = this._lineMirror;
+    const cs = getComputedStyle(ta);
+    m.style.width = ta.clientWidth + 'px';
+    m.style.font = cs.font;
+    m.style.padding = cs.padding;
+    m.style.boxSizing = cs.boxSizing;
+    m.style.letterSpacing = cs.letterSpacing;
+    m.textContent = 'X';
+    const lineH = m.offsetHeight;
+    m.textContent = ta.value.substring(0, ta.selectionStart);
+    return m.offsetHeight <= lineH;
+  }
+
   // ---- Odesílání zpráv ----
 
   async _detectLoop() {
@@ -2069,6 +2486,7 @@ class UnityChat {
           this.config._platformUsernames[resp.platform] = name;
           this._saveConfig();
         }
+        this._syncProfile(resp.platform, name);
         // Update settings UI when username changes (or was missing on first detect)
         if (prev !== name && resp.platform === this.activePlatform) {
           const el = document.getElementById('input-username');
@@ -2092,9 +2510,261 @@ class UnityChat {
         if (el) el.value = resp.username;
         this._saveConfig();
       }
+
+      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano.
+      // Pokud content script nereaguje, detekujeme platformu z URL — auto-switch
+      // má fungovat i bez funkčního content scriptu.
+      if (tab.url) {
+        const p = resp?.platform || this._detectPlatformFromUrl(tab.url);
+        if (p) this._checkAutoSwitch(p, tab.url, resp?.channelHandle).catch(() => {});
+      }
     } catch {
       this._setActivePlatform(null);
     }
+  }
+
+  // ---- Auto-switch: detect current stream from tab URL, look up in
+  // streamer directory, re-point UnityChat to all 3 channels if known. ----
+
+  _parseChannelFromUrl(url, platform) {
+    try {
+      const u = new URL(url);
+      const host = u.hostname.toLowerCase();
+      const parts = u.pathname.toLowerCase().split('/').filter(Boolean);
+      if (platform === 'twitch') {
+        // Only main www.twitch.tv / m.twitch.tv — skip dev.twitch.tv, id.twitch.tv,
+        // api.twitch.tv, help.twitch.tv, etc. (those have non-channel paths that
+        // would leak false-positive stub records into the directory).
+        if (host !== 'www.twitch.tv' && host !== 'm.twitch.tv' && host !== 'twitch.tv') return null;
+        const excluded = new Set([
+          'directory', 'videos', 'search', 'p', 'turbo', 'prime', 'downloads',
+          'subscriptions', 'settings', 'login', 'signup', 'logout', 'friends',
+          'wallet', 'inventory', 'drops', 'moderator', 'user', 'videoproducer',
+        ]);
+        if (parts[0] === 'popout' && parts[1] && /^[a-z0-9_]+$/.test(parts[1])) return parts[1];
+        if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_]+$/.test(parts[0])) return parts[0];
+      }
+      if (platform === 'kick') {
+        if (host !== 'kick.com' && host !== 'www.kick.com') return null;
+        const excluded = new Set([
+          'categories', 'category', 'browse', 'following', 'subscriptions',
+          'search', 'dashboard', 'settings', 'login', 'signup', 'help',
+          'community-guidelines', 'careers', 'about', 'terms', 'privacy',
+        ]);
+        if (parts[0] && !excluded.has(parts[0]) && /^[a-z0-9_-]+$/.test(parts[0])) return parts[0];
+      }
+      if (platform === 'youtube') {
+        if (!host.endsWith('youtube.com') && host !== 'youtu.be') return null;
+        // Only @handle pages for now — /watch pages need content-script resolution.
+        if (parts[0]?.startsWith('@')) return parts[0].substring(1);
+      }
+    } catch {}
+    return null;
+  }
+
+  async _lookupStreamer(platform, handle) {
+    if (!this._streamerCache) this._streamerCache = new Map();
+    const key = `${platform}:${handle}`;
+    if (this._streamerCache.has(key)) return this._streamerCache.get(key);
+    try {
+      const resp = await fetch(`${UC_API}/streamers/lookup?platform=${platform}&handle=${encodeURIComponent(handle)}`);
+      if (resp.status === 404) {
+        this._streamerCache.set(key, null);
+        this._trimStreamerCache();
+        return null;
+      }
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const streamer = data.found ? data.streamer : null;
+      this._streamerCache.set(key, streamer);
+      this._trimStreamerCache();
+      return streamer;
+    } catch {
+      return null;
+    }
+  }
+
+  _trimStreamerCache() {
+    if (this._streamerCache.size > 20) {
+      const firstKey = this._streamerCache.keys().next().value;
+      this._streamerCache.delete(firstKey);
+    }
+  }
+
+  _sendSeenPing(platform, handle) {
+    // Fire-and-forget. Chat activation signal that creates a stub in DB.
+    fetch(`${UC_API}/streamers/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, handle }),
+    }).catch(() => {});
+  }
+
+  _detectPlatformFromUrl(url) {
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes('twitch.tv')) return 'twitch';
+      if (u.hostname.includes('kick.com')) return 'kick';
+      if (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be')) return 'youtube';
+    } catch {}
+    return null;
+  }
+
+  async _checkAutoSwitch(platform, tabUrl, contentHandle) {
+    if (!platform || !tabUrl) return;
+    let handle = this._parseChannelFromUrl(tabUrl, platform);
+    // YouTube /watch pages don't have channel handle in URL — use DOM-resolved
+    // handle from content script as fallback.
+    if (!handle && contentHandle) {
+      handle = String(contentHandle).toLowerCase().replace(/^@/, '');
+    }
+    if (!handle) return;
+
+    // Skip if the handle already matches our current config for this platform.
+    const currentConfigHandle = this._getConfiguredHandle(platform);
+    if (currentConfigHandle === handle && this._autoSwitchedTo === handle) return;
+
+    // Cancel any in-flight switch: a new URL change trumps older work.
+    this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
+    const mySeq = this._autoSwitchSeq;
+
+    const streamer = await this._lookupStreamer(platform, handle);
+    if (mySeq !== this._autoSwitchSeq) return;
+
+    // Known streamer → full cross-platform map. Unknown streamer → only the
+    // current platform's channel is set; others cleared (per design — we don't
+    // guess cross-platform handles for unregistered streamers).
+    const target = streamer || {
+      twitchLogin: platform === 'twitch' ? handle : null,
+      youtubeHandle: platform === 'youtube' ? handle : null,
+      kickSlug: platform === 'kick' ? handle : null,
+    };
+
+    await this._performAutoSwitch(target, mySeq, handle);
+    this._sendSeenPing(platform, handle);
+  }
+
+  _getConfiguredHandle(platform) {
+    if (platform === 'twitch') return (this.config.channel || '').toLowerCase();
+    if (platform === 'youtube') return (this.config.ytChannel || '').toLowerCase().replace(/^@/, '');
+    if (platform === 'kick') return (this.config.kickChannel || '').toLowerCase();
+    return '';
+  }
+
+  async _performAutoSwitch(streamer, mySeq, sourceHandle) {
+    const newTwitch = streamer.twitchLogin || '';
+    const newYoutube = streamer.youtubeHandle || '';
+    const newKick = streamer.kickSlug || '';
+
+    // Need at least one platform to switch TO.
+    if (!newTwitch && !newYoutube && !newKick) return;
+
+    const changed =
+      (this.config.channel || '').toLowerCase() !== newTwitch.toLowerCase() ||
+      (this.config.ytChannel || '').toLowerCase() !== newYoutube.toLowerCase() ||
+      (this.config.kickChannel || '').toLowerCase() !== newKick.toLowerCase();
+    if (!changed) {
+      this._autoSwitchedTo = sourceHandle;
+      return;
+    }
+
+    this._showSwitchBanner(streamer);
+
+    // Persist pending messages to OLD channel's cache before switching.
+    if (this._msgCache.length > 0) {
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+
+    // Each platform's channel is strictly its own — never fall back cross-platform.
+    this.config.channel = newTwitch;
+    this.config.ytChannel = newYoutube;
+    this.config.kickChannel = newKick;
+    this._saveConfig();
+    this._refreshSettingsInputs();
+
+    // Clear on-screen chat + in-memory dedup — new streamer has its own history.
+    this.chatEl.innerHTML = '';
+    this.msgCount = 0;
+    this._msgCache = [];
+    this._seenMsgIds = new Set();
+    this._seenContentKeys = new Set();
+    this._optimisticKeys = new Map();
+    this._isModOnChannel = false; // re-detect from badges on new channel
+    // Clear @mention autocomplete — old streamer's chatters should not show up
+    // as suggestions on the new channel. Keep "platform:username" keys so the
+    // color cache survives (users who chat across streams keep their color).
+    for (const key of this._chatUsers.keys()) {
+      if (!key.includes(':')) this._chatUsers.delete(key);
+    }
+    // Clear channel-specific emote + badge caches (belong to old streamer)
+    this.emotes.channel7tv.clear();
+    this.emotes.bttvEmotes.clear();
+    this.emotes.ffzEmotes.clear();
+    this.emotes.twitchNative.clear();
+    this._twitchBadges = {};
+    this.emotes.loadTwitchGlobals();
+
+    this._disconnectAll();
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
+    // Pre-load channel emotes + badges BEFORE rendering cached messages —
+    // otherwise cached messages render as plain text (no emote/badge resolve).
+    // We use user_ids from the streamer lookup result (known) or stub (null);
+    // unknown streamers without user_id get filled-in progressively once IRC
+    // onRoomId arrives from reconnect.
+    if (streamer.twitchUserId) {
+      await Promise.allSettled([
+        this.emotes.loadChannel('twitch', streamer.twitchUserId),
+        this.emotes.loadBTTV(streamer.twitchUserId),
+        this.emotes.loadFFZ(streamer.twitchUserId),
+        streamer.twitchLogin ? this.emotes.loadTwitchChannel(streamer.twitchLogin) : Promise.resolve(),
+        this._loadTwitchBadges(streamer.twitchUserId),
+      ]);
+      // Persist roomId for the new channel so future reloads short-circuit the IRC-wait.
+      this.config._roomId = streamer.twitchUserId;
+      this._saveConfig();
+    } else {
+      // Unknown streamer — clear stale roomId so onRoomId refreshes when IRC connects.
+      this.config._roomId = null;
+    }
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
+    await this._loadCachedMessages();
+    if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
+
+    this._connectAll();
+
+    this._autoSwitchedTo = sourceHandle;
+    setTimeout(() => {
+      if (this._autoSwitchSeq === mySeq) this._hideSwitchBanner();
+    }, 1500);
+  }
+
+  _refreshSettingsInputs() {
+    const map = { 'input-channel': this.config.channel, 'input-yt-channel': this.config.ytChannel, 'input-kick-channel': this.config.kickChannel };
+    for (const [id, val] of Object.entries(map)) {
+      const el = document.getElementById(id);
+      if (el) el.value = val || '';
+    }
+  }
+
+  _showSwitchBanner(streamer) {
+    let banner = document.getElementById('switch-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'switch-banner';
+      banner.className = 'switch-banner';
+      const container = document.getElementById('chat') || document.body;
+      container.parentNode.insertBefore(banner, container);
+    }
+    const name = streamer.twitchDisplayName || streamer.twitchLogin || streamer.youtubeTitle || streamer.kickDisplayName || streamer.kickSlug || '?';
+    banner.textContent = `Připojuji se k streamerovi ${name}...`;
+    banner.classList.remove('hidden');
+  }
+
+  _hideSwitchBanner() {
+    const banner = document.getElementById('switch-banner');
+    if (banner) banner.classList.add('hidden');
   }
 
   async _injectContentScript(tab) {
@@ -2110,6 +2780,21 @@ class UnityChat {
         files: [file]
       });
     } catch {}
+  }
+
+  _syncProfile(platform, username) {
+    const key = `${platform}:${username.toLowerCase()}`;
+    if (this._syncedProfiles.has(key)) return;
+    this._syncedProfiles.add(key);
+    chrome.storage.local.set({ uc_synced: [...this._syncedProfiles] }).catch(() => {});
+    fetch(`${UC_API}/users/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, username }),
+    }).catch(() => {
+      this._syncedProfiles.delete(key);
+      chrome.storage.local.set({ uc_synced: [...this._syncedProfiles] }).catch(() => {});
+    });
   }
 
   _savePlatformColor(platform, color) {
@@ -2228,6 +2913,11 @@ class UnityChat {
     const layout = this.config.layout || 'small';
     document.body.classList.remove('layout-small', 'layout-medium', 'layout-large');
     document.body.classList.add('layout-' + layout);
+  }
+
+  _applyTimestampVisibility() {
+    const show = this.config.showTimestamps !== false;
+    document.body.classList.toggle('no-timestamps', !show);
   }
 
   // ---- Twitch Badges ----
@@ -2435,8 +3125,8 @@ class UnityChat {
 
   // ---- Odpovědi na zprávy ----
 
-  _setReply(platform, username, messageId, message) {
-    this._reply = { platform, username, messageId, message };
+  _setReply(platform, username, messageId, message, senderId) {
+    this._reply = { platform, username, messageId, message, senderId };
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -2476,6 +3166,21 @@ class UnityChat {
       return;
     }
 
+    // Send protection: if the active tab's channel differs from the configured
+    // channel for this platform, refuse to send. Auto-switch should normally
+    // fix this transparently — this is a safety net for the transient window.
+    try {
+      const tab = await this._getActiveBrowserTab();
+      if (tab?.url) {
+        const tabHandle = this._parseChannelFromUrl(tab.url, this.activePlatform);
+        const configured = this._getConfiguredHandle(this.activePlatform);
+        if (tabHandle && configured && tabHandle !== configured) {
+          this._sys(`Nelze odeslat: jsi na kanálu ${tabHandle}, UnityChat je nastaven pro ${configured}.`);
+          return;
+        }
+      }
+    } catch {}
+
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
@@ -2492,12 +3197,16 @@ class UnityChat {
     this.msgInput.style.height = 'auto';
     this._clearReply();
 
-    // Optimistic UI: show message instantly (include @mention for cross-platform reply)
+    // Optimistic UI: show message instantly
+    // Native reply support: Twitch (GQL) + Kick (API reply metadata).
+    // For cross-platform or YouTube → fallback to @mention prefix.
     const username = this._platformUsernames[platform] || this.config.username || 'me';
     const ucProfile = this.nicknames.get(platform, username);
+    const hasNativeReply = reply && reply.platform === platform
+      && (platform === 'twitch' || platform === 'kick');
     let displayText = text;
-    if (reply && reply.platform !== platform) {
-      const at = `@${reply.username}`;
+    if (reply && !hasNativeReply) {
+      const at = reply.username.startsWith('@') ? reply.username : `@${reply.username}`;
       if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
     }
     this._lastSentText = text;
@@ -2521,8 +3230,8 @@ class UnityChat {
       if (!tab) { this._sys('Žádný aktivní tab'); return; }
 
       let resp;
-      // Native reply only on Twitch (GQL threading).
-      // YouTube/Kick don't support native reply → @mention prefix.
+      // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
+      // YouTube → @mention prefix fallback.
       if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
@@ -2530,6 +3239,15 @@ class UnityChat {
           parentMsgId: reply.messageId,
           username: reply.username,
           broadcasterId: this.config._roomId || null
+        });
+      } else if (reply?.messageId && reply.platform === platform && platform === 'kick') {
+        resp = await chrome.tabs.sendMessage(tab.id, {
+          type: 'SEND_CHAT',
+          text: markedText,
+          replyMeta: {
+            messageId: reply.messageId,
+            message: reply.message || ''
+          }
         });
       } else {
         let sendText = markedText;
@@ -2595,6 +3313,7 @@ class UnityChat {
       this.emotes.loadChannel('twitch', id);
       this.emotes.loadBTTV(id);
       this.emotes.loadFFZ(id);
+      this.emotes.loadTwitchChannel(this.config.channel);
       this._loadTwitchBadges(id);
     };
 
@@ -2614,9 +3333,12 @@ class UnityChat {
   _connectAll() {
     this._updateDisabled();
     const connecting = [];
-    if (this.config.twitch) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
-    if (this.config.kick) { this.kick.connect(this.config.kickChannel || this.config.channel); connecting.push('Kick'); }
-    if (this.config.youtube) { this.youtube.connect(this.config.ytChannel || this.config.channel); connecting.push('YouTube'); }
+    // Only connect to platforms that have an explicit channel configured.
+    // Auto-switch clears fields for platforms the streamer isn't registered on,
+    // so we must NOT fall back to twitch channel as a cross-platform guess.
+    if (this.config.twitch && this.config.channel) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
+    if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
+    if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
     // Doparsovat existující zprávy z Twitch tabu (pokud existuje)
@@ -2631,9 +3353,24 @@ class UnityChat {
     const lastCached = this._msgCache[this._msgCache.length - 1];
     if (lastCached?.timestamp && Date.now() - lastCached.timestamp < 120_000) return;
 
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) return;
+
     try {
+      // Only scrape tabs that match the configured channel — otherwise we'd
+      // import messages from an unrelated Twitch stream the user happens to have open.
       const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
       for (const tab of tabs) {
+        // Path-based match (case-insensitive — Twitch handles are not case-sensitive).
+        // Accept: /{channel}, /{channel}/..., /popout/{channel}/...
+        let isChannelTab = false;
+        try {
+          const parts = new URL(tab.url || '').pathname.toLowerCase().split('/').filter(Boolean);
+          isChannelTab = parts[0] === channel
+            || (parts[0] === 'popout' && parts[1] === channel);
+        } catch {}
+        if (!isChannelTab) continue;
+
         const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
         if (!resp?.ok || !resp.messages?.length) continue;
 
@@ -2711,13 +3448,243 @@ class UnityChat {
     this._scroll();
   }
 
+  // Twitch's hash fallback may not match the color Twitch actually stores for
+  // each user (modern Twitch assigns once at first chat, not from username).
+  // Queue a GQL lookup for any Twitch chatter we haven't resolved via GQL yet;
+  // debounced batch resolver updates _chatUsers + live DOM once the real color
+  // arrives, so cached + freshly-rendered messages both retint to match vanilla.
+  _enqueueTwitchColorLookup(username) {
+    if (!username) return;
+    const u = username.toLowerCase();
+    const key = `twitch:${u}`;
+    const cached = this._chatUsers.get(key);
+    if (cached?._fromGQL) return;
+    if (!this._colorQueue) this._colorQueue = new Set();
+    if (this._colorQueue.has(u)) return;
+    this._colorQueue.add(u);
+    if (!this._colorQueueTimer) {
+      this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 700);
+    }
+  }
+
+  async _flushColorLookups() {
+    this._colorQueueTimer = null;
+    if (!this._colorQueue || !this._colorQueue.size) return;
+    const batch = [...this._colorQueue].slice(0, 100);
+    for (const u of batch) this._colorQueue.delete(u);
+    let resp;
+    try {
+      resp = await chrome.runtime.sendMessage({ type: 'GET_CHAT_COLORS', usernames: batch });
+    } catch { return; }
+    if (!resp?.ok || !resp.users) return;
+
+    let dirty = false;
+    for (const login of batch) {
+      const info = resp.users[login] || {};
+      const color = info.color;
+      const userId = info.id;
+      const key = `twitch:${login}`;
+      const prev = this._chatUsers.get(key);
+      // Even if GQL returned no color (user has none), mark as resolved so we
+      // don't re-query. Keep the existing (hash) color as display fallback.
+      // userId gets captured too so we can kick off 7TV paint lookups for
+      // users whose messages didn't carry a user-id (cached schema, scrape).
+      const entry = {
+        name: prev?.name || login,
+        platform: 'twitch',
+        color: color || prev?.color,
+        badgesRaw: prev?.badgesRaw || '',
+        userId: userId || prev?.userId || null,
+        _paint: prev?._paint,
+        _paintChecked: prev?._paintChecked || false,
+        _fromGQL: true,
+      };
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(login, entry);
+      dirty = true;
+
+      // Retint already-rendered usernames (skip ones overridden by nickname)
+      if (color) {
+        const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
+        for (const un of this.chatEl.querySelectorAll(sel)) {
+          const msgId = un.closest('.msg')?.dataset.msgId;
+          const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+          const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+          if (ucProfile?.color) continue;
+          un.style.color = color;
+        }
+      }
+
+      // Kick off 7TV paint resolution — covers the gap where cached/scraped
+      // messages don't have a user-id of their own. One-shot per user thanks
+      // to _paintChecked guard inside _enqueue7tvPaintLookup.
+      if (userId && !entry._paintChecked) {
+        this._enqueue7tvPaintLookup(userId, login);
+      }
+    }
+    if (dirty && !this._userColorTimer) {
+      this._userColorTimer = setTimeout(() => {
+        this._userColorTimer = null;
+        chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+      }, 1500);
+    }
+    if (this._colorQueue.size > 0) {
+      this._colorQueueTimer = setTimeout(() => this._flushColorLookups().catch(() => {}), 1500);
+    }
+  }
+
+  // 7TV paint lookup — each Twitch user gets queried at most once per session
+  // (per-user paint ID resolved via /users/twitch/{id}, then paint def cached
+  // globally). Debounced flush with concurrency-bounded fan-out.
+  _enqueue7tvPaintLookup(userId, username) {
+    if (!userId || !username) return;
+    const key = `twitch:${String(username).toLowerCase()}`;
+    const cached = this._chatUsers.get(key);
+    if (cached?._paintChecked) return;
+    if (!this._paintQueue) this._paintQueue = [];
+    if (!this._paintSeen) this._paintSeen = new Set();
+    if (this._paintSeen.has(key)) return;
+    this._paintSeen.add(key);
+    this._paintQueue.push({ userId: String(userId), username: String(username).toLowerCase() });
+    if (!this._paintQueueTimer) {
+      this._paintQueueTimer = setTimeout(() => this._flush7tvPaints().catch(() => {}), 800);
+    }
+  }
+
+  async _flush7tvPaints() {
+    this._paintQueueTimer = null;
+    if (!this._paintQueue?.length) return;
+    // Pull a small concurrency batch; re-scheduled if more remain.
+    const batch = this._paintQueue.splice(0, 20);
+
+    await Promise.allSettled(batch.map(async ({ userId, username }) => {
+      const key = `twitch:${username}`;
+      const prev = this._chatUsers.get(key) || { name: username, platform: 'twitch' };
+      const paint = await _7tvFetchUserPaint(userId);
+      const entry = { ...prev, _paintChecked: true };
+      if (paint) {
+        entry._paint = paint;
+        this._applyPaintToRenderedMessages(username, paint);
+      } else {
+        // Negative result still stored so we skip re-query next time.
+        entry._paint = null;
+      }
+      this._chatUsers.set(key, entry);
+      this._chatUsers.set(username, entry);
+    }));
+
+    if (!this._userColorTimer) {
+      this._userColorTimer = setTimeout(() => {
+        this._userColorTimer = null;
+        chrome.storage.local.set({ uc_user_colors: Object.fromEntries(this._chatUsers) }).catch(() => {});
+      }, 1500);
+    }
+
+    if (this._paintQueue.length > 0) {
+      this._paintQueueTimer = setTimeout(() => this._flush7tvPaints().catch(() => {}), 1500);
+    }
+  }
+
+  // Walk remaining text nodes inside a rendered message body and wrap any
+  // @username references in <span class="mention"> with the target user's
+  // color (looked up via _chatUsers). Runs post-emote/URL render so we
+  // never touch existing <img>/<a> children — only pure text fragments.
+  _processMentions(el, platform) {
+    if (!el) return;
+    // Pattern: start-of-string OR a non-identifier character, then @name.
+    // Username rules mirror Twitch/Kick/YT: 2–25 chars of [A-Za-z0-9_].
+    const mentionRe = /(^|[^A-Za-z0-9_])@([A-Za-z0-9_]{2,25})/g;
+
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let n;
+    while ((n = walker.nextNode())) nodes.push(n);
+
+    for (const textNode of nodes) {
+      const text = textNode.nodeValue;
+      if (!text || text.indexOf('@') === -1) continue;
+
+      mentionRe.lastIndex = 0;
+      let match;
+      let last = 0;
+      let frag = null;
+
+      while ((match = mentionRe.exec(text)) !== null) {
+        const prefixLen = match[1].length;
+        const start = match.index + prefixLen;
+        const name = match[2];
+        if (!frag) frag = document.createDocumentFragment();
+        if (start > last) frag.appendChild(document.createTextNode(text.substring(last, start)));
+
+        const span = document.createElement('span');
+        span.className = 'mention';
+        const entry = this._chatUsers.get(`${platform}:${name.toLowerCase()}`)
+          || this._chatUsers.get(name.toLowerCase());
+        const color = entry?.color;
+        if (color) {
+          const sanitized = this.emotes._sc(color);
+          if (sanitized) span.style.color = sanitized;
+        }
+        span.textContent = '@' + name;
+        frag.appendChild(span);
+        last = start + name.length + 1;
+      }
+
+      if (!frag) continue;
+      if (last < text.length) frag.appendChild(document.createTextNode(text.substring(last)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
+
+  _applyPaintToRenderedMessages(username, paint) {
+    const css = _7tvPaintToCss(paint);
+    if (!css) return;
+    const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(username)}"]`;
+    for (const un of this.chatEl.querySelectorAll(sel)) {
+      // Respect user-set UnityChat nickname color override
+      const msgId = un.closest('.msg')?.dataset.msgId;
+      const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+      const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
+      if (ucProfile?.color) continue;
+      _7tvApplyPaintStyles(un, css);
+    }
+  }
+
   _addMessage(msg) {
+    // Kick off async color resolution for Twitch chatters — hash fallback or
+    // IRC color may not match what Twitch's own client shows, so we reconcile
+    // via public GQL chatColor field for any user we haven't resolved yet.
+    if (msg.platform === 'twitch' && msg.username && !msg._optimistic) {
+      this._enqueueTwitchColorLookup(msg.username);
+      if (msg.userId) {
+        this._enqueue7tvPaintLookup(msg.userId, msg.username);
+      } else {
+        // Message didn't carry a user-id (older cache schema / scrape). Use
+        // any user-id we resolved in a prior GQL round so paints still fire.
+        const entry = this._chatUsers.get(`twitch:${msg.username.toLowerCase()}`);
+        if (entry?.userId) this._enqueue7tvPaintLookup(entry.userId, msg.username);
+      }
+    }
+
     // Track color + badges BEFORE dedup (echo gets deduped but we still want the data)
     if (msg.color && msg.username && !msg._optimistic) {
       const colorKey = `${msg.platform}:${msg.username.toLowerCase()}`;
       const prev = this._chatUsers.get(colorKey);
-      const entry = { name: msg.username, platform: msg.platform, color: msg.color, badgesRaw: msg.badgesRaw || prev?.badgesRaw || '' };
-      if (!prev || prev.color !== msg.color || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
+      // Preserve _fromGQL flag across message updates so we don't re-query a
+      // user we've already resolved. If a new IRC message arrives for a user
+      // whose color was resolved via GQL AND this message has no explicit
+      // color tag (i.e. we're only producing hash fallback), keep the GQL
+      // color — otherwise we'd clobber the correct value with a local guess.
+      const keepGqlColor = prev?._fromGQL && msg._needsColorLookup;
+      const resolvedColor = keepGqlColor ? prev.color : msg.color;
+      const entry = {
+        name: msg.username,
+        platform: msg.platform,
+        color: resolvedColor,
+        badgesRaw: msg.badgesRaw || prev?.badgesRaw || '',
+        _fromGQL: prev?._fromGQL || false,
+      };
+      if (!prev || prev.color !== resolvedColor || (msg.badgesRaw && prev.badgesRaw !== msg.badgesRaw)) {
         this._chatUsers.set(colorKey, entry);
       }
       // Also set plain username key for @autocomplete
@@ -2825,6 +3792,17 @@ class UnityChat {
       }
     }
 
+    // Detect if viewer is moderator/broadcaster on current Twitch channel.
+    // We see our own username in IRC echoes; the badges tag carries the role.
+    if (msg.platform === 'twitch' && !this._isModOnChannel && msg.badgesRaw && msg.username) {
+      const mine = (this._platformUsernames.twitch || this.config.username || '').toLowerCase();
+      if (mine && msg.username.toLowerCase() === mine) {
+        if (/(^|,)(moderator|broadcaster)\//.test(msg.badgesRaw)) {
+          this._isModOnChannel = true;
+        }
+      }
+    }
+
     // Učení nativních emotes z příchozích zpráv
     if (msg.platform === 'twitch' && msg.twitchEmotes) {
       // Pro učení emotes potřebujeme originální pozice - u reply zpráv
@@ -2889,6 +3867,16 @@ class UnityChat {
     if (msg.isRaid) el.classList.add('raid');
     if (msg.isRaider) el.classList.add('raider-msg');
     if (msg.isSus) el.classList.add('sus-msg');
+    if (msg.isAnnouncement) {
+      el.classList.add('announcement');
+      // PRIMARY | BLUE | GREEN | ORANGE | PURPLE — CSS picks the accent.
+      el.dataset.announcementColor = msg.announcementColor || 'PRIMARY';
+      // Inline header bar with megaphone icon, matches Twitch's vanilla UI.
+      const header = document.createElement('div');
+      header.className = 'announcement-header';
+      header.innerHTML = '<span class="announcement-icon" aria-hidden="true">\u{1F4E3}</span><span class="announcement-label">Announcement</span>';
+      el.appendChild(header);
+    }
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
 
     // Determine if reply is TO the current user (not just any reply)
@@ -2907,9 +3895,23 @@ class UnityChat {
       const replyRawName = (msg.replyTo.username || '').replace(/^@/, '');
       const replyProfile = this.nicknames.get(msg.platform, replyRawName);
       const replyDisplayName = replyProfile?.nickname || replyRawName;
+      let replyBodyHtml = '';
+      if (msg.replyTo.message) {
+        // Render emotes in reply context using platform-specific parser.
+        // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
+        let body;
+        if (msg.platform === 'kick') {
+          body = this.emotes.renderKick(msg.replyTo.message);
+        } else if (msg.platform === 'twitch') {
+          body = this.emotes.renderTwitch(msg.replyTo.message, null);
+        } else {
+          body = this.emotes.renderPlain(msg.replyTo.message);
+        }
+        replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
+      }
       ctx.innerHTML =
         `&#8617; <span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` +
-        (msg.replyTo.message ? ` <span class="rctx-body">${this.emotes._eh(msg.replyTo.message)}</span>` : '');
+        replyBodyHtml;
       if (msg.replyTo.id) {
         ctx.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -2985,8 +3987,16 @@ class UnityChat {
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = ucProfile?.color || this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`)?.color || msg.color;
+    un.style.color = ucProfile?.color || chatUserEntry?.color || msg.color;
+    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
+    // user intent), and we have a paint for this Twitch user. Paint replaces
+    // the solid color with a gradient/image + background-clip on the glyphs.
+    if (msg.platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
+      const css = _7tvPaintToCss(chatUserEntry._paint);
+      if (css) _7tvApplyPaintStyles(un, css);
+    }
     un.textContent = ucProfile?.nickname || msg.username;
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
@@ -3016,6 +4026,11 @@ class UnityChat {
     } else {
       tx.innerHTML = this.emotes.renderPlain(msg.message);
     }
+
+    // @mentions — bold + colored with the mentioned user's chat color.
+    // Runs AFTER emote/URL render so we only walk remaining text nodes (no
+    // risk of corrupting <img> / <a> tags inside the rendered body).
+    this._processMentions(tx, msg.platform);
 
     el.appendChild(tx);
 
@@ -3061,11 +4076,13 @@ class UnityChat {
     });
     actions.appendChild(copyBtn);
 
-    // Pin button (jen Twitch zprávy - vyžaduje mod práva)
-    if (msg.platform === 'twitch') {
+    // Pin button (jen Twitch zprávy; jen pokud viewer je mod/broadcaster).
+    // Mod status se detekuje z IRC badge na vlastní zprávě — takže button se
+    // objeví až poté co viewer pošle alespoň jednu zprávu (nebo dorazí echo).
+    if (msg.platform === 'twitch' && this._isModOnChannel) {
       const pinBtn = document.createElement('button');
       pinBtn.className = 'msg-action-btn';
-      pinBtn.title = 'Připnout zprávu (pouze mod)';
+      pinBtn.title = 'Připnout zprávu';
       pinBtn.innerHTML =
         '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">' +
         '<path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>' +
@@ -3084,7 +4101,7 @@ class UnityChat {
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._setReply(msg.platform, msg.username, msg.id, msg.message);
+      this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);
     el.appendChild(actions);
@@ -3154,7 +4171,15 @@ class UnityChat {
 
   _cacheMsg(msg) {
     this._msgCache.push(this._compactMsg(msg));
-    if (this._msgCache.length > 200) this._msgCache = this._msgCache.slice(-150);
+    // Cache is bounded by AGE (72h), not count — full 72h of chat activity is
+    // preserved so reload restores everything. Age-prune in batches every 50
+    // pushes to keep the hot path cheap on busy streams.
+    if (!this._cachePruneN) this._cachePruneN = 0;
+    if (++this._cachePruneN >= 50) {
+      this._cachePruneN = 0;
+      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+      this._msgCache = this._msgCache.filter((m) => !m.timestamp || m.timestamp > cutoff);
+    }
     // Save immediately — extension reload can kill context anytime
     chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
   }
@@ -3194,6 +4219,17 @@ class UnityChat {
         }
       }
       if (bdg.children.length && un) el.insertBefore(bdg, un);
+    }
+
+    // Re-render message text with emotes from IRC echo
+    if (el && realMsg.platform === 'twitch' && realMsg.twitchEmotes) {
+      const tx = el.querySelector('.tx');
+      if (tx) {
+        // Learn new emotes first so renderSegments can find them
+        this.emotes.learnTwitch(realMsg.message, realMsg.twitchEmotes);
+        const emotesTag = realMsg.replyTo ? null : realMsg.twitchEmotes;
+        tx.innerHTML = this.emotes.renderTwitch(realMsg.message, emotesTag);
+      }
     }
 
     // Update cache entry: replace optimistic data with real data

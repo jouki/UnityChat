@@ -43,6 +43,11 @@ body.layout-medium .msg .pi { font-size: 9px; line-height: 16px; padding: 1px 4p
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
 body.layout-medium .msg .tx img.emote { height: 2em; }
+body.layout-medium #settings .setting-row label { font-size: 12px; }
+body.layout-medium #settings input[type="text"],
+body.layout-medium #settings input[type="color"],
+body.layout-medium #settings select,
+body.layout-medium #settings button { font-size: 14px; }
 
 body.layout-large { font-size: 16px; }
 body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
@@ -52,6 +57,11 @@ body.layout-large .bdg-img { height: 22px; width: 22px; }
 body.layout-large .msg .tx img.emote { height: 2.2em; }
 body.layout-large #msg-input { font-size: 14px; padding: 8px 10px; }
 body.layout-large .reply-ctx { font-size: 12px; }
+body.layout-large #settings .setting-row label { font-size: 13px; }
+body.layout-large #settings input[type="text"],
+body.layout-large #settings select { font-size: 15px; padding: 8px 10px; }
+body.layout-large #settings button { font-size: 15px; padding: 8px 14px; }
+body.layout-large #settings details summary { font-size: 15px; }
 
 /* ---- Header ---- */
 
@@ -100,7 +110,7 @@ body.layout-large .reply-ctx { font-size: 12px; }
   gap: 2px;
 }
 
-#btn-popout, #btn-dump, #btn-settings {
+#btn-popout, #btn-dump, #btn-settings, #btn-update {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -109,6 +119,131 @@ body.layout-large .reply-ctx { font-size: 12px; }
   padding: 2px 6px;
   border-radius: 4px;
   line-height: 1;
+}
+
+/* Update notification */
+#update-wrap { position: relative; }
+#update-wrap.hidden { display: none; }
+#btn-update {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+#btn-update:hover { filter: brightness(1.15); }
+.update-dot {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: #e5484d;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(229, 72, 77, 0.8);
+  animation: update-pulse 1.5s ease-in-out infinite;
+}
+@keyframes update-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.25); opacity: 0.7; }
+}
+.update-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 280px;
+  max-width: 320px;
+  padding: 14px;
+  background: #151518;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 6px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 140, 0, 0.15);
+  z-index: 200;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+#update-wrap:hover .update-tooltip,
+#update-wrap:focus-within .update-tooltip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.ut-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.ut-version {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.ut-text {
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.ut-text code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: rgba(255, 140, 0, 0.12);
+  border: 1px solid rgba(255, 140, 0, 0.3);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent);
+}
+.ut-text a {
+  color: #ffc800;
+  text-decoration: underline;
+}
+.ut-explorer {
+  background: #1c1c20;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.ut-exp-path {
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.ut-exp-list {
+  list-style: none;
+  padding: 0 0 0 10px;
+  margin: 0;
+  border-left: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.ut-exp-list li {
+  padding: 1px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ut-exp-highlight {
+  color: var(--accent);
+  font-weight: 700;
+  background: rgba(255, 140, 0, 0.12);
+  border-radius: 3px;
+  padding: 2px 4px !important;
+  margin: 2px -4px;
+}
+.ut-exp-arrow {
+  color: var(--accent);
+  animation: arrow-bounce 1.1s ease-in-out infinite;
+  font-size: 12px;
+}
+@keyframes arrow-bounce {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(-3px); }
 }
 
 #btn-dump, #btn-popout {
@@ -236,6 +371,42 @@ body.layout-large .reply-ctx { font-size: 12px; }
   filter: brightness(1.1);
 }
 
+/* "Jsem streamer" inline button — sits in the Kanály summary header */
+#channels-section > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.btn-streamer-inline {
+  padding: 4px 10px;
+  background: var(--accent-gradient);
+  color: #000;
+  font-weight: 600;
+  font-size: 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+  line-height: 1.4;
+  margin-right: 8px;
+}
+.btn-streamer-inline:hover { filter: brightness(1.1); }
+.btn-streamer-inline:active { transform: translateY(1px); }
+
+/* Auto-switch loading banner (shown during reconnect to new streamer) */
+.switch-banner {
+  padding: 8px 14px;
+  background: var(--accent-gradient);
+  color: #000;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.switch-banner.hidden { display: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+
 /* ---- Nickname setting ---- */
 
 .save-row {
@@ -243,7 +414,10 @@ body.layout-large .reply-ctx { font-size: 12px; }
   justify-content: center;
   margin-top: 8px;
 }
-#input-username[readonly] {
+#input-username[readonly],
+#input-channel[readonly],
+#input-kick-channel[readonly],
+#input-yt-channel[readonly] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -337,6 +511,27 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .dev-mode-row label:hover { opacity: 0.7; }
 .kofi-link { font-size: 11px; color: var(--text-muted); opacity: 0.55; text-decoration: none; transition: opacity 0.15s; }
 .kofi-link:hover { opacity: 0.9; color: #ff5e5b; }
+
+/* Author credit stack — sits to the right of Dev mode checkbox */
+.author-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.2;
+}
+.author-link {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.55;
+  text-decoration: none;
+  transition: opacity 0.15s, color 0.15s;
+  font-family: 'JetBrains Mono', monospace, monospace;
+}
+.author-link .author-by { opacity: 0.7; }
+.author-link .author-name { font-weight: 600; color: var(--accent); opacity: 0.85; }
+.author-link:hover { opacity: 1; }
+.author-link:hover .author-name { color: #ffc800; }
 .dev-tools {
   display: flex;
   flex-wrap: wrap;
@@ -530,6 +725,9 @@ body.layout-large .reply-ctx { font-size: 12px; }
   margin-right: 3px;
 }
 
+/* User-toggled via settings — hides timestamps without re-rendering msgs. */
+body.no-timestamps .msg .ts { display: none; }
+
 .msg .bdg {
   margin-right: 2px;
   display: inline;
@@ -612,12 +810,91 @@ body.layout-large .reply-ctx { font-size: 12px; }
   letter-spacing: 0.5px;
   opacity: 0.85;
 }
+/* @mention inside message text — bold + colored to the target user's
+   chat color (JS writes inline color via _processMentions). Unknown
+   users fall back to default bold styling. */
+.tx .mention {
+  font-weight: 700;
+}
+
 .msg-tag.tag-reply { color: #cc3333; }
 .msg-tag.tag-mention { color: #cc3333; }
 .msg-tag.tag-first { color: #9146ff; }
 .msg-tag.tag-raid { color: #ff6b6b; }
 .msg-tag.tag-raider { color: #b2e63d; }
 .msg-tag.tag-sus { color: #ffc107; }
+
+/* Announcement (USERNOTICE msg-id=announcement) — callout-style block with
+   bilateral accent bars (left + right) whose color/gradient is driven by
+   msg-param-color. Prominent by design: stronger background, vertical
+   spacing, glow, and a pulsing icon so it stands out in a fast chat. */
+.msg.announcement {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.04));
+  /* Left + right borders; top/bottom intentionally 0 so we can run a gradient
+     across both vertical edges via border-image without ugly corner pieces. */
+  border-style: solid;
+  border-color: #9146ff;
+  border-width: 0 5px 0 5px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(145, 70, 255, 0.18);
+}
+
+/* PRIMARY = Twitch's rainbow gradient on both edges. `border-image` with
+   `slice: 1` fills each edge strip with the full gradient; top/bottom have
+   zero width so there are no stretched corner artifacts. */
+.msg.announcement[data-announcement-color="PRIMARY"] {
+  border-color: transparent;
+  border-image: linear-gradient(
+    180deg,
+    #ff4500 0%,
+    #ffaf14 22%,
+    #ffd93d 42%,
+    #00ff87 60%,
+    #00d7ec 80%,
+    #9146ff 100%
+  ) 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 0 18px rgba(255, 175, 20, 0.22);
+}
+.msg.announcement[data-announcement-color="BLUE"]   { border-color: #00d7ec; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 215, 236, 0.28); }
+.msg.announcement[data-announcement-color="GREEN"]  { border-color: #00db84; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(0, 219, 132, 0.28); }
+.msg.announcement[data-announcement-color="ORANGE"] { border-color: #ffb31e; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(255, 179, 30, 0.3); }
+.msg.announcement[data-announcement-color="PURPLE"] { border-color: #9146ff; box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 16px rgba(145, 70, 255, 0.28); }
+
+.announcement-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  padding-bottom: 5px;
+  color: #fff;
+  opacity: 0.92;
+}
+.announcement-icon {
+  font-size: 14px;
+  filter: drop-shadow(0 0 4px rgba(255, 175, 20, 0.5));
+  animation: announcement-pulse 2.4s ease-in-out infinite;
+}
+.msg.announcement[data-announcement-color="PRIMARY"] .announcement-label {
+  background: linear-gradient(90deg, #ffd93d, #ff4500, #9146ff, #00d7ec);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+@keyframes announcement-pulse {
+  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 4px rgba(255,175,20,0.5)); }
+  50%      { transform: scale(1.12); filter: drop-shadow(0 0 8px rgba(255,175,20,0.75)); }
+}
 
 /* Raid */
 .msg.raid {
@@ -688,6 +965,11 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .rctx-body {
   color: var(--text-muted);
 }
+.rctx-body img.emote {
+  height: 1.2em;
+  vertical-align: middle;
+  margin: -2px 1px;
+}
 
 .msg .un {
   cursor: pointer;
@@ -711,6 +993,12 @@ body.layout-large .reply-ctx { font-size: 12px; }
 .msg .tx {
   color: var(--text-primary);
 }
+.msg .tx a {
+  color: #e8b84b;
+  text-decoration: none;
+  word-break: break-all;
+}
+.msg .tx a:hover { text-decoration: underline; }
 
 .msg .tx img.emote {
   display: inline-block;

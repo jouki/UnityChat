@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <title>UnityChat — Jsem streamer</title>
+  <link rel="icon" href="icons/icon48.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="streamer.css">
+</head>
+<body>
+  <main>
+    <header>
+      <img src="icons/icon48.png" alt="" class="logo">
+      <div class="title">
+        <h1 class="wordmark">UNITY<span class="accent">CHAT</span></h1>
+        <p class="subtitle">Přihlášení pro streamery</p>
+      </div>
+    </header>
+
+    <div class="warning" role="alert">
+      <svg class="warning-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+        <path d="M12 2L1 21h22L12 2z" fill="currentColor" opacity="0.2"/>
+        <path d="M12 2L1 21h22L12 2zm0 3.83L19.53 19H4.47L12 5.83zM11 10v5h2v-5h-2zm0 6v2h2v-2h-2z" fill="currentColor"/>
+      </svg>
+      <div><strong>Pozor:</strong> Během přihlašování se mohou zobrazit citlivé údaje, které potenciálně nechcete sdílet na streamu.</div>
+    </div>
+
+    <section class="intro">
+      <p>Když propojíš svoje účty, UnityChat dokáže automaticky najít tvé chaty napříč platformami — viewerům se pak po přechodu na tvůj stream okamžitě přepnou všechny tři chaty.</p>
+      <p>Propoj jen platformy na kterých streamuješ. Nepropojené zůstanou prázdné.</p>
+    </section>
+
+    <section id="platforms" class="platforms">
+      <!-- Populated by streamer.js -->
+      <div class="loading">Načítání…</div>
+    </section>
+
+    <section id="account-actions" class="account-actions hidden">
+      <button id="btn-logout" class="btn-ghost">Odhlásit</button>
+    </section>
+
+    <section class="help">
+      <h2>Jak to funguje</h2>
+      <ol>
+        <li>Klikni na <em>Přihlásit</em> u platformy, na které streamuješ.</li>
+        <li>Přihlaš se svým účtem u dané platformy. My si uložíme jen tvé veřejné ID — nikdy heslo.</li>
+        <li>Tvé propojení zůstane uložené 90 dní. Po uplynutí je potřeba se přihlásit znovu.</li>
+      </ol>
+    </section>
+  </main>
+
+  <script src="streamer.js"></script>
+</body>
+</html>

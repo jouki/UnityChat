@@ -6,9 +6,18 @@ import {
   boolean,
   jsonb,
   bigint,
+  integer,
+  customType,
   uniqueIndex,
   index,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; default: false }>({
+  dataType() {
+    return 'bytea';
+  },
+});
 
 export const users = pgTable('users', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),
@@ -126,3 +135,94 @@ export const seenUsers = pgTable(
 );
 
 export type SeenUser = typeof seenUsers.$inferSelect;
+
+// --- Streamer directory (public lookup data) -----------------------------
+// Channel identifiers across platforms. Viewers query this for auto-mapping.
+// All platform unique fields enforce single-row-per-streamer-per-platform.
+export const streamers = pgTable(
+  'streamers',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+
+    twitchLogin: text('twitch_login').unique(),
+    twitchUserId: text('twitch_user_id').unique(),
+    twitchDisplayName: text('twitch_display_name'),
+    twitchAvatarUrl: text('twitch_avatar_url'),
+
+    youtubeHandle: text('youtube_handle').unique(),
+    youtubeChannelId: text('youtube_channel_id').unique(),
+    youtubeTitle: text('youtube_title'),
+    youtubeAvatarUrl: text('youtube_avatar_url'),
+
+    kickSlug: text('kick_slug').unique(),
+    kickUserId: text('kick_user_id').unique(),
+    kickDisplayName: text('kick_display_name'),
+    kickAvatarUrl: text('kick_avatar_url'),
+
+    // True once any platform has completed OAuth. Stubs (viewer-seeded) stay
+    // false until the owner registers.
+    verified: boolean('verified').notNull().default(false),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    twitchLoginIdx: index('streamers_twitch_login_idx').on(t.twitchLogin),
+    youtubeHandleIdx: index('streamers_youtube_handle_idx').on(t.youtubeHandle),
+    kickSlugIdx: index('streamers_kick_slug_idx').on(t.kickSlug),
+  }),
+);
+
+// --- Streamer OAuth tokens (PRIVATE — NEVER RETURN VIA API) --------------
+// Encrypted at rest using AES-256-GCM with master key from Coolify secrets.
+// See security_streamer_tokens.md (internal doc, NEVER commit to git) for the
+// full threat model and incident response plan.
+export const streamerTokens = pgTable(
+  'streamer_tokens',
+  {
+    streamerId: bigint('streamer_id', { mode: 'number' })
+      .notNull()
+      .references(() => streamers.id, { onDelete: 'cascade' }),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    accessTokenEncrypted: bytea('access_token_encrypted').notNull(),
+    refreshTokenEncrypted: bytea('refresh_token_encrypted'),
+    tokenIv: bytea('token_iv').notNull(),
+    tokenAuthTag: bytea('token_auth_tag').notNull(),
+    refreshIv: bytea('refresh_iv'),
+    refreshAuthTag: bytea('refresh_auth_tag'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    scopes: text('scopes').array(),
+    keyVersion: integer('key_version').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.streamerId, t.platform], name: 'streamer_tokens_pk' }),
+  }),
+);
+
+// Streamer persistent session (90-day) — lets returning streamer link more
+// platforms without re-OAuthing the first one.
+export const streamerSessions = pgTable(
+  'streamer_sessions',
+  {
+    sessionId: text('session_id').primaryKey(), // random 32 bytes hex
+    streamerId: bigint('streamer_id', { mode: 'number' })
+      .notNull()
+      .references(() => streamers.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    streamerIdx: index('streamer_sessions_streamer_idx').on(t.streamerId),
+    expiresIdx: index('streamer_sessions_expires_idx').on(t.expiresAt),
+  }),
+);
+
+export type Streamer = typeof streamers.$inferSelect;
+export type NewStreamer = typeof streamers.$inferInsert;
+export type StreamerToken = typeof streamerTokens.$inferSelect;
+export type NewStreamerToken = typeof streamerTokens.$inferInsert;
+export type StreamerSession = typeof streamerSessions.$inferSelect;
+export type NewStreamerSession = typeof streamerSessions.$inferInsert;
