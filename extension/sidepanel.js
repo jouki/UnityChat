@@ -1802,6 +1802,11 @@ class UnityChat {
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
 
+    // Spinner up before any heavy work — it covers cache hydration + the
+    // first round of provider connects. Cleared on first rendered message,
+    // when all configured platforms reach a terminal state, or after 8s.
+    this._showLoading();
+
     console.log('[UC] init: loading cache...');
     await this._loadCachedMessages();
     console.log('[UC] init: cache loaded, connecting all...');
@@ -1810,6 +1815,9 @@ class UnityChat {
     this._detectLoop();
     // Fire-and-forget update check against the public landing page manifest.
     this._checkForUpdate().catch(() => {});
+    // Subscribe to background's 15-min alarm broadcasts so a long-open
+    // panel still updates in real time when a new version drops.
+    this._wireBackgroundUpdateListener();
   }
 
   async _checkForUpdate() {
@@ -1851,6 +1859,30 @@ class UnityChat {
     this._autoRevealT = setTimeout(() => {
       wrap.classList.remove('auto-reveal');
     }, 10000);
+  }
+
+  // Background's 15-min alarm broadcasts UC_UPDATE_AVAILABLE / UC_UPDATE_CLEARED.
+  // Wired here so a long-open sidepanel reflects update state in real time
+  // without waiting for the user to close+reopen the panel.
+  _wireBackgroundUpdateListener() {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
+        const wrap = document.getElementById('hdr-logo-wrap');
+        const num = document.getElementById('ut-version-num');
+        if (!wrap) return;
+        const isNew = !wrap.classList.contains('has-update');
+        if (num) num.textContent = msg.version;
+        wrap.classList.add('has-update');
+        // Only auto-reveal on transition (false→true), not on every periodic
+        // re-confirmation, otherwise the tooltip would pop every 15 min.
+        if (isNew) this._autoRevealUpdateTooltip();
+      } else if (msg?.type === 'UC_UPDATE_CLEARED') {
+        const wrap = document.getElementById('hdr-logo-wrap');
+        if (wrap) {
+          wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
+        }
+      }
+    });
   }
 
   _isNewerVersion(remote, current) {
@@ -3480,19 +3512,85 @@ class UnityChat {
   _status(platform, status, detail) {
     const stEl = document.getElementById(`st-${platform}`);
     const dot = stEl?.querySelector('.dot');
-    if (!dot) return;
-    dot.className = 'dot';
     const name = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' }[platform] || platform;
+    if (dot) {
+      dot.className = 'dot';
+      if (status === 'connected') {
+        dot.classList.add('connected');
+        if (stEl) stEl.title = `${name} - Connected`;
+      } else if (status === 'connecting') {
+        dot.classList.add('connecting');
+        if (stEl) stEl.title = `${name} - Connecting...`;
+      } else if (status === 'error') {
+        dot.classList.add('error');
+        if (stEl) stEl.title = `${name} - Disconnected`;
+      }
+    }
+    if (status === 'error' && detail) {
+      this._sys(`${platform.toUpperCase()}: ${detail}`);
+    }
+    // Mirror to loading-overlay pills so the user sees connection progress.
+    this._updateLoadingPill(platform, status);
+  }
+
+  // ---- Loading overlay ---------------------------------------------------
+
+  _showLoading() {
+    const el = document.getElementById('loading-overlay');
+    if (!el) return;
+    el.classList.remove('fade-out', 'hidden');
+    // Mark every configured-active platform as "currently connecting" so its
+    // pill pulses; disabled platforms stay dim.
+    for (const p of ['twitch', 'youtube', 'kick']) {
+      const pill = el.querySelector(`.lo-pill[data-platform="${p}"]`);
+      if (!pill) continue;
+      pill.classList.remove('lo-pulse', 'lo-connected');
+      const enabled = this.config[p] && this._getConfiguredHandle(p);
+      if (enabled) pill.classList.add('lo-pulse');
+    }
+    // Hard cap — if nothing renders or connects in 8s the overlay hides
+    // anyway so the user isn't stuck staring at a spinner forever.
+    clearTimeout(this._loadingHardT);
+    this._loadingHardT = setTimeout(() => this._hideLoading(), 8000);
+  }
+
+  _hideLoading() {
+    const el = document.getElementById('loading-overlay');
+    if (!el) return;
+    if (el.classList.contains('fade-out') || el.classList.contains('hidden')) return;
+    el.classList.add('fade-out');
+    clearTimeout(this._loadingHardT);
+    // Drop from layout after the CSS fade so it doesn't keep absorbing
+    // pointer events behind the curtain.
+    setTimeout(() => el.classList.add('hidden'), 500);
+  }
+
+  _updateLoadingPill(platform, status) {
+    const el = document.getElementById('loading-overlay');
+    if (!el || el.classList.contains('hidden')) return;
+    const pill = el.querySelector(`.lo-pill[data-platform="${platform}"]`);
+    if (!pill) return;
     if (status === 'connected') {
-      dot.classList.add('connected');
-      if (stEl) stEl.title = `${name} - Connected`;
+      pill.classList.remove('lo-pulse');
+      pill.classList.add('lo-connected');
     } else if (status === 'connecting') {
-      dot.classList.add('connecting');
-      if (stEl) stEl.title = `${name} - Connecting...`;
+      pill.classList.remove('lo-connected');
+      pill.classList.add('lo-pulse');
     } else if (status === 'error') {
-      dot.classList.add('error');
-      if (stEl) stEl.title = `${name} - Disconnected`;
-      this._sys(`${platform.toUpperCase()}: ${detail || 'chyba připojení'}`);
+      pill.classList.remove('lo-pulse', 'lo-connected');
+    }
+    // If every enabled platform is either connected or errored out, fade.
+    const enabled = ['twitch', 'youtube', 'kick'].filter(
+      (p) => this.config[p] && this._getConfiguredHandle(p)
+    );
+    if (!enabled.length) { this._hideLoading(); return; }
+    const allDone = enabled.every((p) => {
+      const pi = el.querySelector(`.lo-pill[data-platform="${p}"]`);
+      return pi && (pi.classList.contains('lo-connected') || (!pi.classList.contains('lo-pulse')));
+    });
+    if (allDone) {
+      // Tiny delay so the user sees the last pill light up before fade.
+      setTimeout(() => this._hideLoading(), 350);
     }
   }
 
@@ -3709,6 +3807,11 @@ class UnityChat {
   }
 
   _addMessage(msg) {
+    // First real message dropping in — chat is "live" enough, hide spinner.
+    if (!this._loadingClearedByMsg && msg.username) {
+      this._loadingClearedByMsg = true;
+      this._hideLoading();
+    }
     // Kick off async color resolution for Twitch chatters — hash fallback or
     // IRC color may not match what Twitch's own client shows, so we reconcile
     // via public GQL chatColor field for any user we haven't resolved yet.

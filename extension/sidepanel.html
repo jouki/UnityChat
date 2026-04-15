@@ -144,6 +144,22 @@
   <div id="chat-wrapper">
     <div id="chat"></div>
     <button id="btn-scroll" class="hidden">&darr; Nové zprávy</button>
+
+    <!-- Loading overlay shown while cache hydrates + providers connect.
+         JS clears it on first rendered message (or a hard timeout). -->
+    <div id="loading-overlay" class="loading-overlay">
+      <div class="lo-logo-stack">
+        <span class="lo-logo-glow" aria-hidden="true"></span>
+        <img src="icons/icon128.png" class="lo-logo" alt="">
+      </div>
+      <div class="lo-text">Načítání chatu</div>
+      <div class="lo-platforms" aria-hidden="true">
+        <span class="lo-pill" data-platform="twitch">TW</span>
+        <span class="lo-pill" data-platform="youtube">YT</span>
+        <span class="lo-pill" data-platform="kick">KI</span>
+      </div>
+      <div class="lo-bar" aria-hidden="true"><span></span></div>
+    </div>
   </div>
 
   <!-- Input pro odesílání zpráv -->

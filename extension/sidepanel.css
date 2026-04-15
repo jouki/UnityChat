@@ -740,6 +740,152 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 #chat::-webkit-scrollbar-thumb:hover { background: #555; }
 
+/* ---- Loading overlay ---- */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(ellipse at center,
+    rgba(20, 20, 25, 0.96) 0%,
+    rgba(14, 14, 16, 0.98) 60%,
+    rgba(10, 10, 13, 1) 100%);
+  z-index: 50;
+  pointer-events: auto;
+  transition: opacity 0.45s ease, visibility 0.45s ease;
+  opacity: 1;
+}
+.loading-overlay.fade-out {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.loading-overlay.hidden { display: none; }
+
+.lo-logo-stack {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lo-logo {
+  width: 56px;
+  height: 56px;
+  filter: drop-shadow(0 0 12px rgba(255, 140, 0, 0.55));
+  animation: lo-logo-pulse 1.8s ease-in-out infinite;
+  position: relative;
+  z-index: 2;
+}
+.lo-logo-glow {
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at center,
+    rgba(255, 140, 0, 0.45) 0%,
+    rgba(255, 140, 0, 0.18) 35%,
+    transparent 70%);
+  animation: lo-glow-pulse 1.8s ease-in-out infinite;
+  z-index: 1;
+}
+@keyframes lo-logo-pulse {
+  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 12px rgba(255, 140, 0, 0.55)); }
+  50%      { transform: scale(1.06); filter: drop-shadow(0 0 22px rgba(255, 140, 0, 0.85)); }
+}
+@keyframes lo-glow-pulse {
+  0%, 100% { transform: scale(1);    opacity: 0.7; }
+  50%      { transform: scale(1.25); opacity: 1; }
+}
+
+.lo-text {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  position: relative;
+}
+/* Animated trailing dots after the label, cycling . / .. / ... */
+.lo-text::after {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  text-align: left;
+  color: var(--accent);
+  animation: lo-dots 1.4s steps(4, end) infinite;
+}
+@keyframes lo-dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
+}
+
+.lo-platforms {
+  display: flex;
+  gap: 8px;
+}
+.lo-pill {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 3px 10px;
+  opacity: 0.4;
+  transition: opacity 0.25s, color 0.25s, background 0.25s, border-color 0.25s, box-shadow 0.25s;
+}
+.lo-pill.lo-pulse {
+  /* Currently-connecting platform pulses softly */
+  animation: lo-pill-pulse 1.2s ease-in-out infinite;
+  opacity: 1;
+}
+.lo-pill.lo-connected {
+  /* Connected platform: lit, no animation, brand color */
+  opacity: 1;
+  animation: none;
+  color: #0a0a0d;
+  background: linear-gradient(135deg, #ffc25a, #ff7a00);
+  border-color: transparent;
+  box-shadow: 0 0 10px rgba(255, 140, 0, 0.45);
+}
+@keyframes lo-pill-pulse {
+  0%, 100% { background: rgba(255, 140, 0, 0.10); border-color: rgba(255, 140, 0, 0.25); color: var(--text-primary); }
+  50%      { background: rgba(255, 140, 0, 0.25); border-color: rgba(255, 140, 0, 0.55); color: #ffc25a; }
+}
+
+/* Indeterminate progress bar — bouncing left-to-right slug */
+.lo-bar {
+  width: 140px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.lo-bar > span {
+  position: absolute;
+  top: 0;
+  left: -40%;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, #ff7a00, #ffc25a, transparent);
+  border-radius: 2px;
+  animation: lo-bar-slide 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes lo-bar-slide {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
 /* Message */
 
 .msg {

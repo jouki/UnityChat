@@ -77,6 +77,64 @@ if (HAS_SIDE_PANEL) {
   } catch {}
 })();
 
+// Periodic update poll — fires every 15 min via chrome.alarms (survives
+// service-worker shutdown). Also runs once on each worker spin-up so the
+// badge appears within seconds of an extension install/restart even before
+// the alarm clock ticks. Sidepanel does its own check on open, so a freshly
+// opened panel never sees stale state either.
+const UC_UPDATE_ALARM = 'uc-update-check';
+const UC_UPDATE_MANIFEST_URL = 'https://jouki.cz/download/manifest.json';
+
+function _ucIsNewerVersion(remote, current) {
+  const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  const a = parse(remote);
+  const b = parse(current);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}
+
+async function ucCheckForUpdate() {
+  try {
+    const current = chrome.runtime.getManifest().version;
+    const r = await fetch(UC_UPDATE_MANIFEST_URL, { cache: 'no-store' });
+    if (!r.ok) return;
+    const remote = await r.json();
+    const latest = remote?.version;
+    if (!latest) return;
+    if (_ucIsNewerVersion(latest, current)) {
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
+      if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
+      chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${latest})` });
+      await chrome.storage.local.set({ uc_update: { version: latest, at: Date.now() } });
+      // Notify any open sidepanel so its in-panel tooltip lights up live,
+      // without waiting for the user to close+reopen the panel.
+      chrome.runtime.sendMessage({ type: 'UC_UPDATE_AVAILABLE', version: latest }).catch(() => {});
+    } else {
+      chrome.action.setBadgeText({ text: '' });
+      chrome.action.setTitle({ title: 'UnityChat - Otevřít sjednocený chat' });
+      await chrome.storage.local.remove('uc_update');
+      chrome.runtime.sendMessage({ type: 'UC_UPDATE_CLEARED' }).catch(() => {});
+    }
+  } catch {}
+}
+
+// Create/refresh the alarm on every worker spin-up — chrome.alarms.create
+// with the same name is a no-op if it already exists with the same period,
+// so this is cheap and self-healing.
+chrome.alarms.create(UC_UPDATE_ALARM, { periodInMinutes: 15 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UC_UPDATE_ALARM) ucCheckForUpdate();
+});
+// Also kick off a check immediately on this worker spin-up.
+ucCheckForUpdate();
+
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
   const targets = [
