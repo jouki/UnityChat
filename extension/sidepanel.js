@@ -5869,12 +5869,13 @@ class UnityChat {
     // redeem/highlight/cleared/action) have their own renderers that
     // don't need a body, so we let those through.
     // Strip UC_MARKER (Braille blank — intentionally NOT whitespace so
-    // Twitch can't normalise it away) before the emptiness check, and
-    // strip literal Braille blank chars too. Otherwise a message like
-    // "⠀" alone parses as "non-empty" here but renders as empty after
-    // the marker-strip path at line ~5814 kicks in.
+    // Twitch can't normalise it away) before the emptiness check.
+    // Messages may carry their real content in platform-specific fields
+    // (ytRuns for YouTube, kickContent for Kick) even when the plain
+    // `message` string is empty — those must NOT be dropped.
     const msgProbe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
-    const textEmpty = !msgProbe;
+    const hasPlatformContent = (msg?.ytRuns?.length > 0) || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
+    const textEmpty = !msgProbe && !hasPlatformContent;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
@@ -6623,10 +6624,12 @@ class UnityChat {
       const msgs = raw.filter((m) => {
         if (m.timestamp && m.timestamp <= cutoff) return false;
         const body = typeof m.message === 'string' && m.message.trim();
+        const platformContent = (m.ytRuns?.length > 0)
+          || (typeof m.kickContent === 'string' && m.kickContent.trim().length > 0);
         const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
           || m.isGiftBundle || m.isSubGift || m.isRedeem
           || m.isHighlight || m._cleared || m.isAction;
-        return body || isSystem;
+        return body || platformContent || isSystem;
       });
 
       // Load each message individually — don't let one bad message kill the rest

@@ -832,8 +832,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   z-index: 1;
 }
 @keyframes lo-logo-pulse {
-  0%, 100% { transform: scale(1);    filter: drop-shadow(0 0 12px rgba(255, 140, 0, 0.55)); }
-  50%      { transform: scale(1.06); filter: drop-shadow(0 0 22px rgba(255, 140, 0, 0.85)); }
+  0%, 100% { transform: scale(0.88); filter: drop-shadow(0 0 10px rgba(255, 140, 0, 0.45)); }
+  50%      { transform: scale(1.14); filter: drop-shadow(0 0 28px rgba(255, 140, 0, 0.95)); }
 }
 @keyframes lo-glow-pulse {
   0%, 100% { transform: scale(1);    opacity: 0.7; }
@@ -901,11 +901,13 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   50%      { background: rgba(255, 140, 0, 0.25); border-color: rgba(255, 140, 0, 0.55); color: #ffc25a; }
 }
 
-/* Indeterminate progress bar — bouncing left-to-right slug */
+/* Indeterminate progress bar — bouncing left-to-right slug. Using
+   transform/will-change so the animation stays on the compositor
+   thread even when the main thread is busy hydrating the cache. */
 .lo-bar {
-  width: 140px;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.06);
+  width: 160px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 2px;
   overflow: hidden;
   position: relative;
@@ -913,16 +915,19 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 .lo-bar > span {
   position: absolute;
   top: 0;
-  left: -40%;
+  left: 0;
   height: 100%;
-  width: 40%;
-  background: linear-gradient(90deg, transparent, #ff7a00, #ffc25a, transparent);
+  width: 45%;
+  background: linear-gradient(90deg, transparent 0%, #ff7a00 30%, #ffc25a 55%, #ff7a00 75%, transparent 100%);
   border-radius: 2px;
-  animation: lo-bar-slide 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  transform: translateX(-100%);
+  will-change: transform;
+  animation: lo-bar-slide 1.35s cubic-bezier(0.55, 0.1, 0.45, 0.9) infinite;
+  box-shadow: 0 0 8px rgba(255, 122, 0, 0.55);
 }
 @keyframes lo-bar-slide {
-  0%   { left: -40%; }
-  100% { left: 100%; }
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(355%); }
 }
 
 /* Message */
