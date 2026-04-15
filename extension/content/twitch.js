@@ -392,63 +392,71 @@
           }
         } catch (e) { log('react-onclick-err', { msg: e.message }); }
 
-        // Always poll for dialog (regardless of hidden state) so we can
-        // verify whether the popover actually opened — the user might
-        // see it briefly off-screen otherwise and we wouldn't know.
+        // Poll for dialog. Once it mounts:
+        //   - If we lifted the hide, re-apply IMMEDIATELY so the chat
+        //     column goes back to width:0 but the popover (portaled to
+        //     body or with position:fixed) stays visible.
+        //   - If the popover turns out to be a DOM child of the chat
+        //     column, our width:0/overflow:hidden would clip it — in
+        //     that case relocate the popover to document.body with
+        //     fixed positioning so it survives the re-hide.
         const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
         let attemptsAll = 0;
+        const rightColumnSel = '.channel-root__right-column, [data-a-target="right-column"], .right-column';
         const checkDialog = () => {
           attemptsAll++;
           const dlg = document.querySelector(dialogSel);
           if (dlg) {
             const rr = dlg.getBoundingClientRect();
-            log('post-click-dialog', { attempts: attemptsAll, x: rr.left, y: rr.top, w: rr.width, h: rr.height, computed: getComputedStyle(dlg).display });
-            return;
-          }
-          if (attemptsAll < 20) setTimeout(checkDialog, 100);
-          else log('post-click-no-dialog', { attempts: attemptsAll });
-        };
-        setTimeout(checkDialog, 50);
+            const insideColumn = !!dlg.closest(rightColumnSel);
+            log('post-click-dialog', { attempts: attemptsAll, x: rr.left, y: rr.top, w: rr.width, h: rr.height, computed: getComputedStyle(dlg).display, insideColumn });
 
-        if (wasHidden) {
-          // Wait for the popover dialog to appear, then watch for its
-          // disappearance to restore our hide. Poll for up to 2s for
-          // the popover to mount; once it's in DOM, observe removal.
-          const restore = () => {
-            if (!ucChatHidden) return; // user toggled UC themselves
-            for (const t of UC_WITH_CHAT_TARGETS) {
-              for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
-                el.classList.remove(t.modifier);
+            if (wasHidden) {
+              if (insideColumn) {
+                // Popover lives inside the chat column DOM tree — our
+                // width:0 hide would clip it. Portal it to body root
+                // with fixed positioning at the exact viewport coords
+                // we just measured, then re-apply hide.
+                const fx = rr.left, fy = rr.top, fw = rr.width, fh = rr.height;
+                try {
+                  document.body.appendChild(dlg);
+                  dlg.style.position = 'fixed';
+                  dlg.style.left = fx + 'px';
+                  dlg.style.top = fy + 'px';
+                  dlg.style.width = fw + 'px';
+                  dlg.style.height = fh + 'px';
+                  dlg.style.zIndex = '9999';
+                  dlg.dataset.ucPortaled = '1';
+                  log('dialog-portaled', { fx, fy, fw, fh });
+                } catch (e) { log('dialog-portal-err', { msg: e.message }); }
               }
-            }
-            let style = document.getElementById(UC_HIDE_STYLE_ID);
-            if (!style) {
-              style = document.createElement('style');
-              style.id = UC_HIDE_STYLE_ID;
-              style.textContent = `
-                .channel-root__right-column,
-                [data-a-target="right-column"],
-                .right-column {
-                  width: 0 !important; min-width: 0 !important; max-width: 0 !important;
-                  overflow: hidden !important; visibility: hidden !important;
+              // Re-apply hide so vanilla chat stays invisible.
+              for (const t of UC_WITH_CHAT_TARGETS) {
+                for (const el of document.querySelectorAll(t.selector + '[data-uc-with-chat="1"]')) {
+                  el.classList.remove(t.modifier);
                 }
-              `;
-              document.documentElement.appendChild(style);
-            }
-          };
-          const dialogSel = '[role="dialog"][aria-labelledby="channel-points-reward-center-header"], [role="dialog"][aria-labelledby*="bits"], [role="dialog"]';
-          let attempts = 0;
-          const waitForDialog = () => {
-            attempts++;
-            const dlg = document.querySelector(dialogSel);
-            if (dlg) {
-              const r = dlg.getBoundingClientRect();
-              log('dialog-found', { attempts, x: r.left, y: r.top, w: r.width, h: r.height, html: dlg.outerHTML.slice(0, 200) });
+              }
+              let style = document.getElementById(UC_HIDE_STYLE_ID);
+              if (!style) {
+                style = document.createElement('style');
+                style.id = UC_HIDE_STYLE_ID;
+                style.textContent = `
+                  .channel-root__right-column,
+                  [data-a-target="right-column"],
+                  .right-column {
+                    width: 0 !important; min-width: 0 !important; max-width: 0 !important;
+                    overflow: hidden !important; visibility: hidden !important;
+                  }
+                `;
+                document.documentElement.appendChild(style);
+              }
+              log('hide-reapplied');
+
+              // Watch for dismissal to clean up the portaled node.
               const obs = new MutationObserver(() => {
                 if (!document.contains(dlg)) {
                   obs.disconnect();
-                  log('dialog-removed-restoring');
-                  restore();
+                  log('portal-dialog-removed');
                 }
               });
               obs.observe(document.body, { childList: true, subtree: true });
@@ -456,20 +464,20 @@
                 if (!dlg.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
                   document.removeEventListener('click', onDocClick, true);
                   obs.disconnect();
-                  log('click-outside-restoring');
-                  setTimeout(restore, 100);
+                  setTimeout(() => { try { dlg.remove(); } catch {} }, 100);
+                  log('portal-click-outside');
                 }
               };
               setTimeout(() => document.addEventListener('click', onDocClick, true), 200);
-              return;
             }
-            if (attempts < 20) setTimeout(waitForDialog, 100);
-            else { log('dialog-never-appeared', { attempts }); restore(); }
-          };
-          waitForDialog();
-        } else {
-          log('not-hidden-no-restore-needed');
-        }
+            return;
+          }
+          if (attemptsAll < 20) setTimeout(checkDialog, 100);
+          else log('post-click-no-dialog', { attempts: attemptsAll });
+        };
+        setTimeout(checkDialog, 50);
+
+        if (!wasHidden) log('not-hidden-no-restore-needed');
         sendResponse({ ok: true });
       } catch (e) { log('exception', { msg: e.message, stack: (e.stack || '').slice(0, 300) }); sendResponse({ ok: false, error: e.message }); }
       return;
