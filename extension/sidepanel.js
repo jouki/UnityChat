@@ -1856,18 +1856,10 @@ class YouTubeProvider {
   }
 
   async _findLiveVideoId() {
-    // Handle URL (@handle/live) FIRST — resolves to the channel's primary live
-    // stream. Legacy username URL (channel/live) can redirect to a different
-    // simultaneous stream on multi-stream channels (thegoodliferadio runs
-    // several live streams at once). The legacy path occasionally lands on
-    // an invalidation-only secondary stream that can't be HTTP-polled; the
-    // handle path reliably hits the main polling-friendly feed.
-    const bare = this.channel.replace(/^@/, '');
     const urls = [
-      `https://www.youtube.com/@${bare}/live`,
-      `https://www.youtube.com/${bare}/live`,
+      `https://www.youtube.com/${this.channel}/live`,
+      `https://www.youtube.com/@${this.channel}/live`
     ];
-    const candidates = [];
     for (const url of urls) {
       try {
         const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
@@ -1880,18 +1872,14 @@ class YouTubeProvider {
           html.includes('"isLiveBroadcast":true');
         const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
         this._log(`findLive ${url} isLive=${isLive} videoId=${m?.[1] || 'none'} bytes=${html.length} finalUrl=${r.url}`);
-        if (!isLive || !m) continue;
-        candidates.push({ url, videoId: m[1], finalUrl: r.url });
+        if (!isLive) continue;
+        if (m) return m[1];
       } catch (err) {
         this._log(`findLive ${url} ERROR ${err.message}`);
+        continue;
       }
     }
-    if (!candidates.length) return null;
-    // Prefer the first candidate (handle URL); dedupe identical videoIds.
-    const picked = candidates[0];
-    const uniq = [...new Set(candidates.map(c => c.videoId))];
-    this._log(`findLive picked=${picked.videoId} candidates=${uniq.join(',')}`);
-    return picked.videoId;
+    return null;
   }
 
   _extractJson(html, varName) {
