@@ -1687,7 +1687,7 @@ class YouTubeProvider {
       // Krok 2: načíst live chat stránku. Try popout first (forces
       // timedContinuationData for HTTP polling); fall back to embedded if
       // popout returns no usable continuation.
-      let chatHtml, ytData, contType = 'none', variant = 'popout';
+      let chatHtml, ytData, contType = 'none', variant = 'popout', invalidationToken = null;
       for (const v of ['popout', 'embedded']) {
         this._log(`[${cid}] fetchChatPage variant=${v} start`);
         const chatStart = Date.now();
@@ -1697,7 +1697,7 @@ class YouTubeProvider {
         this._log(`[${cid}] extractJson variant=${v} ytData=${!!data}`);
         if (!data) continue;
         const conts = data?.contents?.liveChatRenderer?.continuations;
-        let foundTimed = null, foundType = 'none';
+        let foundTimed = null, foundType = 'none', foundInv = null;
         if (conts?.length) {
           for (const c of conts) {
             if (c?.timedContinuationData?.continuation) {
@@ -1708,13 +1708,18 @@ class YouTubeProvider {
           }
           if (!foundTimed) {
             for (const c of conts) {
-              if (c?.invalidationContinuationData) { foundType = 'invalidation'; break; }
+              if (c?.invalidationContinuationData?.continuation) {
+                foundInv = c.invalidationContinuationData.continuation;
+                foundType = 'invalidation';
+                break;
+              }
               if (c?.reloadContinuationData) { foundType = 'reload'; break; }
             }
           }
         }
         this._log(`[${cid}] variant=${v} contType=${foundType} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
         chatHtml = html; ytData = data; contType = foundType; variant = v;
+        if (foundInv && !invalidationToken) invalidationToken = foundInv;
         if (foundTimed) { this._cont = foundTimed; break; }
         // No timed from popout — try embedded before accepting defeat
       }
@@ -1764,12 +1769,73 @@ class YouTubeProvider {
         this.onDebug?.('YouTube: API polling mód');
       }
 
+      // Diagnostic probe for invalidation-only streams — fires once per connect,
+      // tries multiple endpoint/payload variants to find one that accepts the
+      // invalidation token and returns fresh actions. Results purely logged.
+      if (!this._cont && invalidationToken) {
+        this._probeInvalidation(invalidationToken, cid).catch(() => {});
+      }
+
       this._pt = setTimeout(() => this._poll(), 2000);
     } catch (err) {
       console.error('YouTube:', err);
       this._log(`[${cid}] connect ERROR ${err.message}`);
       this.onStatus?.('error', err.message);
     }
+  }
+
+  async _probeInvalidation(invToken, cid) {
+    const base = `https://www.youtube.com/youtubei/v1/live_chat`;
+    const key = this._apiKey;
+    const ctx = this._ctx;
+    const ctxEmbed = { client: { ...ctx.client, clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250401.00.00' } };
+    const ctxTv = { client: { ...ctx.client, clientName: 'TVHTML5', clientVersion: '7.20250401.08.00' } };
+    const attempts = [
+      { name: 'POST get_live_chat WEB',          method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctx, continuation: invToken } },
+      { name: 'POST get_live_chat WEB_EMBEDDED', method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctxEmbed, continuation: invToken } },
+      { name: 'POST get_live_chat TVHTML5',      method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctxTv, continuation: invToken } },
+      { name: 'POST get_live_chat WEB referer',  method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctx, continuation: invToken }, referrer: 'https://www.youtube.com/' },
+      { name: 'GET live_chat?continuation',      method: 'GET',  url: `https://www.youtube.com/live_chat?v=${this._videoId}&continuation=${encodeURIComponent(invToken)}` },
+      { name: 'GET live_chat?popout+cont',       method: 'GET',  url: `https://www.youtube.com/live_chat?v=${this._videoId}&is_popout=1&continuation=${encodeURIComponent(invToken)}` },
+    ];
+    for (const a of attempts) {
+      const t0 = Date.now();
+      try {
+        const init = {
+          method: a.method,
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Version': ctx.client.clientVersion,
+          },
+        };
+        if (a.method === 'POST') init.body = JSON.stringify(a.body);
+        if (a.referrer) init.referrer = a.referrer;
+        const r = await fetch(a.url, init);
+        const text = await r.text();
+        let hasActions = false, contKeys = '', errSnippet = '';
+        const trimmed = text.trim();
+        if (trimmed.startsWith('{')) {
+          try {
+            const j = JSON.parse(text);
+            const lcc = j?.continuationContents?.liveChatContinuation;
+            hasActions = !!(lcc?.actions?.length);
+            const conts = lcc?.continuations;
+            if (conts?.length) contKeys = conts.map(c => Object.keys(c)).flat().join(',');
+            if (j?.error?.message) errSnippet = j.error.message.slice(0, 120);
+          } catch {}
+        } else {
+          if (text.includes('timedContinuationData')) contKeys = 'timed(inHTML)';
+          else if (text.includes('invalidationContinuationData')) contKeys = 'invalidation(inHTML)';
+          else contKeys = 'noCont(inHTML)';
+        }
+        this._log(`PROBE [${cid}] "${a.name}" status=${r.status} bytes=${text.length} hasActions=${hasActions} contKeys=${contKeys} err=${errSnippet} ms=${Date.now()-t0}`);
+      } catch (err) {
+        this._log(`PROBE [${cid}] "${a.name}" EXC ${err.name}:${err.message} ms=${Date.now()-t0}`);
+      }
+    }
+    this._log(`PROBE [${cid}] done`);
   }
 
   async _fetchChatPage(variant) {
