@@ -1684,14 +1684,43 @@ class YouTubeProvider {
       if (!this._videoId) throw new Error('Streamer není live na YouTube');
       this.onDebug?.(`YouTube videoId: ${this._videoId}`);
 
-      // Krok 2: načíst live chat stránku
-      this._log(`[${cid}] fetchChatPage start`);
-      const chatStart = Date.now();
-      const chatHtml = await this._fetchChatPage();
-      this._log(`[${cid}] fetchChatPage done bytes=${chatHtml.length} ms=${Date.now()-chatStart}`);
-      const ytData = this._extractJson(chatHtml, 'ytInitialData');
-      this._log(`[${cid}] extractJson ytData=${!!ytData}`);
+      // Krok 2: načíst live chat stránku. Try popout first (forces
+      // timedContinuationData for HTTP polling); fall back to embedded if
+      // popout returns no usable continuation.
+      let chatHtml, ytData, contType = 'none', variant = 'popout';
+      for (const v of ['popout', 'embedded']) {
+        this._log(`[${cid}] fetchChatPage variant=${v} start`);
+        const chatStart = Date.now();
+        const html = await this._fetchChatPage(v);
+        this._log(`[${cid}] fetchChatPage variant=${v} done bytes=${html.length} ms=${Date.now()-chatStart}`);
+        const data = this._extractJson(html, 'ytInitialData');
+        this._log(`[${cid}] extractJson variant=${v} ytData=${!!data}`);
+        if (!data) continue;
+        const conts = data?.contents?.liveChatRenderer?.continuations;
+        let foundTimed = null, foundType = 'none';
+        if (conts?.length) {
+          for (const c of conts) {
+            if (c?.timedContinuationData?.continuation) {
+              foundTimed = c.timedContinuationData.continuation;
+              foundType = 'timed';
+              break;
+            }
+          }
+          if (!foundTimed) {
+            for (const c of conts) {
+              if (c?.invalidationContinuationData) { foundType = 'invalidation'; break; }
+              if (c?.reloadContinuationData) { foundType = 'reload'; break; }
+            }
+          }
+        }
+        this._log(`[${cid}] variant=${v} contType=${foundType} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
+        chatHtml = html; ytData = data; contType = foundType; variant = v;
+        if (foundTimed) { this._cont = foundTimed; break; }
+        // No timed from popout — try embedded before accepting defeat
+      }
       if (!ytData) throw new Error('YouTube chat data nenalezena');
+      this._variant = variant;
+      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont}`);
 
       // API key + client version + visitorData
       const keyM = chatHtml.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
@@ -1707,29 +1736,6 @@ class YouTubeProvider {
           ...(visM ? { visitorData: visM[1] } : {})
         }
       };
-
-      // Continuation token: ONLY timedContinuationData works with HTTP polling.
-      // invalidationContinuationData is push-only (returns 403 on get_live_chat),
-      // reloadContinuationData is for reinitializing the page, not periodic polling.
-      // If timed is absent, we stay on page-refresh mode (no _cont needed).
-      const conts = ytData?.contents?.liveChatRenderer?.continuations;
-      let contType = 'none';
-      if (conts?.length) {
-        for (const c of conts) {
-          if (c?.timedContinuationData?.continuation) {
-            this._cont = c.timedContinuationData.continuation;
-            contType = 'timed';
-            break;
-          }
-        }
-        if (!this._cont) {
-          for (const c of conts) {
-            if (c?.invalidationContinuationData) { contType = 'invalidation'; break; }
-            if (c?.reloadContinuationData) { contType = 'reload'; break; }
-          }
-        }
-      }
-      this._log(`[${cid}] continuation type=${contType} present=${!!this._cont} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
 
       // Zpracovat úvodní zprávy (zobrazit posledních několik)
       const actions = ytData?.contents?.liveChatRenderer?.actions || [];
@@ -1766,9 +1772,17 @@ class YouTubeProvider {
     }
   }
 
-  async _fetchChatPage() {
+  async _fetchChatPage(variant) {
+    // is_popout=1 forces YouTube to return timedContinuationData (popout chat
+    // has no parent frame for push, so server must provide polling tokens).
+    // Embedded (default) returns invalidationContinuationData for small
+    // channels, which cannot be used for HTTP polling.
+    const v = variant || 'popout';
+    const qs = v === 'popout'
+      ? `v=${this._videoId}&is_popout=1`
+      : `v=${this._videoId}`;
     const resp = await fetch(
-      `https://www.youtube.com/live_chat?v=${this._videoId}`,
+      `https://www.youtube.com/live_chat?${qs}`,
       { credentials: 'include' }
     );
     if (!resp.ok) throw new Error(`YouTube chat page: ${resp.status}`);
@@ -1944,7 +1958,7 @@ class YouTubeProvider {
     const tick = ++this._pollTick;
     try {
       const t0 = Date.now();
-      const html = await this._fetchChatPage();
+      const html = await this._fetchChatPage(this._variant);
       const ytData = this._extractJson(html, 'ytInitialData');
       if (!ytData) {
         this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} ms=${Date.now()-t0}`);
