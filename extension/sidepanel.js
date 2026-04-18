@@ -1708,27 +1708,24 @@ class YouTubeProvider {
         }
       };
 
-      // Continuation token - preferovat timedContinuationData (funguje s pollingem)
+      // Continuation token: ONLY timedContinuationData works with HTTP polling.
+      // invalidationContinuationData is push-only (returns 403 on get_live_chat),
+      // reloadContinuationData is for reinitializing the page, not periodic polling.
+      // If timed is absent, we stay on page-refresh mode (no _cont needed).
       const conts = ytData?.contents?.liveChatRenderer?.continuations;
       let contType = 'none';
       if (conts?.length) {
         for (const c of conts) {
-          // timedContinuationData funguje nejlépe s HTTP pollingem
           if (c?.timedContinuationData?.continuation) {
             this._cont = c.timedContinuationData.continuation;
             contType = 'timed';
             break;
           }
         }
-        // Fallback na jiný typ
         if (!this._cont) {
-          const c = conts[0];
-          if (c?.reloadContinuationData?.continuation) {
-            this._cont = c.reloadContinuationData.continuation;
-            contType = 'reload';
-          } else if (c?.invalidationContinuationData?.continuation) {
-            this._cont = c.invalidationContinuationData.continuation;
-            contType = 'invalidation';
+          for (const c of conts) {
+            if (c?.invalidationContinuationData) { contType = 'invalidation'; break; }
+            if (c?.reloadContinuationData) { contType = 'reload'; break; }
           }
         }
       }
@@ -1891,7 +1888,9 @@ class YouTubeProvider {
         return;
       }
 
-      // Aktualizovat continuation - preferovat timedContinuationData
+      // Continuation update: ONLY timedContinuationData works with HTTP polling.
+      // If the response stops emitting it (stream switched to push-only), keep
+      // previous _cont and fall back to page refresh so we don't start 403-ing.
       let nextMs = 5000;
       let contTypeTick = 'none';
       const conts = lcc.continuations;
@@ -1903,11 +1902,11 @@ class YouTubeProvider {
             contTypeTick = 'timed';
             break;
           }
-          if (c?.invalidationContinuationData) {
-            this._cont = c.invalidationContinuationData.continuation;
-            nextMs = c.invalidationContinuationData.timeoutMs || 5000;
-            contTypeTick = 'invalidation';
-          }
+          if (c?.invalidationContinuationData) contTypeTick = 'invalidation-only';
+        }
+        if (contTypeTick === 'invalidation-only') {
+          this.onDebug?.('YouTube API: stream switched to invalidation-only continuation, page refresh mode');
+          this._usePageRefresh = true;
         }
       }
 
