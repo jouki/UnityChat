@@ -1655,25 +1655,42 @@ class YouTubeProvider {
     this._seen = new Set();
     this._apiFails = 0;       // počet po sobě jdoucích prázdných API odpovědí
     this._usePageRefresh = false;
+    this._connectId = 0;      // serial ID for disambiguating overlapping connects
+    this._pollTick = 0;       // incremented on each poll invocation
     this.onMessage = null;
     this.onStatus = null;
     this.onDebug = null;      // callback pro debug zprávy
   }
 
+  _log(text) {
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'YT', text }).catch(() => {});
+    } catch {}
+  }
+
   async connect(channel) {
     this.channel = channel.trim();
     this.disconnect(true);
+    const cid = ++this._connectId;
+    this._log(`connect() ch=${this.channel} cid=${cid}`);
     this.onStatus?.('connecting');
 
     try {
       // Krok 1: najít videoId
+      this._log(`[${cid}] findLiveVideoId start`);
+      const vidStart = Date.now();
       this._videoId = await this._findLiveVideoId();
+      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart}`);
       if (!this._videoId) throw new Error('Streamer není live na YouTube');
       this.onDebug?.(`YouTube videoId: ${this._videoId}`);
 
       // Krok 2: načíst live chat stránku
+      this._log(`[${cid}] fetchChatPage start`);
+      const chatStart = Date.now();
       const chatHtml = await this._fetchChatPage();
+      this._log(`[${cid}] fetchChatPage done bytes=${chatHtml.length} ms=${Date.now()-chatStart}`);
       const ytData = this._extractJson(chatHtml, 'ytInitialData');
+      this._log(`[${cid}] extractJson ytData=${!!ytData}`);
       if (!ytData) throw new Error('YouTube chat data nenalezena');
 
       // API key + client version + visitorData
@@ -1693,39 +1710,50 @@ class YouTubeProvider {
 
       // Continuation token - preferovat timedContinuationData (funguje s pollingem)
       const conts = ytData?.contents?.liveChatRenderer?.continuations;
+      let contType = 'none';
       if (conts?.length) {
         for (const c of conts) {
           // timedContinuationData funguje nejlépe s HTTP pollingem
           if (c?.timedContinuationData?.continuation) {
             this._cont = c.timedContinuationData.continuation;
+            contType = 'timed';
             break;
           }
         }
         // Fallback na jiný typ
         if (!this._cont) {
           const c = conts[0];
-          this._cont =
-            c?.reloadContinuationData?.continuation ||
-            c?.invalidationContinuationData?.continuation;
+          if (c?.reloadContinuationData?.continuation) {
+            this._cont = c.reloadContinuationData.continuation;
+            contType = 'reload';
+          } else if (c?.invalidationContinuationData?.continuation) {
+            this._cont = c.invalidationContinuationData.continuation;
+            contType = 'invalidation';
+          }
         }
       }
+      this._log(`[${cid}] continuation type=${contType} present=${!!this._cont} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
 
       // Zpracovat úvodní zprávy (zobrazit posledních několik)
       const actions = ytData?.contents?.liveChatRenderer?.actions || [];
       const recentActions = actions.slice(-10); // zobrazit max 10 posledních
+      this._log(`[${cid}] initial actions=${actions.length} rendering=${recentActions.length}`);
       this._processActions(recentActions);
       // Označit všechny jako viděné
+      let initialSeen = 0;
       for (const a of actions) {
         const r =
           a?.addChatItemAction?.item?.liveChatTextMessageRenderer ||
           a?.addChatItemAction?.item?.liveChatPaidMessageRenderer;
-        if (r?.id) this._seen.add(r.id);
+        if (r?.id) { this._seen.add(r.id); initialSeen++; }
       }
+      this._log(`[${cid}] seen set primed with ${initialSeen} ids, total seen=${this._seen.size}`);
 
       this.polling = true;
       this._apiFails = 0;
       this._usePageRefresh = !this._cont; // bez continuation jdeme rovnou na page refresh
       this.onStatus?.('connected');
+      this._log(`[${cid}] connected mode=${this._usePageRefresh ? 'pageRefresh' : 'api'}`);
 
       if (this._usePageRefresh) {
         this.onDebug?.('YouTube: page refresh mód (bez continuation)');
@@ -1736,6 +1764,7 @@ class YouTubeProvider {
       this._pt = setTimeout(() => this._poll(), 2000);
     } catch (err) {
       console.error('YouTube:', err);
+      this._log(`[${cid}] connect ERROR ${err.message}`);
       this.onStatus?.('error', err.message);
     }
   }
@@ -1757,17 +1786,19 @@ class YouTubeProvider {
     for (const url of urls) {
       try {
         const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
-        if (!r.ok) continue;
+        if (!r.ok) { this._log(`findLive ${url} status=${r.status}`); continue; }
         const html = await r.text();
         const isLive =
           html.includes('"isLive":true') ||
           html.includes('"isLiveContent":true') ||
           html.includes('"isLiveNow":true') ||
           html.includes('"isLiveBroadcast":true');
-        if (!isLive) continue;
         const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+        this._log(`findLive ${url} isLive=${isLive} videoId=${m?.[1] || 'none'} bytes=${html.length} finalUrl=${r.url}`);
+        if (!isLive) continue;
         if (m) return m[1];
-      } catch {
+      } catch (err) {
+        this._log(`findLive ${url} ERROR ${err.message}`);
         continue;
       }
     }
@@ -1819,9 +1850,11 @@ class YouTubeProvider {
   }
 
   async _pollApi() {
+    const tick = ++this._pollTick;
     try {
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 15000);
+      const t0 = Date.now();
 
       const resp = await fetch(
         `https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${this._apiKey}&prettyPrint=false`,
@@ -1839,13 +1872,17 @@ class YouTubeProvider {
       );
       clearTimeout(timeout);
 
-      if (!resp.ok) throw new Error(`API ${resp.status}`);
+      if (!resp.ok) {
+        this._log(`pollApi#${tick} HTTP ${resp.status} ms=${Date.now()-t0}`);
+        throw new Error(`API ${resp.status}`);
+      }
 
       const data = await resp.json();
       const lcc = data?.continuationContents?.liveChatContinuation;
 
       if (!lcc) {
         this._apiFails++;
+        this._log(`pollApi#${tick} NO_LCC apiFails=${this._apiFails} dataKeys=${Object.keys(data || {}).join(',')} ms=${Date.now()-t0}`);
         if (this._apiFails >= 3) {
           this.onDebug?.('YouTube API: prázdné odpovědi, přepínám na page refresh');
           this._usePageRefresh = true;
@@ -1856,22 +1893,26 @@ class YouTubeProvider {
 
       // Aktualizovat continuation - preferovat timedContinuationData
       let nextMs = 5000;
+      let contTypeTick = 'none';
       const conts = lcc.continuations;
       if (conts?.length) {
         for (const c of conts) {
           if (c?.timedContinuationData) {
             this._cont = c.timedContinuationData.continuation;
             nextMs = c.timedContinuationData.timeoutMs || 5000;
+            contTypeTick = 'timed';
             break;
           }
           if (c?.invalidationContinuationData) {
             this._cont = c.invalidationContinuationData.continuation;
             nextMs = c.invalidationContinuationData.timeoutMs || 5000;
+            contTypeTick = 'invalidation';
           }
         }
       }
 
       const actions = lcc.actions || [];
+      const beforeSeen = this._seen.size;
       if (actions.length > 0) {
         this._apiFails = 0;
         this._processActions(actions);
@@ -1882,6 +1923,8 @@ class YouTubeProvider {
           this._usePageRefresh = true;
         }
       }
+      const added = this._seen.size - beforeSeen;
+      this._log(`pollApi#${tick} actions=${actions.length} newSeen=${added} apiFails=${this._apiFails} cont=${contTypeTick} nextMs=${nextMs} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 1500));
@@ -1889,6 +1932,7 @@ class YouTubeProvider {
     } catch (err) {
       console.error('YouTube API poll:', err);
       this._apiFails++;
+      this._log(`pollApi#${tick} EXC ${err.name}:${err.message} apiFails=${this._apiFails}`);
       if (this._apiFails >= 3) {
         this.onDebug?.(`YouTube API selhalo (${err.message}), přepínám na page refresh`);
         this._usePageRefresh = true;
@@ -1898,27 +1942,29 @@ class YouTubeProvider {
   }
 
   async _pollPageRefresh() {
+    const tick = ++this._pollTick;
     try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 15000);
-
+      const t0 = Date.now();
       const html = await this._fetchChatPage();
-      clearTimeout(timeout);
-
       const ytData = this._extractJson(html, 'ytInitialData');
       if (!ytData) {
+        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} ms=${Date.now()-t0}`);
         if (this.polling) this._pt = setTimeout(() => this._poll(), 8000);
         return;
       }
 
       const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const beforeSeen = this._seen.size;
       this._processActions(actions);
+      const added = this._seen.size - beforeSeen;
+      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
       }
     } catch (err) {
       console.error('YouTube page refresh:', err);
+      this._log(`pollPage#${tick} EXC ${err.name}:${err.message}`);
       if (this.polling) this._pt = setTimeout(() => this._poll(), 10000);
     }
   }
@@ -1970,6 +2016,9 @@ class YouTubeProvider {
   }
 
   disconnect(internal) {
+    if (this.polling || this._pt || this._videoId) {
+      this._log(`disconnect internal=${!!internal} wasPolling=${this.polling} hadTimer=${!!this._pt} videoId=${this._videoId || 'null'} seenSize=${this._seen.size}`);
+    }
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
