@@ -4678,6 +4678,28 @@ class UnityChat {
       msgEl.appendChild(note);
     }
     note.textContent = label;
+
+    // Retroactively upgrade tag-line from "First message" to "Suspicious" —
+    // a moderated user shouldn't keep the cheerful first-message label.
+    // Preserves higher-priority tags (reply/mention/raid) if already present.
+    const tagLine = msgEl.querySelector('.msg-tag-line');
+    if (tagLine) {
+      const tag = tagLine.querySelector('.msg-tag');
+      if (tag && tag.classList.contains('tag-first')) {
+        tag.classList.remove('tag-first');
+        tag.classList.add('tag-sus');
+        tag.textContent = 'Suspicious';
+      }
+    } else {
+      const newTagLine = document.createElement('div');
+      newTagLine.className = 'msg-tag-line';
+      newTagLine.innerHTML = `<span class="msg-tag tag-sus">Suspicious</span>`;
+      // Insert before message text (.tx) so tag-line appears above content,
+      // matching the initial render order.
+      const tx = msgEl.querySelector('.tx');
+      if (tx) msgEl.insertBefore(newTagLine, tx);
+      else msgEl.appendChild(newTagLine);
+    }
   }
 
   // ---- Loading overlay ---------------------------------------------------
@@ -6300,7 +6322,13 @@ class UnityChat {
           // retroactively gets their real chat color once resolved.
           this._enqueueTwitchColorLookup(lname);
         }
-        span.textContent = '@' + name;
+        // Display nickname if one is set for this user, else raw login name.
+        // Raw message body / cache / dedup all use the original @name — only
+        // the rendered text switches. data-mention-user stays lowercase login
+        // so color retints and scrolls still work.
+        const nick = this.nicknames?.getNickname(platform, lname);
+        span.textContent = '@' + (nick || name);
+        if (nick) span.title = '@' + name;
         frag.appendChild(span);
         last = start + name.length + 1;
       }
@@ -6961,14 +6989,18 @@ class UnityChat {
       el.appendChild(ctx);
     }
 
-    // Tag line (right-aligned, above message content)
+    // Tag line (right-aligned, above message content). Priority:
+    // reply/mention/raid > suspicious (sus user OR message was cleared by mod)
+    // > first message. Moderation-related flags win over first-message because
+    // they're the signal that matters when scanning chat for trouble.
+    const susLike = msg.isSus || !!msg._cleared;
     const tagText =
       isReplyToMe ? 'Replying to you' :
       isMentioned ? 'Mentions you' :
       msg.isRaid ? 'Raid' :
       msg.isRaider ? 'Raider' :
-      msg.firstMsg ? 'First message' :
-      msg.isSus ? 'Suspicious' : null;
+      susLike ? 'Suspicious' :
+      msg.firstMsg ? 'First message' : null;
     if (tagText) {
       const tagLine = document.createElement('div');
       tagLine.className = 'msg-tag-line';
@@ -6977,8 +7009,8 @@ class UnityChat {
         isMentioned ? 'tag-mention' :
         msg.isRaid ? 'tag-raid' :
         msg.isRaider ? 'tag-raider' :
-        msg.firstMsg ? 'tag-first' :
-        'tag-sus';
+        susLike ? 'tag-sus' :
+        'tag-first';
       tagLine.innerHTML = `<span class="msg-tag ${tagCls}">${tagText}</span>`;
       el.appendChild(tagLine);
     }
@@ -7325,6 +7357,8 @@ class UnityChat {
           author: realMsg.username,
           emotesOffset: realMsg.twitchEmotesOffset || 0,
         });
+        // Re-apply @mention highlighting — innerHTML overwrite wiped spans
+        this._processMentions(tx, realMsg.platform);
       }
     }
 
