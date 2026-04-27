@@ -1655,26 +1655,77 @@ class YouTubeProvider {
     this._seen = new Set();
     this._apiFails = 0;       // počet po sobě jdoucích prázdných API odpovědí
     this._usePageRefresh = false;
+    this._connectId = 0;      // serial ID for disambiguating overlapping connects
+    this._pollTick = 0;       // incremented on each poll invocation
     this.onMessage = null;
     this.onStatus = null;
     this.onDebug = null;      // callback pro debug zprávy
   }
 
+  _log(text) {
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'YT', text }).catch(() => {});
+    } catch {}
+  }
+
   async connect(channel) {
     this.channel = channel.trim();
     this.disconnect(true);
+    const cid = ++this._connectId;
+    this._log(`connect() ch=${this.channel} cid=${cid}`);
     this.onStatus?.('connecting');
 
     try {
       // Krok 1: najít videoId
+      this._log(`[${cid}] findLiveVideoId start`);
+      const vidStart = Date.now();
       this._videoId = await this._findLiveVideoId();
+      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart}`);
       if (!this._videoId) throw new Error('Streamer není live na YouTube');
       this.onDebug?.(`YouTube videoId: ${this._videoId}`);
 
-      // Krok 2: načíst live chat stránku
-      const chatHtml = await this._fetchChatPage();
-      const ytData = this._extractJson(chatHtml, 'ytInitialData');
+      // Krok 2: načíst live chat stránku. Try popout first (forces
+      // timedContinuationData for HTTP polling); fall back to embedded if
+      // popout returns no usable continuation.
+      let chatHtml, ytData, contType = 'none', variant = 'popout', invalidationToken = null;
+      for (const v of ['popout', 'embedded']) {
+        this._log(`[${cid}] fetchChatPage variant=${v} start`);
+        const chatStart = Date.now();
+        const html = await this._fetchChatPage(v);
+        this._log(`[${cid}] fetchChatPage variant=${v} done bytes=${html.length} ms=${Date.now()-chatStart}`);
+        const data = this._extractJson(html, 'ytInitialData');
+        this._log(`[${cid}] extractJson variant=${v} ytData=${!!data}`);
+        if (!data) continue;
+        const conts = data?.contents?.liveChatRenderer?.continuations;
+        let foundTimed = null, foundType = 'none', foundInv = null;
+        if (conts?.length) {
+          for (const c of conts) {
+            if (c?.timedContinuationData?.continuation) {
+              foundTimed = c.timedContinuationData.continuation;
+              foundType = 'timed';
+              break;
+            }
+          }
+          if (!foundTimed) {
+            for (const c of conts) {
+              if (c?.invalidationContinuationData?.continuation) {
+                foundInv = c.invalidationContinuationData.continuation;
+                foundType = 'invalidation';
+                break;
+              }
+              if (c?.reloadContinuationData) { foundType = 'reload'; break; }
+            }
+          }
+        }
+        this._log(`[${cid}] variant=${v} contType=${foundType} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
+        chatHtml = html; ytData = data; contType = foundType; variant = v;
+        if (foundInv && !invalidationToken) invalidationToken = foundInv;
+        if (foundTimed) { this._cont = foundTimed; break; }
+        // No timed from popout — try embedded before accepting defeat
+      }
       if (!ytData) throw new Error('YouTube chat data nenalezena');
+      this._variant = variant;
+      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont}`);
 
       // API key + client version + visitorData
       const keyM = chatHtml.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
@@ -1691,41 +1742,26 @@ class YouTubeProvider {
         }
       };
 
-      // Continuation token - preferovat timedContinuationData (funguje s pollingem)
-      const conts = ytData?.contents?.liveChatRenderer?.continuations;
-      if (conts?.length) {
-        for (const c of conts) {
-          // timedContinuationData funguje nejlépe s HTTP pollingem
-          if (c?.timedContinuationData?.continuation) {
-            this._cont = c.timedContinuationData.continuation;
-            break;
-          }
-        }
-        // Fallback na jiný typ
-        if (!this._cont) {
-          const c = conts[0];
-          this._cont =
-            c?.reloadContinuationData?.continuation ||
-            c?.invalidationContinuationData?.continuation;
-        }
-      }
-
       // Zpracovat úvodní zprávy (zobrazit posledních několik)
       const actions = ytData?.contents?.liveChatRenderer?.actions || [];
       const recentActions = actions.slice(-10); // zobrazit max 10 posledních
+      this._log(`[${cid}] initial actions=${actions.length} rendering=${recentActions.length}`);
       this._processActions(recentActions);
       // Označit všechny jako viděné
+      let initialSeen = 0;
       for (const a of actions) {
         const r =
           a?.addChatItemAction?.item?.liveChatTextMessageRenderer ||
           a?.addChatItemAction?.item?.liveChatPaidMessageRenderer;
-        if (r?.id) this._seen.add(r.id);
+        if (r?.id) { this._seen.add(r.id); initialSeen++; }
       }
+      this._log(`[${cid}] seen set primed with ${initialSeen} ids, total seen=${this._seen.size}`);
 
       this.polling = true;
       this._apiFails = 0;
       this._usePageRefresh = !this._cont; // bez continuation jdeme rovnou na page refresh
       this.onStatus?.('connected');
+      this._log(`[${cid}] connected mode=${this._usePageRefresh ? 'pageRefresh' : 'api'}`);
 
       if (this._usePageRefresh) {
         this.onDebug?.('YouTube: page refresh mód (bez continuation)');
@@ -1733,16 +1769,86 @@ class YouTubeProvider {
         this.onDebug?.('YouTube: API polling mód');
       }
 
+      // Diagnostic probe for invalidation-only streams — fires once per connect,
+      // tries multiple endpoint/payload variants to find one that accepts the
+      // invalidation token and returns fresh actions. Results purely logged.
+      if (!this._cont && invalidationToken) {
+        this._probeInvalidation(invalidationToken, cid).catch(() => {});
+      }
+
       this._pt = setTimeout(() => this._poll(), 2000);
     } catch (err) {
       console.error('YouTube:', err);
+      this._log(`[${cid}] connect ERROR ${err.message}`);
       this.onStatus?.('error', err.message);
     }
   }
 
-  async _fetchChatPage() {
+  async _probeInvalidation(invToken, cid) {
+    const base = `https://www.youtube.com/youtubei/v1/live_chat`;
+    const key = this._apiKey;
+    const ctx = this._ctx;
+    const ctxEmbed = { client: { ...ctx.client, clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250401.00.00' } };
+    const ctxTv = { client: { ...ctx.client, clientName: 'TVHTML5', clientVersion: '7.20250401.08.00' } };
+    const attempts = [
+      { name: 'POST get_live_chat WEB',          method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctx, continuation: invToken } },
+      { name: 'POST get_live_chat WEB_EMBEDDED', method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctxEmbed, continuation: invToken } },
+      { name: 'POST get_live_chat TVHTML5',      method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctxTv, continuation: invToken } },
+      { name: 'POST get_live_chat WEB referer',  method: 'POST', url: `${base}/get_live_chat?key=${key}&prettyPrint=false`, body: { context: ctx, continuation: invToken }, referrer: 'https://www.youtube.com/' },
+      { name: 'GET live_chat?continuation',      method: 'GET',  url: `https://www.youtube.com/live_chat?v=${this._videoId}&continuation=${encodeURIComponent(invToken)}` },
+      { name: 'GET live_chat?popout+cont',       method: 'GET',  url: `https://www.youtube.com/live_chat?v=${this._videoId}&is_popout=1&continuation=${encodeURIComponent(invToken)}` },
+    ];
+    for (const a of attempts) {
+      const t0 = Date.now();
+      try {
+        const init = {
+          method: a.method,
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Version': ctx.client.clientVersion,
+          },
+        };
+        if (a.method === 'POST') init.body = JSON.stringify(a.body);
+        if (a.referrer) init.referrer = a.referrer;
+        const r = await fetch(a.url, init);
+        const text = await r.text();
+        let hasActions = false, contKeys = '', errSnippet = '';
+        const trimmed = text.trim();
+        if (trimmed.startsWith('{')) {
+          try {
+            const j = JSON.parse(text);
+            const lcc = j?.continuationContents?.liveChatContinuation;
+            hasActions = !!(lcc?.actions?.length);
+            const conts = lcc?.continuations;
+            if (conts?.length) contKeys = conts.map(c => Object.keys(c)).flat().join(',');
+            if (j?.error?.message) errSnippet = j.error.message.slice(0, 120);
+          } catch {}
+        } else {
+          if (text.includes('timedContinuationData')) contKeys = 'timed(inHTML)';
+          else if (text.includes('invalidationContinuationData')) contKeys = 'invalidation(inHTML)';
+          else contKeys = 'noCont(inHTML)';
+        }
+        this._log(`PROBE [${cid}] "${a.name}" status=${r.status} bytes=${text.length} hasActions=${hasActions} contKeys=${contKeys} err=${errSnippet} ms=${Date.now()-t0}`);
+      } catch (err) {
+        this._log(`PROBE [${cid}] "${a.name}" EXC ${err.name}:${err.message} ms=${Date.now()-t0}`);
+      }
+    }
+    this._log(`PROBE [${cid}] done`);
+  }
+
+  async _fetchChatPage(variant) {
+    // is_popout=1 forces YouTube to return timedContinuationData (popout chat
+    // has no parent frame for push, so server must provide polling tokens).
+    // Embedded (default) returns invalidationContinuationData for small
+    // channels, which cannot be used for HTTP polling.
+    const v = variant || 'popout';
+    const qs = v === 'popout'
+      ? `v=${this._videoId}&is_popout=1`
+      : `v=${this._videoId}`;
     const resp = await fetch(
-      `https://www.youtube.com/live_chat?v=${this._videoId}`,
+      `https://www.youtube.com/live_chat?${qs}`,
       { credentials: 'include' }
     );
     if (!resp.ok) throw new Error(`YouTube chat page: ${resp.status}`);
@@ -1757,17 +1863,19 @@ class YouTubeProvider {
     for (const url of urls) {
       try {
         const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
-        if (!r.ok) continue;
+        if (!r.ok) { this._log(`findLive ${url} status=${r.status}`); continue; }
         const html = await r.text();
         const isLive =
           html.includes('"isLive":true') ||
           html.includes('"isLiveContent":true') ||
           html.includes('"isLiveNow":true') ||
           html.includes('"isLiveBroadcast":true');
-        if (!isLive) continue;
         const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+        this._log(`findLive ${url} isLive=${isLive} videoId=${m?.[1] || 'none'} bytes=${html.length} finalUrl=${r.url}`);
+        if (!isLive) continue;
         if (m) return m[1];
-      } catch {
+      } catch (err) {
+        this._log(`findLive ${url} ERROR ${err.message}`);
         continue;
       }
     }
@@ -1819,9 +1927,11 @@ class YouTubeProvider {
   }
 
   async _pollApi() {
+    const tick = ++this._pollTick;
     try {
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 15000);
+      const t0 = Date.now();
 
       const resp = await fetch(
         `https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${this._apiKey}&prettyPrint=false`,
@@ -1839,13 +1949,17 @@ class YouTubeProvider {
       );
       clearTimeout(timeout);
 
-      if (!resp.ok) throw new Error(`API ${resp.status}`);
+      if (!resp.ok) {
+        this._log(`pollApi#${tick} HTTP ${resp.status} ms=${Date.now()-t0}`);
+        throw new Error(`API ${resp.status}`);
+      }
 
       const data = await resp.json();
       const lcc = data?.continuationContents?.liveChatContinuation;
 
       if (!lcc) {
         this._apiFails++;
+        this._log(`pollApi#${tick} NO_LCC apiFails=${this._apiFails} dataKeys=${Object.keys(data || {}).join(',')} ms=${Date.now()-t0}`);
         if (this._apiFails >= 3) {
           this.onDebug?.('YouTube API: prázdné odpovědi, přepínám na page refresh');
           this._usePageRefresh = true;
@@ -1854,24 +1968,30 @@ class YouTubeProvider {
         return;
       }
 
-      // Aktualizovat continuation - preferovat timedContinuationData
+      // Continuation update: ONLY timedContinuationData works with HTTP polling.
+      // If the response stops emitting it (stream switched to push-only), keep
+      // previous _cont and fall back to page refresh so we don't start 403-ing.
       let nextMs = 5000;
+      let contTypeTick = 'none';
       const conts = lcc.continuations;
       if (conts?.length) {
         for (const c of conts) {
           if (c?.timedContinuationData) {
             this._cont = c.timedContinuationData.continuation;
             nextMs = c.timedContinuationData.timeoutMs || 5000;
+            contTypeTick = 'timed';
             break;
           }
-          if (c?.invalidationContinuationData) {
-            this._cont = c.invalidationContinuationData.continuation;
-            nextMs = c.invalidationContinuationData.timeoutMs || 5000;
-          }
+          if (c?.invalidationContinuationData) contTypeTick = 'invalidation-only';
+        }
+        if (contTypeTick === 'invalidation-only') {
+          this.onDebug?.('YouTube API: stream switched to invalidation-only continuation, page refresh mode');
+          this._usePageRefresh = true;
         }
       }
 
       const actions = lcc.actions || [];
+      const beforeSeen = this._seen.size;
       if (actions.length > 0) {
         this._apiFails = 0;
         this._processActions(actions);
@@ -1882,6 +2002,8 @@ class YouTubeProvider {
           this._usePageRefresh = true;
         }
       }
+      const added = this._seen.size - beforeSeen;
+      this._log(`pollApi#${tick} actions=${actions.length} newSeen=${added} apiFails=${this._apiFails} cont=${contTypeTick} nextMs=${nextMs} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), Math.max(nextMs, 1500));
@@ -1889,6 +2011,7 @@ class YouTubeProvider {
     } catch (err) {
       console.error('YouTube API poll:', err);
       this._apiFails++;
+      this._log(`pollApi#${tick} EXC ${err.name}:${err.message} apiFails=${this._apiFails}`);
       if (this._apiFails >= 3) {
         this.onDebug?.(`YouTube API selhalo (${err.message}), přepínám na page refresh`);
         this._usePageRefresh = true;
@@ -1898,27 +2021,29 @@ class YouTubeProvider {
   }
 
   async _pollPageRefresh() {
+    const tick = ++this._pollTick;
     try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 15000);
-
-      const html = await this._fetchChatPage();
-      clearTimeout(timeout);
-
+      const t0 = Date.now();
+      const html = await this._fetchChatPage(this._variant);
       const ytData = this._extractJson(html, 'ytInitialData');
       if (!ytData) {
+        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} ms=${Date.now()-t0}`);
         if (this.polling) this._pt = setTimeout(() => this._poll(), 8000);
         return;
       }
 
       const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const beforeSeen = this._seen.size;
       this._processActions(actions);
+      const added = this._seen.size - beforeSeen;
+      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
       }
     } catch (err) {
       console.error('YouTube page refresh:', err);
+      this._log(`pollPage#${tick} EXC ${err.name}:${err.message}`);
       if (this.polling) this._pt = setTimeout(() => this._poll(), 10000);
     }
   }
@@ -1970,6 +2095,9 @@ class YouTubeProvider {
   }
 
   disconnect(internal) {
+    if (this.polling || this._pt || this._videoId) {
+      this._log(`disconnect internal=${!!internal} wasPolling=${this.polling} hadTimer=${!!this._pt} videoId=${this._videoId || 'null'} seenSize=${this._seen.size}`);
+    }
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
@@ -4550,6 +4678,28 @@ class UnityChat {
       msgEl.appendChild(note);
     }
     note.textContent = label;
+
+    // Retroactively upgrade tag-line from "First message" to "Suspicious" —
+    // a moderated user shouldn't keep the cheerful first-message label.
+    // Preserves higher-priority tags (reply/mention/raid) if already present.
+    const tagLine = msgEl.querySelector('.msg-tag-line');
+    if (tagLine) {
+      const tag = tagLine.querySelector('.msg-tag');
+      if (tag && tag.classList.contains('tag-first')) {
+        tag.classList.remove('tag-first');
+        tag.classList.add('tag-sus');
+        tag.textContent = 'Suspicious';
+      }
+    } else {
+      const newTagLine = document.createElement('div');
+      newTagLine.className = 'msg-tag-line';
+      newTagLine.innerHTML = `<span class="msg-tag tag-sus">Suspicious</span>`;
+      // Insert before message text (.tx) so tag-line appears above content,
+      // matching the initial render order.
+      const tx = msgEl.querySelector('.tx');
+      if (tx) msgEl.insertBefore(newTagLine, tx);
+      else msgEl.appendChild(newTagLine);
+    }
   }
 
   // ---- Loading overlay ---------------------------------------------------
@@ -6172,7 +6322,13 @@ class UnityChat {
           // retroactively gets their real chat color once resolved.
           this._enqueueTwitchColorLookup(lname);
         }
-        span.textContent = '@' + name;
+        // Display nickname if one is set for this user, else raw login name.
+        // Raw message body / cache / dedup all use the original @name — only
+        // the rendered text switches. data-mention-user stays lowercase login
+        // so color retints and scrolls still work.
+        const nick = this.nicknames?.getNickname(platform, lname);
+        span.textContent = '@' + (nick || name);
+        if (nick) span.title = '@' + name;
         frag.appendChild(span);
         last = start + name.length + 1;
       }
@@ -6833,14 +6989,18 @@ class UnityChat {
       el.appendChild(ctx);
     }
 
-    // Tag line (right-aligned, above message content)
+    // Tag line (right-aligned, above message content). Priority:
+    // reply/mention/raid > suspicious (sus user OR message was cleared by mod)
+    // > first message. Moderation-related flags win over first-message because
+    // they're the signal that matters when scanning chat for trouble.
+    const susLike = msg.isSus || !!msg._cleared;
     const tagText =
       isReplyToMe ? 'Replying to you' :
       isMentioned ? 'Mentions you' :
       msg.isRaid ? 'Raid' :
       msg.isRaider ? 'Raider' :
-      msg.firstMsg ? 'First message' :
-      msg.isSus ? 'Suspicious' : null;
+      susLike ? 'Suspicious' :
+      msg.firstMsg ? 'First message' : null;
     if (tagText) {
       const tagLine = document.createElement('div');
       tagLine.className = 'msg-tag-line';
@@ -6849,8 +7009,8 @@ class UnityChat {
         isMentioned ? 'tag-mention' :
         msg.isRaid ? 'tag-raid' :
         msg.isRaider ? 'tag-raider' :
-        msg.firstMsg ? 'tag-first' :
-        'tag-sus';
+        susLike ? 'tag-sus' :
+        'tag-first';
       tagLine.innerHTML = `<span class="msg-tag ${tagCls}">${tagText}</span>`;
       el.appendChild(tagLine);
     }
@@ -7197,6 +7357,8 @@ class UnityChat {
           author: realMsg.username,
           emotesOffset: realMsg.twitchEmotesOffset || 0,
         });
+        // Re-apply @mention highlighting — innerHTML overwrite wiped spans
+        this._processMentions(tx, realMsg.platform);
       }
     }
 
