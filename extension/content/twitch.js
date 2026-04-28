@@ -231,6 +231,15 @@
             overflow: hidden !important;
             visibility: hidden !important;
           }
+          /* Theater mode reserves 34rem for chat via inline style on the
+             persistent player. With chat hidden that leaves a black gap on
+             the right — override the inline calc() so the player fills the
+             full viewport width. */
+          .persistent-player--theatre,
+          [data-a-player-state="theatre"].persistent-player {
+            width: 100% !important;
+            max-width: 100% !important;
+          }
         `;
         document.documentElement.appendChild(style);
       }
