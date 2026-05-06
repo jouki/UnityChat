@@ -3025,32 +3025,33 @@ class UnityChat {
           this._acTab(-1);
           return;
         }
-        if (e.key === 'ArrowRight') {
-          // Potvrdit výběr - kurzor je už za doplněným textem, jen zavřít suggest
+        if (e.key === 'ArrowRight' || e.key === 'Enter') {
+          // Potvrdit výběr - kurzor je už za doplněným textem, jen zavřít
+          // suggest list. Enter nesmí spadnout dolů na _sendMessage —
+          // standard chat-app pattern: Enter v autocompletu = potvrdit.
           e.preventDefault();
           this._acHide();
           return;
         }
       }
-      // Message history (ArrowUp/Down when no autocomplete is active)
+      // Message history (ArrowUp/Down). Multi-line draft / history zpráva:
+      // šipka prvně posouvá kurzor v textu, teprve při dosažení okraje
+      // (první řádek pro Up, poslední pro Down) přepíná historii.
       if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
-        if (this._msgHistoryIdx !== -1) {
-          e.preventDefault();
-          if (this._msgHistoryIdx > 0) this._msgHistoryIdx--;
-          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-          this.msgInput.setSelectionRange(0, 0);
-          return;
-        }
-        if (this._isCursorOnFirstLine()) {
-          e.preventDefault();
+        if (!this._isCursorOnFirstLine()) return; // native cursor-up
+        e.preventDefault();
+        if (this._msgHistoryIdx === -1) {
           this._msgHistoryDraft = this.msgInput.value;
           this._msgHistoryIdx = this._msgHistory.length - 1;
-          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-          this.msgInput.setSelectionRange(0, 0);
-          return;
+        } else if (this._msgHistoryIdx > 0) {
+          this._msgHistoryIdx--;
         }
+        this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+        this.msgInput.setSelectionRange(0, 0);
+        return;
       }
       if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
+        if (!this._isCursorOnLastLine()) return; // native cursor-down
         e.preventDefault();
         if (this._msgHistoryIdx < this._msgHistory.length - 1) {
           this._msgHistoryIdx++;
@@ -3324,6 +3325,28 @@ class UnityChat {
     m.textContent = 'X';
     const lineH = m.offsetHeight;
     m.textContent = ta.value.substring(0, ta.selectionStart);
+    return m.offsetHeight <= lineH;
+  }
+
+  _isCursorOnLastLine() {
+    const ta = this.msgInput;
+    if (!ta.value) return true;
+    if (ta.selectionEnd >= ta.value.length) return true;
+    if (!this._lineMirror) {
+      this._lineMirror = document.createElement('div');
+      this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
+      document.body.appendChild(this._lineMirror);
+    }
+    const m = this._lineMirror;
+    const cs = getComputedStyle(ta);
+    m.style.width = ta.clientWidth + 'px';
+    m.style.font = cs.font;
+    m.style.padding = cs.padding;
+    m.style.boxSizing = cs.boxSizing;
+    m.style.letterSpacing = cs.letterSpacing;
+    m.textContent = 'X';
+    const lineH = m.offsetHeight;
+    m.textContent = ta.value.substring(ta.selectionEnd);
     return m.offsetHeight <= lineH;
   }
 
