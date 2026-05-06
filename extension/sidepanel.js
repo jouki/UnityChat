@@ -3323,11 +3323,14 @@ class UnityChat {
     if (!ta.value) return true;
     // Hard newline before cursor → definitely past line 1.
     if (ta.value.substring(0, ta.selectionStart).includes('\n')) return false;
-    // No hard newline — visual-wrap check. Append sentinel 'X' so when
-    // cursor sits exactly at a wrap point (text fills line 1 to the
-    // pixel), the sentinel pushes onto line 2 and we detect correctly.
-    // Without sentinel, the substring's offsetHeight ends on line 1 even
-    // though the cursor's visual position is line 2.
+    // Visual-wrap check: measure substring before cursor. No sentinel —
+    // sentinel char caused false positives when cursor sat at end of a
+    // nearly-full single line (sentinel's hypothetical width pushed mirror
+    // to line 2, but real cursor stays on line 1). Trade-off: cursor at
+    // the exact pixel-perfect wrap point of a multi-row visual wrap may
+    // false-negative ("on first line" when visually on row 2). Rare; the
+    // sentinel false-positive (cursor at end of normal text) is far more
+    // common and the bug user reported.
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3342,7 +3345,7 @@ class UnityChat {
     m.style.letterSpacing = cs.letterSpacing;
     m.textContent = 'X';
     const lineH = m.offsetHeight;
-    m.textContent = ta.value.substring(0, ta.selectionStart) + 'X';
+    m.textContent = ta.value.substring(0, ta.selectionStart);
     return m.offsetHeight <= lineH;
   }
 
@@ -3365,10 +3368,8 @@ class UnityChat {
     if (ta.selectionEnd >= ta.value.length) return true;
     // Hard newline after cursor → not on last line yet.
     if (ta.value.substring(ta.selectionEnd).includes('\n')) return false;
-    // No hard newline — visual-wrap check. Prepend sentinel 'X' for
-    // symmetric reasoning to _isCursorOnFirstLine — captures the case
-    // where cursor sits at a wrap boundary and the trailing substring
-    // would otherwise measure as a single line.
+    // Visual-wrap check: measure substring after cursor (no sentinel,
+    // see _isCursorOnFirstLine for rationale).
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3383,7 +3384,7 @@ class UnityChat {
     m.style.letterSpacing = cs.letterSpacing;
     m.textContent = 'X';
     const lineH = m.offsetHeight;
-    m.textContent = 'X' + ta.value.substring(ta.selectionEnd);
+    m.textContent = ta.value.substring(ta.selectionEnd);
     return m.offsetHeight <= lineH;
   }
 
