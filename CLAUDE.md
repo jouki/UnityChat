@@ -614,6 +614,50 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 
 > **Tato sekce je primární orientace pro každou novou Claude session.** Memory soubory v `~/.claude/projects/D---BACKUP-2-0-Code-Projects-UnityChat/memory/` jsou doplňkové — feedback od uživatele, security context, otevřené TODO, locks. CLAUDE.md drží kompletní obraz "jak pracujeme" tady.
 
+### ⚠️ Pravidlo č. 1 — Nehádat. Ověřit.
+
+**Každý fix musí být podložený důkazem co problém způsobuje.** NE spekulativní "this might work, let's try". Před push změny Claude **musí vědět proč** to opraví bug, ne jen doufat že pomůže.
+
+**Standard troubleshooting flow:**
+1. User reportuje bug → **nehádat root cause hned**
+2. **Data first**:
+   - Existuje UC_LOG instrumentace v té oblasti? → požádat o `Downloads/unitychat-debug.txt` (💾 button nebo `window.ucDump()` v F12)
+   - Žádná instrumentace → přidat ji jako separate `debug:` commit, ask for repro+dump, **AŽ POTOM** fix v dalším commitu
+3. **Read code end-to-end** — Grep / Glob / Read full functions, trace data flow, check git log/blame
+4. **Diagnostic probe** pro nejisté hypotézy — pokud >1 možná příčina, přidat probe co testuje varianty (jako v3.38.43 — 6 endpoint probnuto), rozhodnout podle dat
+5. **Push fix** s konkrétním odůvodněním v commit message; po pushi sbírat repro/log dokud user nepotvrdí
+
+**Co je dovoleno bez ověření:**
+- Pure code review fixy (typo, syntax error, missing await, broken refactor — očividné z kódu)
+- Reverze na user request
+- Instrumentace (právě nástroj pro získání dat)
+- Známé vzory dokumentované v memory / CLAUDE.md / CLAUDE-HISTORY
+
+**Red flags v interní úvaze (recognize and stop):**
+- "this should work" / "maybe X helps" / "let's try and see" / "likely the cause is..." (bez podložení)
+- "could be a race" (bez konkrétní timing trace)
+
+→ STOP. Nepush. Přidej instrumentaci, ověř přes log, vrať se s důkazem.
+
+**Co Claude může aktivně testovat sám** (Claude Code prostředí):
+- HTTP endpoint behavior (`curl`, deploy verifikace)
+- Code path traces (Read + Grep, mental simulation)
+- Git history (`git log --oneline -p`)
+- GQL queries proti veřejným endpointům (`curl` test)
+- Bash skripty na test inputu
+
+**Co je MIMO** (akceptovat limit, kompenzovat instrumentací):
+- Browser DOM/CSS rendering
+- Twitch IRC / WebSocket real-time flow
+- YouTube push notifications
+- Service worker lifecycle
+
+→ Pro tyhle je instrumentace JEDINÁ cesta. Bez logu = slepý. Vyžadovat data od usera.
+
+**Override:** User může explicit říct "just ship it" / "zkus naslepo" / "máme málo času, hodit to a uvidíme" → tehdy je guess přípustný. Bez explicit overridu **vždy** podle pravidla výše.
+
+Detaily + příklady (správně vs špatně z v3.38.x): viz `memory/feedback_no_guessing.md`.
+
 ### Co číst na startu session (pořadí)
 
 1. **`MEMORY.md`** (auto-loaded) — index, ukazuje na všechny memory soubory
