@@ -3021,13 +3021,26 @@ class UnityChat {
           this._acTab(-1);
           return;
         }
-        if (e.key === 'ArrowRight' || e.key === 'Enter') {
-          // Potvrdit výběr - kurzor je už za doplněným textem, jen zavřít
-          // suggest list. Enter nesmí spadnout dolů na _sendMessage —
-          // standard chat-app pattern: Enter v autocompletu = potvrdit.
+        if (e.key === 'ArrowRight') {
+          // Potvrdit výběr — kurzor je už za doplněným textem, jen zavřít
+          // suggest list.
           e.preventDefault();
           this._acHide();
           return;
+        }
+        if (e.key === 'Enter') {
+          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern).
+          // Pro emote / !cmd / /uc autocomplete propadne dolů na _sendMessage
+          // (původní funkcionalita — Tab/ArrowRight už emote vložilo,
+          // Enter logicky odešle zprávu).
+          const isUserAc = this._ac.kind === 'user'
+            || this._ac.matches[0]?.startsWith?.('@');
+          if (isUserAc) {
+            e.preventDefault();
+            this._acHide();
+            return;
+          }
+          // Fall through — emote/cmd autocomplete: Enter sends message
         }
       }
       // Message history (ArrowUp/Down). Multi-line draft / history zpráva:
