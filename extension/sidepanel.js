@@ -2683,11 +2683,7 @@ class UnityChat {
     }
     // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
-      this.msgInput.style.height = 'auto';
-      const max = 250;
-      const h = Math.min(this.msgInput.scrollHeight, max);
-      this.msgInput.style.height = h + 'px';
-      this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+      this._autoResizeInput();
 
       // Auto-trigger @username autocomplete while typing
       const text = this.msgInput.value;
@@ -3047,6 +3043,7 @@ class UnityChat {
           this._msgHistoryIdx--;
         }
         this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+        this._autoResizeInput();
         this.msgInput.setSelectionRange(0, 0);
         return;
       }
@@ -3060,6 +3057,7 @@ class UnityChat {
           this._msgHistoryIdx = -1;
           this.msgInput.value = this._msgHistoryDraft;
         }
+        this._autoResizeInput();
         const len = this.msgInput.value.length;
         this.msgInput.setSelectionRange(len, len);
         return;
@@ -3310,6 +3308,13 @@ class UnityChat {
     const ta = this.msgInput;
     if (ta.selectionStart === 0) return true;
     if (!ta.value) return true;
+    // Hard newline before cursor → definitely past line 1.
+    if (ta.value.substring(0, ta.selectionStart).includes('\n')) return false;
+    // No hard newline — visual-wrap check. Append sentinel 'X' so when
+    // cursor sits exactly at a wrap point (text fills line 1 to the
+    // pixel), the sentinel pushes onto line 2 and we detect correctly.
+    // Without sentinel, the substring's offsetHeight ends on line 1 even
+    // though the cursor's visual position is line 2.
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3324,14 +3329,33 @@ class UnityChat {
     m.style.letterSpacing = cs.letterSpacing;
     m.textContent = 'X';
     const lineH = m.offsetHeight;
-    m.textContent = ta.value.substring(0, ta.selectionStart);
+    m.textContent = ta.value.substring(0, ta.selectionStart) + 'X';
     return m.offsetHeight <= lineH;
+  }
+
+  _autoResizeInput() {
+    // Adjust textarea height to fit content. Cap at 250px (matches the
+    // 'input' event handler that fires on user typing). Programmatic
+    // value changes (history nav, send clear, /uc commands) MUST call
+    // this — setting .value doesn't fire 'input' so the listener
+    // wouldn't run on its own.
+    this.msgInput.style.height = 'auto';
+    const max = 250;
+    const h = Math.min(this.msgInput.scrollHeight, max);
+    this.msgInput.style.height = h + 'px';
+    this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
   }
 
   _isCursorOnLastLine() {
     const ta = this.msgInput;
     if (!ta.value) return true;
     if (ta.selectionEnd >= ta.value.length) return true;
+    // Hard newline after cursor → not on last line yet.
+    if (ta.value.substring(ta.selectionEnd).includes('\n')) return false;
+    // No hard newline — visual-wrap check. Prepend sentinel 'X' for
+    // symmetric reasoning to _isCursorOnFirstLine — captures the case
+    // where cursor sits at a wrap boundary and the trailing substring
+    // would otherwise measure as a single line.
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3346,7 +3370,7 @@ class UnityChat {
     m.style.letterSpacing = cs.letterSpacing;
     m.textContent = 'X';
     const lineH = m.offsetHeight;
-    m.textContent = ta.value.substring(ta.selectionEnd);
+    m.textContent = 'X' + ta.value.substring(ta.selectionEnd);
     return m.offsetHeight <= lineH;
   }
 
