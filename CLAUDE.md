@@ -625,7 +625,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
    - Žádná instrumentace → přidat ji jako separate `debug:` commit, ask for repro+dump, **AŽ POTOM** fix v dalším commitu
 3. **Read code end-to-end** — Grep / Glob / Read full functions, trace data flow, check git log/blame
 4. **Diagnostic probe** pro nejisté hypotézy — pokud >1 možná příčina, přidat probe co testuje varianty (jako v3.38.43 — 6 endpoint probnuto), rozhodnout podle dat
-5. **Push fix** s konkrétním odůvodněním v commit message; po pushi sbírat repro/log dokud user nepotvrdí
+5. **Push fix s instrumentací VŽDY** — když v té oblasti není ověřitelná hypotéza (browser DOM, IRC realtime, async timing), v rámci fix commitu přidat UC_LOG do změněných cest. Pokud první pokus neopraví bug, máme data pro korekci hned, neztrácíme round-trip "log commit → user dump → fix commit". Logy se odstraní v cleanup commitu až user potvrdí.
+6. **Po pushi sbírat repro/log** dokud user nepotvrdí.
 
 **Co je dovoleno bez ověření:**
 - Pure code review fixy (typo, syntax error, missing await, broken refactor — očividné z kódu)
