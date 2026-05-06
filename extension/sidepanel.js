@@ -1379,6 +1379,52 @@ class TwitchProvider {
       });
       return;
     }
+    if (msgId === 'viewermilestone') {
+      // Watch streak / viewer milestone — Twitch awards channel points to
+      // viewers when they hit milestones (e.g. 5-stream watch streak).
+      // Tag names per Twitch IRC docs (https://dev.twitch.tv/docs/irc/tags/):
+      //   msg-param-category    — milestone category (currently "watch-streak")
+      //   msg-param-value       — milestone value (streak count)
+      //   msg-param-copoReward  — channel points awarded
+      let body = '';
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni !== -1) {
+        const after = rest.substring(uni + 10);
+        const ci = after.indexOf(':');
+        if (ci !== -1) body = after.substring(ci + 1);
+      }
+      const username = tags['display-name'] || tags.login || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      const category = tags['msg-param-category'] || 'watch-streak';
+      const value = parseInt(tags['msg-param-value'] || '0', 10) || 0;
+      const points = parseInt(tags['msg-param-copoReward'] || '0', 10) || 0;
+      // Diagnostic: verify tag names match docs against real-world data.
+      // Remove this block once a few production samples confirm the parser.
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'Milestone',
+          text: `category=${category} value=${value} points=${points} body="${body.slice(0, 80)}" tags=${JSON.stringify(tags).slice(0, 500)}`,
+        }).catch(() => {});
+      } catch {}
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message: body,
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isMilestone: true,
+        milestoneCategory: category,
+        milestoneValue: value,
+        milestonePoints: points,
+      });
+      return;
+    }
     if (msgId === 'announcement') {
       // USERNOTICE #channel :message text — grab the body after the command+channel.
       const uni = rest.indexOf('USERNOTICE');
@@ -2735,6 +2781,7 @@ class UnityChat {
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
           'redeem', 'highlight',
+          'milestone', 'streak',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
@@ -4335,6 +4382,26 @@ class UnityChat {
       case 'sus':
         this._addMessage({ ...base, isSus: true, color: '#ffc107' });
         break;
+      case 'milestone':
+      case 'streak': {
+        // /uc milestone [streakCount] [points] [body]
+        // Example: /uc milestone 5 450 Wow that was very cool!
+        const argv = text.trim().split(/\s+/);
+        const value = parseInt(argv[0], 10) || 5;
+        const points = parseInt(argv[1], 10) || 450;
+        const body = argv.slice(2).join(' ') || 'Wow that was very cool!';
+        this._addMessage({
+          ...base,
+          username: mockUser,
+          message: body,
+          isMilestone: true,
+          milestoneCategory: 'watch-streak',
+          milestoneValue: value,
+          milestonePoints: points,
+          color: '#00b35a',
+        });
+        break;
+      }
       case 'announcement':
       case 'ann': {
         // /uc announcement [PRIMARY|BLUE|GREEN|ORANGE|PURPLE] [body]
@@ -5228,6 +5295,7 @@ class UnityChat {
       isSubEvent: !!m.isSubEvent,
       isGiftBundle: !!m.isGiftBundle,
       isSubGift: !!m.isSubGift,
+      isMilestone: !!m.isMilestone,
       isAction: !!m.isAction,
       scraped: !!m.scraped,
       optimistic: !!m._optimistic,
@@ -6295,6 +6363,83 @@ class UnityChat {
     el.appendChild(body);
   }
 
+  _renderMilestoneEvent(el, msg) {
+    el.classList.add('milestone-event');
+    if (msg.milestoneCategory) {
+      el.classList.add(`milestone-${msg.milestoneCategory}`);
+    }
+    // Flame icon (Twitch's watch-streak symbol — same path Twitch uses)
+    const icon = document.createElement('span');
+    icon.className = 'milestone-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">'
+      + '<path fill-rule="evenodd" d="M11 4.5 9 2 4.8 6.9A7.48 7.48 0 0 0 3 11.77C3 15.2 5.8 18 9.23 18h1.65A6.12 6.12 0 0 0 17 11.88c0-1.86-.65-3.66-1.84-5.1L12 3l-1 1.5ZM6.32 8.2 9 5l2 2.5L12 6l1.62 2.07A5.96 5.96 0 0 1 15 11.88c0 2.08-1.55 3.8-3.56 4.08.36-.47.56-1.05.56-1.66 0-.52-.18-1.02-.5-1.43L10 11l-1.5 1.87c-.32.4-.5.91-.5 1.43 0 .6.2 1.18.54 1.64A4.23 4.23 0 0 1 5 11.77c0-1.31.47-2.58 1.32-3.57Z" clip-rule="evenodd"/>'
+      + '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'milestone-body';
+
+    // Header row: username + channel-points pill
+    const header = document.createElement('div');
+    header.className = 'milestone-header';
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    header.appendChild(un);
+    if (msg.milestonePoints > 0) {
+      const points = document.createElement('span');
+      points.className = 'milestone-points';
+      points.innerHTML = '+ <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">'
+        + '<path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z"/>'
+        + '<path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-2 0a6 6 0 11-12 0 6 6 0 0112 0z" clip-rule="evenodd"/>'
+        + '</svg> ';
+      points.appendChild(document.createTextNode(String(msg.milestonePoints)));
+      header.appendChild(points);
+    }
+    body.appendChild(header);
+
+    // Subtitle line — category-specific copy
+    const sub = document.createElement('div');
+    sub.className = 'milestone-line';
+    if (msg.milestoneCategory === 'watch-streak') {
+      const label = document.createElement('strong');
+      label.textContent = 'Watch Streak Reached!';
+      sub.appendChild(label);
+      sub.appendChild(document.createTextNode(`: ${msg.username} is currently on a `));
+      const v = document.createElement('strong');
+      v.textContent = `${msg.milestoneValue}-stream streak`;
+      sub.appendChild(v);
+      sub.appendChild(document.createTextNode('!'));
+    } else {
+      // Generic fallback for unknown categories — Twitch may add new ones.
+      const label = document.createElement('strong');
+      label.textContent = 'Milestone Reached!';
+      sub.appendChild(label);
+      sub.appendChild(document.createTextNode(`: ${msg.username} hit `));
+      const v = document.createElement('strong');
+      v.textContent = String(msg.milestoneValue || msg.milestoneCategory);
+      sub.appendChild(v);
+    }
+    body.appendChild(sub);
+
+    // Optional attached chat message
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'milestone-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
   _renderRedeemEvent(el, msg) {
     const icon = document.createElement('span');
     icon.className = 'redeem-icon';
@@ -6696,6 +6841,7 @@ class UnityChat {
     const textEmpty = !msgProbe && !hasPlatformContent;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
+      || msg?.isMilestone
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
     if (textEmpty && !isSystem) {
       // Log root-cause clues — which source produced an empty message.
@@ -6980,7 +7126,8 @@ class UnityChat {
     const isGift = !!(msg.isGiftBundle || msg.isSubGift);
     const isSubEvent = !!msg.isSubEvent;
     const isRedeem = !!msg.isRedeem;
-    const isCustomEvent = isGift || isSubEvent || isRedeem;
+    const isMilestone = !!msg.isMilestone;
+    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone;
     if (msg.isGiftBundle) el.classList.add('gift-bundle');
     if (msg.isSubGift) el.classList.add('sub-gift');
     if (isSubEvent) el.classList.add('sub-event');
@@ -7013,6 +7160,8 @@ class UnityChat {
       this._renderSubEvent(el, msg);
     } else if (isRedeem) {
       this._renderRedeemEvent(el, msg);
+    } else if (isMilestone) {
+      this._renderMilestoneEvent(el, msg);
     } else {
 
     // Reply context (Twitch reply-parent tagy)
@@ -7199,7 +7348,8 @@ class UnityChat {
     // announcement). They aren't user messages: copying their body text
     // is meaningless and Twitch IRC won't accept a reply to them.
     const isSystemEvent = msg.isRaid || msg.isAnnouncement
-      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem;
+      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem
+      || msg.isMilestone;
     if (isSystemEvent) {
       // Skip the entire actions cluster but keep the closing brace structure
       // (we still need to fall through to the unread/append/scroll/cache).
@@ -7562,6 +7712,7 @@ class UnityChat {
           || (typeof m.kickContent === 'string' && m.kickContent.trim().length > 0);
         const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
           || m.isGiftBundle || m.isSubGift || m.isRedeem
+          || m.isMilestone
           || m.isHighlight || m._cleared || m.isAction;
         return body || platformContent || isSystem;
       });

@@ -1904,6 +1904,81 @@ body.no-timestamps .msg .ts { display: none; }
   color: var(--text, #d0d0da);
 }
 
+/* ==== Viewer Milestone (watch-streak) events ==== */
+.msg.milestone-event {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: linear-gradient(180deg, rgba(0, 200, 100, 0.16), rgba(0, 200, 100, 0.05));
+  border-style: solid;
+  border-color: #00b35a;
+  border-width: 0 5px 0 5px;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 200, 100, 0.22);
+}
+.msg.milestone-event:hover {
+  background: linear-gradient(180deg, rgba(0, 200, 100, 0.24), rgba(0, 200, 100, 0.08));
+}
+.msg.milestone-event .milestone-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #ff8c3a;
+  filter: drop-shadow(0 0 4px rgba(255, 140, 58, 0.55));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg.milestone-event .milestone-body {
+  flex: 1;
+  min-width: 0;
+}
+.msg.milestone-event .milestone-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.msg.milestone-event .un {
+  font-weight: 700;
+  cursor: pointer;
+}
+.msg.milestone-event .milestone-points {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 700;
+  color: #ffd93d;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 217, 61, 0.12);
+  font-size: 0.92em;
+}
+.msg.milestone-event .milestone-points svg {
+  width: 14px;
+  height: 14px;
+}
+.msg.milestone-event .milestone-line {
+  font-size: 0.95em;
+  color: var(--text, #d0d0da);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.msg.milestone-event .milestone-line strong {
+  color: #fff;
+  font-weight: 700;
+}
+.msg.milestone-event .milestone-text {
+  margin-top: 4px;
+  color: var(--text, #d0d0da);
+}
+
 /* ==== Channel Points redeem events ==== */
 .msg.redeem {
   display: flex;
