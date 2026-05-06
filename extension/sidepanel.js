@@ -3094,7 +3094,10 @@ class UnityChat {
       // šipka prvně posouvá kurzor v textu, teprve při dosažení okraje
       // (první řádek pro Up, poslední pro Down) přepíná historii.
       if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
-        if (!this._isCursorOnFirstLine()) return; // native cursor-up
+        const idxBefore = this._msgHistoryIdx;
+        const isFirst = this._isCursorOnFirstLine();
+        this._logCursor({ key: 'ArrowUp', idxBefore, isFirst, willSwitch: isFirst, sel: this.msgInput.selectionStart });
+        if (!isFirst) return; // native cursor-up
         e.preventDefault();
         if (this._msgHistoryIdx === -1) {
           this._msgHistoryDraft = this.msgInput.value;
@@ -3105,10 +3108,14 @@ class UnityChat {
         this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
         this._autoResizeInput();
         this.msgInput.setSelectionRange(0, 0);
+        this._logCursor({ key: 'ArrowUp', phase: 'after', idxAfter: this._msgHistoryIdx, valueLen: this.msgInput.value.length, sel: this.msgInput.selectionStart });
         return;
       }
       if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
-        if (!this._isCursorOnLastLine()) return; // native cursor-down
+        const idxBefore = this._msgHistoryIdx;
+        const isLast = this._isCursorOnLastLine();
+        this._logCursor({ key: 'ArrowDown', idxBefore, isLast, willSwitch: isLast, sel: this.msgInput.selectionEnd });
+        if (!isLast) return; // native cursor-down
         e.preventDefault();
         if (this._msgHistoryIdx < this._msgHistory.length - 1) {
           this._msgHistoryIdx++;
@@ -3120,6 +3127,7 @@ class UnityChat {
         this._autoResizeInput();
         const len = this.msgInput.value.length;
         this.msgInput.setSelectionRange(len, len);
+        this._logCursor({ key: 'ArrowDown', phase: 'after', idxAfter: this._msgHistoryIdx, valueLen: this.msgInput.value.length, sel: this.msgInput.selectionEnd });
         return;
       }
       if (e.key === 'Escape') {
@@ -3366,18 +3374,10 @@ class UnityChat {
 
   _isCursorOnFirstLine() {
     const ta = this.msgInput;
-    if (ta.selectionStart === 0) return true;
-    if (!ta.value) return true;
-    // Hard newline before cursor → definitely past line 1.
-    if (ta.value.substring(0, ta.selectionStart).includes('\n')) return false;
-    // Visual-wrap check: measure substring before cursor. No sentinel —
-    // sentinel char caused false positives when cursor sat at end of a
-    // nearly-full single line (sentinel's hypothetical width pushed mirror
-    // to line 2, but real cursor stays on line 1). Trade-off: cursor at
-    // the exact pixel-perfect wrap point of a multi-row visual wrap may
-    // false-negative ("on first line" when visually on row 2). Rare; the
-    // sentinel false-positive (cursor at end of normal text) is far more
-    // common and the bug user reported.
+    const dbg = { fn: 'isFirst', selStart: ta.selectionStart, valueLen: ta.value.length };
+    if (ta.selectionStart === 0) { this._logCursor({ ...dbg, shortcut: 'sel===0', result: true }); return true; }
+    if (!ta.value) { this._logCursor({ ...dbg, shortcut: 'empty', result: true }); return true; }
+    if (ta.value.substring(0, ta.selectionStart).includes('\n')) { this._logCursor({ ...dbg, shortcut: 'hasNL', result: false }); return false; }
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3393,7 +3393,29 @@ class UnityChat {
     m.textContent = 'X';
     const lineH = m.offsetHeight;
     m.textContent = ta.value.substring(0, ta.selectionStart);
-    return m.offsetHeight <= lineH;
+    const subH = m.offsetHeight;
+    const result = subH <= lineH;
+    this._logCursor({
+      ...dbg, shortcut: 'mirror', result,
+      lineH, subH,
+      taClientW: ta.clientWidth,
+      mirrorW: m.style.width,
+      mirrorPad: m.style.padding,
+      mirrorBox: m.style.boxSizing,
+      cssPadding: cs.padding,
+      cssFont: cs.font,
+      substr: ta.value.substring(0, ta.selectionStart).slice(0, 60),
+    });
+    return result;
+  }
+
+  _logCursor(data) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UC_LOG', tag: 'CursorLine',
+        text: JSON.stringify(data),
+      }).catch(() => {});
+    } catch {}
   }
 
   _autoResizeInput() {
@@ -3411,12 +3433,10 @@ class UnityChat {
 
   _isCursorOnLastLine() {
     const ta = this.msgInput;
-    if (!ta.value) return true;
-    if (ta.selectionEnd >= ta.value.length) return true;
-    // Hard newline after cursor → not on last line yet.
-    if (ta.value.substring(ta.selectionEnd).includes('\n')) return false;
-    // Visual-wrap check: measure substring after cursor (no sentinel,
-    // see _isCursorOnFirstLine for rationale).
+    const dbg = { fn: 'isLast', selEnd: ta.selectionEnd, valueLen: ta.value.length };
+    if (!ta.value) { this._logCursor({ ...dbg, shortcut: 'empty', result: true }); return true; }
+    if (ta.selectionEnd >= ta.value.length) { this._logCursor({ ...dbg, shortcut: 'sel===len', result: true }); return true; }
+    if (ta.value.substring(ta.selectionEnd).includes('\n')) { this._logCursor({ ...dbg, shortcut: 'hasNL', result: false }); return false; }
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3432,7 +3452,15 @@ class UnityChat {
     m.textContent = 'X';
     const lineH = m.offsetHeight;
     m.textContent = ta.value.substring(ta.selectionEnd);
-    return m.offsetHeight <= lineH;
+    const subH = m.offsetHeight;
+    const result = subH <= lineH;
+    this._logCursor({
+      ...dbg, shortcut: 'mirror', result,
+      lineH, subH,
+      taClientW: ta.clientWidth,
+      substr: ta.value.substring(ta.selectionEnd).slice(0, 60),
+    });
+    return result;
   }
 
   // ---- Odesílání zpráv ----
