@@ -1590,8 +1590,28 @@
       !allCandidates.some((other) => other !== el && el.contains(other))
     );
     for (const el of kept) {
-      const text = (el.textContent || '').trim();
-      if (!text) continue;
+      const rawText = (el.textContent || '').trim();
+      if (!rawText) continue;
+      // Defensive dedup: some Twitch highlight cards (notably "Sdílený chat
+      // byl spuštěn!" / "Shared Chat Started!" banners + 7TV-overlaid
+      // milestones) emit the same phrase twice in textContent — once
+      // visible, once for accessibility/aria/sr-only sibling. Detect exact
+      // 2x repeat and trim to one copy. Threshold ≥ 10 chars to avoid
+      // accidental matches on short repeated tokens.
+      let text = rawText;
+      if (rawText.length >= 10 && rawText.length % 2 === 0) {
+        const half = rawText.length / 2;
+        if (rawText.substring(0, half) === rawText.substring(half)) {
+          text = rawText.substring(0, half);
+          // Log outerHTML so we can verify the actual Twitch DOM structure
+          // and refine handling (e.g. drop aria-hidden / visuallyhidden
+          // descendants properly instead of relying on this heuristic).
+          try {
+            chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'HighlightDup',
+              text: `dedup="${text.slice(0, 80)}" originalLen=${rawText.length} html=${(el.outerHTML || '').slice(0, 1500)}` }).catch(() => {});
+          } catch {}
+        }
+      }
       const key = text.slice(0, 120);
       if (seenTexts.has(key)) continue;
       seenTexts.add(key);
