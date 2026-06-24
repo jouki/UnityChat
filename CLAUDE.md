@@ -24,20 +24,8 @@ UnityChat/
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
-├── landing/                 # jouki.cz root + /UnityChat install page
-│   ├── index.html              # Root page (under construction, gaming HUD aesthetic)
-│   ├── nginx.conf              # Nginx static server config (case-insensitive /UnityChat)
-│   ├── Dockerfile              # nginx:alpine, zips extension/, healthcheck
-│   └── unitychat/              # /UnityChat install page
-│       ├── index.html          # Install guide: hero+preview, steps, features, FAQ
-│       ├── preview.html        # Iframe mockup using real sidepanel.css
-│       └── assets/
-│           ├── brand/unitychat-logo.png  # 512px polished logo for hero branding
-│           ├── badges/         # broadcaster, moderator, chatbot, vip, partner PNG
-│           ├── emotes/         # kappa, lul, kreygasm, ragey(7TV), waytoodank(7TV)
-│           ├── audio/          # streamelements-bulgarians.mp3 (click-to-play demo)
-│           ├── chrome-extension-card.png
-│           └── chrome-extensions-header.png
+# landing/ — POZOR: web jouki.cz je v SAMOSTATNÉM privátním repu github.com/jouki/jouki.cz
+#            (ne tady). Viz sekce "Landing page" níže. Tento repo dává jen extension/.
 ├── backend/                 # Node.js + Fastify + Drizzle + Postgres API server
 │   ├── src/
 │   │   ├── server.ts           # Fastify entry point + health endpoints
@@ -452,24 +440,34 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
 
 ## Landing page (jouki.cz/UnityChat)
 
-Statická install stránka na `jouki.cz/UnityChat` (case-insensitive). Nasazena jako nginx container přes Coolify, auto-deploy z GitHub pushů (webhook na `landing/**` a `extension/**`).
+> ⚠️ **DŮLEŽITÉ — web žije v SAMOSTATNÉM repu.** Landing/web jouki.cz **NENÍ** v tomto
+> UnityChat repu (žádná `landing/` složka tu není, navzdory starším poznámkám). Web je v
+> **privátním repu `github.com/jouki/jouki.cz`** (branch `master`, Coolify base dir `/`).
+> Ověřeno přes Coolify DB: `jouki-landing` (app id=2) → `git@github.com:jouki/jouki.cz.git`.
+> Tento UnityChat repo poskytuje jen `extension/` (ZIP se zipuje při buildu landing image z
+> public UnityChat repa, branche master + dev). Pro úpravy webu: `gh repo clone jouki/jouki.cz`.
 
-### Architektura
-- `landing/unitychat/index.html` — hlavní install page (Orbitron + JetBrains Mono, gaming HUD)
-- `landing/unitychat/preview.html` — iframe mockup (načítá `extension/sidepanel.css` pro pixel-accurate rendering)
-- `landing/Dockerfile` — base_directory je `/` (repo root), zipuje extension/ pro download, kopíruje sidepanel.css + icons z extension/
+Statická install stránka na `jouki.cz/UnityChat` (case-insensitive). Nasazena jako nginx container přes Coolify, auto-deploy z pushů do `jouki/jouki.cz` (a refresh ZIPů při pushi do `jouki/UnityChat` master/dev).
 
-### Dockerfile build kontext
+### Struktura repa `jouki/jouki.cz`
+- `jouki-cz/index.html` — root page (jouki.cz, under-construction CRT estetika)
+- `unitychat/index.html` — hlavní install page (Orbitron + JetBrains Mono, gaming HUD)
+- `unitychat/preview.html` — iframe mockup (načítá `extension/sidepanel.css` pro pixel-accurate rendering)
+- `unitychat/dev/` — dev install page
+- `unitychat/privacy/index.html` — **bilingvální (CS/EN) privacy policy** pro Google OAuth verifikaci (`youtube.readonly` sensitive scope). URL `jouki.cz/UnityChat/privacy` (+`?lang=en`). Live od 2026-06-24.
+- `nginx.conf` — routing (case-insensitive `/UnityChat`, `/UnityChat/dev`, `/UnityChat/privacy`, download area, `/dev-api/` proxy na :3001)
+- `Dockerfile` — base dir `/`, klonuje public UnityChat (master+dev), zipuje obě `extension/` složky, kopíruje sidepanel.css + icons
+
+### Dockerfile build kontext (repo jouki/jouki.cz)
 ```dockerfile
-# Base directory v Coolify = "/" (repo root)
-# Dockerfile location = "/landing/Dockerfile"
-FROM alpine:3 AS zipper    # zipuje extension/ → unitychat.zip
+# Base directory v Coolify = "/" (jouki.cz repo root)
+FROM alpine:3 AS zipper    # git clone UnityChat master+dev → zip každou extension/
 FROM nginx:alpine           # runtime
-COPY landing/unitychat → /unitychat        # install page
-COPY extension/sidepanel.css → /unitychat/assets/sidepanel.css  # real CSS for preview
-COPY extension/icons → /unitychat/assets/icons
-COPY unitychat.zip → /download/unitychat.zip
-COPY extension/manifest.json → /download/manifest.json
+COPY jouki-cz/  → /usr/share/nginx/html/            # root page
+COPY unitychat  → /usr/share/nginx/html/unitychat   # install + privacy + dev pages
+COPY --from=zipper .../extension/sidepanel.css → /unitychat/assets/sidepanel.css
+COPY --from=zipper .../extension/icons          → /unitychat/assets/icons
+COPY --from=zipper unitychat.zip + manifest.json → /download/...
 ```
 
 ### Nginx routing
