@@ -970,13 +970,42 @@
   }
 
   async function sendChat(text) {
-    const input = findInput();
+    let input = findInput();
     if (!input) throw new Error('Twitch chat input nenalezen');
+
+    const log = (step, extra) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'TwSend', args: [step, extra ? JSON.stringify(extra) : ''] });
+      } catch {}
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Twitch může chat přemountovat uprostřed odesílání (channel switch,
+    // 7TV rerender) — vždy číst z živého elementu.
+    const readInput = () => {
+      if (!document.contains(input)) {
+        const fresh = findInput();
+        if (fresh) input = fresh;
+      }
+      return (input.tagName === 'TEXTAREA' ? input.value : input.textContent) || '';
+    };
+    const findSendBtn = () => document.querySelector('[data-a-target="chat-send-button"]');
+    const btnDisabled = (b) => !!b && (b.disabled || b.getAttribute('aria-disabled') === 'true');
+    // Probe = úvodní část textu; detekuje "náš text je/není v editoru".
+    // Slate placeholder ani zero-width výplně ho neobsahují, takže je
+    // spolehlivější než empty-check přes textContent.
+    const probe = text.trim().slice(0, 20);
+
+    const preText = readInput();
+    log('start', {
+      len: text.length, tag: input.tagName,
+      preLen: preText.length, preText: preText.slice(0, 60),
+      focus: document.hasFocus(), vis: document.visibilityState
+    });
 
     input.focus();
 
     // Počkat chvíli na focus
-    await new Promise((r) => setTimeout(r, 50));
+    await sleep(50);
 
     if (input.tagName === 'TEXTAREA') {
       // Starší Twitch - React textarea
@@ -988,8 +1017,7 @@
       input.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
       // Moderní Twitch - Slate contenteditable div
-      // Vyčistit obsah a vložit text přes simulaci paste
-      input.focus();
+      // Vložit text přes simulaci paste
 
       // Metoda 1: DataTransfer paste (nejspolehlivější pro Slate)
       try {
@@ -1021,27 +1049,62 @@
       }
     }
 
-    // Počkat na React/Slate zpracování
-    await new Promise((r) => setTimeout(r, 150));
-
-    // Kliknout na Send tlačítko
-    const sendBtn = document.querySelector(
-      '[data-a-target="chat-send-button"]'
-    );
-    if (sendBtn) {
-      sendBtn.click();
-    } else {
-      // Fallback - Enter key
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13,
-          bubbles: true
-        })
-      );
+    // Condition-based wait místo původního fixního 150ms timeoutu.
+    // React/Slate zpracovává paste asynchronně přes svůj scheduler — a když
+    // má fokus sidepanel (= vždy při odesílání z UC), Chrome scheduler
+    // throttluje; u rewards popoveru naměřeno 500–800 ms (viz komentář v
+    // TW_OPEN_REWARDS_POPOVER handleru). Pevných 150 ms občas prohrálo
+    // závod → klik trefil send ve stavu "prázdný input" → Twitch neodeslal
+    // a text zůstal viset v inputu (další zpráva se pak appendla za něj).
+    const t0 = performance.now();
+    let ready = false;
+    while (performance.now() - t0 < 1500) {
+      const btn = findSendBtn();
+      if (readInput().includes(probe) && btn && !btnDisabled(btn)) { ready = true; break; }
+      await sleep(50);
     }
+    log('pre-click', {
+      ready, waitMs: Math.round(performance.now() - t0),
+      cur: readInput().slice(0, 60),
+      btn: !!findSendBtn(), disabled: btnDisabled(findSendBtn())
+    });
+
+    // Klik + verifikace + retry. Úspěšný send input vyprázdní (jakmile
+    // React commitne) — dokud v něm náš text visí, send neproběhl.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const sendBtn = findSendBtn();
+      if (sendBtn) {
+        sendBtn.click();
+      } else {
+        // Fallback - Enter key
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true
+          })
+        );
+      }
+
+      // Verifikační okno 2000 ms je záměrně delší než nejhorší naměřený
+      // scheduler lag (800 ms) — předčasný retry po kliku, který ve
+      // skutečnosti USPĚL, by zprávu poslal dvakrát.
+      const v0 = performance.now();
+      let cleared = false;
+      while (performance.now() - v0 < 2000) {
+        await sleep(100);
+        if (!readInput().includes(probe)) { cleared = true; break; }
+      }
+      log(cleared ? 'sent' : 'not-cleared', {
+        attempt, viaBtn: !!sendBtn,
+        verifyMs: Math.round(performance.now() - v0),
+        cur: cleared ? '' : readInput().slice(0, 60)
+      });
+      if (cleared) return;
+    }
+    throw new Error('zpráva zůstala viset v Twitch inputu (3 pokusy o odeslání selhaly)');
   }
 
   async function replyChat(text, parentMsgId, username) {
