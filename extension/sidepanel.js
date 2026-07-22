@@ -2510,7 +2510,7 @@ class UnityChat {
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
-        const tab = await this._getActiveBrowserTab();
+        const tab = await this._findStreamTab();
         if (tab) {
           await this._injectContentScript(tab);
           const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -3483,9 +3483,74 @@ class UnityChat {
     }
   }
 
+  // Najít stream tab pro detekci platformy / odesílání zpráv. Aktivní tab má
+  // přednost (dosavadní chování). Když aktivní tab není platform stránka —
+  // typicky UnityChat otevřený jako tab v Opera split screenu — fallback
+  // URL-scan přes všechny taby: bere jen skutečné channel stránky, preferuje
+  // nakonfigurovaný kanál a sticky drží naposledy aktivní platformu.
+  // platform = omezit na konkrétní platformu (send path), null = libovolná.
+  async _findStreamTab(platform = null) {
+    const active = await this._getActiveBrowserTab();
+    const activeP = active?.url ? this._detectPlatformFromUrl(active.url) : null;
+    if (active && activeP && (!platform || activeP === platform)) {
+      return active;
+    }
+
+    let tabs;
+    try { tabs = await chrome.tabs.query({}); } catch { return null; }
+
+    const order = ['twitch', 'kick', 'youtube'];
+    let wanted;
+    if (platform) {
+      wanted = [platform];
+    } else if (this.activePlatform && order.includes(this.activePlatform)) {
+      wanted = [this.activePlatform, ...order.filter((p) => p !== this.activePlatform)];
+    } else {
+      wanted = order;
+    }
+
+    for (const p of wanted) {
+      if (!this.config[p]) continue;
+      const candidates = [];
+      for (const t of tabs) {
+        if (!t.url || t.id == null) continue;
+        const handle = this._parseChannelFromUrl(t.url, p);
+        let ok = !!handle;
+        // YouTube live běží na /watch — _parseChannelFromUrl umí jen @handle
+        // stránky, watch stránky přijmout bez handle (content script si poradí).
+        if (!ok && p === 'youtube') {
+          try {
+            const u = new URL(t.url);
+            ok = u.hostname.endsWith('youtube.com')
+              && (u.pathname === '/watch' || u.pathname.startsWith('/live'));
+          } catch {}
+        }
+        if (ok) candidates.push({ tab: t, handle: handle || null });
+      }
+      if (!candidates.length) continue;
+      const configured = this._getConfiguredHandle(p);
+      const match = candidates.find((c) => configured && c.handle === configured)
+        || candidates[0];
+      this._streamTabLog(`scan hit p=${p} handle=${match.handle || '?'} cfg=${configured || '—'} tabId=${match.tab.id} cand=${candidates.length}`);
+      return match.tab;
+    }
+    this._streamTabLog(`scan miss platform=${platform || 'any'} active=${(active?.url || '—').slice(0, 60)}`);
+    return null;
+  }
+
+  // Rate-limited StreamTab diagnostic (fallback scan běží ve 3s loopu —
+  // stejná zpráva se opakuje max 1× za 15 s).
+  _streamTabLog(text) {
+    const now = Date.now();
+    if (this._streamTabLogPrev === text && now - (this._streamTabLogLast || 0) < 15000) return;
+    this._streamTabLogLast = now;
+    this._streamTabLogPrev = text;
+    chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'StreamTab', text }).catch(() => {});
+  }
+
   async _detectActivePlatform() {
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab();
       if (!tab) { this._setActivePlatform(null); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -4218,7 +4283,7 @@ class UnityChat {
     setTimeout(() => { this._ucDebounce = false; }, 2000);
 
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab(platform);
       if (!tab) return;
 
       chrome.runtime.sendMessage({
@@ -4281,7 +4346,7 @@ class UnityChat {
     // channel for this platform, refuse to send. Auto-switch should normally
     // fix this transparently — this is a safety net for the transient window.
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab(this.activePlatform);
       if (tab?.url) {
         const tabHandle = this._parseChannelFromUrl(tab.url, this.activePlatform);
         const configured = this._getConfiguredHandle(this.activePlatform);
@@ -4337,8 +4402,8 @@ class UnityChat {
 
     // Send in background (don't block UI)
     try {
-      const tab = await this._getActiveBrowserTab();
-      if (!tab) { this._sys('Žádný aktivní tab'); return; }
+      const tab = await this._findStreamTab(platform);
+      if (!tab) { this._sys(`Nenalezen otevřený stream tab (${platform})`); return; }
 
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).

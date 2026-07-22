@@ -32,33 +32,59 @@ if (HAS_SIDE_PANEL) {
     .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
 } else {
   // Opera path: the native sidebar is wired via "sidebar_action" in the
-  // manifest. The toolbar action falls back to a popup window.
-  let _ucWindowId = null;
-
-  chrome.action.onClicked.addListener(async () => {
-    if (_ucWindowId !== null) {
-      try {
-        const win = await chrome.windows.get(_ucWindowId);
-        if (win) {
-          chrome.windows.update(_ucWindowId, { focused: true });
-          return;
-        }
-      } catch {
-        _ucWindowId = null;
-      }
-    }
-    const win = await chrome.windows.create({
-      url: 'sidepanel.html',
-      type: 'popup',
-      width: 420,
-      height: 720
-    });
-    _ucWindowId = win.id;
+  // manifest. The toolbar action opens UnityChat as a regular tab next to
+  // the stream tab (openerTabId → Opera may auto-group them into a tab
+  // island). Popup-window mode was replaced in v3.38.56 — a tab works with
+  // Opera Split Screen, a popup window does not.
+  chrome.action.onClicked.addListener((tab) => {
+    openUcTab(tab).catch((e) => ucLog('TabOpen', 'action open failed:', e.message));
   });
+}
 
-  chrome.windows.onRemoved.addListener((windowId) => {
-    if (windowId === _ucWindowId) _ucWindowId = null;
-  });
+// Otevřít (nebo fokusnout existující) UnityChat tab. streamTab = tab, vedle
+// kterého se má otevřít (openerTabId + index → Opera tab island best-effort).
+async function openUcTab(streamTab) {
+  const url = chrome.runtime.getURL('sidepanel.html');
+  const existing = await chrome.tabs.query({ url });
+  if (existing.length) {
+    const t = existing[0];
+    ucLog('TabOpen', 'focusing existing tab', t.id);
+    await chrome.tabs.update(t.id, { active: true });
+    if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true });
+    return;
+  }
+  // Opener: předaný tab pokud je to platform stránka, jinak aktivní tab
+  // posledního normal okna, jinak první platform tab v URL-scanu.
+  let opener = isPlatformTab(streamTab) ? streamTab : null;
+  if (!opener) {
+    try {
+      const win = await chrome.windows.getLastFocused({ populate: true, windowTypes: ['normal'] });
+      const activeTab = win?.tabs?.find((t) => t.active);
+      if (isPlatformTab(activeTab)) opener = activeTab;
+    } catch {}
+  }
+  if (!opener) {
+    try {
+      const all = await chrome.tabs.query({});
+      opener = all.find((t) => isPlatformTab(t)) || null;
+    } catch {}
+  }
+  const createProps = { url: 'sidepanel.html', active: true };
+  if (opener) {
+    createProps.openerTabId = opener.id;
+    createProps.index = opener.index + 1;
+    createProps.windowId = opener.windowId;
+  }
+  ucLog('TabOpen', 'creating tab, opener=', opener ? `${opener.id} ${(opener.url || '').slice(0, 50)}` : 'none');
+  await chrome.tabs.create(createProps);
+}
+
+function isPlatformTab(tab) {
+  if (!tab?.url || tab.id == null) return false;
+  try {
+    const h = new URL(tab.url).hostname;
+    return h.includes('twitch.tv') || h.includes('kick.com') || h.includes('youtube.com');
+  } catch { return false; }
 }
 
 // Restore the update-available badge on service-worker startup. MV3 workers
@@ -269,13 +295,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       return true;
     }
-    // Opera (no sidePanel API) → popup window fallback (no toggle, just open)
-    chrome.windows.create({
-      url: 'sidepanel.html',
-      type: 'popup',
-      width: 420,
-      height: 720
-    }).then(() => sendResponse({ ok: true, action: 'opened' }))
+    // Opera (no sidePanel API) → open as a regular tab next to the stream
+    // tab (sender.tab = Twitch tab when clicked from the chat header button)
+    openUcTab(sender.tab || null)
+      .then(() => sendResponse({ ok: true, action: 'opened' }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
