@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.38.56
+# UnityChat - Chrome/Opera Extension + Backend v3.38.57
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -383,7 +383,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.38.56** (dev)
+- Aktuální: **v3.38.57** (dev)
 
 ## Známé limitace / gotchas
 
@@ -615,7 +615,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.53** - **Cursor-line detection instrumentation (debug)**: po stížnosti že "HeHe" potřebuje 4 ArrowUp k advancementu, přidána UC_LOG `CursorLine` instrumentace v ArrowUp/Down handlerech a v `_isCursorOnFirstLine` / `_isCursorOnLastLine`. Dump z 6.5. ukázal že shortcut `sel===0` funguje správně — bug ve v3.38.51 byl fakticky vyřešen, zbývající user complaint je jiný (zatím v session není repro).
 - **v3.38.54** - **Highlight banner doubled-text dedup**: "Sdílený chat byl spuštěn!" v UC banner zobrazoval text 2× ("Sdílený chat byl spuštěn!Sdílený chat byl spuštěn!"). String není v UC kódu — Twitch DOM má phrase 2× v textContent (visible + aria/sr-only nebo 7TV overlay). Defensive heuristic v `snapshotHighlights`: pokud `textContent` má sudou délku ≥ 10 a první polovina === druhá polovina, trim na 1 kopii. Plus UC_LOG `HighlightDup` co loguje outerHTML při dedupu pro budoucí targeted DOM filter.
 - **v3.38.55** - **Twitch verified send (fix občasného neodeslání)**: `sendChat` byl fire-and-forget od v3.3.9 — fixních 150 ms mezi paste eventem a klikem na send button, bez verifikace výsledku. React/Slate zpracovává paste async přes scheduler, který Chrome throttluje když má fokus sidepanel (in-repo důkaz: 500–800 ms naměřeno u rewards popoveru). Commit paste > 150 ms → klik trefil "prázdný input" stav → Twitch neodeslal, text zůstal viset v inputu, další zpráva se appendla a odešly spojené. Fix: condition-based wait (text v editoru + button enabled, cap 1.5 s), post-click verifikace vyprázdnění inputu (okno 2 s proti double-send), retry 3×, pak `ok:false` → chyba v UC. UC_LOG tag `TwSend` (start/pre-click/sent/not-cleared).
-- **v3.38.56** - **Opera tab mode + stream-tab URL-scan fix**: (1) Opera toolbar/chat-header klik otevírá UnityChat jako regular tab (openerTabId + index vedle stream tabu → Opera tab island best-effort; existující UC tab se fokusne, žádné duplicity) místo popup okna. (2) `_findStreamTab(platform?)` — aktivní tab má přednost, fallback URL-scan přes všechny taby (jen channel stránky, preferuje nakonfigurovaný kanál, sticky drží poslední aktivní platformu; YouTube přijímá i /watch). Nahrazuje `_getActiveBrowserTab()` v `_detectActivePlatform`, `_sendMessage`, `_openUserCard` + boot username detect → chat v Opera split screenu už nešediví, když je aktivní UnityChat tab. Split poměr = ruční divider (Opera nemá split API), `chrome.tabGroups` v Opeře neexistuje. UC_LOG tagy `StreamTab` + `TabOpen` (cleanup po user verifikaci). **Aktuální verze (dev)**
+- **v3.38.56** - **Opera tab mode + stream-tab URL-scan fix**: (1) Opera toolbar/chat-header klik otevírá UnityChat jako regular tab (openerTabId + index vedle stream tabu → Opera tab island best-effort; existující UC tab se fokusne, žádné duplicity) místo popup okna. (2) `_findStreamTab(platform?)` — aktivní tab má přednost, fallback URL-scan přes všechny taby (jen channel stránky, preferuje nakonfigurovaný kanál, sticky drží poslední aktivní platformu; YouTube přijímá i /watch). Nahrazuje `_getActiveBrowserTab()` v `_detectActivePlatform`, `_sendMessage`, `_openUserCard` + boot username detect → chat v Opera split screenu už nešediví, když je aktivní UnityChat tab. Split poměr = ruční divider (Opera nemá split API), `chrome.tabGroups` v Opeře neexistuje. UC_LOG tagy `StreamTab` + `TabOpen` (cleanup po user verifikaci).
+- **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider. **Aktuální verze (dev)**
 
 ## Session workflow — jak Claude pracuje v tomto repu
 
@@ -764,6 +765,7 @@ UC má vlastní logging system. Logy se akumulují v service worker `_logs[]` (m
 - `HighlightDiag` — pin/raid/highlight DOM dump
 - `Pin` — pin extractor DOM-walk
 - `StreakSkip` — watch-streak text reject
+- `EmoteFetch` — timeout/error emote a badge provider fetchů (url + elapsed ms); když boot stojí mezi `7TV globals loaded` a `channel emotes+badges loaded`, tady je viník
 
 **Pattern když není instrumentace:** přidej UC_LOG tag jako separate `debug:` commit, požádej user o repro+dump, AŽ POTOM fix v dalším commitu. NE pokoušet se fix slepě.
 
