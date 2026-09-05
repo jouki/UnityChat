@@ -504,7 +504,7 @@ async function loadTwitchBadges(channel, roomId) {
 
   // IVR API - veřejné, žádný auth, spolehlivé
   try {
-    const gr = await fetch('https://api.ivr.fi/v2/twitch/badges/global');
+    const gr = await fetch('https://api.ivr.fi/v2/twitch/badges/global', { signal: AbortSignal.timeout(8000) });
     if (gr.ok) {
       for (const b of await gr.json()) {
         for (const v of b.versions || []) {
@@ -513,7 +513,7 @@ async function loadTwitchBadges(channel, roomId) {
       }
     }
     if (roomId) {
-      const cr = await fetch(`https://api.ivr.fi/v2/twitch/badges/channel?id=${roomId}`);
+      const cr = await fetch(`https://api.ivr.fi/v2/twitch/badges/channel?id=${roomId}`, { signal: AbortSignal.timeout(8000) });
       if (cr.ok) {
         for (const b of await cr.json()) {
           for (const v of b.versions || []) {

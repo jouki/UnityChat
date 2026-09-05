@@ -58,10 +58,32 @@ class EmoteManager {
 
   // ---- Loading ----
 
+  // Bounded fetch for emote/badge providers. Boot awaits these via
+  // Promise.allSettled, so a single provider that accepts the TCP/TLS
+  // handshake but never sends a byte (FFZ outage 2026-09-05) would hang
+  // _init forever — Chrome's fetch has no idle timeout of its own. Timeout
+  // and any other failure are surfaced via UC_LOG [EmoteFetch] so the
+  // boot dump shows WHICH provider stalled instead of a silent 0-count.
+  async _fetch(url, opts = {}, timeoutMs = 8000) {
+    const t0 = Date.now();
+    try {
+      return await fetch(url, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (err) {
+      const kind = err?.name === 'TimeoutError' ? 'timeout' : (err?.name || 'error');
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'EmoteFetch',
+          text: `${kind} after ${Date.now() - t0}ms: ${url}`
+        }).catch(() => {});
+      } catch {}
+      throw err;
+    }
+  }
+
   async loadGlobal() {
     if (this._globalLoaded) return;
     try {
-      const resp = await fetch('https://7tv.io/v3/emote-sets/global');
+      const resp = await this._fetch('https://7tv.io/v3/emote-sets/global');
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const emotes = data.emotes || [];
@@ -81,7 +103,7 @@ class EmoteManager {
 
   async loadChannel(platform, userId) {
     try {
-      const resp = await fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
+      const resp = await this._fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
       if (!resp.ok) {
         console.warn(`[7TV] Channel emotes ${platform}/${userId}: HTTP ${resp.status}`);
         return 0;
@@ -117,7 +139,7 @@ class EmoteManager {
     let count = 0;
     try {
       // Globální BTTV emotes
-      const gr = await fetch('https://api.betterttv.net/3/cached/emotes/global');
+      const gr = await this._fetch('https://api.betterttv.net/3/cached/emotes/global');
       if (gr.ok) {
         for (const e of await gr.json()) {
           this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
@@ -127,7 +149,7 @@ class EmoteManager {
     } catch {}
     try {
       // Kanálové BTTV emotes
-      const cr = await fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
+      const cr = await this._fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
       if (cr.ok) {
         const data = await cr.json();
         for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
@@ -168,7 +190,7 @@ class EmoteManager {
   async loadTwitchChannel(channelLogin) {
     let count = 0;
     try {
-      const resp = await fetch('https://gql.twitch.tv/gql', {
+      const resp = await this._fetch('https://gql.twitch.tv/gql', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -220,11 +242,11 @@ class EmoteManager {
       }
     };
     try {
-      const gr = await fetch('https://api.frankerfacez.com/v1/set/global');
+      const gr = await this._fetch('https://api.frankerfacez.com/v1/set/global');
       if (gr.ok) parseSet((await gr.json()).sets || {});
     } catch {}
     try {
-      const cr = await fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
+      const cr = await this._fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
       if (cr.ok) parseSet((await cr.json()).sets || {});
     } catch {}
     console.log(`[FFZ] ${count} emotes loaded`);
