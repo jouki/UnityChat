@@ -6,6 +6,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="brand.css">
 <!--
   Zdroj promo dlaždic pro Chrome Web Store. Jeden soubor, dvě velikosti —
   ?size=small (440x280, povinná) a ?size=marquee (1400x560, volitelná).
@@ -21,21 +22,17 @@
   ("Free", "Install now", hvězdičky) — obojí je důvod k odmítnutí assetu.
 -->
 <style>
+  /* Jen to, co je specificke pro dlazdice; zbytek dedi z brand.css. */
   :root {
-    --bg-deep:   #0a0b0d;
-    --bg-lift:   #14161a;
-    --orange:    #ff8c00;
-    --amber:     #ffc24d;
-    --ink:       #f4f6f8;
-    --ink-dim:   #8b949e;
-
-    /* Přepisuje se pro marquee variantu. */
     --logo:      96px;
     --wordmark:  40px;
     --tagline:   12px;
     --gap:       18px;
     --grid-lg:   56px;
     --grid-sm:   14px;
+    --glow-x:    50%;
+    --glow-y:    34%;
+    --glow-size: calc(var(--logo) * 2.4);
   }
 
   html[data-size="marquee"] {
@@ -45,62 +42,14 @@
     --gap:       64px;
     --grid-lg:   140px;
     --grid-sm:   35px;
+    --glow-x:    calc(var(--logo) * 0.72);
+    --glow-y:    50%;
   }
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { display: grid; place-items: center; }
 
-  html, body { width: 100%; height: 100%; overflow: hidden; }
-
-  body {
-    display: grid;
-    place-items: center;
-    background:
-      radial-gradient(120% 90% at 18% 12%, rgba(255,140,0,0.16) 0%, transparent 58%),
-      radial-gradient(90% 80% at 88% 92%, rgba(255,140,0,0.08) 0%, transparent 62%),
-      linear-gradient(155deg, var(--bg-lift) 0%, var(--bg-deep) 62%);
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    position: relative;
-  }
-
-  /* HUD mřížka — dvojité rozlišení jako na jouki.cz/UnityChat. */
-  body::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px),
-      linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
-    background-size:
-      var(--grid-lg) var(--grid-lg),
-      var(--grid-lg) var(--grid-lg),
-      var(--grid-sm) var(--grid-sm),
-      var(--grid-sm) var(--grid-sm);
-    /* Mřížka se vytrácí ke spodnímu pravému rohu, ať netlačí na text. */
-    -webkit-mask-image: radial-gradient(130% 110% at 20% 10%, #000 0%, transparent 78%);
-    mask-image: radial-gradient(130% 110% at 20% 10%, #000 0%, transparent 78%);
-  }
-
-  /* Oranžová světelná stopa pod logem. */
-  body::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 34%;
-    width: calc(var(--logo) * 2.4);
-    height: calc(var(--logo) * 2.4);
-    transform: translate(-50%, -50%);
-    background: radial-gradient(circle, rgba(255,140,0,0.22) 0%, transparent 68%);
-    filter: blur(calc(var(--logo) * 0.12));
-  }
-  html[data-size="marquee"] body::after {
-    left: calc(var(--logo) * 0.72);
-    top: 50%;
-  }
-
-  /* Small tile je skoro čtvercový — text vedle loga se tam nevejde, takže
-     staví na výšku. Marquee je široký pruh, tam je logo vedle textu. */
+  /* Small tile je skoro ctvercovy - text vedle loga se tam nevejde, takze
+     stavi na vysku. Marquee je siroky pruh, tam je logo vedle textu. */
   .tile {
     position: relative;
     z-index: 1;
@@ -133,23 +82,9 @@
   }
   html[data-size="marquee"] .copy { align-items: flex-start; }
 
-  .wordmark {
-    font-family: 'Orbitron', sans-serif;
-    font-weight: 900;
-    font-size: var(--wordmark);
-    line-height: 0.96;
-    letter-spacing: 0.01em;
-    color: var(--ink);
-    white-space: nowrap;
-  }
-  .wordmark .accent {
-    background: linear-gradient(100deg, var(--amber) 0%, var(--orange) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
+  .wordmark { font-size: var(--wordmark); }
 
-  /* Tři platformy jako text, nikdy jako cizí logo. */
+  /* Tri platformy jako text, nikdy jako cizi logo. */
   .platforms {
     display: flex;
     align-items: center;
@@ -176,14 +111,7 @@
     white-space: nowrap;
   }
 
-  /* Tenký oranžový svod u spodní hrany — drží dlaždici pohromadě. */
-  .rule {
-    position: absolute;
-    left: 0; right: 0; bottom: 0;
-    height: calc(var(--tagline) * 0.24);
-    background: linear-gradient(90deg, var(--orange) 0%, rgba(255,140,0,0.15) 48%, transparent 100%);
-    z-index: 2;
-  }
+  .rule { height: calc(var(--tagline) * 0.24); }
 </style>
 </head>
 <body>

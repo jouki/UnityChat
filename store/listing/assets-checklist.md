@@ -8,7 +8,7 @@ Požadavky podle [Chrome Web Store image guidelines](https://developer.chrome.co
 |---|---|---|---|
 | Ikona rozšíření | 128×128 (kresba 96×96 + 16 px průhledný okraj) | PNG | ✅ `assets/icon128-store.png` |
 | Small promo tile | 440×280 | PNG / JPEG | ✅ `assets/promo-small-440x280.png` |
-| Screenshot (min. 1) | 1280×800 (preferované) nebo 640×400 | PNG / JPEG, full bleed, ostré rohy | ⚠️ `assets/screenshot-1-panel-1280x800.png` — provizorní, viz níže |
+| Screenshot (min. 1) | 1280×800 (preferované) nebo 640×400 | PNG / JPEG, full bleed, ostré rohy | ✅ `assets/screenshot-1-panel-1280x800.png` |
 
 Bez těchto tří položek nejde item publikovat.
 
@@ -52,19 +52,34 @@ používá původní `extension/icons/icon128.png`.
 | Marquee promo tile | 1400×560 | ✅ `assets/promo-marquee-1400x560.png` — bez něj se rozšíření nemůže dostat do marquee featuru |
 | Screenshoty 2–5 | 1280×800 | ☐ více záběrů = lepší konverze, max. 5 |
 
-### ⚠️ Stávající screenshot je provizorní
+### Screenshot — hotovo
 
-`screenshot-1-panel-1280x800.png` vznikl ořezem z Lightshot snímku
-(3748×1903 → ořez 703 px zleva → 1280×800; panel musel zůstat celý na výšku,
-proto se řezalo jen ze strany). Rozměrově sedí, **obsahově ne**:
+`screenshot-1-panel-1280x800.png` je panel na brand pozadí, vedle něj čtyři
+věty o tom, co UnityChat dělá. Zdroj `assets/screenshot.html`, generuje se
+týmž skriptem jako dlaždice.
 
-- panel má otevřené **nastavení, ne chat** — sjednocený seznam zpráv, tedy
-  hlavní důvod existence UnityChatu, na snímku vůbec není
-- stream neběží (offline obrazovka), status hlásí „Připojování…“ a
-  „Streamer není live na YouTube“ → působí to jako rozbitý stav
+Panel v něm je `assets/panel-mock.png` — render mockupu z
+`jouki.cz/UnityChat` (`preview.html`), který načítá **skutečné**
+`extension/sidepanel.css`, takže UI odpovídá reálnému panelu. Smyšlené jsou
+jen zprávy.
 
-Pro první screenshot v listingu to je málo. Přefotit za živého streamu
-s panelem v chat režimu podle návrhu níže.
+⚠️ **Riziko, se kterým počítej:** mockup se od reálného panelu může tichá
+rozejít. Jednou už se to stalo — `preview.html` přidával dvojtečku za jméno
+literálně, ačkoli ji `sidepanel.css` přidává přes `.un::after`, takže
+mockup zobrazoval `jméno::` (opraveno 2026-09-15). Po každé větší změně
+`sidepanel.css` proto **přerenderuj `panel-mock.png`** a porovnej ho s
+reálným panelem, jinak bude screenshot ve store ukazovat UI, které addon nemá.
+
+Reálný snímek za živého streamu je pořád lepší — tohle riziko nemá vůbec.
+
+#### Jak přerenderovat panel
+
+```powershell
+# s běžícím náhledem jouki.cz na :8731
+chrome --headless --force-device-scale-factor=2 --window-size=640,760 `
+  --screenshot=store\listing\assets\panel-mock.png `
+  "http://127.0.0.1:8731/unitychat/preview.html"
+```
 
 ## Co nafotit (návrh 5 screenshotů)
 

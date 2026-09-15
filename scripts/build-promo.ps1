@@ -38,7 +38,8 @@ if (-not $ChromePath) { throw 'Chrome not found - pass -ChromePath explicitly.' 
 $tiles = @(
   @{ Source = 'promo.html'; Query = '?size=small';   W = 440;  H = 280; Name = 'promo-small-440x280.png' },
   @{ Source = 'promo.html'; Query = '?size=marquee'; W = 1400; H = 560; Name = 'promo-marquee-1400x560.png' },
-  @{ Source = 'icon.html';  Query = '';              W = 128;  H = 128; Name = 'icon128-store.png'; Transparent = $true }
+  @{ Source = 'icon.html';  Query = '';              W = 128;  H = 128; Name = 'icon128-store.png'; Transparent = $true },
+  @{ Source = 'screenshot.html'; Query = '';         W = 1280; H = 800; Name = 'screenshot-1-panel-1280x800.png' }
 )
 
 Write-Host ''
