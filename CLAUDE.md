@@ -383,18 +383,35 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.38.58** (dev)
+- Aktuální: **v3.38.59** (dev)
 
-## Chrome Web Store build (v3.38.58+)
+## Chrome Web Store (v3.38.58+)
+
+> **Stav k 16. 9. 2026:** položka **odeslána ke kontrole**, verze 3.38.59,
+> item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, viditelnost Veřejné, jazyk CS.
+> Podklady pro dashboard a stav publikace: `store/listing/README.md`.
+> Během review **nenahrávat nový balíček** — restartuje ji to.
 
 `extension/` zůstává jediný dev zdroj (Chrome + Opera, no build step). Store
 balíček je z něj **generovaný derivát**, protože CWS zakazuje update
 mechanismy mimo store.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-store.ps1
+powershell -ExecutionPolicy Bypass -File scripts\build-store.ps1   # balíček
+powershell -ExecutionPolicy Bypass -File scripts\build-promo.ps1   # ikona, dlaždice, screenshot
 ```
 → `store/build/unpacked/` (Load unpacked test) + `store/build/unitychat-store-vX.Y.Z.zip`
+
+`build-promo.ps1` renderuje headless Chromem z `store/listing/assets/`:
+`icon.html` → ikona 128×128 (průhledná, 96×96 kresba + glow), `promo.html`
+→ dlaždice 440×280 a 1400×560, `screenshot.html` → snímek 1280×800.
+Sdílené pozadí je v `brand.css`, logo ve vektoru `logo.svg`.
+
+⚠️ Snímek obrazovky skládá `panel-mock.png` = render `preview.html`
+z jouki.cz, který načítá **skutečné** `extension/sidepanel.css`. Po větší
+změně toho CSS je potřeba mock přerenderovat, jinak screenshot ve store
+ukazuje UI, které addon nemá. Jednou se to už stalo (mockup přidával
+dvojtečku za jméno navíc k té z `.un::after`, opraveno 2026-09-15).
 
 Texty pro Developer Dashboard (single purpose, permission justifikace, data
 disclosure, listing CS/EN, assety) žijí v `store/listing/` — **tracked**,
@@ -670,6 +687,7 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.55** - **Twitch verified send (fix občasného neodeslání)**: `sendChat` byl fire-and-forget od v3.3.9 — fixních 150 ms mezi paste eventem a klikem na send button, bez verifikace výsledku. React/Slate zpracovává paste async přes scheduler, který Chrome throttluje když má fokus sidepanel (in-repo důkaz: 500–800 ms naměřeno u rewards popoveru). Commit paste > 150 ms → klik trefil "prázdný input" stav → Twitch neodeslal, text zůstal viset v inputu, další zpráva se appendla a odešly spojené. Fix: condition-based wait (text v editoru + button enabled, cap 1.5 s), post-click verifikace vyprázdnění inputu (okno 2 s proti double-send), retry 3×, pak `ok:false` → chyba v UC. UC_LOG tag `TwSend` (start/pre-click/sent/not-cleared).
 - **v3.38.56** - **Opera tab mode + stream-tab URL-scan fix**: (1) Opera toolbar/chat-header klik otevírá UnityChat jako regular tab (openerTabId + index vedle stream tabu → Opera tab island best-effort; existující UC tab se fokusne, žádné duplicity) místo popup okna. (2) `_findStreamTab(platform?)` — aktivní tab má přednost, fallback URL-scan přes všechny taby (jen channel stránky, preferuje nakonfigurovaný kanál, sticky drží poslední aktivní platformu; YouTube přijímá i /watch). Nahrazuje `_getActiveBrowserTab()` v `_detectActivePlatform`, `_sendMessage`, `_openUserCard` + boot username detect → chat v Opera split screenu už nešediví, když je aktivní UnityChat tab. Split poměr = ruční divider (Opera nemá split API), `chrome.tabGroups` v Opeře neexistuje. UC_LOG tagy `StreamTab` + `TabOpen` (cleanup po user verifikaci).
 - **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider.
+- **v3.38.59** - **Store assety + medium layout jako výchozí**: `DEFAULTS.layout` small → medium (jen nové instalace, uložené configy si své nastavení nechávají). Přibyl `scripts/build-promo.ps1` — headless Chrome renderuje ikonu, obě promo dlaždice i screenshot 1280×800 ze zdrojů v `store/listing/assets/` (sdílené `brand.css`, vektorové `logo.svg` vytažené z logo-designer.html). **Položka odeslána do CWS ke kontrole 16. 9. 2026.**
 - **v3.38.58** - **Chrome Web Store build pipeline**: `extension/` zůstává jediný dev zdroj, store balíček je generovaný derivát přes `scripts/build-store.ps1` (markerové stříhání `UC_STORE_STRIP_START/END`, patch manifestu, verifikace + `node --check`, ZIP). Vyříznuto: self-update check (`_checkForUpdate` + background alarm + update tooltip — CWS zakazuje out-of-store update), `update.bat`, streamer OAuth (`streamer.*` + „Jsem streamer" tlačítko), `backup.*`, `sidebar_action` klíč, `alarms` permission. Refaktor v `_wireBackgroundUpdateListener`: větve `UC_UPDATE_*` přesunuty na konec `else if` řetězu, aby strip nenechal osamocené `else` (chování beze změny). Podklady pro Developer Dashboard v `store/listing/` — single purpose, per-permission justifikace (nejcitlivější `cookies` + Twitch auth-token a `scripting` MAIN world), data disclosure checkboxy podložené auditem všech volání `UC_API`, listing CS/EN, asset checklist + store ikona s 16px paddingem. Cílová viditelnost: Public. **Aktuální verze (dev)**
 
 ## Session workflow — jak Claude pracuje v tomto repu

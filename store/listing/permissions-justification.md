@@ -33,9 +33,15 @@ věci.
 ### `sidePanel`
 
 ```
-The entire user interface is a side panel. The extension has no popup and no
-options page; sidepanel.html is where the merged chat is rendered.
+The entire user interface is a side panel: sidepanel.html renders the merged chat, its settings and the message input. The toolbar action opens that panel, and a button inside it can open the same page in a separate browser window for users who want it next to a full-screen stream.
 ```
+
+**Pozor na formulaci:** dřívější verze říkala „the extension has no popup and no
+options page". Technicky to platí (`action.default_popup` ani `options_ui`
+v manifestu nejsou), ale slovo *popup* je dvojznačné — tlačítko „Otevřít
+v samostatném okně" dělá `chrome.windows.create({type:'popup'})`, což je něco
+jiného. Justifikace má vysvětlovat, proč oprávnění potřebuješ, ne vyjmenovávat,
+co v rozšíření není.
 
 ### `storage`
 
@@ -102,28 +108,19 @@ user can attach it to a bug report. Nothing is downloaded without that click.
 
 ### Host permissions
 
+⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze má 977 — původní delší
+varianta se tam nevešla, proto je badges.twitch.tv sloučený k api.ivr.fi.
+
 ```
-twitch.tv, youtube.com, kick.com (and their API hosts api.twitch.tv,
-gql.twitch.tv): the three chat platforms the extension merges. Needed to read
-the live chat and to send messages using the user's own session.
+twitch.tv, youtube.com, kick.com (and their API hosts api.twitch.tv, gql.twitch.tv): the three chat platforms the extension merges. Needed to read the live chat and to send messages using the user's own session.
 
-wss://irc-ws.chat.twitch.tv: Twitch's public IRC gateway, which is how the
-extension reads Twitch chat in real time.
+wss://irc-ws.chat.twitch.tv: Twitch's public IRC gateway, how the extension reads Twitch chat in real time.
 
-7tv.io, cdn.7tv.app, api.betterttv.net, cdn.betterttv.net,
-api.frankerfacez.com, cdn.frankerfacez.com, static-cdn.jtvnw.net,
-files.kick.com: emote providers. Chat is unreadable without them — these hosts
-supply the emote definitions and images that the messages reference.
+7tv.io, cdn.7tv.app, api.betterttv.net, cdn.betterttv.net, api.frankerfacez.com, cdn.frankerfacez.com, static-cdn.jtvnw.net, files.kick.com: emote providers. Chat is unreadable without them - these hosts supply the emote definitions and images that the messages reference.
 
-api.ivr.fi: public API used to fetch Twitch badge images (subscriber, mod,
-VIP) shown next to usernames.
+api.ivr.fi: public API for Twitch badge images (subscriber, mod, VIP) shown next to usernames. badges.twitch.tv: Twitch's own endpoint, fallback for the same images.
 
-badges.twitch.tv: Twitch's own badge endpoint, kept as a fallback source for
-the same images.
-
-api.jouki.cz: the extension's own backend. It stores the cross-platform
-nicknames users assign to each other and the list of channels the extension
-has been used on. See the privacy policy for exactly what is sent.
+api.jouki.cz: the extension's own backend. It stores the cross-platform nicknames users assign to each other and the list of channels the extension has been used on. See the privacy policy for exactly what is sent.
 ```
 
 **Proč seskupené:** dashboard má jedno pole na všechny host permissions.
@@ -144,3 +141,24 @@ and files that ship inside the extension.
 dynamické načítání `<script src>`. Build skript nic z toho nekontroluje
 automaticky — pokud by někdy takový kód přibyl, tahle odpověď přestane platit
 a musí se změnit.
+
+
+---
+
+## Pokyny k testu (Přístup → Pokyny k testu)
+
+⚠️ **Limit tohoto pole je 500 znaků**, ne 1 000 jako u ostatních.
+
+Uživatelské jméno a heslo nechat **prázdné** — UnityChat vlastní účet nemá.
+Do „Další pokyny" jde tohle (496 znaků):
+
+```
+The panel stays empty unless a stream is actually live - expected, not a bug. No account or login is needed to read chat. UI is in Czech, matching the listing.
+
+Test: open any LIVE channel on twitch.tv, then click the UnityChat toolbar icon. It detects the channel from the tab URL and shows its chat within seconds (purple TW badge). YouTube and Kick work the same (red YT / green KI); YouTube needs a live stream, not a replay.
+
+Sending needs you logged in to that platform in the same browser.
+```
+
+**Proč to tam patří:** reviewer, který otevře panel mimo živý stream, uvidí
+prázdné okno a snadno to vyhodnotí jako nefunkční rozšíření. Navíc je UI česky.

@@ -51,11 +51,25 @@ Pozor na `else if` řetězy — stripnutá větev nesmí nechat osamocené `else
 Proto je v `_wireBackgroundUpdateListener` větev `UC_UPDATE_*` schválně až na
 konci řetězu.
 
-## Postup první publikace
+## Stav položky
+
+| | |
+|---|---|
+| **Item ID** | `picaeipbmkgcippknkpkbnbgjlkblbnp` |
+| **Odesláno ke kontrole** | 16. 9. 2026, verze **3.38.59** |
+| **Viditelnost** | Veřejné, všechny regiony, bez poplatků |
+| **Jazyk listingu** | čeština |
+| **Kategorie** | Komunikace |
+| **Publisher e-mail** | `m.joukal+unitychat@gmail.com` (ověřený) |
+| **Doména** | `jouki.cz` ověřená v Search Console (TXT záznam na GigaServeru) |
+
+Dashboard po odeslání upozornil, že u položek s naplánovaným publikováním
+**vyprší platnost kontroly po 30 dnech**.
+
+## Postup publikace (prošlé kroky)
 
 1. **Developer účet** — jednorázový registrační poplatek $5 na
    [Developer Dashboard](https://chrome.google.com/webstore/devconsole).
-   Před publikací je potřeba ověřit e-mail vydavatele.
 2. **Build** — `scripts\build-store.ps1`, výsledný ZIP nahrát jako nový item.
 3. **Store listing** — texty z `description-cs.md` (výchozí jazyk) a
    `description-en.md`. Jako support e-mail zadat
@@ -64,9 +78,28 @@ konci řetězu.
    (single purpose, per-permission justifikace, data disclosure checkboxy,
    limited use certifikace, URL privacy policy).
 5. **Assets** — podle `assets-checklist.md`.
-6. **Visibility: Public**, distribuce všechny regiony.
-7. **Submit for review.** Review u rozšíření s širokými host permissions a
+6. **Pokyny k testu** (Přístup → Pokyny k testu) — bez nich reviewer uvidí
+   prázdný panel. Text v `permissions-justification.md`, limit **500 znaků**.
+7. **Visibility: Public**, distribuce všechny regiony.
+8. **Submit for review.** Review u rozšíření s širokými host permissions a
    `cookies` obvykle trvá déle než standardní pár dní.
+
+### ⚠️ Past: šedé tlačítko „Odeslat ke kontrole"
+
+Tlačítko zůstává zašedlé **bez ohledu na to, jak kompletně je položka
+vyplněná**, dokud není v *Nastavení účtu* zadaný a **ověřený** kontaktní
+e-mail vydavatele. Dashboard to neřekne sám od sebe — důvod vypíše až
+odkaz **„Kde mohu položku odeslat?"** vedle tlačítka, případně levé menu
+→ *Sestavení → Stav*.
+
+### Limity polí (naražené v praxi)
+
+| Pole | Limit |
+|---|---|
+| Popis položky | 16 000 |
+| Single purpose, každá permission justifikace | 1 000 |
+| **Pokyny k testu → Další pokyny** | **500** |
+| URL zásad ochrany soukromí | 2 048 |
 
 ## Při každé další verzi
 

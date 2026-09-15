@@ -45,7 +45,7 @@ Zprávy odcházejí přes přihlášení, které už v prohlížeči máš — U
 
 ━━━ SOUKROMÍ ━━━
 
-Historie chatu zůstává lokálně ve tvém prohlížeči, nikam se neposílá. Na server UnityChatu jde jen jméno, kterým jsi na platformě přihlášený, sledovaný kanál a přezdívky, které sám nastavíš. Podrobnosti: https://jouki.cz/UnityChat/privacy
+Historie chatu dnes zůstává lokálně ve tvém prohlížeči. Na server UnityChatu jde jméno, kterým jsi na platformě přihlášený, sledovaný kanál a přezdívky, které sám nastavíš. Připravuje se archiv chatu, který bude veřejné zprávy ukládat i na serveru — zatím není aktivní. Podrobnosti: https://jouki.cz/UnityChat/privacy
 
 ━━━ POZNÁMKY ━━━
 

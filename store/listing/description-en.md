@@ -45,7 +45,7 @@ Messages are sent through the login you already have in your browser — UnityCh
 
 ━━━ PRIVACY ━━━
 
-Chat history stays locally in your browser and is never uploaded. The only things sent to the UnityChat server are the username you are signed in with, the channel you are watching, and any nicknames you choose to set. Details: https://jouki.cz/UnityChat/privacy
+Chat history currently stays locally in your browser. What goes to the UnityChat server is the username you are signed in with, the channel you are watching, and any nicknames you choose to set. A chat archive that will also store public messages on the server is in preparation and is not active yet. Details: https://jouki.cz/UnityChat/privacy
 
 ━━━ NOTES ━━━
 

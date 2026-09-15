@@ -33,7 +33,7 @@ kromě toho, co si daná služba stejně přečte z requestu.
 | Authentication information | **ANO** | Definice zahrnuje *authentication cookies*. Rozšíření čte Twitch `auth-token` cookie. Neopouští Twitch, ale reviewer vidí `cookies` permission — nezaškrtnout a nechat ho to objevit je horší varianta. |
 | Web browsing activity | **ANO** | `/streamers/seen` posílá handle sledovaného kanálu, což je informace o tom, jakou stránku uživatel sleduje. |
 | Website content | **ANO** | Rozšíření čte obsah chatu ze stránek platforem (text zpráv, jména, badge). Zůstává lokálně, ale čte se. |
-| Personal communications | **NE** | Rozšíření pracuje s veřejným live chatem, ne se soukromou komunikací (e-maily, DM). Odeslané zprávy jdou na platformu, kam je uživatel sám posílá. |
+| Personal communications | **ANO** | Změna oproti původnímu doporučení. Formulář se ptá i na to, co plánuješ *v budoucnu*, a chystaný archiv chatu (tabulka `messages` už je ve schématu) bude veřejné chatové zprávy ukládat na server. Rozhodnutí usera 2026-09-16. |
 | Financial and payment information | **NE** | — |
 | Health information | **NE** | — |
 | Location | **NE** | — |
@@ -73,6 +73,16 @@ Stránka je bilingvální (CS/EN, `?lang=en`), live od 2026-06-24. Kontaktní
 e-mail na ní je **m.joukal+unitychat@gmail.com** — stejný musí být i jako
 support e-mail v listingu, aby si to reviewer spároval.
 
-⚠️ **Před submitem zkontrolovat, že policy pokrývá všechno výše** — hlavně
-Twitch auth cookie a `/streamers/seen`. Rozpor mezi dashboard checkboxy a
+✅ **Vyřešeno 2026-09-16.** Policy původně popisovala jen lokální data a
+YouTube OAuth — chyběla v ní úplně data posílaná na `api.jouki.cz` i Twitch
+auth cookie, takže neodpovídala ani jednomu zaškrtnutému checkboxu. Doplněny
+sekce **1c** (serverová data + připravovaný archiv chatu) a **1d** (Twitch
+cookie), účely v sekci 2 a retence v sekci 5. Datum platnosti 15. 9. 2026.
+
+⚠️ **Při každé další verzi to zkontroluj znovu.** Dashboard u formuláře píše:
+„Publikováním položky potvrzujete, že se tato prohlášení vztahují na
+nejaktuálnější obsah vašich zásad ochrany soukromí." Rozpor mezi checkboxy a
 textem policy je důvod k odmítnutí.
+
+⚠️ **Až archiv chatu reálně zapneš**, doplň do policy (sekce 1c) rozsah a dobu
+uchování — teď je tam popsaný jako připravovaná, neaktivní funkce.
