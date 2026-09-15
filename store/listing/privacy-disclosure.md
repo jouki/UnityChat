@@ -69,7 +69,9 @@ Zaškrtnout všechny tři — odpovídají skutečnosti:
 https://jouki.cz/UnityChat/privacy
 ```
 
-Stránka je bilingvální (CS/EN, `?lang=en`), live od 2026-06-24.
+Stránka je bilingvální (CS/EN, `?lang=en`), live od 2026-06-24. Kontaktní
+e-mail na ní je **m.joukal+unitychat@gmail.com** — stejný musí být i jako
+support e-mail v listingu, aby si to reviewer spároval.
 
 ⚠️ **Před submitem zkontrolovat, že policy pokrývá všechno výše** — hlavně
 Twitch auth cookie a `/streamers/seen`. Rozpor mezi dashboard checkboxy a

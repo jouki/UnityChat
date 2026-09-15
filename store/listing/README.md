@@ -13,7 +13,7 @@ Výstup (gitignorovaný):
 
 ```
 store/build/unpacked/                      # pro "Load unpacked" test v Chrome
-store/build/unitychat-store-v3.38.58.zip   # tohle se nahrává do dashboardu
+store/build/unitychat-store-vX.Y.Z.zip     # tohle se nahrává do dashboardu
 ```
 
 Skript sám spadne, pokud v balíčku přežije cokoli zakázaného (self-update
@@ -58,7 +58,8 @@ konci řetězu.
    Před publikací je potřeba ověřit e-mail vydavatele.
 2. **Build** — `scripts\build-store.ps1`, výsledný ZIP nahrát jako nový item.
 3. **Store listing** — texty z `description-cs.md` (výchozí jazyk) a
-   `description-en.md`.
+   `description-en.md`. Jako support e-mail zadat
+   **m.joukal+unitychat@gmail.com** (stejný, jaký je v privacy policy).
 4. **Privacy practices** — postupovat podle `privacy-disclosure.md`
    (single purpose, per-permission justifikace, data disclosure checkboxy,
    limited use certifikace, URL privacy policy).
