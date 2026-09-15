@@ -18,7 +18,8 @@ Bez těchto tří položek nejde item publikovat.
 powershell -ExecutionPolicy Bypass -File scripts\build-promo.ps1
 ```
 
-Obě dlaždice (440×280 i 1400×560) vznikají z jednoho zdroje
+Skript renderuje tři assety: obě dlaždice a store ikonu.
+Dlaždice (440×280 i 1400×560) vznikají z jednoho zdroje
 `assets/promo.html` — `?size=small|marquee` přepíná měřítko a kompozici
 (small staví na výšku, marquee je logo vedle textu). Renderuje headless
 Chrome, skript ověří výsledné rozměry, protože špatně velký asset dashboard
@@ -34,10 +35,15 @@ Logo je v `assets/logo.svg` — vektor vytažený z `logo-designer.html`
 okraj 4/0/4/0 px), zatímco store čeká **96×96 kresby a 16 px průhledného
 okraje**. Bez úpravy by ikona ve store vypadala větší než ostatní.
 
-Store varianta je proto v `assets/icon128-store.png` — stejná kresba
-přeškálovaná na 96×96 a vycentrovaná ve 128×128 (ověřený okraj 19/16/19/16 px,
-rozdíl je vlastní odsazení původní kresby). **Nahrává se v dashboardu, do
-balíčku nepatří** — rozšíření samo dál používá původní ikonu.
+Store varianta `assets/icon128-store.png` se generuje týmž skriptem jako
+dlaždice, ze zdroje `assets/icon.html`: kresba z `logo.svg` škálovaná na
+96×96, vycentrovaná a s oražovým glow, který se rozlévá právě do toho
+16px okraje. Pozadí zůstává průhledné (`--default-background-color=00000000`)
+— tmavý čtverec by ve store katalogu rámoval kolem ikony, na rozdíl od
+ostatních položek.
+
+**Nahrává se v dashboardu, do balíčku nepatří** — rozšíření samo dál
+používá původní `extension/icons/icon128.png`.
 
 ## Volitelné, ale vyplatí se
 

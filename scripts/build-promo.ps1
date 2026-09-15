@@ -11,6 +11,8 @@
     store/listing/assets/promo-small-440x280.png     (required by CWS)
     store/listing/assets/promo-marquee-1400x560.png  (optional, needed for
                                                       marquee featuring)
+    store/listing/assets/icon128-store.png           (required; transparent,
+                                                      96x96 art + glow)
 #>
 [CmdletBinding()]
 param(
@@ -21,10 +23,6 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot  = Split-Path -Parent $PSScriptRoot
 $assetsDir = Join-Path $repoRoot 'store\listing\assets'
-$source    = Join-Path $assetsDir 'promo.html'
-
-if (-not (Test-Path $source)) { throw "Promo source not found: $source" }
-
 if (-not $ChromePath) {
   $candidates = @(
     "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
@@ -35,9 +33,12 @@ if (-not $ChromePath) {
 }
 if (-not $ChromePath) { throw 'Chrome not found - pass -ChromePath explicitly.' }
 
+# Source is the page to render; Transparent keeps the alpha channel (the
+# store icon needs it, the tiles are full bleed).
 $tiles = @(
-  @{ Size = 'small';   W = 440;  H = 280; Name = 'promo-small-440x280.png' },
-  @{ Size = 'marquee'; W = 1400; H = 560; Name = 'promo-marquee-1400x560.png' }
+  @{ Source = 'promo.html'; Query = '?size=small';   W = 440;  H = 280; Name = 'promo-small-440x280.png' },
+  @{ Source = 'promo.html'; Query = '?size=marquee'; W = 1400; H = 560; Name = 'promo-marquee-1400x560.png' },
+  @{ Source = 'icon.html';  Query = '';              W = 128;  H = 128; Name = 'icon128-store.png'; Transparent = $true }
 )
 
 Write-Host ''
@@ -47,7 +48,11 @@ foreach ($tile in $tiles) {
   $out = Join-Path $assetsDir $tile.Name
   if (Test-Path $out) { Remove-Item -LiteralPath $out -Force }
 
-  $url = 'file:///' + ($source -replace '\\', '/') + '?size=' + $tile.Size
+  $page = Join-Path $assetsDir $tile.Source
+  if (-not (Test-Path $page)) { throw "Source page not found: $page" }
+  $url = 'file:///' + ($page -replace '\\', '/') + $tile.Query
+
+  $bgArg = if ($tile.Transparent) { '--default-background-color=00000000' } else { '--default-background-color=000000ff' }
 
   # virtual-time-budget gives the Google Fonts request time to land before
   # the screenshot is taken; without it the wordmark renders in a fallback.
@@ -59,6 +64,7 @@ foreach ($tile in $tiles) {
     --hide-scrollbars `
     --force-device-scale-factor=1 `
     --virtual-time-budget=6000 `
+    $bgArg `
     "--window-size=$($tile.W),$($tile.H)" `
     "--screenshot=$out" `
     $url | Out-Null

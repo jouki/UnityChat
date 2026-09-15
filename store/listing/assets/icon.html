@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<title>UnityChat store icon</title>
+<!--
+  Zdroj store ikony (128x128). Proti extension/icons/icon128.png má dvě
+  změny, které Chrome Web Store vyžaduje nebo odměňuje:
+
+    1. kresba je 96x96 vycentrovaná ve 128x128 — store čeká 16 px
+       průhledného okraje, jinak ikona vypadá větší než ostatní v katalogu
+    2. oranžový glow, který se rozlévá do toho okraje (proto tam ten prostor
+       vlastně je) — stejný efekt jako na brand grafice, ale s průhledným
+       pozadím, ne na tmavém čtverci
+
+  Render: scripts/build-promo.ps1
+-->
+<style>
+  * { margin: 0; padding: 0; }
+  html, body {
+    width: 128px;
+    height: 128px;
+    overflow: hidden;
+    background: transparent;
+  }
+  body { display: grid; place-items: center; }
+
+  .icon {
+    width: 96px;
+    height: 96px;
+    /* Dvě vrstvy: těsný jasný glow + širší měkký nádech. Vejde se do
+       16px okraje, takže kresba zůstává v 96x96 safe zóně. */
+    filter:
+      drop-shadow(0 0 5px rgba(255, 170, 40, 0.85))
+      drop-shadow(0 0 13px rgba(255, 140, 0, 0.55));
+  }
+</style>
+</head>
+<body>
+  <img class="icon" src="logo.svg" alt="">
+</body>
+</html>
