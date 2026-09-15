@@ -1,0 +1,33 @@
+<!--
+  Vektorová verze UnityChat loga pro promo grafiku ve větších rozlišeních
+  (icon128.png se při upscalu rozmazává).
+
+  Zdroj: logo-designer.html, varianta 5 "Stylized U-as-bubble" — velké U,
+  jehož pravá noha přechází v ocas bubliny. Gradient #ffc800 → #ff8c00
+  je stejný jako v generátoru; glow se přidává v CSS, ne tady, aby SVG
+  zůstalo ostré při libovolné velikosti.
+-->
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="ucGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffc800"/>
+      <stop offset="100%" stop-color="#ff8c00"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#ucGrad)" d="
+    M 18 18
+    L 18 78
+    Q 18 116 64 116
+    Q 90 116 102 102
+    L 122 122
+    L 110 92
+    Q 110 86 110 78
+    L 110 18
+    L 78 18
+    L 78 78
+    Q 78 90 64 90
+    Q 50 90 50 78
+    L 50 18
+    Z
+  "/>
+</svg>

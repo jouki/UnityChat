@@ -7,10 +7,26 @@ Požadavky podle [Chrome Web Store image guidelines](https://developer.chrome.co
 | Asset | Rozměr | Formát | Stav |
 |---|---|---|---|
 | Ikona rozšíření | 128×128 (kresba 96×96 + 16 px průhledný okraj) | PNG | ✅ `assets/icon128-store.png` |
-| Small promo tile | 440×280 | PNG / JPEG | ☐ vytvořit |
+| Small promo tile | 440×280 | PNG / JPEG | ✅ `assets/promo-small-440x280.png` |
 | Screenshot (min. 1) | 1280×800 (preferované) nebo 640×400 | PNG / JPEG, full bleed, ostré rohy | ☐ vytvořit |
 
 Bez těchto tří položek nejde item publikovat.
+
+### Promo dlaždice — hotovo
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-promo.ps1
+```
+
+Obě dlaždice (440×280 i 1400×560) vznikají z jednoho zdroje
+`assets/promo.html` — `?size=small|marquee` přepíná měřítko a kompozici
+(small staví na výšku, marquee je logo vedle textu). Renderuje headless
+Chrome, skript ověří výsledné rozměry, protože špatně velký asset dashboard
+odmítne při uploadu.
+
+Logo je v `assets/logo.svg` — vektor vytažený z `logo-designer.html`
+(varianta 5 „Stylized U-as-bubble", gradient #ffc800 → #ff8c00).
+`icon128.png` se na 250 px rozmazával.
 
 ### Ikona — hotovo
 
@@ -25,10 +41,10 @@ balíčku nepatří** — rozšíření samo dál používá původní ikonu.
 
 ## Volitelné, ale vyplatí se
 
-| Asset | Rozměr | Kdy |
+| Asset | Rozměr | Stav |
 |---|---|---|
-| Marquee promo tile | 1400×560 | bez něj se rozšíření nemůže dostat do marquee featuru na homepage store |
-| Screenshoty 2–5 | 1280×800 | více záběrů = lepší konverze, max. 5 |
+| Marquee promo tile | 1400×560 | ✅ `assets/promo-marquee-1400x560.png` — bez něj se rozšíření nemůže dostat do marquee featuru |
+| Screenshoty 2–5 | 1280×800 | ☐ více záběrů = lepší konverze, max. 5 |
 
 ## Co nafotit (návrh 5 screenshotů)
 

@@ -20,7 +20,7 @@ const DEFAULTS = {
   maxMessages: 5000,       // storage cap — how many msgs we keep in _msgCache (72h TTL still applies)
   initialRender: 250,      // how many render into DOM on boot; older load on scroll-up
   username: '',
-  layout: 'small',
+  layout: 'medium',
   showTimestamps: true,
 };
 
