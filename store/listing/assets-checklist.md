@@ -8,7 +8,7 @@ Požadavky podle [Chrome Web Store image guidelines](https://developer.chrome.co
 |---|---|---|---|
 | Ikona rozšíření | 128×128 (kresba 96×96 + 16 px průhledný okraj) | PNG | ✅ `assets/icon128-store.png` |
 | Small promo tile | 440×280 | PNG / JPEG | ✅ `assets/promo-small-440x280.png` |
-| Screenshot (min. 1) | 1280×800 (preferované) nebo 640×400 | PNG / JPEG, full bleed, ostré rohy | ☐ vytvořit |
+| Screenshot (min. 1) | 1280×800 (preferované) nebo 640×400 | PNG / JPEG, full bleed, ostré rohy | ⚠️ `assets/screenshot-1-panel-1280x800.png` — provizorní, viz níže |
 
 Bez těchto tří položek nejde item publikovat.
 
@@ -45,6 +45,20 @@ balíčku nepatří** — rozšíření samo dál používá původní ikonu.
 |---|---|---|
 | Marquee promo tile | 1400×560 | ✅ `assets/promo-marquee-1400x560.png` — bez něj se rozšíření nemůže dostat do marquee featuru |
 | Screenshoty 2–5 | 1280×800 | ☐ více záběrů = lepší konverze, max. 5 |
+
+### ⚠️ Stávající screenshot je provizorní
+
+`screenshot-1-panel-1280x800.png` vznikl ořezem z Lightshot snímku
+(3748×1903 → ořez 703 px zleva → 1280×800; panel musel zůstat celý na výšku,
+proto se řezalo jen ze strany). Rozměrově sedí, **obsahově ne**:
+
+- panel má otevřené **nastavení, ne chat** — sjednocený seznam zpráv, tedy
+  hlavní důvod existence UnityChatu, na snímku vůbec není
+- stream neběží (offline obrazovka), status hlásí „Připojování…“ a
+  „Streamer není live na YouTube“ → působí to jako rozbitý stav
+
+Pro první screenshot v listingu to je málo. Přefotit za živého streamu
+s panelem v chat režimu podle návrhu níže.
 
 ## Co nafotit (návrh 5 screenshotů)
 
