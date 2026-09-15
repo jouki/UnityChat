@@ -383,7 +383,60 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.38.57** (dev)
+- Aktuální: **v3.38.58** (dev)
+
+## Chrome Web Store build (v3.38.58+)
+
+`extension/` zůstává jediný dev zdroj (Chrome + Opera, no build step). Store
+balíček je z něj **generovaný derivát**, protože CWS zakazuje update
+mechanismy mimo store.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-store.ps1
+```
+→ `store/build/unpacked/` (Load unpacked test) + `store/build/unitychat-store-vX.Y.Z.zip`
+
+Texty pro Developer Dashboard (single purpose, permission justifikace, data
+disclosure, listing CS/EN, assety) žijí v `store/listing/` — **tracked**,
+`store/build/` je v `.gitignore`.
+
+### ⚠️ UC_STORE_STRIP markery — pravidlo pro každou novou změnu
+
+Kód, který nemá jít do store verze, se obaluje markery. V dev verzi jsou to
+jen komentáře, build skript vyřízne řádky mezi nimi včetně markerů:
+
+```js
+// UC_STORE_STRIP_START: důvod
+...kód...
+// UC_STORE_STRIP_END
+```
+```html
+<!-- UC_STORE_STRIP_START: důvod --> ... <!-- UC_STORE_STRIP_END -->
+```
+
+**Pozor na `else if` řetězy** — stripnutá větev nesmí nechat osamocené
+`else`. Proto je větev `UC_UPDATE_*` v `_wireBackgroundUpdateListener`
+schválně poslední v řetězu. Build skript má `node --check` na každém skriptu,
+takže rozbitá syntaxe build shodí, ale ušetří to kolo navíc.
+
+### Co se ze store buildu vyřezává
+
+| Vyříznuto | Proč |
+|---|---|
+| `_checkForUpdate()`, background update alarm, update tooltip | CWS zakazuje out-of-store update |
+| `update.bat` | spustitelný updater |
+| `streamer.html/js/css` + tlačítko „Jsem streamer" | streamer OAuth se do store verze nepouští (rozhodnutí usera 2026-09-15) |
+| `backup.html/js` | z UI nedosažitelné, mrtvý kód navíc |
+| `sidebar_action` (manifest) | Opera/Firefox klíč |
+| `alarms` permission | používal ho jen update poll |
+
+Auto-switch přes `/streamers/lookup` **zůstává** — to je čtení veřejného
+directory, ne přihlašování.
+
+Build skript fail-uje, pokud v balíčku přežije zakázaný string, excludovaný
+soubor, zbylý marker, nevalidní manifest nebo JS se syntax errorem.
+
+Navazující cíle (Firefox / Opera store / mobil) jsou v `store/listing/README.md`.
 
 ## Známé limitace / gotchas
 
@@ -616,7 +669,8 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.54** - **Highlight banner doubled-text dedup**: "Sdílený chat byl spuštěn!" v UC banner zobrazoval text 2× ("Sdílený chat byl spuštěn!Sdílený chat byl spuštěn!"). String není v UC kódu — Twitch DOM má phrase 2× v textContent (visible + aria/sr-only nebo 7TV overlay). Defensive heuristic v `snapshotHighlights`: pokud `textContent` má sudou délku ≥ 10 a první polovina === druhá polovina, trim na 1 kopii. Plus UC_LOG `HighlightDup` co loguje outerHTML při dedupu pro budoucí targeted DOM filter.
 - **v3.38.55** - **Twitch verified send (fix občasného neodeslání)**: `sendChat` byl fire-and-forget od v3.3.9 — fixních 150 ms mezi paste eventem a klikem na send button, bez verifikace výsledku. React/Slate zpracovává paste async přes scheduler, který Chrome throttluje když má fokus sidepanel (in-repo důkaz: 500–800 ms naměřeno u rewards popoveru). Commit paste > 150 ms → klik trefil "prázdný input" stav → Twitch neodeslal, text zůstal viset v inputu, další zpráva se appendla a odešly spojené. Fix: condition-based wait (text v editoru + button enabled, cap 1.5 s), post-click verifikace vyprázdnění inputu (okno 2 s proti double-send), retry 3×, pak `ok:false` → chyba v UC. UC_LOG tag `TwSend` (start/pre-click/sent/not-cleared).
 - **v3.38.56** - **Opera tab mode + stream-tab URL-scan fix**: (1) Opera toolbar/chat-header klik otevírá UnityChat jako regular tab (openerTabId + index vedle stream tabu → Opera tab island best-effort; existující UC tab se fokusne, žádné duplicity) místo popup okna. (2) `_findStreamTab(platform?)` — aktivní tab má přednost, fallback URL-scan přes všechny taby (jen channel stránky, preferuje nakonfigurovaný kanál, sticky drží poslední aktivní platformu; YouTube přijímá i /watch). Nahrazuje `_getActiveBrowserTab()` v `_detectActivePlatform`, `_sendMessage`, `_openUserCard` + boot username detect → chat v Opera split screenu už nešediví, když je aktivní UnityChat tab. Split poměr = ruční divider (Opera nemá split API), `chrome.tabGroups` v Opeře neexistuje. UC_LOG tagy `StreamTab` + `TabOpen` (cleanup po user verifikaci).
-- **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider. **Aktuální verze (dev)**
+- **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider.
+- **v3.38.58** - **Chrome Web Store build pipeline**: `extension/` zůstává jediný dev zdroj, store balíček je generovaný derivát přes `scripts/build-store.ps1` (markerové stříhání `UC_STORE_STRIP_START/END`, patch manifestu, verifikace + `node --check`, ZIP). Vyříznuto: self-update check (`_checkForUpdate` + background alarm + update tooltip — CWS zakazuje out-of-store update), `update.bat`, streamer OAuth (`streamer.*` + „Jsem streamer" tlačítko), `backup.*`, `sidebar_action` klíč, `alarms` permission. Refaktor v `_wireBackgroundUpdateListener`: větve `UC_UPDATE_*` přesunuty na konec `else if` řetězu, aby strip nenechal osamocené `else` (chování beze změny). Podklady pro Developer Dashboard v `store/listing/` — single purpose, per-permission justifikace (nejcitlivější `cookies` + Twitch auth-token a `scripting` MAIN world), data disclosure checkboxy podložené auditem všech volání `UC_API`, listing CS/EN, asset checklist + store ikona s 16px paddingem. Cílová viditelnost: Public. **Aktuální verze (dev)**
 
 ## Session workflow — jak Claude pracuje v tomto repu
 

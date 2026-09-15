@@ -2441,6 +2441,7 @@ class UnityChat {
         <img src="icons/icon48.png" class="hdr-logo" alt="UnityChat">
         <span class="update-dot" aria-hidden="true"></span>
       </span> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
+    // UC_STORE_STRIP_START: update tooltip mount (self-update UI)
     // Clone the update tooltip template into the logo wrap so hover on the
     // logo reveals it. Pulled from a <template> in sidepanel.html so the
     // markup stays authored in HTML and readable.
@@ -2468,6 +2469,7 @@ class UnityChat {
         tip.addEventListener('mouseleave', hide);
       }
     }
+    // UC_STORE_STRIP_END
 
     this._bootMark('_init start');
     // Arm background watchdog — if _bootMark('_init done') never arrives,
@@ -2581,10 +2583,12 @@ class UnityChat {
     this._connectAll();
     this._bootMark('_connectAll dispatched');
     this._detectLoop();
+    // UC_STORE_STRIP_START: self-update check call
     // Fire-and-forget update check against the public landing page manifest.
     this._checkForUpdate().catch(() => {});
-    // Subscribe to background's 15-min alarm broadcasts so a long-open
-    // panel still updates in real time when a new version drops.
+    // UC_STORE_STRIP_END
+    // Background broadcast listener (Twitch redeems/highlights/credits, plus
+    // the self-update badge in non-store builds).
     this._wireBackgroundUpdateListener();
     // Hover/click preview card for emotes inside chat messages.
     this._setupEmotePreview();
@@ -2600,6 +2604,7 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
+  // UC_STORE_STRIP_START: self-update check + tooltip (CWS forbids out-of-store updates)
   async _checkForUpdate() {
     try {
       const current = chrome.runtime.getManifest().version;
@@ -2640,13 +2645,25 @@ class UnityChat {
       wrap.classList.remove('auto-reveal');
     }, 10000);
   }
+  // UC_STORE_STRIP_END
 
-  // Background's 15-min alarm broadcasts UC_UPDATE_AVAILABLE / UC_UPDATE_CLEARED.
-  // Wired here so a long-open sidepanel reflects update state in real time
-  // without waiting for the user to close+reopen the panel.
+  // Background broadcasts for panel-wide state. UC_UPDATE_* come from the
+  // 15-min self-update alarm and are kept last in the chain so the store
+  // build can strip them without orphaning an `else if`.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
+      if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+        this._handleDomRedeem(msg.data);
+      } else if (msg?.type === 'TW_HIGHLIGHTS') {
+        this._handleHighlights(msg);
+      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
+        this._handleCredits(msg.data);
+      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
+        // Twitch fired a floating "+N" reward animation — content script
+        // caught it from DOM mutations. We just flash the amount.
+        this._flashPointsDelta(msg.amount);
+      // UC_STORE_STRIP_START: self-update broadcasts
+      } else if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
         const wrap = document.getElementById('hdr-logo-wrap');
         const num = document.getElementById('ut-version-num');
         if (!wrap) return;
@@ -2661,20 +2678,12 @@ class UnityChat {
         if (wrap) {
           wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
         }
-      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
-        this._handleDomRedeem(msg.data);
-      } else if (msg?.type === 'TW_HIGHLIGHTS') {
-        this._handleHighlights(msg);
-      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
-        this._handleCredits(msg.data);
-      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
-        // Twitch fired a floating "+N" reward animation — content script
-        // caught it from DOM mutations. We just flash the amount.
-        this._flashPointsDelta(msg.amount);
+      // UC_STORE_STRIP_END
       }
     });
   }
 
+  // UC_STORE_STRIP_START: version compare, only used by the self-update check
   _isNewerVersion(remote, current) {
     const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
     const a = parse(remote);
@@ -2688,6 +2697,7 @@ class UnityChat {
     }
     return false;
   }
+  // UC_STORE_STRIP_END
 
   // ---- Config ----
 
@@ -2975,6 +2985,7 @@ class UnityChat {
       this.msgCount = 0;
     });
 
+    // UC_STORE_STRIP_START: streamer OAuth entry point (not shipped to the store)
     // "Jsem streamer" button — opens streamer.html in a new tab.
     // Stop propagation so click doesn't toggle the <details> section.
     const imStreamerBtn = $('btn-im-streamer');
@@ -2985,6 +2996,7 @@ class UnityChat {
         chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
       });
     }
+    // UC_STORE_STRIP_END
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {

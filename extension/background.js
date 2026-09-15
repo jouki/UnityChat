@@ -87,6 +87,7 @@ function isPlatformTab(tab) {
   } catch { return false; }
 }
 
+// UC_STORE_STRIP_START: self-update badge + poll (CWS forbids out-of-store updates)
 // Restore the update-available badge on service-worker startup. MV3 workers
 // shut down under idle and lose in-memory state, but chrome.action badge is
 // persistent in browser session; we still re-assert from storage to survive
@@ -160,6 +161,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 // Also kick off a check immediately on this worker spin-up.
 ucCheckForUpdate();
+// UC_STORE_STRIP_END
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
@@ -302,6 +304,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
+  // UC_STORE_STRIP_START: update badge messages (self-update path)
   if (msg.type === 'SET_UPDATE_BADGE') {
     const v = msg.version || '?';
     chrome.action.setBadgeText({ text: '!' });
@@ -317,6 +320,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     chrome.storage.local.remove('uc_update').catch(() => {});
     return;
   }
+  // UC_STORE_STRIP_END
   if (msg.type === 'GET_CHAT_COLORS') {
     fetchChatColors(msg.usernames || [])
       .then((users) => sendResponse({ ok: true, users }))

@@ -10,6 +10,7 @@
   <!-- Header -->
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
+    <!-- UC_STORE_STRIP_START: self-update tooltip (CWS forbids out-of-store updates) -->
     <!-- Update notification tooltip template — JS relocates this into
          #hdr-logo-wrap (built at init time) so the dot and tooltip hang
          off the UnityChat logo on the left of the header. -->
@@ -41,6 +42,7 @@
         <span class="ut-countdown" aria-hidden="true"></span>
       </div>
     </template>
+    <!-- UC_STORE_STRIP_END -->
     <div id="header-actions">
       <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
       <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
@@ -53,7 +55,9 @@
     <details class="settings-section" id="channels-section">
       <summary>
         <span>Kanály</span>
+        <!-- UC_STORE_STRIP_START: streamer OAuth entry point -->
         <button id="btn-im-streamer" class="btn-streamer-inline" title="Otevřít stránku pro přihlášení streamera">Jsem streamer</button>
+        <!-- UC_STORE_STRIP_END -->
       </summary>
       <div class="setting-row">
         <label for="input-channel">Twitch</label>

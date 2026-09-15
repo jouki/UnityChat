@@ -6,3 +6,6 @@ dist
 # Infra runbook with credentials — local only
 SERVER.md
 .claude/
+
+# Generated Chrome Web Store package (store/listing/ stays tracked)
+store/build/
