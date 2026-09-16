@@ -997,6 +997,23 @@ class NicknameManager {
     return this.get(platform, username)?.color || null;
   }
 
+  // Reverzní lookup: UC přezdívka → skutečný login. Autocomplete nabízí
+  // přezdívky (skutečný login uživatel nikde nevidí), do chatu ale musí odejít
+  // login, jinak zmíněný nedostane upozornění a lidé mimo UnityChat nepoznají,
+  // o koho jde. Bez `platform` hledá napříč platformami.
+  resolveNickname(nickname, platform) {
+    const want = String(nickname || '').toLowerCase().replace(/^@/, '');
+    if (!want) return null;
+    for (const [key, val] of this._map) {
+      if ((val?.nickname || '').toLowerCase() !== want) continue;
+      const i = key.indexOf(':');
+      if (i < 0) continue;
+      if (platform && key.slice(0, i) !== platform) continue;
+      return key.slice(i + 1);
+    }
+    return null;
+  }
+
   async save(platform, username, nickname, color) {
     const cleanName = username.replace(/^@/, '');
     try {
@@ -1079,6 +1096,21 @@ function _isTwitchOgFaceName(name) {
 // stay legible (DarkRed #8B0000 → a visible red, etc.). We mirror that: lift
 // the HSL Lightness floor to 0.5 and ceiling to 0.85 so both extremes read well.
 const _READABLE_CACHE = new Map();
+// YouTube barvu jména v datech NEPOSÍLÁ (ověřeno na live streamu: renderer
+// nese jen authorName/authorPhoto/authorExternalChannelId). Web klient si ji
+// počítá sám — live_chat_polymer.js: computeAuthorNameColor → hash z textu
+// jména. Tohle je port toho hashe; čitelnost na tmavém pozadí pak dořeší
+// readableColor() při renderu, takže kontrastní část jejich algoritmu
+// neduplikujeme. Hash se počítá z původního jména VČETNĚ '@', jinak by
+// barvy nesouhlasily s tím, co uživatel vidí na YouTube.
+function ytNameColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  let out = '#';
+  for (let i = 0; i < 3; i++) out += ('00' + ((h >> (i * 8)) & 255).toString(16)).slice(-2);
+  return out;
+}
+
 function readableColor(input) {
   if (!input) return input;
   if (_READABLE_CACHE.has(input)) return _READABLE_CACHE.get(input);
@@ -2174,6 +2206,24 @@ class YouTubeProvider {
 
   // ---- Message processing ----
 
+  // Barva jména. Pořadí větví je stejné jako v computeAuthorNameColor na
+  // YouTube: server-dodaná barva > seed color > hash z textu jména. Prvních
+  // dvou polí jsme se v datech zatím nedočkali (ani na robdiesalot streamu),
+  // ale jsou za A/B experimentem — když dorazí, mají přednost před hashem.
+  // Diagnostiku zapisujeme jednou za connect, ať víme, která větev platí.
+  _authorColor(renderer, rawName) {
+    const argb = typeof renderer.authorUsernameColorDark === 'number'
+      ? renderer.authorUsernameColorDark
+      : (typeof renderer.authorSeedColorArgb === 'number' ? renderer.authorSeedColorArgb : null);
+    const src = argb !== null ? 'data' : 'hash';
+    if (this._colorSrc !== src) {
+      this._colorSrc = src;
+      this._log(`authorColor source=${src} sample=${rawName}`);
+    }
+    if (argb !== null) return '#' + ('000000' + (argb & 0xffffff).toString(16)).slice(-6);
+    return ytNameColor(rawName);
+  }
+
   _processActions(actions) {
     for (const a of actions) {
       const item = a?.addChatItemAction?.item;
@@ -2189,7 +2239,12 @@ class YouTubeProvider {
         this._seen = new Set(arr.slice(-2500));
       }
 
-      const username = renderer.authorName?.simpleText || 'Unknown';
+      // YouTube dává do simpleText handle včetně '@' ("@nekdo"). Zobrazovat
+      // zavináč je zbytečné a navíc rozbíjel lookupy: _chatUsers klíč byl
+      // "youtube:@nekdo", zatímco mention regex i autocomplete hledají jméno
+      // bez něj. Strippujeme hned na vstupu, ať je jméno všude stejné.
+      const rawName = renderer.authorName?.simpleText || 'Unknown';
+      const username = rawName.replace(/^@/, '') || rawName;
       const runs = renderer.message?.runs || [];
       const message = runs.map((r) =>
         r.text || r.emoji?.shortcuts?.[0] || r.emoji?.emojiId || ''
@@ -2209,7 +2264,7 @@ class YouTubeProvider {
         username,
         message,
         ytRuns: runs,
-        color: isSuperChat ? '#ffd600' : '#ff0000',
+        color: isSuperChat ? '#ffd600' : this._authorColor(renderer, rawName),
         badges,
         timestamp: Date.now(),
         id,
@@ -2226,6 +2281,7 @@ class YouTubeProvider {
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
     this._allCont = null;
+    this._colorSrc = null;
     this._videoId = null;
     // _seen NEMAZAT - musí přežít reconnect aby se neduplikovaly zprávy
     this._apiFails = 0;
@@ -2828,19 +2884,7 @@ class UnityChat {
       while (ws > 0 && text[ws - 1] !== ' ') ws--;
       const partial = text.substring(ws, pos);
       if (partial.startsWith('@') && partial.length >= 2) {
-        const prefix = partial.substring(1).toLowerCase();
-        const seen = new Set();
-        const matches = [...this._chatUsers.entries()]
-          .filter(([key, u]) => {
-            if (key.includes(':')) return false;
-            const name = u.name.replace(/^@/, '').toLowerCase();
-            if (seen.has(name)) return false;
-            if (!name.startsWith(prefix)) return false;
-            seen.add(name);
-            return true;
-          })
-          .sort(([, a], [, b]) => a.name.localeCompare(b.name))
-          .map(([, u]) => '@' + u.name.replace(/^@/, ''));
+        const matches = this._acUserMatches(partial.substring(1).toLowerCase());
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
           this._acRender();
@@ -3286,20 +3330,7 @@ class UnityChat {
     let matches;
     if (partial.startsWith('@')) {
       // @username autocomplete (@ samotné = všichni uživatelé)
-      // Deduplicate by display name (map has both plain + platform:username keys)
-      const prefix = partial.substring(1).toLowerCase();
-      const seen = new Set();
-      matches = [...this._chatUsers.entries()]
-        .filter(([key, u]) => {
-          if (key.includes(':')) return false;
-          const name = u.name.replace(/^@/, '').toLowerCase();
-          if (seen.has(name)) return false;
-          if (prefix && !name.startsWith(prefix)) return false;
-          seen.add(name);
-          return true;
-        })
-        .sort(([, a], [, b]) => a.name.localeCompare(b.name))
-        .map(([, u]) => '@' + u.name.replace(/^@/, ''));
+      matches = this._acUserMatches(partial.substring(1).toLowerCase());
     } else {
       // Emote autocomplete — honors the per-session "Fulltext" toggle
       matches = this.emotes.findCompletions(partial, { fulltext: this._acFulltext });
@@ -3339,11 +3370,45 @@ class UnityChat {
     this._acRender();
   }
 
+  // Návrhy pro @autocomplete. Uživatel s UC přezdívkou se nabízí pod ní —
+  // skutečný login nikde v panelu nevidí, takže by ho neuměl napsat. Zpátky
+  // na login se mention přeloží až při odeslání (_resolveNicknameMentions).
+  // Mapa drží každého pod dvěma klíči (plain + platform:username), proto se
+  // berou jen plain klíče a deduplikuje se podle zobrazeného jména.
+  _acUserMatches(prefix) {
+    const seen = new Set();
+    const names = [];
+    for (const [key, u] of this._chatUsers) {
+      if (key.includes(':')) continue;
+      const login = (u.name || '').replace(/^@/, '');
+      if (!login) continue;
+      const display = this.nicknames?.getNickname(u.platform, login) || login;
+      const lower = display.toLowerCase();
+      if (seen.has(lower)) continue;
+      // Hledá se i podle skutečného loginu — kdo ho zná (třeba z tooltipu),
+      // najde uživatele i tak.
+      if (prefix && !lower.startsWith(prefix) && !login.toLowerCase().startsWith(prefix)) continue;
+      seen.add(lower);
+      names.push(display);
+    }
+    return names.sort((a, b) => a.localeCompare(b)).map((n) => '@' + n);
+  }
+
+  // Položka v seznamu může nést přezdívku — do _chatUsers se pak dostaneme
+  // až přes skutečný login.
+  _acUserEntry(atName) {
+    const name = atName.replace(/^@/, '').toLowerCase();
+    const direct = this._chatUsers.get(name);
+    if (direct) return direct;
+    const login = this.nicknames?.resolveNickname(name);
+    return login ? this._chatUsers.get(login.toLowerCase()) : null;
+  }
+
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
     if (name.startsWith('@')) {
-      const u = this._chatUsers.get(name.substring(1).toLowerCase());
+      const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
     }
     if (this.emotes.channel7tv.has(name)) return '7TV';
@@ -3398,8 +3463,10 @@ class UnityChat {
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
-        const u = this._chatUsers.get(name.substring(1).toLowerCase());
-        const col = this.emotes._sc(u?.color) || '#ccc';
+        const u = this._acUserEntry(name);
+        const col = this.emotes._sc(
+          this.nicknames?.getColor(u?.platform, u?.name) || u?.color
+        ) || '#ccc';
         html += `<span class="es-dot" style="background:${col}"></span>`;
       } else {
         // Emote: obrázek
@@ -4421,6 +4488,24 @@ class UnityChat {
     if (el) el.classList.add('hidden');
   }
 
+  // @přezdívka → @login pro odchozí text. Záměrně širší než mention regex v
+  // _processMentions ([A-Za-z0-9_]), aby prošly i přezdívky s diakritikou;
+  // koncová interpunkce se z názvu odřízne a vrátí zpět. Když se přezdívka
+  // nenajde, text zůstává beze změny.
+  _resolveNicknameMentions(text, platform) {
+    if (!text.includes('@') || !this.nicknames) return text;
+    return text.replace(/(^|[^A-Za-z0-9_@])@([^\s@]{2,30})/g, (m, pre, raw) => {
+      const trail = raw.match(/[.,!?;:]+$/)?.[0] || '';
+      const name = trail ? raw.slice(0, -trail.length) : raw;
+      const login = this.nicknames.resolveNickname(name, platform);
+      if (!login) return m;
+      // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
+      // loginu tak, jak dorazil z chatu, když ho známe.
+      const cased = (this._chatUsers?.get(login)?.name || login).replace(/^@/, '');
+      return `${pre}@${cased}${trail}`;
+    });
+  }
+
   async _sendMessage() {
     const text = this.msgInput.value.trim();
     if (!text || !this.activePlatform) return;
@@ -4449,8 +4534,13 @@ class UnityChat {
     } catch {}
 
     const isCmd = text.startsWith('!') || text.startsWith('/');
-    const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
+    // Autocomplete vkládá UC přezdívku (skutečný login uživatel nevidí), do
+    // chatu ale musí odejít login — jinak zmíněný nedostane upozornění a lidé
+    // mimo UnityChat nepoznají, o koho jde. V panelu se @přezdívka zobrazí
+    // zpátky přes _processMentions.
+    const wireText = this._resolveNicknameMentions(text, platform);
+    const markedText = isCmd ? wireText : wireText + ' ' + UC_MARKER;
     const reply = this._reply ? { ...this._reply } : null;
 
     // Save to message history (max 50)
@@ -4476,7 +4566,8 @@ class UnityChat {
       const at = reply.username.startsWith('@') ? reply.username : `@${reply.username}`;
       if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
     }
-    this._lastSentText = text;
+    // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
+    this._lastSentText = wireText;
     const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
     this._addMessage({
       id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -6699,9 +6790,15 @@ class UnityChat {
         const span = document.createElement('span');
         span.className = 'mention';
         const lname = name.toLowerCase();
-        span.dataset.mentionUser = lname;
-        const entry = this._chatUsers.get(`${platform}:${lname}`)
-          || this._chatUsers.get(lname);
+        // V optimistické zprávě může stát UC přezdívka — autocomplete ji
+        // vkládá a na login se text přeloží až při odeslání. Namapovat zpět,
+        // ať mention dostane barvu a data-mention-user zůstane login.
+        const login = this._chatUsers.has(lname)
+          ? lname
+          : (this.nicknames?.resolveNickname(lname, platform) || lname);
+        span.dataset.mentionUser = login;
+        const entry = this._chatUsers.get(`${platform}:${login}`)
+          || this._chatUsers.get(login);
         const color = entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
@@ -6710,15 +6807,15 @@ class UnityChat {
           // Unknown user — they've been @mentioned but haven't spoken in
           // our session yet. Queue a Twitch color lookup so the mention
           // retroactively gets their real chat color once resolved.
-          this._enqueueTwitchColorLookup(lname);
+          this._enqueueTwitchColorLookup(login);
         }
         // Display nickname if one is set for this user, else raw login name.
         // Raw message body / cache / dedup all use the original @name — only
         // the rendered text switches. data-mention-user stays lowercase login
         // so color retints and scrolls still work.
-        const nick = this.nicknames?.getNickname(platform, lname);
+        const nick = this.nicknames?.getNickname(platform, login);
         span.textContent = '@' + (nick || name);
-        if (nick) span.title = '@' + name;
+        if (nick) span.title = '@' + login;
         frag.appendChild(span);
         last = start + name.length + 1;
       }
