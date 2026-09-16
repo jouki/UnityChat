@@ -1718,6 +1718,7 @@ class YouTubeProvider {
     this._pt = null;
     this._videoId = null;
     this._cont = null;
+    this._allCont = null;     // reload token režimu "všechny zprávy" (ne Top chat)
     this._apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
     this._ctx = null;
     this._seen = new Set();
@@ -1755,7 +1756,7 @@ class YouTubeProvider {
       // Krok 2: načíst live chat stránku. Try popout first (forces
       // timedContinuationData for HTTP polling); fall back to embedded if
       // popout returns no usable continuation.
-      let chatHtml, ytData, contType = 'none', variant = 'popout', invalidationToken = null;
+      let chatHtml, ytData, lcrData = null, contType = 'none', variant = 'popout', invalidationToken = null;
       for (const v of ['popout', 'embedded']) {
         this._log(`[${cid}] fetchChatPage variant=${v} start`);
         const chatStart = Date.now();
@@ -1764,7 +1765,32 @@ class YouTubeProvider {
         const data = this._extractJson(html, 'ytInitialData');
         this._log(`[${cid}] extractJson variant=${v} ytData=${!!data}`);
         if (!data) continue;
-        const conts = data?.contents?.liveChatRenderer?.continuations;
+
+        // YouTube servíruje ve výchozím stavu "Nejlepší zprávy" (Top chat),
+        // který část zpráv zahazuje jako potenciální spam. Token pro režim
+        // "Chat" (= všechny zprávy) je v header view selectoru; přepneme se
+        // na něj a dál pracujeme s jeho odpovědí.
+        let lcr = this._lcr(data);
+        const allTok = this._pickAllChatToken(lcr);
+        if (allTok) {
+          try {
+            const allHtml = await this._fetchChatPage(v, allTok);
+            const allLcr = this._lcr(this._extractJson(allHtml, 'ytInitialData'));
+            if (allLcr) {
+              this._allCont = allTok;
+              lcr = allLcr;
+              this._log(`[${cid}] variant=${v} chatMode=all switched actions=${allLcr.actions?.length || 0} bytes=${allHtml.length}`);
+            } else {
+              this._log(`[${cid}] variant=${v} chatMode=all FAILED (no lcr in response), zůstávám na top chat`);
+            }
+          } catch (err) {
+            this._log(`[${cid}] variant=${v} chatMode=all EXC ${err.name}:${err.message}`);
+          }
+        } else {
+          this._log(`[${cid}] variant=${v} chatMode=noSwitch (selector chybí nebo už je all)`);
+        }
+
+        const conts = lcr?.continuations;
         let foundTimed = null, foundType = 'none', foundInv = null;
         if (conts?.length) {
           for (const c of conts) {
@@ -1786,14 +1812,14 @@ class YouTubeProvider {
           }
         }
         this._log(`[${cid}] variant=${v} contType=${foundType} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
-        chatHtml = html; ytData = data; contType = foundType; variant = v;
+        chatHtml = html; ytData = data; lcrData = lcr; contType = foundType; variant = v;
         if (foundInv && !invalidationToken) invalidationToken = foundInv;
         if (foundTimed) { this._cont = foundTimed; break; }
         // No timed from popout — try embedded before accepting defeat
       }
       if (!ytData) throw new Error('YouTube chat data nenalezena');
       this._variant = variant;
-      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont}`);
+      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont} chatMode=${this._allCont ? 'all' : 'top'}`);
 
       // API key + client version + visitorData
       const keyM = chatHtml.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
@@ -1811,7 +1837,7 @@ class YouTubeProvider {
       };
 
       // Zpracovat úvodní zprávy (zobrazit posledních několik)
-      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const actions = lcrData?.actions || [];
       const recentActions = actions.slice(-10); // zobrazit max 10 posledních
       this._log(`[${cid}] initial actions=${actions.length} rendering=${recentActions.length}`);
       this._processActions(recentActions);
@@ -1906,13 +1932,37 @@ class YouTubeProvider {
     this._log(`PROBE [${cid}] done`);
   }
 
-  async _fetchChatPage(variant) {
+  // Live chat data mají dvě podoby: čerstvě načtená stránka je drží v
+  // contents.liveChatRenderer, continuation fetch v continuationContents.
+  _lcr(data) {
+    return data?.contents?.liveChatRenderer
+      || data?.continuationContents?.liveChatContinuation
+      || null;
+  }
+
+  // View selector nabízí dva režimy: [0] "Nejlepší zprávy" (Top chat, filtruje
+  // domnělý spam) a [1] "Chat" (všechny zprávy). Vrací reload token druhého,
+  // nebo null když už v něm jsme / selector chybí.
+  _pickAllChatToken(lcr) {
+    const items = lcr?.header?.liveChatHeaderRenderer?.viewSelector
+      ?.sortFilterSubMenuRenderer?.subMenuItems;
+    if (!Array.isArray(items) || items.length < 2) return null;
+    const all = items[items.length - 1];
+    if (all?.selected) return null;
+    return all?.continuation?.reloadContinuationData?.continuation || null;
+  }
+
+  async _fetchChatPage(variant, cont) {
     // is_popout=1 forces YouTube to return timedContinuationData (popout chat
     // has no parent frame for push, so server must provide polling tokens).
     // Embedded (default) returns invalidationContinuationData for small
     // channels, which cannot be used for HTTP polling.
     const v = variant || 'popout';
-    const qs = v === 'popout'
+    // Continuation token je self-contained (nese videoId, popout i režim
+    // chatu), takže v/is_popout se s ním neposílá.
+    const qs = cont
+      ? `continuation=${encodeURIComponent(cont)}`
+      : v === 'popout'
       ? `v=${this._videoId}&is_popout=1`
       : `v=${this._videoId}`;
     const resp = await fetch(
@@ -2092,19 +2142,25 @@ class YouTubeProvider {
     const tick = ++this._pollTick;
     try {
       const t0 = Date.now();
-      const html = await this._fetchChatPage(this._variant);
-      const ytData = this._extractJson(html, 'ytInitialData');
-      if (!ytData) {
-        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} ms=${Date.now()-t0}`);
+      const html = await this._fetchChatPage(this._variant, this._allCont);
+      const lcr = this._lcr(this._extractJson(html, 'ytInitialData'));
+      if (!lcr) {
+        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
+        // Token pro režim "všechny zprávy" mohl expirovat — další tick jede
+        // bez něj, ať chat nezmrzne úplně (a log to pojmenuje).
+        if (this._allCont) {
+          this._log(`pollPage#${tick} chatMode=all token zahozen, fallback na top chat`);
+          this._allCont = null;
+        }
         if (this.polling) this._pt = setTimeout(() => this._poll(), 8000);
         return;
       }
 
-      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const actions = lcr.actions || [];
       const beforeSeen = this._seen.size;
       this._processActions(actions);
       const added = this._seen.size - beforeSeen;
-      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} ms=${Date.now()-t0}`);
+      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
@@ -2169,6 +2225,7 @@ class YouTubeProvider {
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
+    this._allCont = null;
     this._videoId = null;
     // _seen NEMAZAT - musí přežít reconnect aby se neduplikovaly zprávy
     this._apiFails = 0;
