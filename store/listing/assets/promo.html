@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<title>UnityChat promo tile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="brand.css">
+<!--
+  Zdroj promo dlaždic pro Chrome Web Store. Jeden soubor, dvě velikosti —
+  ?size=small (440x280, povinná) a ?size=marquee (1400x560, volitelná).
+
+  Render:
+    scripts/build-promo.ps1
+  nebo ručně:
+    chrome --headless --screenshot=out.png --window-size=440,280
+           --default-background-color=00000000 --hide-scrollbars
+           "file:///.../promo.html?size=small"
+
+  Záměrně bez log Twitche/YouTube/Kicku a bez marketingových prvků
+  ("Free", "Install now", hvězdičky) — obojí je důvod k odmítnutí assetu.
+-->
+<style>
+  /* Jen to, co je specificke pro dlazdice; zbytek dedi z brand.css. */
+  :root {
+    --logo:      96px;
+    --wordmark:  40px;
+    --tagline:   12px;
+    --gap:       18px;
+    --grid-lg:   56px;
+    --grid-sm:   14px;
+    --glow-x:    50%;
+    --glow-y:    34%;
+    --glow-size: calc(var(--logo) * 2.4);
+  }
+
+  html[data-size="marquee"] {
+    --logo:      250px;
+    --wordmark:  108px;
+    --tagline:   30px;
+    --gap:       64px;
+    --grid-lg:   140px;
+    --grid-sm:   35px;
+    --glow-x:    calc(var(--logo) * 0.72);
+    --glow-y:    50%;
+  }
+
+  body { display: grid; place-items: center; }
+
+  /* Small tile je skoro ctvercovy - text vedle loga se tam nevejde, takze
+     stavi na vysku. Marquee je siroky pruh, tam je logo vedle textu. */
+  .tile {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: calc(var(--gap) * 0.75);
+    padding: 0 calc(var(--gap) * 0.9);
+  }
+  html[data-size="marquee"] .tile {
+    flex-direction: row;
+    align-items: center;
+    text-align: left;
+    gap: var(--gap);
+  }
+
+  .logo {
+    width: var(--logo);
+    height: var(--logo);
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 calc(var(--logo) * 0.16) rgba(255,140,0,0.55));
+  }
+
+  .copy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(var(--gap) * 0.34);
+  }
+  html[data-size="marquee"] .copy { align-items: flex-start; }
+
+  .wordmark { font-size: var(--wordmark); }
+
+  /* Tri platformy jako text, nikdy jako cizi logo. */
+  .platforms {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--gap) * 0.42);
+    font-size: var(--tagline);
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    white-space: nowrap;
+  }
+  .platforms .dot {
+    width: calc(var(--tagline) * 0.32);
+    height: calc(var(--tagline) * 0.32);
+    border-radius: 50%;
+    background: var(--orange);
+    box-shadow: 0 0 calc(var(--tagline) * 0.5) rgba(255,140,0,0.8);
+  }
+
+  .tagline {
+    font-size: calc(var(--tagline) * 1.08);
+    color: var(--ink);
+    opacity: 0.9;
+    white-space: nowrap;
+  }
+
+  .rule { height: calc(var(--tagline) * 0.24); }
+</style>
+</head>
+<body>
+  <div class="tile">
+    <img class="logo" src="logo.svg" alt="">
+    <div class="copy">
+      <div class="wordmark">UNITY<span class="accent">CHAT</span></div>
+      <div class="platforms">
+        <span>Twitch</span><span class="dot"></span>
+        <span>YouTube</span><span class="dot"></span>
+        <span>Kick</span>
+      </div>
+      <div class="tagline">Tři chaty. Jeden panel.</div>
+    </div>
+  </div>
+  <div class="rule"></div>
+
+<script>
+  // Velikost se řídí query parametrem, ať obě dlaždice sdílí jeden zdroj.
+  const size = new URLSearchParams(location.search).get('size') || 'small';
+  document.documentElement.dataset.size = size;
+</script>
+</body>
+</html>

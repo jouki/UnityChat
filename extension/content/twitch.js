@@ -969,33 +969,87 @@
     return null;
   }
 
-  async function sendChat(text) {
-    const input = findInput();
+  // Twitch chat input je JEDEN sdílený DOM prvek, ale SEND_CHAT handler se
+  // spustí pro každou zprávu zvlášť — dvě rychle po sobě odeslané zprávy tak
+  // běžely souběžně a přepisovaly si editor pod rukama (druhý paste vlezl do
+  // Slate dřív, než první stihl kliknout na send). Serializace: každý send
+  // čeká na dokončení předchozího.
+  let _sendChain = Promise.resolve();
+  let _sendPending = 0;
+
+  function sendChat(text) {
+    const queuedBehind = _sendPending++;
+    const run = _sendChain.then(() => sendChatNow(text, queuedBehind));
+    _sendChain = run.catch(() => {});          // řetěz nesmí uváznout na chybě
+    run.catch(() => {}).then(() => { _sendPending--; });
+    return run;
+  }
+
+  async function sendChatNow(text, queuedBehind) {
+    let input = findInput();
     if (!input) throw new Error('Twitch chat input nenalezen');
 
-    input.focus();
+    const log = (step, extra) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'TwSend', args: [step, extra ? JSON.stringify(extra) : ''] });
+      } catch {}
+    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Twitch může chat přemountovat uprostřed odesílání (channel switch,
+    // 7TV rerender) — vždy číst z živého elementu.
+    const liveInput = () => {
+      if (!document.contains(input)) {
+        const fresh = findInput();
+        if (fresh) input = fresh;
+      }
+      return input;
+    };
+    const readInput = () => {
+      const el = liveInput();
+      return (el.tagName === 'TEXTAREA' ? el.value : el.textContent) || '';
+    };
+    const findSendBtn = () => document.querySelector('[data-a-target="chat-send-button"]');
+    const btnDisabled = (b) => !!b && (b.disabled || b.getAttribute('aria-disabled') === 'true');
+    // Probe = úvodní část textu; detekuje "náš text je/není v editoru".
+    // Slate placeholder ani zero-width výplně ho neobsahují, takže je
+    // spolehlivější než empty-check přes textContent.
+    const probe = text.trim().slice(0, 20);
 
-    // Počkat chvíli na focus
-    await new Promise((r) => setTimeout(r, 50));
+    const insertText = (replaceExisting) => {
+      const el = liveInput();
+      el.focus();
 
-    if (input.tagName === 'TEXTAREA') {
-      // Starší Twitch - React textarea
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value'
-      ).set;
-      setter.call(input, text);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
+      if (el.tagName === 'TEXTAREA') {
+        // Starší Twitch - React textarea
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          'value'
+        ).set;
+        setter.call(el, text);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+
       // Moderní Twitch - Slate contenteditable div
-      // Vyčistit obsah a vložit text přes simulaci paste
-      input.focus();
+      // Vložit text přes simulaci paste
+      if (replaceExisting) {
+        // Při opakovaném pokusu může v editoru viset zbytek — označit ho,
+        // ať ho paste přepíše místo aby se text zdvojil. Range API místo
+        // execCommand('selectAll'), které mimo editor sahá na celou stránku.
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch {}
+      }
 
       // Metoda 1: DataTransfer paste (nejspolehlivější pro Slate)
       try {
         const dt = new DataTransfer();
         dt.setData('text/plain', text);
-        input.dispatchEvent(
+        el.dispatchEvent(
           new ClipboardEvent('paste', {
             clipboardData: dt,
             bubbles: true,
@@ -1005,7 +1059,7 @@
       } catch {
         // Metoda 2: InputEvent insertText
         try {
-          input.dispatchEvent(
+          el.dispatchEvent(
             new InputEvent('beforeinput', {
               inputType: 'insertText',
               data: text,
@@ -1019,29 +1073,119 @@
           document.execCommand('insertText', false, text);
         }
       }
-    }
+    };
 
-    // Počkat na React/Slate zpracování
-    await new Promise((r) => setTimeout(r, 150));
+    const preText = readInput();
+    log('start', {
+      len: text.length, tag: input.tagName, q: queuedBehind,
+      preLen: preText.length, preText: preText.slice(0, 60),
+      focus: document.hasFocus(), vis: document.visibilityState
+    });
 
-    // Kliknout na Send tlačítko
-    const sendBtn = document.querySelector(
-      '[data-a-target="chat-send-button"]'
-    );
-    if (sendBtn) {
-      sendBtn.click();
-    } else {
-      // Fallback - Enter key
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          key: 'Enter',
-          code: 'Enter',
-          keyCode: 13,
-          which: 13,
-          bubbles: true
-        })
-      );
+    input.focus();
+
+    // Počkat chvíli na focus
+    await sleep(50);
+
+    insertText(false);
+
+    // Condition-based wait místo původního fixního 150ms timeoutu.
+    // React/Slate zpracovává paste asynchronně přes svůj scheduler — a když
+    // má fokus sidepanel (= vždy při odesílání z UC), Chrome scheduler
+    // throttluje; u rewards popoveru naměřeno 500–800 ms (viz komentář v
+    // TW_OPEN_REWARDS_POPOVER handleru). Pevných 150 ms občas prohrálo
+    // závod → klik trefil send ve stavu "prázdný input" → Twitch neodeslal
+    // a text zůstal viset v inputu (další zpráva se pak appendla za něj).
+    const waitReady = async () => {
+      const t0 = performance.now();
+      let ok = false;
+      while (performance.now() - t0 < 1500) {
+        const btn = findSendBtn();
+        if (readInput().includes(probe) && btn && !btnDisabled(btn)) { ok = true; break; }
+        await sleep(50);
+      }
+      log('pre-click', {
+        ready: ok, waitMs: Math.round(performance.now() - t0),
+        cur: readInput().slice(0, 60),
+        btn: !!findSendBtn(), disabled: btnDisabled(findSendBtn())
+      });
+      return ok;
+    };
+
+    await waitReady();
+
+    // Klik + verifikace + retry. Úspěšný send input vyprázdní (jakmile
+    // React commitne) — dokud v něm náš text visí, send neproběhl.
+    let sawText = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      // Náš text v editoru není? Klik by odešel naprázdno — a prázdný input
+      // by pak v ověření níž prošel jako "odesláno" (přesně tahle díra dělala
+      // z neodeslané zprávy tichý úspěch). Vložit znovu místo slepého kliku.
+      if (!readInput().includes(probe)) {
+        log('repaste', { attempt, cur: readInput().slice(0, 60) });
+        insertText(true);
+        await waitReady();
+      }
+      // Jen když text prokazatelně v editoru byl, je jeho zmizení po kliku
+      // důkazem odeslání.
+      const hadText = readInput().includes(probe);
+      const before = readInput().trim();
+      if (hadText) sawText = true;
+
+      if (!hadText && !before) {
+        // Editor je prázdný a náš text se do něj nedostal — klikat nemá co
+        // odeslat. Vracet tu úspěch (dřívější chování) znamenalo ztratit
+        // zprávu potichu.
+        log('no-text', { attempt, cur: '' });
+        break;
+      }
+
+      const sendBtn = findSendBtn();
+      if (sendBtn) {
+        sendBtn.click();
+      } else {
+        // Fallback - Enter key
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true
+          })
+        );
+      }
+
+      // Verifikační okno 2000 ms je záměrně delší než nejhorší naměřený
+      // scheduler lag (800 ms) — předčasný retry po kliku, který ve
+      // skutečnosti USPĚL, by zprávu poslal dvakrát.
+      const v0 = performance.now();
+      let cleared = false;
+      while (performance.now() - v0 < 2000) {
+        await sleep(100);
+        const cur = readInput();
+        // Náš text známe → stačí, že zmizel. Klikali-li jsme na cizí obsah
+        // (probe se neshodl), důkazem je jen úplně prázdný editor — jinak by
+        // "neobsahuje probe" platilo od začátku a prošlo by to naprázdno.
+        if (hadText ? !cur.includes(probe) : !cur.trim()) { cleared = true; break; }
+      }
+      log(cleared ? (hadText ? 'sent' : 'sent-blind') : 'not-cleared', {
+        attempt, viaBtn: !!sendBtn, hadText,
+        verifyMs: Math.round(performance.now() - v0),
+        cur: cleared ? '' : readInput().slice(0, 60)
+      });
+      if (cleared) return;
+
+      if (!hadText) {
+        // Klikali jsme na obsah, který nevypadá jako náš text (probe detekce
+        // mohla selhat na Slate normalizaci). Zůstal tam → retry by riskoval
+        // odeslání dvakrát; radši ohlásit chybu.
+        break;
+      }
     }
+    throw new Error(sawText
+      ? 'zpráva zůstala viset v Twitch inputu (3 pokusy o odeslání selhaly)'
+      : 'text se nepodařilo vložit do Twitch inputu (3 pokusy)');
   }
 
   async function replyChat(text, parentMsgId, username) {
@@ -1590,8 +1734,28 @@
       !allCandidates.some((other) => other !== el && el.contains(other))
     );
     for (const el of kept) {
-      const text = (el.textContent || '').trim();
-      if (!text) continue;
+      const rawText = (el.textContent || '').trim();
+      if (!rawText) continue;
+      // Defensive dedup: some Twitch highlight cards (notably "Sdílený chat
+      // byl spuštěn!" / "Shared Chat Started!" banners + 7TV-overlaid
+      // milestones) emit the same phrase twice in textContent — once
+      // visible, once for accessibility/aria/sr-only sibling. Detect exact
+      // 2x repeat and trim to one copy. Threshold ≥ 10 chars to avoid
+      // accidental matches on short repeated tokens.
+      let text = rawText;
+      if (rawText.length >= 10 && rawText.length % 2 === 0) {
+        const half = rawText.length / 2;
+        if (rawText.substring(0, half) === rawText.substring(half)) {
+          text = rawText.substring(0, half);
+          // Log outerHTML so we can verify the actual Twitch DOM structure
+          // and refine handling (e.g. drop aria-hidden / visuallyhidden
+          // descendants properly instead of relying on this heuristic).
+          try {
+            chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'HighlightDup',
+              text: `dedup="${text.slice(0, 80)}" originalLen=${rawText.length} html=${(el.outerHTML || '').slice(0, 1500)}` }).catch(() => {});
+          } catch {}
+        }
+      }
       const key = text.slice(0, 120);
       if (seenTexts.has(key)) continue;
       seenTexts.add(key);

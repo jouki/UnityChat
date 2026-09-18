@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<title>UnityChat store screenshot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="brand.css">
+<!--
+  Store screenshot 1280x800 — panel na brand pozadí, vedle něj to hlavní,
+  co UnityChat dělá.
+
+  Panel je `panel-mock.png`, render mockupu z jouki.cz/UnityChat (preview.html
+  načítá skutečné extension/sidepanel.css, takže UI odpovídá reálnému panelu
+  pixel po pixelu; smyšlené jsou jen zprávy).
+
+  POZOR: až se sidepanel.css výrazněji změní, panel-mock.png je potřeba
+  přerenderovat, jinak bude screenshot ukazovat zastaralé UI. Stejné riziko
+  platí pro preview.html na webu — jednou se už rozešel (dvojité dvojtečky
+  za jménem, opraveno 2026-09-15).
+
+  Render: scripts/build-promo.ps1
+-->
+<style>
+  :root {
+    --glow-x: 34%;
+    --glow-y: 46%;
+    --glow-size: 520px;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    gap: 56px;
+    padding: 48px 56px;
+  }
+
+  .copy {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    flex: 1 1 auto;
+  }
+
+  .wordmark { font-size: 54px; }
+
+  .lede {
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--ink);
+    opacity: 0.92;
+    max-width: 30ch;
+  }
+
+  .points {
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    list-style: none;
+  }
+  .points li {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+    font-size: 14.5px;
+    line-height: 1.45;
+    color: var(--ink-dim);
+  }
+  /* Oranžová značka místo odrážky — HUD styl, ne klasický bullet. */
+  .points li::before {
+    content: '';
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    background: var(--orange);
+    box-shadow: 0 0 8px rgba(255,140,0,0.75);
+  }
+  .points strong { color: var(--ink); font-weight: 500; }
+
+  .panel-wrap {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto;
+    height: 100%;
+  }
+  .panel-wrap img {
+    height: 100%;
+    width: auto;
+    display: block;
+    border-radius: 12px;
+    /* Panel má odsadit od pozadí, ale bez tvrdého rámečku. */
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.07),
+      0 24px 60px rgba(0,0,0,0.55),
+      0 0 70px rgba(255,140,0,0.14);
+  }
+</style>
+</head>
+<body>
+  <div class="copy">
+    <div class="wordmark">UNITY<span class="accent">CHAT</span></div>
+    <p class="lede">Twitch, YouTube a Kick v jednom panelu vedle streamu.</p>
+    <ul class="points">
+      <li><span>Zprávy ze <strong>všech tří platforem</strong> v jednom seznamu</span></li>
+      <li><span>Emoty ze <strong>7TV, BTTV i FrankerFaceZ</strong> včetně odznaků</span></li>
+      <li><span>Odpovídej kamkoli <strong>bez přepínání tabu</strong></span></li>
+      <li><span>Raidy, připnuté zprávy a zvýrazněné zmínky</span></li>
+    </ul>
+  </div>
+
+  <div class="panel-wrap">
+    <img src="panel-mock.png" alt="">
+  </div>
+
+  <div class="rule"></div>
+</body>
+</html>

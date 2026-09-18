@@ -20,7 +20,7 @@ const DEFAULTS = {
   maxMessages: 5000,       // storage cap — how many msgs we keep in _msgCache (72h TTL still applies)
   initialRender: 250,      // how many render into DOM on boot; older load on scroll-up
   username: '',
-  layout: 'small',
+  layout: 'medium',
   showTimestamps: true,
 };
 
@@ -58,10 +58,32 @@ class EmoteManager {
 
   // ---- Loading ----
 
+  // Bounded fetch for emote/badge providers. Boot awaits these via
+  // Promise.allSettled, so a single provider that accepts the TCP/TLS
+  // handshake but never sends a byte (FFZ outage 2026-09-05) would hang
+  // _init forever — Chrome's fetch has no idle timeout of its own. Timeout
+  // and any other failure are surfaced via UC_LOG [EmoteFetch] so the
+  // boot dump shows WHICH provider stalled instead of a silent 0-count.
+  async _fetch(url, opts = {}, timeoutMs = 8000) {
+    const t0 = Date.now();
+    try {
+      return await fetch(url, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (err) {
+      const kind = err?.name === 'TimeoutError' ? 'timeout' : (err?.name || 'error');
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'EmoteFetch',
+          text: `${kind} after ${Date.now() - t0}ms: ${url}`
+        }).catch(() => {});
+      } catch {}
+      throw err;
+    }
+  }
+
   async loadGlobal() {
     if (this._globalLoaded) return;
     try {
-      const resp = await fetch('https://7tv.io/v3/emote-sets/global');
+      const resp = await this._fetch('https://7tv.io/v3/emote-sets/global');
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const emotes = data.emotes || [];
@@ -81,7 +103,7 @@ class EmoteManager {
 
   async loadChannel(platform, userId) {
     try {
-      const resp = await fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
+      const resp = await this._fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
       if (!resp.ok) {
         console.warn(`[7TV] Channel emotes ${platform}/${userId}: HTTP ${resp.status}`);
         return 0;
@@ -117,7 +139,7 @@ class EmoteManager {
     let count = 0;
     try {
       // Globální BTTV emotes
-      const gr = await fetch('https://api.betterttv.net/3/cached/emotes/global');
+      const gr = await this._fetch('https://api.betterttv.net/3/cached/emotes/global');
       if (gr.ok) {
         for (const e of await gr.json()) {
           this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
@@ -127,7 +149,7 @@ class EmoteManager {
     } catch {}
     try {
       // Kanálové BTTV emotes
-      const cr = await fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
+      const cr = await this._fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
       if (cr.ok) {
         const data = await cr.json();
         for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
@@ -168,7 +190,7 @@ class EmoteManager {
   async loadTwitchChannel(channelLogin) {
     let count = 0;
     try {
-      const resp = await fetch('https://gql.twitch.tv/gql', {
+      const resp = await this._fetch('https://gql.twitch.tv/gql', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -220,11 +242,11 @@ class EmoteManager {
       }
     };
     try {
-      const gr = await fetch('https://api.frankerfacez.com/v1/set/global');
+      const gr = await this._fetch('https://api.frankerfacez.com/v1/set/global');
       if (gr.ok) parseSet((await gr.json()).sets || {});
     } catch {}
     try {
-      const cr = await fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
+      const cr = await this._fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
       if (cr.ok) parseSet((await cr.json()).sets || {});
     } catch {}
     console.log(`[FFZ] ${count} emotes loaded`);
@@ -975,6 +997,23 @@ class NicknameManager {
     return this.get(platform, username)?.color || null;
   }
 
+  // Reverzní lookup: UC přezdívka → skutečný login. Autocomplete nabízí
+  // přezdívky (skutečný login uživatel nikde nevidí), do chatu ale musí odejít
+  // login, jinak zmíněný nedostane upozornění a lidé mimo UnityChat nepoznají,
+  // o koho jde. Bez `platform` hledá napříč platformami.
+  resolveNickname(nickname, platform) {
+    const want = String(nickname || '').toLowerCase().replace(/^@/, '');
+    if (!want) return null;
+    for (const [key, val] of this._map) {
+      if ((val?.nickname || '').toLowerCase() !== want) continue;
+      const i = key.indexOf(':');
+      if (i < 0) continue;
+      if (platform && key.slice(0, i) !== platform) continue;
+      return key.slice(i + 1);
+    }
+    return null;
+  }
+
   async save(platform, username, nickname, color) {
     const cleanName = username.replace(/^@/, '');
     try {
@@ -1057,6 +1096,21 @@ function _isTwitchOgFaceName(name) {
 // stay legible (DarkRed #8B0000 → a visible red, etc.). We mirror that: lift
 // the HSL Lightness floor to 0.5 and ceiling to 0.85 so both extremes read well.
 const _READABLE_CACHE = new Map();
+// YouTube barvu jména v datech NEPOSÍLÁ (ověřeno na live streamu: renderer
+// nese jen authorName/authorPhoto/authorExternalChannelId). Web klient si ji
+// počítá sám — live_chat_polymer.js: computeAuthorNameColor → hash z textu
+// jména. Tohle je port toho hashe; čitelnost na tmavém pozadí pak dořeší
+// readableColor() při renderu, takže kontrastní část jejich algoritmu
+// neduplikujeme. Hash se počítá z původního jména VČETNĚ '@', jinak by
+// barvy nesouhlasily s tím, co uživatel vidí na YouTube.
+function ytNameColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  let out = '#';
+  for (let i = 0; i < 3; i++) out += ('00' + ((h >> (i * 8)) & 255).toString(16)).slice(-2);
+  return out;
+}
+
 function readableColor(input) {
   if (!input) return input;
   if (_READABLE_CACHE.has(input)) return _READABLE_CACHE.get(input);
@@ -1379,6 +1433,52 @@ class TwitchProvider {
       });
       return;
     }
+    if (msgId === 'viewermilestone') {
+      // Watch streak / viewer milestone — Twitch awards channel points to
+      // viewers when they hit milestones (e.g. 5-stream watch streak).
+      // Tag names per Twitch IRC docs (https://dev.twitch.tv/docs/irc/tags/):
+      //   msg-param-category    — milestone category (currently "watch-streak")
+      //   msg-param-value       — milestone value (streak count)
+      //   msg-param-copoReward  — channel points awarded
+      let body = '';
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni !== -1) {
+        const after = rest.substring(uni + 10);
+        const ci = after.indexOf(':');
+        if (ci !== -1) body = after.substring(ci + 1);
+      }
+      const username = tags['display-name'] || tags.login || '?';
+      const ircColor = tags.color;
+      const color = ircColor || twitchDefaultColor(username);
+      const category = tags['msg-param-category'] || 'watch-streak';
+      const value = parseInt(tags['msg-param-value'] || '0', 10) || 0;
+      const points = parseInt(tags['msg-param-copoReward'] || '0', 10) || 0;
+      // Diagnostic: verify tag names match docs against real-world data.
+      // Remove this block once a few production samples confirm the parser.
+      try {
+        chrome.runtime.sendMessage({
+          type: 'UC_LOG', tag: 'Milestone',
+          text: `category=${category} value=${value} points=${points} body="${body.slice(0, 80)}" tags=${JSON.stringify(tags).slice(0, 500)}`,
+        }).catch(() => {});
+      } catch {}
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message: body,
+        color,
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isMilestone: true,
+        milestoneCategory: category,
+        milestoneValue: value,
+        milestonePoints: points,
+      });
+      return;
+    }
     if (msgId === 'announcement') {
       // USERNOTICE #channel :message text — grab the body after the command+channel.
       const uni = rest.indexOf('USERNOTICE');
@@ -1650,6 +1750,7 @@ class YouTubeProvider {
     this._pt = null;
     this._videoId = null;
     this._cont = null;
+    this._allCont = null;     // reload token režimu "všechny zprávy" (ne Top chat)
     this._apiKey = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
     this._ctx = null;
     this._seen = new Set();
@@ -1687,7 +1788,7 @@ class YouTubeProvider {
       // Krok 2: načíst live chat stránku. Try popout first (forces
       // timedContinuationData for HTTP polling); fall back to embedded if
       // popout returns no usable continuation.
-      let chatHtml, ytData, contType = 'none', variant = 'popout', invalidationToken = null;
+      let chatHtml, ytData, lcrData = null, contType = 'none', variant = 'popout', invalidationToken = null;
       for (const v of ['popout', 'embedded']) {
         this._log(`[${cid}] fetchChatPage variant=${v} start`);
         const chatStart = Date.now();
@@ -1696,7 +1797,32 @@ class YouTubeProvider {
         const data = this._extractJson(html, 'ytInitialData');
         this._log(`[${cid}] extractJson variant=${v} ytData=${!!data}`);
         if (!data) continue;
-        const conts = data?.contents?.liveChatRenderer?.continuations;
+
+        // YouTube servíruje ve výchozím stavu "Nejlepší zprávy" (Top chat),
+        // který část zpráv zahazuje jako potenciální spam. Token pro režim
+        // "Chat" (= všechny zprávy) je v header view selectoru; přepneme se
+        // na něj a dál pracujeme s jeho odpovědí.
+        let lcr = this._lcr(data);
+        const allTok = this._pickAllChatToken(lcr);
+        if (allTok) {
+          try {
+            const allHtml = await this._fetchChatPage(v, allTok);
+            const allLcr = this._lcr(this._extractJson(allHtml, 'ytInitialData'));
+            if (allLcr) {
+              this._allCont = allTok;
+              lcr = allLcr;
+              this._log(`[${cid}] variant=${v} chatMode=all switched actions=${allLcr.actions?.length || 0} bytes=${allHtml.length}`);
+            } else {
+              this._log(`[${cid}] variant=${v} chatMode=all FAILED (no lcr in response), zůstávám na top chat`);
+            }
+          } catch (err) {
+            this._log(`[${cid}] variant=${v} chatMode=all EXC ${err.name}:${err.message}`);
+          }
+        } else {
+          this._log(`[${cid}] variant=${v} chatMode=noSwitch (selector chybí nebo už je all)`);
+        }
+
+        const conts = lcr?.continuations;
         let foundTimed = null, foundType = 'none', foundInv = null;
         if (conts?.length) {
           for (const c of conts) {
@@ -1718,14 +1844,14 @@ class YouTubeProvider {
           }
         }
         this._log(`[${cid}] variant=${v} contType=${foundType} contKeys=${conts?.map(c=>Object.keys(c)).flat().join(',') || ''}`);
-        chatHtml = html; ytData = data; contType = foundType; variant = v;
+        chatHtml = html; ytData = data; lcrData = lcr; contType = foundType; variant = v;
         if (foundInv && !invalidationToken) invalidationToken = foundInv;
         if (foundTimed) { this._cont = foundTimed; break; }
         // No timed from popout — try embedded before accepting defeat
       }
       if (!ytData) throw new Error('YouTube chat data nenalezena');
       this._variant = variant;
-      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont}`);
+      this._log(`[${cid}] final variant=${variant} contType=${contType} contPresent=${!!this._cont} chatMode=${this._allCont ? 'all' : 'top'}`);
 
       // API key + client version + visitorData
       const keyM = chatHtml.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/);
@@ -1743,7 +1869,7 @@ class YouTubeProvider {
       };
 
       // Zpracovat úvodní zprávy (zobrazit posledních několik)
-      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const actions = lcrData?.actions || [];
       const recentActions = actions.slice(-10); // zobrazit max 10 posledních
       this._log(`[${cid}] initial actions=${actions.length} rendering=${recentActions.length}`);
       this._processActions(recentActions);
@@ -1838,13 +1964,37 @@ class YouTubeProvider {
     this._log(`PROBE [${cid}] done`);
   }
 
-  async _fetchChatPage(variant) {
+  // Live chat data mají dvě podoby: čerstvě načtená stránka je drží v
+  // contents.liveChatRenderer, continuation fetch v continuationContents.
+  _lcr(data) {
+    return data?.contents?.liveChatRenderer
+      || data?.continuationContents?.liveChatContinuation
+      || null;
+  }
+
+  // View selector nabízí dva režimy: [0] "Nejlepší zprávy" (Top chat, filtruje
+  // domnělý spam) a [1] "Chat" (všechny zprávy). Vrací reload token druhého,
+  // nebo null když už v něm jsme / selector chybí.
+  _pickAllChatToken(lcr) {
+    const items = lcr?.header?.liveChatHeaderRenderer?.viewSelector
+      ?.sortFilterSubMenuRenderer?.subMenuItems;
+    if (!Array.isArray(items) || items.length < 2) return null;
+    const all = items[items.length - 1];
+    if (all?.selected) return null;
+    return all?.continuation?.reloadContinuationData?.continuation || null;
+  }
+
+  async _fetchChatPage(variant, cont) {
     // is_popout=1 forces YouTube to return timedContinuationData (popout chat
     // has no parent frame for push, so server must provide polling tokens).
     // Embedded (default) returns invalidationContinuationData for small
     // channels, which cannot be used for HTTP polling.
     const v = variant || 'popout';
-    const qs = v === 'popout'
+    // Continuation token je self-contained (nese videoId, popout i režim
+    // chatu), takže v/is_popout se s ním neposílá.
+    const qs = cont
+      ? `continuation=${encodeURIComponent(cont)}`
+      : v === 'popout'
       ? `v=${this._videoId}&is_popout=1`
       : `v=${this._videoId}`;
     const resp = await fetch(
@@ -2024,19 +2174,25 @@ class YouTubeProvider {
     const tick = ++this._pollTick;
     try {
       const t0 = Date.now();
-      const html = await this._fetchChatPage(this._variant);
-      const ytData = this._extractJson(html, 'ytInitialData');
-      if (!ytData) {
-        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} ms=${Date.now()-t0}`);
+      const html = await this._fetchChatPage(this._variant, this._allCont);
+      const lcr = this._lcr(this._extractJson(html, 'ytInitialData'));
+      if (!lcr) {
+        this._log(`pollPage#${tick} NO_YTDATA bytes=${html.length} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
+        // Token pro režim "všechny zprávy" mohl expirovat — další tick jede
+        // bez něj, ať chat nezmrzne úplně (a log to pojmenuje).
+        if (this._allCont) {
+          this._log(`pollPage#${tick} chatMode=all token zahozen, fallback na top chat`);
+          this._allCont = null;
+        }
         if (this.polling) this._pt = setTimeout(() => this._poll(), 8000);
         return;
       }
 
-      const actions = ytData?.contents?.liveChatRenderer?.actions || [];
+      const actions = lcr.actions || [];
       const beforeSeen = this._seen.size;
       this._processActions(actions);
       const added = this._seen.size - beforeSeen;
-      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} ms=${Date.now()-t0}`);
+      this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
@@ -2049,6 +2205,24 @@ class YouTubeProvider {
   }
 
   // ---- Message processing ----
+
+  // Barva jména. Pořadí větví je stejné jako v computeAuthorNameColor na
+  // YouTube: server-dodaná barva > seed color > hash z textu jména. Prvních
+  // dvou polí jsme se v datech zatím nedočkali (ani na robdiesalot streamu),
+  // ale jsou za A/B experimentem — když dorazí, mají přednost před hashem.
+  // Diagnostiku zapisujeme jednou za connect, ať víme, která větev platí.
+  _authorColor(renderer, rawName) {
+    const argb = typeof renderer.authorUsernameColorDark === 'number'
+      ? renderer.authorUsernameColorDark
+      : (typeof renderer.authorSeedColorArgb === 'number' ? renderer.authorSeedColorArgb : null);
+    const src = argb !== null ? 'data' : 'hash';
+    if (this._colorSrc !== src) {
+      this._colorSrc = src;
+      this._log(`authorColor source=${src} sample=${rawName}`);
+    }
+    if (argb !== null) return '#' + ('000000' + (argb & 0xffffff).toString(16)).slice(-6);
+    return ytNameColor(rawName);
+  }
 
   _processActions(actions) {
     for (const a of actions) {
@@ -2065,7 +2239,12 @@ class YouTubeProvider {
         this._seen = new Set(arr.slice(-2500));
       }
 
-      const username = renderer.authorName?.simpleText || 'Unknown';
+      // YouTube dává do simpleText handle včetně '@' ("@nekdo"). Zobrazovat
+      // zavináč je zbytečné a navíc rozbíjel lookupy: _chatUsers klíč byl
+      // "youtube:@nekdo", zatímco mention regex i autocomplete hledají jméno
+      // bez něj. Strippujeme hned na vstupu, ať je jméno všude stejné.
+      const rawName = renderer.authorName?.simpleText || 'Unknown';
+      const username = rawName.replace(/^@/, '') || rawName;
       const runs = renderer.message?.runs || [];
       const message = runs.map((r) =>
         r.text || r.emoji?.shortcuts?.[0] || r.emoji?.emojiId || ''
@@ -2085,7 +2264,7 @@ class YouTubeProvider {
         username,
         message,
         ytRuns: runs,
-        color: isSuperChat ? '#ffd600' : '#ff0000',
+        color: isSuperChat ? '#ffd600' : this._authorColor(renderer, rawName),
         badges,
         timestamp: Date.now(),
         id,
@@ -2101,6 +2280,8 @@ class YouTubeProvider {
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
     this._cont = null;
+    this._allCont = null;
+    this._colorSrc = null;
     this._videoId = null;
     // _seen NEMAZAT - musí přežít reconnect aby se neduplikovaly zprávy
     this._apiFails = 0;
@@ -2373,6 +2554,7 @@ class UnityChat {
         <img src="icons/icon48.png" class="hdr-logo" alt="UnityChat">
         <span class="update-dot" aria-hidden="true"></span>
       </span> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
+    // UC_STORE_STRIP_START: update tooltip mount (self-update UI)
     // Clone the update tooltip template into the logo wrap so hover on the
     // logo reveals it. Pulled from a <template> in sidepanel.html so the
     // markup stays authored in HTML and readable.
@@ -2400,6 +2582,7 @@ class UnityChat {
         tip.addEventListener('mouseleave', hide);
       }
     }
+    // UC_STORE_STRIP_END
 
     this._bootMark('_init start');
     // Arm background watchdog — if _bootMark('_init done') never arrives,
@@ -2464,7 +2647,7 @@ class UnityChat {
     // Auto-detekce username z aktivního tabu PŘED cache renderem
     if (!this.config.username) {
       try {
-        const tab = await this._getActiveBrowserTab();
+        const tab = await this._findStreamTab();
         if (tab) {
           await this._injectContentScript(tab);
           const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -2513,10 +2696,12 @@ class UnityChat {
     this._connectAll();
     this._bootMark('_connectAll dispatched');
     this._detectLoop();
+    // UC_STORE_STRIP_START: self-update check call
     // Fire-and-forget update check against the public landing page manifest.
     this._checkForUpdate().catch(() => {});
-    // Subscribe to background's 15-min alarm broadcasts so a long-open
-    // panel still updates in real time when a new version drops.
+    // UC_STORE_STRIP_END
+    // Background broadcast listener (Twitch redeems/highlights/credits, plus
+    // the self-update badge in non-store builds).
     this._wireBackgroundUpdateListener();
     // Hover/click preview card for emotes inside chat messages.
     this._setupEmotePreview();
@@ -2532,6 +2717,7 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
+  // UC_STORE_STRIP_START: self-update check + tooltip (CWS forbids out-of-store updates)
   async _checkForUpdate() {
     try {
       const current = chrome.runtime.getManifest().version;
@@ -2572,13 +2758,25 @@ class UnityChat {
       wrap.classList.remove('auto-reveal');
     }, 10000);
   }
+  // UC_STORE_STRIP_END
 
-  // Background's 15-min alarm broadcasts UC_UPDATE_AVAILABLE / UC_UPDATE_CLEARED.
-  // Wired here so a long-open sidepanel reflects update state in real time
-  // without waiting for the user to close+reopen the panel.
+  // Background broadcasts for panel-wide state. UC_UPDATE_* come from the
+  // 15-min self-update alarm and are kept last in the chain so the store
+  // build can strip them without orphaning an `else if`.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
+      if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+        this._handleDomRedeem(msg.data);
+      } else if (msg?.type === 'TW_HIGHLIGHTS') {
+        this._handleHighlights(msg);
+      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
+        this._handleCredits(msg.data);
+      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
+        // Twitch fired a floating "+N" reward animation — content script
+        // caught it from DOM mutations. We just flash the amount.
+        this._flashPointsDelta(msg.amount);
+      // UC_STORE_STRIP_START: self-update broadcasts
+      } else if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
         const wrap = document.getElementById('hdr-logo-wrap');
         const num = document.getElementById('ut-version-num');
         if (!wrap) return;
@@ -2593,20 +2791,12 @@ class UnityChat {
         if (wrap) {
           wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
         }
-      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
-        this._handleDomRedeem(msg.data);
-      } else if (msg?.type === 'TW_HIGHLIGHTS') {
-        this._handleHighlights(msg);
-      } else if (msg?.type === 'TW_CREDITS' && msg.data) {
-        this._handleCredits(msg.data);
-      } else if (msg?.type === 'TW_POINTS_DELTA' && msg.amount) {
-        // Twitch fired a floating "+N" reward animation — content script
-        // caught it from DOM mutations. We just flash the amount.
-        this._flashPointsDelta(msg.amount);
+      // UC_STORE_STRIP_END
       }
     });
   }
 
+  // UC_STORE_STRIP_START: version compare, only used by the self-update check
   _isNewerVersion(remote, current) {
     const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
     const a = parse(remote);
@@ -2620,6 +2810,7 @@ class UnityChat {
     }
     return false;
   }
+  // UC_STORE_STRIP_END
 
   // ---- Config ----
 
@@ -2683,11 +2874,7 @@ class UnityChat {
     }
     // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
-      this.msgInput.style.height = 'auto';
-      const max = 250;
-      const h = Math.min(this.msgInput.scrollHeight, max);
-      this.msgInput.style.height = h + 'px';
-      this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+      this._autoResizeInput();
 
       // Auto-trigger @username autocomplete while typing
       const text = this.msgInput.value;
@@ -2697,19 +2884,7 @@ class UnityChat {
       while (ws > 0 && text[ws - 1] !== ' ') ws--;
       const partial = text.substring(ws, pos);
       if (partial.startsWith('@') && partial.length >= 2) {
-        const prefix = partial.substring(1).toLowerCase();
-        const seen = new Set();
-        const matches = [...this._chatUsers.entries()]
-          .filter(([key, u]) => {
-            if (key.includes(':')) return false;
-            const name = u.name.replace(/^@/, '').toLowerCase();
-            if (seen.has(name)) return false;
-            if (!name.startsWith(prefix)) return false;
-            seen.add(name);
-            return true;
-          })
-          .sort(([, a], [, b]) => a.name.localeCompare(b.name))
-          .map(([, u]) => '@' + u.name.replace(/^@/, ''));
+        const matches = this._acUserMatches(partial.substring(1).toLowerCase());
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
           this._acRender();
@@ -2739,6 +2914,7 @@ class UnityChat {
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
           'redeem', 'highlight',
+          'milestone', 'streak',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
@@ -2910,6 +3086,7 @@ class UnityChat {
       this.msgCount = 0;
     });
 
+    // UC_STORE_STRIP_START: streamer OAuth entry point (not shipped to the store)
     // "Jsem streamer" button — opens streamer.html in a new tab.
     // Stop propagation so click doesn't toggle the <details> section.
     const imStreamerBtn = $('btn-im-streamer');
@@ -2920,6 +3097,7 @@ class UnityChat {
         chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
       });
     }
+    // UC_STORE_STRIP_END
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {
@@ -3026,31 +3204,53 @@ class UnityChat {
           return;
         }
         if (e.key === 'ArrowRight') {
-          // Potvrdit výběr - kurzor je už za doplněným textem, jen zavřít suggest
+          // Potvrdit výběr — kurzor je už za doplněným textem, jen zavřít
+          // suggest list.
           e.preventDefault();
           this._acHide();
           return;
         }
-      }
-      // Message history (ArrowUp/Down when no autocomplete is active)
-      if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
-        if (this._msgHistoryIdx !== -1) {
-          e.preventDefault();
-          if (this._msgHistoryIdx > 0) this._msgHistoryIdx--;
-          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-          this.msgInput.setSelectionRange(0, 0);
-          return;
+        if (e.key === 'Enter') {
+          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern).
+          // Pro emote / !cmd / /uc autocomplete propadne dolů na _sendMessage
+          // (původní funkcionalita — Tab/ArrowRight už emote vložilo,
+          // Enter logicky odešle zprávu).
+          const isUserAc = this._ac.kind === 'user'
+            || this._ac.matches[0]?.startsWith?.('@');
+          if (isUserAc) {
+            e.preventDefault();
+            this._acHide();
+            return;
+          }
+          // Fall through — emote/cmd autocomplete: Enter sends message
         }
-        if (this._isCursorOnFirstLine()) {
-          e.preventDefault();
+      }
+      // Message history (ArrowUp/Down). Multi-line draft / history zpráva:
+      // šipka prvně posouvá kurzor v textu, teprve při dosažení okraje
+      // (první řádek pro Up, poslední pro Down) přepíná historii.
+      if (e.key === 'ArrowUp' && !this._ac && this._msgHistory.length) {
+        const idxBefore = this._msgHistoryIdx;
+        const isFirst = this._isCursorOnFirstLine();
+        this._logCursor({ key: 'ArrowUp', idxBefore, isFirst, willSwitch: isFirst, sel: this.msgInput.selectionStart });
+        if (!isFirst) return; // native cursor-up
+        e.preventDefault();
+        if (this._msgHistoryIdx === -1) {
           this._msgHistoryDraft = this.msgInput.value;
           this._msgHistoryIdx = this._msgHistory.length - 1;
-          this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
-          this.msgInput.setSelectionRange(0, 0);
-          return;
+        } else if (this._msgHistoryIdx > 0) {
+          this._msgHistoryIdx--;
         }
+        this.msgInput.value = this._msgHistory[this._msgHistoryIdx];
+        this._autoResizeInput();
+        this.msgInput.setSelectionRange(0, 0);
+        this._logCursor({ key: 'ArrowUp', phase: 'after', idxAfter: this._msgHistoryIdx, valueLen: this.msgInput.value.length, sel: this.msgInput.selectionStart });
+        return;
       }
       if (e.key === 'ArrowDown' && !this._ac && this._msgHistoryIdx !== -1) {
+        const idxBefore = this._msgHistoryIdx;
+        const isLast = this._isCursorOnLastLine();
+        this._logCursor({ key: 'ArrowDown', idxBefore, isLast, willSwitch: isLast, sel: this.msgInput.selectionEnd });
+        if (!isLast) return; // native cursor-down
         e.preventDefault();
         if (this._msgHistoryIdx < this._msgHistory.length - 1) {
           this._msgHistoryIdx++;
@@ -3059,8 +3259,10 @@ class UnityChat {
           this._msgHistoryIdx = -1;
           this.msgInput.value = this._msgHistoryDraft;
         }
+        this._autoResizeInput();
         const len = this.msgInput.value.length;
         this.msgInput.setSelectionRange(len, len);
+        this._logCursor({ key: 'ArrowDown', phase: 'after', idxAfter: this._msgHistoryIdx, valueLen: this.msgInput.value.length, sel: this.msgInput.selectionEnd });
         return;
       }
       if (e.key === 'Escape') {
@@ -3128,20 +3330,7 @@ class UnityChat {
     let matches;
     if (partial.startsWith('@')) {
       // @username autocomplete (@ samotné = všichni uživatelé)
-      // Deduplicate by display name (map has both plain + platform:username keys)
-      const prefix = partial.substring(1).toLowerCase();
-      const seen = new Set();
-      matches = [...this._chatUsers.entries()]
-        .filter(([key, u]) => {
-          if (key.includes(':')) return false;
-          const name = u.name.replace(/^@/, '').toLowerCase();
-          if (seen.has(name)) return false;
-          if (prefix && !name.startsWith(prefix)) return false;
-          seen.add(name);
-          return true;
-        })
-        .sort(([, a], [, b]) => a.name.localeCompare(b.name))
-        .map(([, u]) => '@' + u.name.replace(/^@/, ''));
+      matches = this._acUserMatches(partial.substring(1).toLowerCase());
     } else {
       // Emote autocomplete — honors the per-session "Fulltext" toggle
       matches = this.emotes.findCompletions(partial, { fulltext: this._acFulltext });
@@ -3181,11 +3370,45 @@ class UnityChat {
     this._acRender();
   }
 
+  // Návrhy pro @autocomplete. Uživatel s UC přezdívkou se nabízí pod ní —
+  // skutečný login nikde v panelu nevidí, takže by ho neuměl napsat. Zpátky
+  // na login se mention přeloží až při odeslání (_resolveNicknameMentions).
+  // Mapa drží každého pod dvěma klíči (plain + platform:username), proto se
+  // berou jen plain klíče a deduplikuje se podle zobrazeného jména.
+  _acUserMatches(prefix) {
+    const seen = new Set();
+    const names = [];
+    for (const [key, u] of this._chatUsers) {
+      if (key.includes(':')) continue;
+      const login = (u.name || '').replace(/^@/, '');
+      if (!login) continue;
+      const display = this.nicknames?.getNickname(u.platform, login) || login;
+      const lower = display.toLowerCase();
+      if (seen.has(lower)) continue;
+      // Hledá se i podle skutečného loginu — kdo ho zná (třeba z tooltipu),
+      // najde uživatele i tak.
+      if (prefix && !lower.startsWith(prefix) && !login.toLowerCase().startsWith(prefix)) continue;
+      seen.add(lower);
+      names.push(display);
+    }
+    return names.sort((a, b) => a.localeCompare(b)).map((n) => '@' + n);
+  }
+
+  // Položka v seznamu může nést přezdívku — do _chatUsers se pak dostaneme
+  // až přes skutečný login.
+  _acUserEntry(atName) {
+    const name = atName.replace(/^@/, '').toLowerCase();
+    const direct = this._chatUsers.get(name);
+    if (direct) return direct;
+    const login = this.nicknames?.resolveNickname(name);
+    return login ? this._chatUsers.get(login.toLowerCase()) : null;
+  }
+
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
     if (name.startsWith('@')) {
-      const u = this._chatUsers.get(name.substring(1).toLowerCase());
+      const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
     }
     if (this.emotes.channel7tv.has(name)) return '7TV';
@@ -3240,8 +3463,10 @@ class UnityChat {
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
-        const u = this._chatUsers.get(name.substring(1).toLowerCase());
-        const col = this.emotes._sc(u?.color) || '#ccc';
+        const u = this._acUserEntry(name);
+        const col = this.emotes._sc(
+          this.nicknames?.getColor(u?.platform, u?.name) || u?.color
+        ) || '#ccc';
         html += `<span class="es-dot" style="background:${col}"></span>`;
       } else {
         // Emote: obrázek
@@ -3307,8 +3532,10 @@ class UnityChat {
 
   _isCursorOnFirstLine() {
     const ta = this.msgInput;
-    if (ta.selectionStart === 0) return true;
-    if (!ta.value) return true;
+    const dbg = { fn: 'isFirst', selStart: ta.selectionStart, valueLen: ta.value.length };
+    if (ta.selectionStart === 0) { this._logCursor({ ...dbg, shortcut: 'sel===0', result: true }); return true; }
+    if (!ta.value) { this._logCursor({ ...dbg, shortcut: 'empty', result: true }); return true; }
+    if (ta.value.substring(0, ta.selectionStart).includes('\n')) { this._logCursor({ ...dbg, shortcut: 'hasNL', result: false }); return false; }
     if (!this._lineMirror) {
       this._lineMirror = document.createElement('div');
       this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
@@ -3324,7 +3551,74 @@ class UnityChat {
     m.textContent = 'X';
     const lineH = m.offsetHeight;
     m.textContent = ta.value.substring(0, ta.selectionStart);
-    return m.offsetHeight <= lineH;
+    const subH = m.offsetHeight;
+    const result = subH <= lineH;
+    this._logCursor({
+      ...dbg, shortcut: 'mirror', result,
+      lineH, subH,
+      taClientW: ta.clientWidth,
+      mirrorW: m.style.width,
+      mirrorPad: m.style.padding,
+      mirrorBox: m.style.boxSizing,
+      cssPadding: cs.padding,
+      cssFont: cs.font,
+      substr: ta.value.substring(0, ta.selectionStart).slice(0, 60),
+    });
+    return result;
+  }
+
+  _logCursor(data) {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'UC_LOG', tag: 'CursorLine',
+        text: JSON.stringify(data),
+      }).catch(() => {});
+    } catch {}
+  }
+
+  _autoResizeInput() {
+    // Adjust textarea height to fit content. Cap at 250px (matches the
+    // 'input' event handler that fires on user typing). Programmatic
+    // value changes (history nav, send clear, /uc commands) MUST call
+    // this — setting .value doesn't fire 'input' so the listener
+    // wouldn't run on its own.
+    this.msgInput.style.height = 'auto';
+    const max = 250;
+    const h = Math.min(this.msgInput.scrollHeight, max);
+    this.msgInput.style.height = h + 'px';
+    this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+  }
+
+  _isCursorOnLastLine() {
+    const ta = this.msgInput;
+    const dbg = { fn: 'isLast', selEnd: ta.selectionEnd, valueLen: ta.value.length };
+    if (!ta.value) { this._logCursor({ ...dbg, shortcut: 'empty', result: true }); return true; }
+    if (ta.selectionEnd >= ta.value.length) { this._logCursor({ ...dbg, shortcut: 'sel===len', result: true }); return true; }
+    if (ta.value.substring(ta.selectionEnd).includes('\n')) { this._logCursor({ ...dbg, shortcut: 'hasNL', result: false }); return false; }
+    if (!this._lineMirror) {
+      this._lineMirror = document.createElement('div');
+      this._lineMirror.style.cssText = 'position:absolute;visibility:hidden;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;';
+      document.body.appendChild(this._lineMirror);
+    }
+    const m = this._lineMirror;
+    const cs = getComputedStyle(ta);
+    m.style.width = ta.clientWidth + 'px';
+    m.style.font = cs.font;
+    m.style.padding = cs.padding;
+    m.style.boxSizing = cs.boxSizing;
+    m.style.letterSpacing = cs.letterSpacing;
+    m.textContent = 'X';
+    const lineH = m.offsetHeight;
+    m.textContent = ta.value.substring(ta.selectionEnd);
+    const subH = m.offsetHeight;
+    const result = subH <= lineH;
+    this._logCursor({
+      ...dbg, shortcut: 'mirror', result,
+      lineH, subH,
+      taClientW: ta.clientWidth,
+      substr: ta.value.substring(ta.selectionEnd).slice(0, 60),
+    });
+    return result;
   }
 
   // ---- Odesílání zpráv ----
@@ -3347,9 +3641,74 @@ class UnityChat {
     }
   }
 
+  // Najít stream tab pro detekci platformy / odesílání zpráv. Aktivní tab má
+  // přednost (dosavadní chování). Když aktivní tab není platform stránka —
+  // typicky UnityChat otevřený jako tab v Opera split screenu — fallback
+  // URL-scan přes všechny taby: bere jen skutečné channel stránky, preferuje
+  // nakonfigurovaný kanál a sticky drží naposledy aktivní platformu.
+  // platform = omezit na konkrétní platformu (send path), null = libovolná.
+  async _findStreamTab(platform = null) {
+    const active = await this._getActiveBrowserTab();
+    const activeP = active?.url ? this._detectPlatformFromUrl(active.url) : null;
+    if (active && activeP && (!platform || activeP === platform)) {
+      return active;
+    }
+
+    let tabs;
+    try { tabs = await chrome.tabs.query({}); } catch { return null; }
+
+    const order = ['twitch', 'kick', 'youtube'];
+    let wanted;
+    if (platform) {
+      wanted = [platform];
+    } else if (this.activePlatform && order.includes(this.activePlatform)) {
+      wanted = [this.activePlatform, ...order.filter((p) => p !== this.activePlatform)];
+    } else {
+      wanted = order;
+    }
+
+    for (const p of wanted) {
+      if (!this.config[p]) continue;
+      const candidates = [];
+      for (const t of tabs) {
+        if (!t.url || t.id == null) continue;
+        const handle = this._parseChannelFromUrl(t.url, p);
+        let ok = !!handle;
+        // YouTube live běží na /watch — _parseChannelFromUrl umí jen @handle
+        // stránky, watch stránky přijmout bez handle (content script si poradí).
+        if (!ok && p === 'youtube') {
+          try {
+            const u = new URL(t.url);
+            ok = u.hostname.endsWith('youtube.com')
+              && (u.pathname === '/watch' || u.pathname.startsWith('/live'));
+          } catch {}
+        }
+        if (ok) candidates.push({ tab: t, handle: handle || null });
+      }
+      if (!candidates.length) continue;
+      const configured = this._getConfiguredHandle(p);
+      const match = candidates.find((c) => configured && c.handle === configured)
+        || candidates[0];
+      this._streamTabLog(`scan hit p=${p} handle=${match.handle || '?'} cfg=${configured || '—'} tabId=${match.tab.id} cand=${candidates.length}`);
+      return match.tab;
+    }
+    this._streamTabLog(`scan miss platform=${platform || 'any'} active=${(active?.url || '—').slice(0, 60)}`);
+    return null;
+  }
+
+  // Rate-limited StreamTab diagnostic (fallback scan běží ve 3s loopu —
+  // stejná zpráva se opakuje max 1× za 15 s).
+  _streamTabLog(text) {
+    const now = Date.now();
+    if (this._streamTabLogPrev === text && now - (this._streamTabLogLast || 0) < 15000) return;
+    this._streamTabLogLast = now;
+    this._streamTabLogPrev = text;
+    chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'StreamTab', text }).catch(() => {});
+  }
+
   async _detectActivePlatform() {
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab();
       if (!tab) { this._setActivePlatform(null); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
@@ -4082,7 +4441,7 @@ class UnityChat {
     setTimeout(() => { this._ucDebounce = false; }, 2000);
 
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab(platform);
       if (!tab) return;
 
       chrome.runtime.sendMessage({
@@ -4129,6 +4488,24 @@ class UnityChat {
     if (el) el.classList.add('hidden');
   }
 
+  // @přezdívka → @login pro odchozí text. Záměrně širší než mention regex v
+  // _processMentions ([A-Za-z0-9_]), aby prošly i přezdívky s diakritikou;
+  // koncová interpunkce se z názvu odřízne a vrátí zpět. Když se přezdívka
+  // nenajde, text zůstává beze změny.
+  _resolveNicknameMentions(text, platform) {
+    if (!text.includes('@') || !this.nicknames) return text;
+    return text.replace(/(^|[^A-Za-z0-9_@])@([^\s@]{2,30})/g, (m, pre, raw) => {
+      const trail = raw.match(/[.,!?;:]+$/)?.[0] || '';
+      const name = trail ? raw.slice(0, -trail.length) : raw;
+      const login = this.nicknames.resolveNickname(name, platform);
+      if (!login) return m;
+      // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
+      // loginu tak, jak dorazil z chatu, když ho známe.
+      const cased = (this._chatUsers?.get(login)?.name || login).replace(/^@/, '');
+      return `${pre}@${cased}${trail}`;
+    });
+  }
+
   async _sendMessage() {
     const text = this.msgInput.value.trim();
     if (!text || !this.activePlatform) return;
@@ -4145,7 +4522,7 @@ class UnityChat {
     // channel for this platform, refuse to send. Auto-switch should normally
     // fix this transparently — this is a safety net for the transient window.
     try {
-      const tab = await this._getActiveBrowserTab();
+      const tab = await this._findStreamTab(this.activePlatform);
       if (tab?.url) {
         const tabHandle = this._parseChannelFromUrl(tab.url, this.activePlatform);
         const configured = this._getConfiguredHandle(this.activePlatform);
@@ -4157,8 +4534,13 @@ class UnityChat {
     } catch {}
 
     const isCmd = text.startsWith('!') || text.startsWith('/');
-    const markedText = isCmd ? text : text + ' ' + UC_MARKER;
     const platform = this.activePlatform;
+    // Autocomplete vkládá UC přezdívku (skutečný login uživatel nevidí), do
+    // chatu ale musí odejít login — jinak zmíněný nedostane upozornění a lidé
+    // mimo UnityChat nepoznají, o koho jde. V panelu se @přezdívka zobrazí
+    // zpátky přes _processMentions.
+    const wireText = this._resolveNicknameMentions(text, platform);
+    const markedText = isCmd ? wireText : wireText + ' ' + UC_MARKER;
     const reply = this._reply ? { ...this._reply } : null;
 
     // Save to message history (max 50)
@@ -4184,7 +4566,8 @@ class UnityChat {
       const at = reply.username.startsWith('@') ? reply.username : `@${reply.username}`;
       if (!displayText.startsWith(at)) displayText = `${at} ${displayText}`;
     }
-    this._lastSentText = text;
+    // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
+    this._lastSentText = wireText;
     const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
     this._addMessage({
       id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -4201,8 +4584,8 @@ class UnityChat {
 
     // Send in background (don't block UI)
     try {
-      const tab = await this._getActiveBrowserTab();
-      if (!tab) { this._sys('Žádný aktivní tab'); return; }
+      const tab = await this._findStreamTab(platform);
+      if (!tab) { this._sys(`Nenalezen otevřený stream tab (${platform})`); return; }
 
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
@@ -4274,6 +4657,26 @@ class UnityChat {
       case 'sus':
         this._addMessage({ ...base, isSus: true, color: '#ffc107' });
         break;
+      case 'milestone':
+      case 'streak': {
+        // /uc milestone [streakCount] [points] [body]
+        // Example: /uc milestone 5 450 Wow that was very cool!
+        const argv = text.trim().split(/\s+/);
+        const value = parseInt(argv[0], 10) || 5;
+        const points = parseInt(argv[1], 10) || 450;
+        const body = argv.slice(2).join(' ') || 'Wow that was very cool!';
+        this._addMessage({
+          ...base,
+          username: mockUser,
+          message: body,
+          isMilestone: true,
+          milestoneCategory: 'watch-streak',
+          milestoneValue: value,
+          milestonePoints: points,
+          color: '#00b35a',
+        });
+        break;
+      }
       case 'announcement':
       case 'ann': {
         // /uc announcement [PRIMARY|BLUE|GREEN|ORANGE|PURPLE] [body]
@@ -5167,6 +5570,7 @@ class UnityChat {
       isSubEvent: !!m.isSubEvent,
       isGiftBundle: !!m.isGiftBundle,
       isSubGift: !!m.isSubGift,
+      isMilestone: !!m.isMilestone,
       isAction: !!m.isAction,
       scraped: !!m.scraped,
       optimistic: !!m._optimistic,
@@ -6234,6 +6638,83 @@ class UnityChat {
     el.appendChild(body);
   }
 
+  _renderMilestoneEvent(el, msg) {
+    el.classList.add('milestone-event');
+    if (msg.milestoneCategory) {
+      el.classList.add(`milestone-${msg.milestoneCategory}`);
+    }
+    // Flame icon (Twitch's watch-streak symbol — same path Twitch uses)
+    const icon = document.createElement('span');
+    icon.className = 'milestone-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 20 20" width="20" height="20" fill="currentColor">'
+      + '<path fill-rule="evenodd" d="M11 4.5 9 2 4.8 6.9A7.48 7.48 0 0 0 3 11.77C3 15.2 5.8 18 9.23 18h1.65A6.12 6.12 0 0 0 17 11.88c0-1.86-.65-3.66-1.84-5.1L12 3l-1 1.5ZM6.32 8.2 9 5l2 2.5L12 6l1.62 2.07A5.96 5.96 0 0 1 15 11.88c0 2.08-1.55 3.8-3.56 4.08.36-.47.56-1.05.56-1.66 0-.52-.18-1.02-.5-1.43L10 11l-1.5 1.87c-.32.4-.5.91-.5 1.43 0 .6.2 1.18.54 1.64A4.23 4.23 0 0 1 5 11.77c0-1.31.47-2.58 1.32-3.57Z" clip-rule="evenodd"/>'
+      + '</svg>';
+    el.appendChild(icon);
+
+    const body = document.createElement('div');
+    body.className = 'milestone-body';
+
+    // Header row: username + channel-points pill
+    const header = document.createElement('div');
+    header.className = 'milestone-header';
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = msg.username;
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    header.appendChild(un);
+    if (msg.milestonePoints > 0) {
+      const points = document.createElement('span');
+      points.className = 'milestone-points';
+      points.innerHTML = '+ <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">'
+        + '<path d="M10 6a4 4 0 014 4h-2a2 2 0 00-2-2V6z"/>'
+        + '<path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-2 0a6 6 0 11-12 0 6 6 0 0112 0z" clip-rule="evenodd"/>'
+        + '</svg> ';
+      points.appendChild(document.createTextNode(String(msg.milestonePoints)));
+      header.appendChild(points);
+    }
+    body.appendChild(header);
+
+    // Subtitle line — category-specific copy
+    const sub = document.createElement('div');
+    sub.className = 'milestone-line';
+    if (msg.milestoneCategory === 'watch-streak') {
+      const label = document.createElement('strong');
+      label.textContent = 'Watch Streak Reached!';
+      sub.appendChild(label);
+      sub.appendChild(document.createTextNode(`: ${msg.username} is currently on a `));
+      const v = document.createElement('strong');
+      v.textContent = `${msg.milestoneValue}-stream streak`;
+      sub.appendChild(v);
+      sub.appendChild(document.createTextNode('!'));
+    } else {
+      // Generic fallback for unknown categories — Twitch may add new ones.
+      const label = document.createElement('strong');
+      label.textContent = 'Milestone Reached!';
+      sub.appendChild(label);
+      sub.appendChild(document.createTextNode(`: ${msg.username} hit `));
+      const v = document.createElement('strong');
+      v.textContent = String(msg.milestoneValue || msg.milestoneCategory);
+      sub.appendChild(v);
+    }
+    body.appendChild(sub);
+
+    // Optional attached chat message
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'milestone-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
   _renderRedeemEvent(el, msg) {
     const icon = document.createElement('span');
     icon.className = 'redeem-icon';
@@ -6309,9 +6790,15 @@ class UnityChat {
         const span = document.createElement('span');
         span.className = 'mention';
         const lname = name.toLowerCase();
-        span.dataset.mentionUser = lname;
-        const entry = this._chatUsers.get(`${platform}:${lname}`)
-          || this._chatUsers.get(lname);
+        // V optimistické zprávě může stát UC přezdívka — autocomplete ji
+        // vkládá a na login se text přeloží až při odeslání. Namapovat zpět,
+        // ať mention dostane barvu a data-mention-user zůstane login.
+        const login = this._chatUsers.has(lname)
+          ? lname
+          : (this.nicknames?.resolveNickname(lname, platform) || lname);
+        span.dataset.mentionUser = login;
+        const entry = this._chatUsers.get(`${platform}:${login}`)
+          || this._chatUsers.get(login);
         const color = entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
@@ -6320,15 +6807,15 @@ class UnityChat {
           // Unknown user — they've been @mentioned but haven't spoken in
           // our session yet. Queue a Twitch color lookup so the mention
           // retroactively gets their real chat color once resolved.
-          this._enqueueTwitchColorLookup(lname);
+          this._enqueueTwitchColorLookup(login);
         }
         // Display nickname if one is set for this user, else raw login name.
         // Raw message body / cache / dedup all use the original @name — only
         // the rendered text switches. data-mention-user stays lowercase login
         // so color retints and scrolls still work.
-        const nick = this.nicknames?.getNickname(platform, lname);
+        const nick = this.nicknames?.getNickname(platform, login);
         span.textContent = '@' + (nick || name);
-        if (nick) span.title = '@' + name;
+        if (nick) span.title = '@' + login;
         frag.appendChild(span);
         last = start + name.length + 1;
       }
@@ -6635,6 +7122,7 @@ class UnityChat {
     const textEmpty = !msgProbe && !hasPlatformContent;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
+      || msg?.isMilestone
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
     if (textEmpty && !isSystem) {
       // Log root-cause clues — which source produced an empty message.
@@ -6919,7 +7407,8 @@ class UnityChat {
     const isGift = !!(msg.isGiftBundle || msg.isSubGift);
     const isSubEvent = !!msg.isSubEvent;
     const isRedeem = !!msg.isRedeem;
-    const isCustomEvent = isGift || isSubEvent || isRedeem;
+    const isMilestone = !!msg.isMilestone;
+    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone;
     if (msg.isGiftBundle) el.classList.add('gift-bundle');
     if (msg.isSubGift) el.classList.add('sub-gift');
     if (isSubEvent) el.classList.add('sub-event');
@@ -6952,6 +7441,8 @@ class UnityChat {
       this._renderSubEvent(el, msg);
     } else if (isRedeem) {
       this._renderRedeemEvent(el, msg);
+    } else if (isMilestone) {
+      this._renderMilestoneEvent(el, msg);
     } else {
 
     // Reply context (Twitch reply-parent tagy)
@@ -7138,7 +7629,8 @@ class UnityChat {
     // announcement). They aren't user messages: copying their body text
     // is meaningless and Twitch IRC won't accept a reply to them.
     const isSystemEvent = msg.isRaid || msg.isAnnouncement
-      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem;
+      || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem
+      || msg.isMilestone;
     if (isSystemEvent) {
       // Skip the entire actions cluster but keep the closing brace structure
       // (we still need to fall through to the unread/append/scroll/cache).
@@ -7501,6 +7993,7 @@ class UnityChat {
           || (typeof m.kickContent === 'string' && m.kickContent.trim().length > 0);
         const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
           || m.isGiftBundle || m.isSubGift || m.isRedeem
+          || m.isMilestone
           || m.isHighlight || m._cleared || m.isAction;
         return body || platformContent || isSystem;
       });
