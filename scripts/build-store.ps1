@@ -37,7 +37,9 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------- paths ----
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $srcDir   = Join-Path $repoRoot 'extension'
-if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'store\build' }
+# Dva segmenty schvalne: 'store\build' by v pwsh na Linuxu (CI runner) vzniklo
+# jako jediny adresar s backslashem v nazvu misto vnoreneho.
+if (-not $OutDir) { $OutDir = Join-Path (Join-Path $repoRoot 'store') 'build' }
 $unpacked = Join-Path $OutDir 'unpacked'
 
 if (-not (Test-Path $srcDir)) { throw "Source folder not found: $srcDir" }

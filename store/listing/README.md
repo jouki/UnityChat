@@ -99,6 +99,20 @@ e-mail vydavatele. Dashboard to neřekne sám od sebe — důvod vypíše až
 odkaz **„Kde mohu položku odeslat?"** vedle tlačítka, případně levé menu
 → *Sestavení → Stav*.
 
+### Odkaz pod názvem položky (Oficiální adresa URL)
+
+Rozbalovátko nabízí **jen domény ověřené v Search Console**, konkrétní cestu
+tam zadat nelze. Prefix property `https://jouki.cz/UnityChat/` se v Search
+Console ověří automaticky (doménový DNS TXT ji pokrývá), ale v CWS dropdownu
+se neobjeví — ověřeno 18. 9. 2026.
+
+Řešení: v `nginx.conf` repa `jouki/jouki.cz` je v `location = /` redirect
+podle `Referer` z `chromewebstore.google.com` na `/UnityChat`. Klik z listingu
+tak končí na install stránce, root zůstává pro ostatní beze změny.
+
+**Adresa URL domovské stránky** je naproti tomu volný text a zobrazuje se
+v sekci Podrobnosti — tam patří `https://jouki.cz/UnityChat`.
+
 ### Limity polí (naražené v praxi)
 
 | Pole | Limit |

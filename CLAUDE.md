@@ -549,7 +549,23 @@ COPY --from=zipper unitychat.zip + manifest.json → /download/...
 location ~* ^/unitychat/?$   # case-insensitive → /unitychat/index.html
 location /unitychat/          # static files
 location = /download/unitychat.zip  # Content-Disposition: attachment
+location = /                  # root + store redirect (viz níže)
 ```
+
+⚠️ **Store redirect na rootu — nemazat.** `location = /` obsahuje podmínku:
+návštěvník s `Referer: https://chromewebstore.google.com/...` dostane 302 na
+`https://jouki.cz/UnityChat`, ostatní vidí osobní root.
+
+Důvod: odkaz pod názvem položky ve store je „Oficiální adresa URL" a její
+rozbalovátko nabízí **jen domény ověřené v Search Console, ne konkrétní cesty**.
+Prefix property `https://jouki.cz/UnityChat/` se sice v Search Console ověří
+(automaticky, díky doménovému DNS TXT), ale do CWS dropdownu se nepropíše.
+Redirect je způsob, jak ten odkaz stejně dovést na install stránku — jinak
+klikající ze storu přistál na „under construction" rozcestníku.
+
+Funguje díky tomu, že CWS posílá `<meta name="referrer" content="origin">`.
+URL v `return` musí být **absolutní https** — nginx za Coolify proxy vidí
+`$scheme = http`, takže relativní cesta přidá hop navíc (ověřeno curl-em).
 
 ### Preview mockup (preview.html)
 Interaktivní demo v iframe simulující reálný UnityChat panel:
@@ -803,6 +819,39 @@ Types: `fix`, `feat`, `refactor`, `chore`, `docs`, `debug` (jen instrumentace), 
 - Dev branch se NIKDY nemaže při merge.
 - PR merge: `gh pr merge <num> --merge --admin` — vždy `--merge`, NIKDY `--squash` ani `--rebase`.
 
+### ⚠️ Release = DVA cíle, ne jeden
+
+> **Od 18. 9. 2026 to řeší automatika.** Push do `master`, který mění
+> `extension/manifest.json`, spustí workflow `.github/workflows/cws-release.yml`:
+> sestaví store balíček, nahraje ho a **odele ke kontrole**. Není na co
+> zapomínat — ale když workflow spadne nebo ho někdo vypne, platí níže
+> popsaný ruční postup.
+>
+> **Stav položky kdykoli zjistíš:**
+> ```bash
+> CWS_PUBLISHER_ID=<id> node scripts/cws.mjs status --key <cesta k JSON klíči>
+> ```
+> Vypíše publikovanou verzi, verzi čekající na review a případná varování
+> o porušení policy. Klíč má user v Bitwardenu (položka „UnityChat — CWS
+> service account"), v CI je v secrets `CWS_SERVICE_ACCOUNT` + `CWS_PUBLISHER_ID`.
+
+UnityChat má **dvě distribuční cesty** a release není hotový, dokud nejsou
+obě na stejné verzi:
+
+| Cíl | Jak | Kdo to dostane |
+|---|---|---|
+| **jouki.cz ZIP** | PR `dev → master`, Coolify rebuild | Opera, dev větev, ruční instalace |
+| **Chrome Web Store** | `build-store.ps1` → dashboard „Package → Upload new package" → Submit | Chrome / Edge / Brave — **většina uživatelů** |
+
+**Když uděláš master release, udělej i upload do storu.** Jinak dostanou
+uživatelé ze storu starší build než ti, co si stahují ZIP — a protože store
+verze se aktualizuje sama, budou na staré verzi, aniž by o tom věděli.
+
+Store upload má vlastní review (u v3.38.59 trvala 2 dny). Verze v manifestu
+musí být vyšší než ta publikovaná, jinak ji store odmítne. Listing texty a
+privacy odpovědi se nemění — jen když se změní chování rozšíření, viz
+`store/listing/privacy-disclosure.md`.
+
 ### Release flow (master deploy)
 
 ```bash
@@ -823,6 +872,15 @@ for i in 1 2 3 4 5 6 7 8; do
   [ "$V" = "X.Y.Z" ] && { echo "DEPLOYED"; break; }
   sleep 15
 done
+```
+
+```bash
+# 5. Chrome Web Store — dělá workflow cws-release.yml samé po merge do master.
+#    Kontrola, že to opravdu odešlo:
+CWS_PUBLISHER_ID=<id> node scripts/cws.mjs status --key <klíč>
+#    Ruční záloha, kdyby workflow selhal:
+#    powershell -File scripts/build-store.ps1
+#    CWS_PUBLISHER_ID=<id> node scripts/cws.mjs release store/build/unitychat-store-vX.Y.Z.zip --key <klíč>
 ```
 
 ⚠️ **Coolify gotcha (`feedback_coolify_force1.md`):** trigger-jouki-cz.yml **musí** mít `force=1` v Coolify URL, jinak Coolify dedupuje (trackuje jouki.cz repo, ne UnityChat) a build se nespustí.
