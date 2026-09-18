@@ -549,7 +549,23 @@ COPY --from=zipper unitychat.zip + manifest.json → /download/...
 location ~* ^/unitychat/?$   # case-insensitive → /unitychat/index.html
 location /unitychat/          # static files
 location = /download/unitychat.zip  # Content-Disposition: attachment
+location = /                  # root + store redirect (viz níže)
 ```
+
+⚠️ **Store redirect na rootu — nemazat.** `location = /` obsahuje podmínku:
+návštěvník s `Referer: https://chromewebstore.google.com/...` dostane 302 na
+`https://jouki.cz/UnityChat`, ostatní vidí osobní root.
+
+Důvod: odkaz pod názvem položky ve store je „Oficiální adresa URL" a její
+rozbalovátko nabízí **jen domény ověřené v Search Console, ne konkrétní cesty**.
+Prefix property `https://jouki.cz/UnityChat/` se sice v Search Console ověří
+(automaticky, díky doménovému DNS TXT), ale do CWS dropdownu se nepropíše.
+Redirect je způsob, jak ten odkaz stejně dovést na install stránku — jinak
+klikající ze storu přistál na „under construction" rozcestníku.
+
+Funguje díky tomu, že CWS posílá `<meta name="referrer" content="origin">`.
+URL v `return` musí být **absolutní https** — nginx za Coolify proxy vidí
+`$scheme = http`, takže relativní cesta přidá hop navíc (ověřeno curl-em).
 
 ### Preview mockup (preview.html)
 Interaktivní demo v iframe simulující reálný UnityChat panel:
