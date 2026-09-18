@@ -803,6 +803,25 @@ Types: `fix`, `feat`, `refactor`, `chore`, `docs`, `debug` (jen instrumentace), 
 - Dev branch se NIKDY nemaže při merge.
 - PR merge: `gh pr merge <num> --merge --admin` — vždy `--merge`, NIKDY `--squash` ani `--rebase`.
 
+### ⚠️ Release = DVA cíle, ne jeden
+
+Od publikace v Chrome Web Store (18. 9. 2026) má UnityChat **dvě distribuční
+cesty** a release není hotový, dokud nejsou obě na stejné verzi:
+
+| Cíl | Jak | Kdo to dostane |
+|---|---|---|
+| **jouki.cz ZIP** | PR `dev → master`, Coolify rebuild | Opera, dev větev, ruční instalace |
+| **Chrome Web Store** | `build-store.ps1` → dashboard „Package → Upload new package" → Submit | Chrome / Edge / Brave — **většina uživatelů** |
+
+**Když uděláš master release, udělej i upload do storu.** Jinak dostanou
+uživatelé ze storu starší build než ti, co si stahují ZIP — a protože store
+verze se aktualizuje sama, budou na staré verzi, aniž by o tom věděli.
+
+Store upload má vlastní review (u v3.38.59 trvala 2 dny). Verze v manifestu
+musí být vyšší než ta publikovaná, jinak ji store odmítne. Listing texty a
+privacy odpovědi se nemění — jen když se změní chování rozšíření, viz
+`store/listing/privacy-disclosure.md`.
+
 ### Release flow (master deploy)
 
 ```bash
@@ -823,6 +842,13 @@ for i in 1 2 3 4 5 6 7 8; do
   [ "$V" = "X.Y.Z" ] && { echo "DEPLOYED"; break; }
   sleep 15
 done
+```
+
+```powershell
+# 5. Chrome Web Store — NEVYNECHÁVAT
+powershell -ExecutionPolicy Bypass -File scriptsuild-store.ps1
+# → dashboard: Package → Upload new package → store/build/unitychat-store-vX.Y.Z.zip
+# → Odeslat ke kontrole
 ```
 
 ⚠️ **Coolify gotcha (`feedback_coolify_force1.md`):** trigger-jouki-cz.yml **musí** mít `force=1` v Coolify URL, jinak Coolify dedupuje (trackuje jouki.cz repo, ne UnityChat) a build se nespustí.
