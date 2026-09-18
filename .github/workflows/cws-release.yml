@@ -1,0 +1,93 @@
+# Automatický release do Chrome Web Store.
+#
+# Proč: UnityChat se distribuuje dvěma cestami (ZIP z jouki.cz + Chrome Web
+# Store). Když se povýší jen master, uživatelé ze storu zůstanou na staré
+# verzi — a protože se store verze aktualizuje sama a tiše, nemají jak zjistit,
+# že jim něco uteklo. Tenhle workflow zajišťuje, že na upload nejde zapomenout.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   CWS_SERVICE_ACCOUNT  celý obsah JSON klíče service accountu
+#   CWS_PUBLISHER_ID     publisher ID z URL Developer Dashboardu
+#
+# Repo je veřejné, proto workflow běží jen na push do master (do forku se
+# secrets nedostanou a pull_request trigger tu schválně není).
+
+name: Chrome Web Store release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'extension/**'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Odeslat i když se verze nezměnila (upload stejně selže, pokud není vyšší)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # kvůli porovnání verze s předchozím commitem
+
+      - name: Zjistit verzi a jestli se změnila
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Verze v manifestu: $VERSION"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Ruční spuštění s force — pokračuju."
+            exit 0
+          fi
+
+          # Verze z předchozího commitu. Když manifest v předchozím commitu
+          # neexistoval (první push), bereme to jako změnu.
+          PREV=$(git show HEAD~1:extension/manifest.json 2>/dev/null | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version}catch(e){''}" || echo "")
+          echo "Předchozí verze: ${PREV:-—}"
+
+          if [ "$VERSION" = "$PREV" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Verze se nezměnila — upload se přeskakuje."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sestavit store balíček
+        if: steps.version.outputs.changed == 'true'
+        shell: pwsh
+        run: ./scripts/build-store.ps1
+
+      - name: Nahrát a odeslat ke kontrole
+        if: steps.version.outputs.changed == 'true'
+        env:
+          CWS_SERVICE_ACCOUNT: ${{ secrets.CWS_SERVICE_ACCOUNT }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: |
+          node scripts/cws.mjs release "store/build/unitychat-store-v${{ steps.version.outputs.version }}.zip"
+
+      - name: Shrnutí
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Chrome Web Store"
+            echo ""
+            if [ "${{ steps.version.outputs.changed }}" = "true" ]; then
+              echo "Verze **${{ steps.version.outputs.version }}** nahrána a odeslána ke kontrole."
+              echo ""
+              echo "Stav: https://chrome.google.com/webstore/devconsole"
+            else
+              echo "Verze se nezměnila (**${{ steps.version.outputs.version }}**), upload přeskočen."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
