@@ -63,6 +63,16 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Běží vždy, i když se verze nezměnila. Dvojí užitek: ruční spuštění
+      # workflow funguje jako test přístupu k API, a při ostrém releasu je
+      # vidět výchozí stav dřív, než se cokoli nahraje — chyba v klíči tak
+      # nevypadne až uprostřed uploadu.
+      - name: Ověřit přístup k API a vypsat stav položky
+        env:
+          CWS_SERVICE_ACCOUNT: ${{ secrets.CWS_SERVICE_ACCOUNT }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: node scripts/cws.mjs status
+
       - name: Sestavit store balíček
         if: steps.version.outputs.changed == 'true'
         shell: pwsh
