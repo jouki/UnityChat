@@ -25,6 +25,12 @@ const EnvSchema = z.object({
   // Kick OAuth credentials (https://kick.com/settings/developer)
   KICK_CLIENT_ID: z.string().default(''),
   KICK_CLIENT_SECRET: z.string().default(''),
+  // Chrome Web Store API v2 - cte stav polozky pro /store/status (landing page
+  // z nej kresli "nova verze ceka na schvaleni"). Cely JSON klic service
+  // accountu; v Coolify secrets, NIKDY v gitu. Bez nej endpoint vraci 503.
+  CWS_SERVICE_ACCOUNT: z.string().optional(),
+  CWS_PUBLISHER_ID: z.string().default(''),
+  CWS_ITEM_ID: z.string().default('picaeipbmkgcippknkpkbnbgjlkblbnp'),
 });
 
 export const config = EnvSchema.parse(process.env);

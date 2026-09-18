@@ -7,6 +7,7 @@ import userRoutes from './routes/users.js';
 import devDownloadRoutes from './routes/dev-download.js';
 import streamerRoutes from './routes/streamers.js';
 import oauthRoutes from './routes/oauth.js';
+import storeRoutes from './routes/store.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 
 const startedAt = Date.now();
@@ -47,6 +48,7 @@ await app.register(nicknameRoutes);
 await app.register(userRoutes);
 await app.register(streamerRoutes);
 await app.register(oauthRoutes);
+await app.register(storeRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
