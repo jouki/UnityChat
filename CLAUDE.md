@@ -387,10 +387,14 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 
 ## Chrome Web Store (v3.38.58+)
 
-> **Stav k 16. 9. 2026:** položka **odeslána ke kontrole**, verze 3.38.59,
-> item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, viditelnost Veřejné, jazyk CS.
-> Podklady pro dashboard a stav publikace: `store/listing/README.md`.
-> Během review **nenahrávat nový balíček** — restartuje ji to.
+> **✅ PUBLIKOVÁNO 18. 9. 2026** — review prošla za 2 dny. Položka je veřejná
+> a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
+> Verze 3.38.59, item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS.
+> Podklady pro dashboard: `store/listing/README.md`.
+>
+> Další verze se nahrává přes „Package → Upload new package" a jde znovu přes
+> review; **bumpnout `extension/manifest.json`**, store nepřijme stejnou nebo
+> nižší verzi.
 
 `extension/` zůstává jediný dev zdroj (Chrome + Opera, no build step). Store
 balíček je z něj **generovaný derivát**, protože CWS zakazuje update

@@ -56,15 +56,22 @@ konci řetězu.
 | | |
 |---|---|
 | **Item ID** | `picaeipbmkgcippknkpkbnbgjlkblbnp` |
-| **Odesláno ke kontrole** | 16. 9. 2026, verze **3.38.59** |
+| **Stav** | ✅ **PUBLIKOVÁNO 18. 9. 2026** (odesláno 16. 9., review 2 dny) |
+| **Veřejná URL** | https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp |
+| **Verze ve storu** | **3.38.59** |
 | **Viditelnost** | Veřejné, všechny regiony, bez poplatků |
 | **Jazyk listingu** | čeština |
 | **Kategorie** | Komunikace |
 | **Publisher e-mail** | `m.joukal+unitychat@gmail.com` (ověřený) |
 | **Doména** | `jouki.cz` ověřená v Search Console (TXT záznam na GigaServeru) |
 
-Dashboard po odeslání upozornil, že u položek s naplánovaným publikováním
-**vyprší platnost kontroly po 30 dnech**.
+Položka je veřejná i **vyhledatelná** ve storu (ověřeno 18. 9. 2026).
+
+Do pár hodin po publikaci začnou na veřejný kontaktní e-mail chodit **cold
+marketingové nabídky** (analytics dashboardy pro vývojáře rozšíření apod.).
+Nejsou to phishingy, jen scraping veřejného listingu — proto ten `+unitychat`
+alias, jde na ně nasadit jedno filtrovací pravidlo. Metriky, které nabízejí,
+už máš v dashboardu pod *Analytics*.
 
 ## Postup publikace (prošlé kroky)
 
