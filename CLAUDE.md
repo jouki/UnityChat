@@ -821,8 +821,22 @@ Types: `fix`, `feat`, `refactor`, `chore`, `docs`, `debug` (jen instrumentace), 
 
 ### ⚠️ Release = DVA cíle, ne jeden
 
-Od publikace v Chrome Web Store (18. 9. 2026) má UnityChat **dvě distribuční
-cesty** a release není hotový, dokud nejsou obě na stejné verzi:
+> **Od 18. 9. 2026 to řeší automatika.** Push do `master`, který mění
+> `extension/manifest.json`, spustí workflow `.github/workflows/cws-release.yml`:
+> sestaví store balíček, nahraje ho a **odele ke kontrole**. Není na co
+> zapomínat — ale když workflow spadne nebo ho někdo vypne, platí níže
+> popsaný ruční postup.
+>
+> **Stav položky kdykoli zjistíš:**
+> ```bash
+> CWS_PUBLISHER_ID=<id> node scripts/cws.mjs status --key <cesta k JSON klíči>
+> ```
+> Vypíše publikovanou verzi, verzi čekající na review a případná varování
+> o porušení policy. Klíč má user v Bitwardenu (položka „UnityChat — CWS
+> service account"), v CI je v secrets `CWS_SERVICE_ACCOUNT` + `CWS_PUBLISHER_ID`.
+
+UnityChat má **dvě distribuční cesty** a release není hotový, dokud nejsou
+obě na stejné verzi:
 
 | Cíl | Jak | Kdo to dostane |
 |---|---|---|
@@ -860,11 +874,13 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 ```
 
-```powershell
-# 5. Chrome Web Store — NEVYNECHÁVAT
-powershell -ExecutionPolicy Bypass -File scriptsuild-store.ps1
-# → dashboard: Package → Upload new package → store/build/unitychat-store-vX.Y.Z.zip
-# → Odeslat ke kontrole
+```bash
+# 5. Chrome Web Store — dělá workflow cws-release.yml samé po merge do master.
+#    Kontrola, že to opravdu odešlo:
+CWS_PUBLISHER_ID=<id> node scripts/cws.mjs status --key <klíč>
+#    Ruční záloha, kdyby workflow selhal:
+#    powershell -File scripts/build-store.ps1
+#    CWS_PUBLISHER_ID=<id> node scripts/cws.mjs release store/build/unitychat-store-vX.Y.Z.zip --key <klíč>
 ```
 
 ⚠️ **Coolify gotcha (`feedback_coolify_force1.md`):** trigger-jouki-cz.yml **musí** mít `force=1` v Coolify URL, jinak Coolify dedupuje (trackuje jouki.cz repo, ne UnityChat) a build se nespustí.
