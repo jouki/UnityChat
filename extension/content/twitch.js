@@ -827,6 +827,12 @@
       return;
     }
 
+    if (msg.type === 'SEND_CHAT') {
+      sendChat(msg.text)
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
   });
 
   // Resolve rendered username colors from the live Twitch/7TV chat DOM. The
