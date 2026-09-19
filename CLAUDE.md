@@ -368,7 +368,9 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
 > Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
 > **3.39.3 odeslána ke kontrole 19. 9. 2026** (PR #21, workflow cws-release.yml).
-> Podklady pro dashboard: `store/listing/README.md`.
+> Podklady pro dashboard: `store/listing/README.md`; **kompletní záznam všeho,
+> co je v dashboardu zadané (texty, oprávnění, data-use checkboxy, prohlášení):
+> `store/listing/dashboard-state.md`** — při každé změně v dashboardu aktualizovat.
 >
 > Další verze se nahrává přes „Package → Upload new package" a jde znovu přes
 > review; **bumpnout `extension/manifest.json`**, store nepřijme stejnou nebo

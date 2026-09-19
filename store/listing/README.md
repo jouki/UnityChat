@@ -1,5 +1,10 @@
 # Chrome Web Store — podklady pro publikaci
 
+> **Co je reálně zadané v dashboardu (všechna pole, checkboxy, prohlášení):
+> `dashboard-state.md`.** Tenhle README je postup a stav; jednotlivé texty
+> žijí v `description-*.md`, `permissions-justification.md`,
+> `privacy-disclosure.md`.
+
 Tahle složka je **zdroj pravdy pro texty do Developer Dashboardu**. Balíček
 sám se generuje skriptem, nic tady se do ZIPu nedostane.
 
@@ -33,9 +38,9 @@ v3.38.81).
 | | |
 |---|---|
 | **Item ID** | `picaeipbmkgcippknkpkbnbgjlkblbnp` |
-| **Stav** | ✅ **PUBLIKOVÁNO 18. 9. 2026** (odesláno 16. 9., review 2 dny) |
+| **Stav** | ✅ publikováno 18. 9. 2026 (3.38.59, review 2 dny); 3.38.62 publikováno; **3.39.3 ve frontě na review od 19. 9. 2026** |
 | **Veřejná URL** | https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp |
-| **Verze ve storu** | **3.38.59** |
+| **Verze ve storu** | **3.38.62** (čeká 3.39.3) |
 | **Viditelnost** | Veřejné, všechny regiony, bez poplatků |
 | **Jazyk listingu** | čeština |
 | **Kategorie** | Komunikace |
