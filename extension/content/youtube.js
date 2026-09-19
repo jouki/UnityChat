@@ -96,8 +96,14 @@
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
     let _ucEnteredTheater = false;
+    // true = naše layout styly (skrytý chat) jsou na stránce aktivní
+    let _ucLayoutApplied = false;
 
     function hideYtChat() {
+      // Jen na stránce s live chatem. Na běžném videu #secondary nese
+      // doporučená videa — skrýt je znamená „zmizel sidebar" (report 2026-09-19).
+      if (!document.querySelector('ytd-live-chat-frame')) return;
+      _ucLayoutApplied = true;
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
@@ -155,6 +161,7 @@
     }
 
     function showYtChat() {
+      _ucLayoutApplied = false;
       // Restore #chat
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = '';
@@ -185,21 +192,17 @@
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
-    // Periodic layout fix: if #secondary takes up space but chat is not
-    // actually showing live content, collapse it. Catches X button close,
-    // SPA navigation, or any state mismatch.
+    // Periodic layout fix — jen dokud jsou naše styly aktivní (_ucLayoutApplied):
+    // YouTube při SPA navigaci / rerenderu inline styly zahodí, tak je vrátíme.
+    // Dřív interval schovával #secondary vždy, když nebyl aktivní chat iframe —
+    // na běžném videu (bez ytd-live-chat-frame) tím zmizel celý sidebar
+    // s doporučenými videy. Na stránce bez live chatu se styly naopak sundají.
     setInterval(() => {
+      if (!_ucLayoutApplied) return;
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      if (!chatFrame) { showYtChat(); return; }
       const secondary = document.querySelector('#secondary');
-      if (!secondary || secondary.style.display === 'none') return;
-      // If secondary has width but chat iframe is not active → fix layout
-      if (secondary.offsetWidth > 50) {
-        const chatFrame = document.querySelector('ytd-live-chat-frame');
-        const iframe = chatFrame?.querySelector('#chatframe');
-        const isChatActive = iframe && iframe.offsetHeight > 100;
-        if (!isChatActive) {
-          hideYtChat();
-        }
-      }
+      if (secondary && secondary.offsetWidth > 50) hideYtChat();
     }, 1500);
 
     // ---- UnityChat button next to "Otevřít panel" ----
