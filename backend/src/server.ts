@@ -8,6 +8,7 @@ import devDownloadRoutes from './routes/dev-download.js';
 import streamerRoutes from './routes/streamers.js';
 import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
+import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 
 const startedAt = Date.now();
@@ -42,6 +43,9 @@ app.get('/health', async () => ({
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
+  // Diagnostika: bez klice vraci /store/status 503 a landing page nezobrazi
+  // radek o verzi cekajici na schvaleni. Snazsi zjistit odsud nez z kontejneru.
+  cwsConfigured: cwsConfigured(),
 }));
 
 await app.register(nicknameRoutes);
