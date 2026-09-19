@@ -1,12 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractJson, lcr, pickAllChatToken, pickTimedContinuation, YouTubeListener } from './youtube.js';
+import { extractJson, lcr, pickAllChatToken, pickTimedContinuation, pickLiveVideoId, YouTubeListener } from './youtube.js';
 import type { IngestMessage } from './types.js';
 
 test('extractJson: brace counting přes vnořené objekty a stringy se závorkami', () => {
   const html = 'x var ytInitialData = {"a":{"b":"}"},"c":[1,{"d":2}]}; y';
   assert.deepEqual(extractJson(html, 'ytInitialData'), { a: { b: '}' }, c: [1, { d: 2 }] });
   assert.equal(extractJson('nothing', 'ytInitialData'), null);
+});
+
+test('pickLiveVideoId: currentVideoEndpoint má přednost před prvním videoId, offline → null', () => {
+  const html = '"videoId":"OLDVIDEO111" ... "currentVideoEndpoint":{"clickTrackingParams":"x","watchEndpoint":{"videoId":"LIVEVIDEO22","watchEndpointSupportedOnesieConfig":{}}} ... "isLive":true';
+  assert.equal(pickLiveVideoId(html), 'LIVEVIDEO22');
+  assert.equal(pickLiveVideoId('"isLiveNow":true "videoId":"ABCDEFGHIJK"'), 'ABCDEFGHIJK');
+  assert.equal(pickLiveVideoId('"videoId":"ABCDEFGHIJK" "isLive":false'), null);
 });
 
 test('lcr + pickAllChatToken + pickTimedContinuation', () => {

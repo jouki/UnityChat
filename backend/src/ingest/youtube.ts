@@ -5,7 +5,25 @@ import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
 interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; minPollMs?: number }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
-const HEADERS = { 'User-Agent': UA, 'Accept-Language': 'cs,en;q=0.8' };
+// SOCS=CAI: bez něj YouTube ze serverové IP přesměruje na consent stránku
+// (?cbrd=1&ucbcb=1) a vrátí okleštěný HTML.
+const HEADERS = { 'User-Agent': UA, 'Accept-Language': 'cs,en;q=0.8', Cookie: 'SOCS=CAI' };
+
+/**
+ * videoId živého streamu z watch stránky. První "videoId" v HTML NENÍ
+ * spolehlivý — ze serverové IP dostane stránka jiný layout a první výskyt
+ * je klidně starší video (ověřeno 2026-09-19: chat „disabled", zatímco live
+ * bylo jiné id). currentVideoEndpoint je id právě otevřeného videa.
+ */
+export function pickLiveVideoId(html: string): string | null {
+  const isLive = html.includes('"isLive":true') || html.includes('"isLiveNow":true') || html.includes('"isLiveBroadcast":true');
+  if (!isLive) return null;
+  const cur = html.match(/"currentVideoEndpoint":\{[^{}]{0,200}\{[^{}]{0,200}"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/)
+    || html.match(/"currentVideoEndpoint":\{[\s\S]{0,400}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+  if (cur) return cur[1];
+  const first = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+  return first ? first[1] : null;
+}
 
 /** Brace-counting extrakce `var ytInitialData = {...}` — regex selže na vnořených objektech. */
 export function extractJson(html: string, varName: string): unknown {
@@ -107,10 +125,8 @@ export class YouTubeListener implements IngestListener {
   private async findLiveVideoId(): Promise<string | null> {
     for (const url of [`https://www.youtube.com/${this.handle}/live`, `https://www.youtube.com/@${this.handle}/live`]) {
       try {
-        const html = await this.get(url);
-        const isLive = html.includes('"isLive":true') || html.includes('"isLiveNow":true') || html.includes('"isLiveBroadcast":true');
-        const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
-        if (isLive && m) return m[1];
+        const id = pickLiveVideoId(await this.get(url));
+        if (id) return id;
       } catch (err) {
         this.log.warn({ err, url }, 'youtube ingest: findLive selhal');
       }
