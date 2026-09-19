@@ -1585,6 +1585,8 @@ class KickProvider {
     this.onMessage = null;
     this.onStatus = null;
     this.onUserId = null;
+    this.onSubBadges = null;
+    this._badgeLogBudget = 5;
   }
 
   async connect(channel) {
@@ -1603,6 +1605,9 @@ class KickProvider {
       this.userId = data?.user_id || data?.id;
       if (!this.chatroomId) throw new Error('Chatroom nenalezen');
       if (this.userId) this.onUserId?.(this.userId);
+      // Per-channel subscriber badge tiers ({months, badge_image.src}); the
+      // built-in role badges are bundled in icons/kick-badges/.
+      this.onSubBadges?.(Array.isArray(data?.subscriber_badges) ? data.subscriber_badges : []);
 
       this._connectPusher();
     } catch (err) {
@@ -1682,10 +1687,22 @@ class KickProvider {
         }
       }
 
-      const badges = [];
-      if (data.sender?.is_broadcaster) badges.push('\uD83C\uDFA4');
-      if (data.sender?.is_moderator) badges.push('\u2694\uFE0F');
-      if (data.sender?.is_subscriber) badges.push('\u2B50');
+      // Kick sends roles as sender.identity.badges[] = {type, text, count?}
+      // (e.g. moderator, subscriber+count, founder, vip, og, sub_gifter+count,
+      // verified, broadcaster, bot). Serialised like Twitch's IRC tag so the
+      // rest of the pipeline (cache, user entries) stays string-based.
+      const identityBadges = Array.isArray(data.sender?.identity?.badges) ? data.sender.identity.badges : [];
+      const badgesRaw = identityBadges
+        .filter((b) => b && typeof b.type === 'string')
+        .map((b) => (b.count ? `${b.type}/${b.count}` : b.type))
+        .join(',');
+      if (identityBadges.length && this._badgeLogBudget > 0) {
+        this._badgeLogBudget--;
+        try {
+          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'KickBadge',
+            text: `${username} identity=${JSON.stringify(data.sender?.identity)} senderKeys=${Object.keys(data.sender || {}).join(',')}` }).catch(() => {});
+        } catch {}
+      }
 
       this.onMessage?.({
         platform: 'kick',
@@ -1694,7 +1711,7 @@ class KickProvider {
         kickContent: content, // surový HTML obsah pro EmoteManager
         message: this._textOnly(content), // plain text fallback
         color,
-        badges,
+        badgesRaw,
         timestamp: Date.now(),
         id: data.id || crypto.randomUUID(),
         replyTo
@@ -2456,6 +2473,7 @@ class UnityChat {
     this.nicknames = new NicknameManager();
     this.twitch = new TwitchProvider();
     this.kick = new KickProvider();
+    this._kickSubBadges = []; // Kick per-channel subscriber badge tiers
     this.youtube = new YouTubeProvider();
     this.autoScroll = true;
     this.msgCount = 0;
@@ -4093,6 +4111,30 @@ class UnityChat {
     document.body.classList.toggle('no-timestamps', !show);
   }
 
+  // Kick badge key "type" or "type/count" → {url, title}. Subscriber tiers
+  // come from the channel API (highest tier ≤ months), everything else is a
+  // bundled SVG. Unknown types render nothing rather than a broken image.
+  _kickBadgeEntry(key) {
+    const [type, countStr] = key.split('/');
+    const count = parseInt(countStr, 10) || 0;
+    const titles = {
+      broadcaster: 'Broadcaster', moderator: 'Moderator', vip: 'VIP', og: 'OG',
+      founder: 'Founder', subscriber: 'Subscriber', sub_gifter: 'Sub Gifter',
+      verified: 'Verified', staff: 'Kick Staff', bot: 'Bot'
+    };
+    if (!titles[type]) return null;
+    let title = titles[type];
+    if (type === 'subscriber' && count) title += ` (${count} ${count === 1 ? 'měsíc' : count < 5 ? 'měsíce' : 'měsíců'})`;
+    if (type === 'sub_gifter' && count) title += ` (${count})`;
+    if (type === 'subscriber' && count && this._kickSubBadges.length) {
+      const tier = this._kickSubBadges
+        .filter((b) => b && b.months <= count && b.badge_image?.src)
+        .sort((a, b) => b.months - a.months)[0];
+      if (tier) return { url: tier.badge_image.src, title };
+    }
+    return { url: `icons/kick-badges/${type}.svg`, title };
+  }
+
   _applyReplyOneLine() {
     document.body.classList.toggle('reply-oneline', this.config.replyOneLine === true);
   }
@@ -4789,6 +4831,7 @@ class UnityChat {
 
     this.kick.onMessage = (m) => this._addMessage(m);
     this.kick.onStatus = (s, d) => this._status('kick', s, d);
+    this.kick.onSubBadges = (list) => { this._kickSubBadges = list; };
     this.kick.onUserId = (id) => {
       if (this.emotes.channel7tv.size === 0) {
         this.emotes.loadChannel('kick', id);
@@ -7423,9 +7466,9 @@ class UnityChat {
       const badgeCount = Object.keys(this._twitchBadges).length;
       for (const badge of msg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const entry = this._twitchBadges[badge];
+        const entry = msg.platform === 'kick' ? this._kickBadgeEntry(badge) : this._twitchBadges[badge];
         const url = entry && typeof entry === 'object' ? entry.url : entry;
-        if (!url && badgeCount > 0) {
+        if (!url && msg.platform !== 'kick' && badgeCount > 0) {
           console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
         }
         if (url) {

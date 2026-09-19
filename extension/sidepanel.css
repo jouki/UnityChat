@@ -898,6 +898,8 @@ body.layout-large #settings details summary { font-size: 15px; }
 .msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
 .msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
 .msg .pi.ki { background-image: url(icons/platform/kick.svg); }
+/* Kick K je plný čtverec bez vnitřního okraje → 2px padding, ať opticky sedí k ostatním */
+.msg .pi.ki, .badge.ki, #active-badge.ki { padding: 2px; box-sizing: border-box; background-origin: content-box; background-clip: content-box; }
 
 .msg .ts {
   color: var(--text-muted);
