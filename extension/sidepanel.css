@@ -140,7 +140,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 2px;
 }
 
-#btn-popout, #btn-dump, #btn-settings {
+#btn-reconnect, #btn-popout, #btn-dump, #btn-settings {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -233,8 +233,10 @@ body.layout-large #settings details summary { font-size: 15px; }
 #btn-dump, #btn-popout {
   font-size: 14px;
 }
+#btn-reconnect { display: inline-flex; align-items: center; }
+#btn-reconnect:active svg { transform: rotate(-90deg); transition: transform 0.15s; }
 
-#btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
+#btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -537,7 +539,7 @@ body.layout-large #settings details summary { font-size: 15px; }
 #bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 3px 10px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
@@ -545,25 +547,13 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 8px;
 }
 
-#statuses {
-  display: flex;
-  gap: 10px;
-}
-
-.st {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--text-muted);
-}
-
+/* Stavová tečka žije uvnitř filter tlačítka. Bez stavu = červená
+   (nepřipojeno), vyfiltrovaná platforma = šedá bez ohledu na stav. */
 .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #555;
+  background: #ff5252;
   display: inline-block;
   flex-shrink: 0;
 }
@@ -572,6 +562,7 @@ body.layout-large #settings details summary { font-size: 15px; }
 .dot.connecting { background: #ffc107; animation: pulse 1s infinite; }
 .dot.error { background: #ff5252; }
 .dot.disabled { background: #333; }
+.fbtn:not(.active) .dot { background: #555; box-shadow: none; animation: none; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -584,10 +575,13 @@ body.layout-large #settings details summary { font-size: 15px; }
 }
 
 .fbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: var(--bg-tertiary);
   border: 1px solid transparent;
   color: var(--text-muted);
-  padding: 1px 7px;
+  padding: 1px 8px 1px 6px;
   border-radius: 10px;
   font-size: 10px;
   font-weight: 600;
@@ -2138,10 +2132,6 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 #btn-scroll.hidden { display: none; }
 
 /* Tooltip for status */
-.st[title] {
-  cursor: default;
-}
-
 /* Pinned message banner */
 /* Pinned message — Twitch-style banner with expandable body.
    Collapsed: just shows header row with who pinned + chevron.

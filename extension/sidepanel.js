@@ -2987,7 +2987,9 @@ class UnityChat {
       if (/^#[0-9a-fA-F]{6}$/.test(v)) $('input-color-picker').value = v;
     });
 
-    $('btn-connect').addEventListener('click', () => {
+    // Reload ikona v hlavičce = dřívější „Připojit": uloží kanály z inputů
+    // a znovu připojí vše. „Odpojit" a „Vyčistit chat" zrušeny (v3.38.72).
+    $('btn-reconnect').addEventListener('click', () => {
       this.config.channel = $('input-channel').value.trim();
       this.config.kickChannel = $('input-kick-channel').value.trim();
       this.config.ytChannel = $('input-yt-channel').value.trim();
@@ -2998,11 +3000,6 @@ class UnityChat {
       this._connectAll();
     });
 
-    $('btn-disconnect').addEventListener('click', () => this._disconnectAll());
-    $('btn-clear').addEventListener('click', () => {
-      this.chatEl.innerHTML = '';
-      this.msgCount = 0;
-    });
 
 
     // Dev mode
