@@ -21,7 +21,10 @@ if (!url) {
   console.error('usage: node scripts/ingest-audit.mjs --db <DATABASE_URL> dump.txt [...]  (nebo DATABASE_URL v env)');
   process.exit(2);
 }
-const files = dbIdx === -1 ? args.slice() : args.filter((_a, i) => i !== dbIdx && i !== dbIdx + 1);
+const chIdx = args.indexOf('--channel');
+const channel = chIdx !== -1 ? args[chIdx + 1] : null;
+const skip = new Set([dbIdx, dbIdx + 1, chIdx, chIdx + 1].filter((i) => i >= 0));
+const files = args.filter((_a, i) => !skip.has(i));
 if (!files.length) { console.error('žádné dumpy'); process.exit(2); }
 
 // "platform:id|ts|user|text" → {platform, id, ts, user, text}
@@ -39,8 +42,22 @@ for (const f of files) {
 console.log(`dumpy: ${files.length}, unikátních zpráv: ${seen.size}`);
 
 const sql = postgres(url, { max: 2 });
+
+// Okno auditu: jen zprávy odeslané po prvním zápisu daného kanálu na dané
+// platformě (ingest nemůže mít, co proběhlo před jeho startem). Bez --channel
+// se bere první zápis platformy napříč kanály.
+const firstRows = channel
+  ? await sql`select platform, min(created_at) as first_in from messages where channel = ${channel} group by 1`
+  : await sql`select platform, min(created_at) as first_in from messages group by 1`;
+const firstIn = Object.fromEntries(firstRows.map((r) => [r.platform, new Date(r.first_in).getTime()]));
 const byPlatform = { twitch: [], kick: [], youtube: [] };
-for (const v of seen.values()) byPlatform[v.platform]?.push(v);
+let skippedBefore = 0;
+for (const v of seen.values()) {
+  if (!byPlatform[v.platform]) continue;
+  if (firstIn[v.platform] && v.ts < firstIn[v.platform]) { skippedBefore++; continue; }
+  byPlatform[v.platform].push(v);
+}
+console.log(`okno: ${channel || 'všechny kanály'}, start ingestu ${JSON.stringify(Object.fromEntries(Object.entries(firstIn).map(([k, v]) => [k, new Date(v).toISOString()])))}, mimo okno vynecháno: ${skippedBefore}`);
 
 const pct = (arr, p) => {
   if (!arr.length) return null;
