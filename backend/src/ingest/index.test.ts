@@ -46,3 +46,17 @@ test('createIngest: bez kanálů je vše off a start() nic nedělá', async () =
   assert.deepEqual(ing.status(), { twitch: 'off', kick: 'off', youtube: 'off', lastMessageAt: null, inserted: 0, dropped: 0 });
   await ing.stop();
 });
+
+test('createIngest: dva kanály na jedné platformě dostanou každý svůj listener', async () => {
+  const made: string[] = [];
+  const mk = (name: string, st: 'connected' | 'connecting'): IngestListener => ({ start() { made.push(name); }, stop() {}, status: () => st, lastMessageAt: () => null });
+  const ing = createIngest({
+    channels: [{ platform: 'twitch', channel: 'robdiesalot' }, { platform: 'twitch', channel: 'tensterakdary' }],
+    retentionDays: 7, log: silent, insert: async () => 0, deleteOld: async () => 0,
+    listenerFactory: (c) => mk(c.channel, c.channel === 'robdiesalot' ? 'connecting' : 'connected'),
+  });
+  ing.start();
+  assert.deepEqual(made, ['robdiesalot', 'tensterakdary']);
+  assert.equal(ing.status().twitch, 'connected');
+  await ing.stop();
+});

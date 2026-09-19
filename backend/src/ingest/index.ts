@@ -45,7 +45,8 @@ export function createIngest(opts: CreateOpts) {
   const flushMs = opts.flushMs ?? 500;
   const retentionMs = opts.retentionMs ?? 60 * 60 * 1000;
 
-  const listeners = new Map<IngestChannel['platform'], IngestListener>();
+  // Klíč platforma:kanál — víc kanálů na jedné platformě je běžné (Rob + Stéra).
+  const listeners = new Map<string, IngestListener>();
   let queue: IngestMessage[] = [];
   let flushTimer: NodeJS.Timeout | null = null;
   let retentionTimer: NodeJS.Timeout | null = null;
@@ -93,7 +94,7 @@ export function createIngest(opts: CreateOpts) {
       if (!opts.channels.length) return;
       for (const c of opts.channels) {
         const l = factory(c, onMessage);
-        listeners.set(c.platform, l);
+        listeners.set(`${c.platform}:${c.channel}`, l);
         l.start();
       }
       void runRetention();
@@ -107,7 +108,15 @@ export function createIngest(opts: CreateOpts) {
       await flush();
     },
     status(): IngestStatus {
-      const st = (p: IngestChannel['platform']): PlatformStatus => listeners.get(p)?.status() ?? 'off';
+      // Souhrn per platforma: connected, když aspoň jeden kanál běží; jinak
+      // nejhorší z ostatních stavů (reconnecting > connecting > error).
+      const rank: Record<PlatformStatus, number> = { off: 0, connected: 1, connecting: 2, error: 3, reconnecting: 4 };
+      const st = (p: IngestChannel['platform']): PlatformStatus => {
+        const states = [...listeners.entries()].filter(([k]) => k.startsWith(p + ':')).map(([, l]) => l.status());
+        if (!states.length) return 'off';
+        if (states.includes('connected')) return 'connected';
+        return states.sort((a, b) => rank[b] - rank[a])[0];
+      };
       return {
         twitch: st('twitch'),
         kick: st('kick'),
