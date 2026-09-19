@@ -98,6 +98,19 @@
     let _ucEnteredTheater = false;
     // true = naše layout styly (skrytý chat) jsou na stránce aktivní
     let _ucLayoutApplied = false;
+    // Atributy, kterými YouTube říká „chat je otevřený" a podle nich rezervuje
+    // místo vpravo (#columns::after spacer = sidebar + margin, theater player
+    // užší o panel). Nativní zavření chatu je sundá; my je sundáme taky a při
+    // show vrátíme jen ty, které jsme odebrali.
+    const UC_PANEL_ATTRS = ['live-chat-present-and-expanded', 'panel-expanded', 'fixed-panel-expanded', 'watch-while-panels-active'];
+    let _ucRemovedAttrs = [];
+    function _ucDropPanelAttrs() {
+      const flexy = document.querySelector('ytd-watch-flexy');
+      if (!flexy) return;
+      for (const a of UC_PANEL_ATTRS) {
+        if (flexy.hasAttribute(a)) { flexy.removeAttribute(a); if (!_ucRemovedAttrs.includes(a)) _ucRemovedAttrs.push(a); }
+      }
+    }
 
     function hideYtChat() {
       // Jen na stránce s live chatem. Na běžném videu #secondary nese
@@ -117,6 +130,9 @@
       // se nesahá (zúžení sloupce zabilo related videa, v3.39.5).
       const chatContainer = document.querySelector('#chat-container');
       if (chatContainer) chatContainer.style.cssText = 'height:0!important;min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;';
+      // Player nedosahoval k okraji a vpravo zůstávalo prázdno (report 2026-09-20):
+      // YouTube má chat pořád za „otevřený panel" a drží pro něj místo.
+      _ucDropPanelAttrs();
       // Úklid po starších verzích (3.38.64–3.39.5) — kdyby styly přežily reload.
       for (const sel of ['#secondary', '#columns', '#primary']) {
         const el = document.querySelector(sel);
@@ -154,12 +170,17 @@
           theater: !!flexy?.hasAttribute('theater'),
           twoCol: !!flexy?.hasAttribute('is-two-columns_'),
           singleCol: !!flexy?.hasAttribute('is-single-column'),
+          flexyAttrs: flexy ? [...flexy.attributes].map((a) => a.name).filter((a) => /theater|chat|panel|column|bleed|split/i.test(a)).join(',') : null,
+          columnsW: q('#columns')?.offsetWidth ?? null,
         })] }).catch?.(() => {});
       } catch {}
     }
 
     function showYtChat() {
       _ucLayoutApplied = false;
+      const flexyEl = document.querySelector('ytd-watch-flexy');
+      if (flexyEl) for (const a of _ucRemovedAttrs) flexyEl.setAttribute(a, '');
+      _ucRemovedAttrs = [];
       // Restore #chat
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = '';
@@ -199,7 +220,9 @@
       const chatFrame = document.querySelector('ytd-live-chat-frame');
       if (!chatFrame) { showYtChat(); return; }
       const cc = document.querySelector('#chat-container');
-      if (cc && cc.offsetHeight > 50) hideYtChat();
+      const flexyEl = document.querySelector('ytd-watch-flexy');
+      const attrsBack = flexyEl && UC_PANEL_ATTRS.some((a) => flexyEl.hasAttribute(a));
+      if ((cc && cc.offsetHeight > 50) || attrsBack) hideYtChat();
     }, 1500);
 
     // ---- UnityChat button next to "Otevřít panel" ----
