@@ -8,6 +8,12 @@
 // Vkládá se za mezeru, aby neovlivnil trailing emoty.
 const UC_MARKER = '\u2800';
 
+// Podporovaní streameři (Twitch login). Primární je Rob; na jiného se
+// přepíná jen ručně tlačítkem nad chatem. Ostatní streamery addon ignoruje
+// (rozhodnutí usera 2026-09-19 — chaty se míchaly a emoty se nepřenačítaly).
+const PRIMARY_STREAMER = 'robdiesalot';
+const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary', 'arcadebulls']);
+
 const DEFAULTS = {
   channel: 'robdiesalot',
   kickChannel: 'robdiesalot',
@@ -17,11 +23,10 @@ const DEFAULTS = {
   kick: true,
   // Soft render cap — chat should hold ~72h of activity, cache is the source
   // of truth. Keep a ceiling to prevent runaway DOM growth on busy streams.
-  maxMessages: 5000,       // storage cap — how many msgs we keep in _msgCache (72h TTL still applies)
-  initialRender: 250,      // how many render into DOM on boot; older load on scroll-up
   username: '',
   layout: 'medium',
   showTimestamps: true,
+  replyOneLine: false,
 };
 
 // =============================================================
@@ -1306,7 +1311,7 @@ class TwitchProvider {
       _needsColorLookup: !ircColor,
       // Twitch numeric user-id — needed to look up 7TV profile (nickname paint).
       userId: tags['user-id'] || null,
-      timestamp: Date.now(),
+      timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
       twitchEmotes: tags.emotes || null,
@@ -1344,7 +1349,7 @@ class TwitchProvider {
         username: raider,
         message: `raiduje s ${viewers} diváky!`,
         color: '#ff6b6b',
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         isRaid: true,
         raidViewers: viewers,
@@ -1375,7 +1380,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1400,7 +1405,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         isGiftBundle: true,
@@ -1424,7 +1429,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         isSubGift: true,
@@ -1468,7 +1473,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1499,7 +1504,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1584,6 +1589,8 @@ class KickProvider {
     this.onMessage = null;
     this.onStatus = null;
     this.onUserId = null;
+    this.onSubBadges = null;
+    this._badgeLogBudget = 5;
   }
 
   async connect(channel) {
@@ -1602,6 +1609,9 @@ class KickProvider {
       this.userId = data?.user_id || data?.id;
       if (!this.chatroomId) throw new Error('Chatroom nenalezen');
       if (this.userId) this.onUserId?.(this.userId);
+      // Per-channel subscriber badge tiers ({months, badge_image.src}); the
+      // built-in role badges are bundled in icons/kick-badges/.
+      this.onSubBadges?.(Array.isArray(data?.subscriber_badges) ? data.subscriber_badges : []);
 
       this._connectPusher();
     } catch (err) {
@@ -1681,10 +1691,22 @@ class KickProvider {
         }
       }
 
-      const badges = [];
-      if (data.sender?.is_broadcaster) badges.push('\uD83C\uDFA4');
-      if (data.sender?.is_moderator) badges.push('\u2694\uFE0F');
-      if (data.sender?.is_subscriber) badges.push('\u2B50');
+      // Kick sends roles as sender.identity.badges[] = {type, text, count?}
+      // (e.g. moderator, subscriber+count, founder, vip, og, sub_gifter+count,
+      // verified, broadcaster, bot). Serialised like Twitch's IRC tag so the
+      // rest of the pipeline (cache, user entries) stays string-based.
+      const identityBadges = Array.isArray(data.sender?.identity?.badges) ? data.sender.identity.badges : [];
+      const badgesRaw = identityBadges
+        .filter((b) => b && typeof b.type === 'string')
+        .map((b) => (b.count ? `${b.type}/${b.count}` : b.type))
+        .join(',');
+      if (identityBadges.length && this._badgeLogBudget > 0) {
+        this._badgeLogBudget--;
+        try {
+          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'KickBadge',
+            text: `${username} identity=${JSON.stringify(data.sender?.identity)} senderKeys=${Object.keys(data.sender || {}).join(',')}` }).catch(() => {});
+        } catch {}
+      }
 
       this.onMessage?.({
         platform: 'kick',
@@ -1693,8 +1715,8 @@ class KickProvider {
         kickContent: content, // surový HTML obsah pro EmoteManager
         message: this._textOnly(content), // plain text fallback
         color,
-        badges,
-        timestamp: Date.now(),
+        badgesRaw,
+        timestamp: Date.parse(data.created_at) || Date.now(), // čas z Kicku (ISO created_at)
         id: data.id || crypto.randomUUID(),
         replyTo
       });
@@ -2266,7 +2288,7 @@ class YouTubeProvider {
         ytRuns: runs,
         color: isSuperChat ? '#ffd600' : this._authorColor(renderer, rawName),
         badges,
-        timestamp: Date.now(),
+        timestamp: Math.floor(Number(renderer.timestampUsec) / 1000) || Date.now(), // čas z YouTube (µs → ms)
         id,
         superChat: isSuperChat
       });
@@ -2455,30 +2477,27 @@ class UnityChat {
     this.nicknames = new NicknameManager();
     this.twitch = new TwitchProvider();
     this.kick = new KickProvider();
+    this._kickSubBadges = []; // Kick per-channel subscriber badge tiers
     this.youtube = new YouTubeProvider();
     this.autoScroll = true;
-    this.msgCount = 0;
     this.filters = { twitch: true, youtube: true, kick: true };
     this.activePlatform = null;
-    this._msgCache = [];
-    this._cacheTimer = null;
+    // Jediný držitel dat zpráv (extension/chat-store.js). Historie jde ze
+    // serveru (/chat/history), lokální cache i scrape zmizely ve v3.39.
+    this.store = new ChatStore();
+    // DOM okno: v chatu je naživo max ~300 uzlů. Co vypadne nahoře/dole, se
+    // zaparkuje (odpojené uzly), ať jde scrollem vrátit bez znovurenderu.
+    this.DOM_WINDOW = 300;
+    this._parkedTop = [];     // odpojené uzly nad oknem (nejstarší první)
+    this._parkedBottom = [];  // odpojené uzly pod oknem (nejstarší první)
+    this._prependCursor = null; // při dotahování starší historie: před co vkládat
+    this._bootLoading = false;
+    this._historyBusy = false;
+    this._historyCooldownUntil = 0;
+    this._historyFetches = 0;
     this._twitchBadges = {};
     this._chatUsers = new Map();  // username → { name, platform, color }
-    // Lazy-load cursor: index into _msgCache of the first un-rendered msg.
-    // Boot renders only the last `initialRender` msgs; scroll-up triggers
-    // _hydrateOlderMessages which prepends batches of 250 from _msgCache.
-    this._hydratedIdx = 0;
-    this._hydratingOlder = false;
-    // Per-channel LRU dedup. Map<"platform:channel", {ids:Set, content:Set}>.
-    // Each channel holds its own dedup sets so switching channels and coming
-    // back doesn't duplicate messages still in the target's DOM. LRU eviction
-    // caps total channels at _dedupMaxChannels; per-channel FIFO at
-    // _dedupMaxPerChannel keeps memory bounded regardless of channel activity.
-    this._dedupChannels = new Map();
-    this._dedupLRU = [];                // channel keys, most-recent last
-    this._dedupMaxChannels = 150;       // ~50 per platform × 3 platforms
-    this._dedupMaxPerChannel = 250;     // Twitch DOM caps at ~200, 25% headroom
-    this._optimisticKeys = new Map();  // contentKey → sentId (for upgrading optimistic → real)
+    this._optimisticKeys = new Map();  // contentKey → sentId (párování optimistická ↔ echo)
     this._platformUsernames = {}; // per-platform username tracking (loaded from config in _init)
     this._isModOnChannel = false; // viewer has moderator/broadcaster badge on current Twitch channel
     this._platformColors = {};    // per-platform user color (from IRC/API)
@@ -2495,11 +2514,7 @@ class UnityChat {
       if (msg.type === 'CLOSE') window.close();
     });
 
-    // Uložit cache při zavření/reloadu panelu
     window.addEventListener('beforeunload', () => {
-      if (this._msgCache.length > 0) {
-        chrome.storage.local.set({ [this._cacheKey]: this._msgCache });
-      }
       this.nicknames?.disconnect();
     });
 
@@ -2544,45 +2559,13 @@ class UnityChat {
   }
 
   async _init() {
-    // Verze v titulku — wrap the logo so the update dot + tooltip can hang
-    // off it (dot anchors to the top-right corner of the logo, tooltip
-    // drops to the right from the logo's left edge).
+    // Verze v titulku.
     const ver = chrome.runtime.getManifest().version;
     const title = document.getElementById('header-title');
     title.innerHTML =
       `<span class="hdr-logo-wrap" id="hdr-logo-wrap">
         <img src="icons/icon48.png" class="hdr-logo" alt="UnityChat">
-        <span class="update-dot" aria-hidden="true"></span>
       </span> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
-    // UC_STORE_STRIP_START: update tooltip mount (self-update UI)
-    // Clone the update tooltip template into the logo wrap so hover on the
-    // logo reveals it. Pulled from a <template> in sidepanel.html so the
-    // markup stays authored in HTML and readable.
-    const tpl = document.getElementById('update-tooltip-tpl');
-    const logoWrap = document.getElementById('hdr-logo-wrap');
-    if (tpl && logoWrap) {
-      logoWrap.appendChild(tpl.content.cloneNode(true));
-      // Hover-intent: 250ms hide delay covers the pixel gap between the logo
-      // and the tooltip card (CSS-only :hover would drop as soon as the
-      // cursor left the logo, killing the "move down to click the link" UX).
-      const tip = logoWrap.querySelector('.update-tooltip');
-      let hideT = null;
-      const show = () => {
-        clearTimeout(hideT);
-        logoWrap.classList.add('is-hovering');
-      };
-      const hide = () => {
-        clearTimeout(hideT);
-        hideT = setTimeout(() => logoWrap.classList.remove('is-hovering'), 250);
-      };
-      logoWrap.addEventListener('mouseenter', show);
-      logoWrap.addEventListener('mouseleave', hide);
-      if (tip) {
-        tip.addEventListener('mouseenter', show);
-        tip.addEventListener('mouseleave', hide);
-      }
-    }
-    // UC_STORE_STRIP_END
 
     this._bootMark('_init start');
     // Arm background watchdog — if _bootMark('_init done') never arrives,
@@ -2591,6 +2574,8 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
     this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
+    await this._pickBootStreamer();
+    this._bootMark('streamer picked', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
@@ -2691,15 +2676,18 @@ class UnityChat {
     // when all configured platforms reach a terminal state, or after 8s.
     this._showLoading();
 
-    await this._loadCachedMessages();
-    this._bootMark('cache loaded', `rendered=${this.chatEl?.children.length ?? 0} msgCache=${this._msgCache?.length ?? 0}`);
+    // v3.39: lokální cache zpráv nahradil server. Staré klíče uklidit jednou.
+    try {
+      const all = await chrome.storage.local.get(null);
+      const stale = Object.keys(all).filter((k) => k.startsWith('uc_messages'));
+      if (stale.length) await chrome.storage.local.remove(stale);
+    } catch {}
+    await this._loadHistory();
+    this._fillMsgHistoryFromStore();
+    this._bootMark('history loaded', `rendered=${this.chatEl?.children.length ?? 0} store=${this.store.length}`);
     this._connectAll();
     this._bootMark('_connectAll dispatched');
     this._detectLoop();
-    // UC_STORE_STRIP_START: self-update check call
-    // Fire-and-forget update check against the public landing page manifest.
-    this._checkForUpdate().catch(() => {});
-    // UC_STORE_STRIP_END
     // Background broadcast listener (Twitch redeems/highlights/credits, plus
     // the self-update badge in non-store builds).
     this._wireBackgroundUpdateListener();
@@ -2717,52 +2705,8 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
-  // UC_STORE_STRIP_START: self-update check + tooltip (CWS forbids out-of-store updates)
-  async _checkForUpdate() {
-    try {
-      const current = chrome.runtime.getManifest().version;
-      const resp = await fetch('https://jouki.cz/download/manifest.json', { cache: 'no-store' });
-      if (!resp.ok) return;
-      const remote = await resp.json();
-      const latest = remote?.version;
-      const wrap = document.getElementById('hdr-logo-wrap');
-      const num = document.getElementById('ut-version-num');
-      const hasUpdate = latest && this._isNewerVersion(latest, current);
-      if (!hasUpdate) {
-        // User is on latest (or ahead — update.bat was run). Clear any stale
-        // badge from a previous session.
-        chrome.runtime.sendMessage({ type: 'CLEAR_UPDATE_BADGE' }).catch(() => {});
-        return;
-      }
-      if (num) num.textContent = latest;
-      if (wrap) wrap.classList.add('has-update');
-      // Browser action icon: red ! badge + hover title "UPDATE available"
-      chrome.runtime.sendMessage({ type: 'SET_UPDATE_BADGE', version: latest }).catch(() => {});
-      // Auto-reveal the tooltip for 10s with a shrinking countdown bar so
-      // the user sees the notice even without hovering the logo.
-      this._autoRevealUpdateTooltip();
-    } catch {}
-  }
 
-  _autoRevealUpdateTooltip() {
-    const wrap = document.getElementById('hdr-logo-wrap');
-    if (!wrap || !wrap.classList.contains('has-update')) return;
-    // Restart the countdown bar animation on repeat calls by removing and
-    // re-adding the class on the next frame.
-    wrap.classList.remove('auto-reveal');
-    // Force reflow so the animation restart actually takes effect
-    void wrap.offsetWidth;
-    wrap.classList.add('auto-reveal');
-    clearTimeout(this._autoRevealT);
-    this._autoRevealT = setTimeout(() => {
-      wrap.classList.remove('auto-reveal');
-    }, 10000);
-  }
-  // UC_STORE_STRIP_END
-
-  // Background broadcasts for panel-wide state. UC_UPDATE_* come from the
-  // 15-min self-update alarm and are kept last in the chain so the store
-  // build can strip them without orphaning an `else if`.
+  // Background broadcasts for panel-wide state.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
@@ -2775,42 +2719,10 @@ class UnityChat {
         // Twitch fired a floating "+N" reward animation — content script
         // caught it from DOM mutations. We just flash the amount.
         this._flashPointsDelta(msg.amount);
-      // UC_STORE_STRIP_START: self-update broadcasts
-      } else if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
-        const wrap = document.getElementById('hdr-logo-wrap');
-        const num = document.getElementById('ut-version-num');
-        if (!wrap) return;
-        const isNew = !wrap.classList.contains('has-update');
-        if (num) num.textContent = msg.version;
-        wrap.classList.add('has-update');
-        // Only auto-reveal on transition (false→true), not on every periodic
-        // re-confirmation, otherwise the tooltip would pop every 15 min.
-        if (isNew) this._autoRevealUpdateTooltip();
-      } else if (msg?.type === 'UC_UPDATE_CLEARED') {
-        const wrap = document.getElementById('hdr-logo-wrap');
-        if (wrap) {
-          wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
-        }
-      // UC_STORE_STRIP_END
       }
     });
   }
 
-  // UC_STORE_STRIP_START: version compare, only used by the self-update check
-  _isNewerVersion(remote, current) {
-    const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
-    const a = parse(remote);
-    const b = parse(current);
-    const len = Math.max(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-      const x = a[i] || 0;
-      const y = b[i] || 0;
-      if (x > y) return true;
-      if (x < y) return false;
-    }
-    return false;
-  }
-  // UC_STORE_STRIP_END
 
   // ---- Config ----
 
@@ -2818,13 +2730,6 @@ class UnityChat {
     try {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
-      // Older configs have maxMessages baked in — bring them up to the new
-      // default so existing users benefit from the 72h cache + lazy load.
-      if ((this.config.maxMessages || 0) < DEFAULTS.maxMessages) {
-        this.config.maxMessages = DEFAULTS.maxMessages;
-        this._saveConfig();
-      }
-      if (!this.config.initialRender) this.config.initialRender = DEFAULTS.initialRender;
     } catch {}
   }
 
@@ -2870,6 +2775,17 @@ class UnityChat {
         this.config.showTimestamps = tsBox.checked;
         this._saveConfig();
         this._applyTimestampVisibility();
+      });
+    }
+    // Reply context on one line (ellipsis) — CSS-only toggle
+    const rolBox = $('chk-reply-oneline');
+    if (rolBox) {
+      rolBox.checked = this.config.replyOneLine === true;
+      this._applyReplyOneLine();
+      rolBox.addEventListener('change', () => {
+        this.config.replyOneLine = rolBox.checked;
+        this._saveConfig();
+        this._applyReplyOneLine();
       });
     }
     // Auto-resize textarea + auto @username suggest
@@ -3069,7 +2985,9 @@ class UnityChat {
       if (/^#[0-9a-fA-F]{6}$/.test(v)) $('input-color-picker').value = v;
     });
 
-    $('btn-connect').addEventListener('click', () => {
+    // Reload ikona v hlavičce = dřívější „Připojit": uloží kanály z inputů
+    // a znovu připojí vše. „Odpojit" a „Vyčistit chat" zrušeny (v3.38.72).
+    $('btn-reconnect').addEventListener('click', () => {
       this.config.channel = $('input-channel').value.trim();
       this.config.kickChannel = $('input-kick-channel').value.trim();
       this.config.ytChannel = $('input-yt-channel').value.trim();
@@ -3080,24 +2998,7 @@ class UnityChat {
       this._connectAll();
     });
 
-    $('btn-disconnect').addEventListener('click', () => this._disconnectAll());
-    $('btn-clear').addEventListener('click', () => {
-      this.chatEl.innerHTML = '';
-      this.msgCount = 0;
-    });
 
-    // UC_STORE_STRIP_START: streamer OAuth entry point (not shipped to the store)
-    // "Jsem streamer" button — opens streamer.html in a new tab.
-    // Stop propagation so click doesn't toggle the <details> section.
-    const imStreamerBtn = $('btn-im-streamer');
-    if (imStreamerBtn) {
-      imStreamerBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
-      });
-    }
-    // UC_STORE_STRIP_END
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {
@@ -3107,16 +3008,17 @@ class UnityChat {
       $('input-username').readOnly = !on;
     });
     $('btn-dump-cache').addEventListener('click', () => {
-      chrome.storage.local.get(this._cacheKey, (d) => {
-        const json = JSON.stringify(d[this._cacheKey] || [], null, 2);
+      // Dump dat zpráv ze store (in-memory; historie jde ze serveru).
+      {
+        const json = JSON.stringify(this.store.slice(), null, 2);
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'unitychat-message-cache.json';
+        a.download = 'unitychat-message-store.json';
         a.click();
         URL.revokeObjectURL(url);
-      });
+      }
     });
     $('btn-dump-nicknames').addEventListener('click', () => {
       chrome.storage.local.get('uc_nicknames', (d) => {
@@ -3131,13 +3033,7 @@ class UnityChat {
       });
     });
     $('btn-clear-cache').addEventListener('click', () => {
-      chrome.storage.local.remove(this._cacheKey);
-      this._msgCache = [];
-      this._hydratedIdx = 0;
-      this._dedupChannels.clear();
-      this._dedupLRU.length = 0;
-      this.chatEl.innerHTML = '';
-      this.msgCount = 0;
+      this._resetChat();
     });
 
     // Scroll - detekce nových zpráv + auto-scroll pause.
@@ -3160,18 +3056,22 @@ class UnityChat {
       if (atBottom) {
         this._clearUnread();
       }
-      // Lazy load older messages when user scrolls near the top. Keeps boot
-      // fast (only initialRender msgs in DOM) while letting heavy scrollers
-      // reach the full 72h cache on demand.
-      if (el.scrollTop < 200 && this._hydratedIdx > 0 && !this._hydratingOlder) {
-        this._hydrateOlderMessages();
-      }
+      // Nahoru: nejdřív zaparkované uzly, pak starší stránka ze serveru.
+      if (el.scrollTop < 200) this._extendUp();
+      // Dolů: vrátit zaparkované uzly zpod okna.
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 200 && this._parkedBottom.length) this._extendDown();
     });
     this.scrollBtn.addEventListener('click', () => {
-      this.chatEl.scrollTo({ top: this.chatEl.scrollHeight, behavior: 'smooth' });
-      this.autoScroll = true;
-      this._clearUnread();
+      this._jumpToLatest();
     });
+
+    // Ruční přepnutí streamera (nabídka nad chatem)
+    const switchBtn = $('btn-switch-streamer');
+    if (switchBtn) {
+      switchBtn.addEventListener('click', () => {
+        if (this._offeredRecord) this._switchToStreamer(this._offeredRecord);
+      });
+    }
 
     // Filtry
     document.querySelectorAll('.fbtn').forEach((btn) => {
@@ -3709,7 +3609,7 @@ class UnityChat {
   async _detectActivePlatform() {
     try {
       const tab = await this._findStreamTab();
-      if (!tab) { this._setActivePlatform(null); return; }
+      if (!tab) { this._setActivePlatform(null); this._hideSwitchOffer(); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
 
@@ -3756,12 +3656,13 @@ class UnityChat {
         this._saveConfig();
       }
 
-      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano.
-      // Pokud content script nereaguje, detekujeme platformu z URL — auto-switch
-      // má fungovat i bez funkčního content scriptu.
+      // Nabídka přepnutí: když tab patří podporovanému streamerovi, který
+      // není ten připojený, ukáže se tlačítko. Nic se nepřepíná samo.
       if (tab.url) {
         const p = resp?.platform || this._detectPlatformFromUrl(tab.url);
-        if (p) this._checkAutoSwitch(p, tab.url, resp?.channelHandle).catch(() => {});
+        if (p) this._checkSwitchOffer(p, tab.url, resp?.channelHandle).catch(() => {});
+      } else {
+        this._hideSwitchOffer();
       }
     } catch {
       this._setActivePlatform(null);
@@ -3855,38 +3756,107 @@ class UnityChat {
     return null;
   }
 
-  async _checkAutoSwitch(platform, tabUrl, contentHandle) {
-    if (!platform || !tabUrl) return;
+  // Handle z URL/tabu → záznam podporovaného streamera (nebo null).
+  async _resolveSupportedStreamer(platform, tabUrl, contentHandle) {
     let handle = this._parseChannelFromUrl(tabUrl, platform);
-    // YouTube /watch pages don't have channel handle in URL — use DOM-resolved
-    // handle from content script as fallback.
-    if (!handle && contentHandle) {
-      handle = String(contentHandle).toLowerCase().replace(/^@/, '');
-    }
-    if (!handle) return;
-
-    // Skip if the handle already matches our current config for this platform.
-    const currentConfigHandle = this._getConfiguredHandle(platform);
-    if (currentConfigHandle === handle && this._autoSwitchedTo === handle) return;
-
-    // Cancel any in-flight switch: a new URL change trumps older work.
-    this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
-    const mySeq = this._autoSwitchSeq;
-
+    // YouTube /watch nemá handle v URL — bere se z content scriptu.
+    if (!handle && contentHandle) handle = String(contentHandle).toLowerCase().replace(/^@/, '');
+    if (!handle) return null;
     const streamer = await this._lookupStreamer(platform, handle);
-    if (mySeq !== this._autoSwitchSeq) return;
+    const login = (streamer?.twitchLogin || '').toLowerCase();
+    if (!login || !SUPPORTED_STREAMERS.has(login)) return null;
+    return streamer;
+  }
 
-    // Known streamer → full cross-platform map. Unknown streamer → only the
-    // current platform's channel is set; others cleared (per design — we don't
-    // guess cross-platform handles for unregistered streamers).
-    const target = streamer || {
-      twitchLogin: platform === 'twitch' ? handle : null,
-      youtubeHandle: platform === 'youtube' ? handle : null,
-      kickSlug: platform === 'kick' ? handle : null,
-    };
+  _streamerDisplay(streamer) {
+    return streamer.twitchDisplayName || streamer.twitchLogin || streamer.youtubeTitle || streamer.kickDisplayName || '?';
+  }
 
-    await this._performAutoSwitch(target, mySeq, handle);
-    this._sendSeenPing(platform, handle);
+  async _checkSwitchOffer(platform, tabUrl, contentHandle) {
+    if (!platform || !tabUrl || this._switching) return;
+    const streamer = await this._resolveSupportedStreamer(platform, tabUrl, contentHandle);
+    if (!streamer) { this._hideSwitchOffer(); return; }
+    const login = streamer.twitchLogin.toLowerCase();
+    if (login === (this.config.channel || '').toLowerCase()) { this._hideSwitchOffer(); return; }
+    this._showSwitchOffer(streamer);
+  }
+
+  _showSwitchOffer(streamer) {
+    const box = document.getElementById('switch-offer');
+    const btn = document.getElementById('btn-switch-streamer');
+    if (!box || !btn) return;
+    const login = streamer.twitchLogin.toLowerCase();
+    if (this._offeredStreamer !== login) {
+      this._offeredStreamer = login;
+      this._offeredRecord = streamer;
+      btn.textContent = `Přepnout chat na ${this._streamerDisplay(streamer)}`;
+      this._ucLog?.('Streamer', `offer ${login}`);
+    }
+    box.classList.remove('hidden');
+  }
+
+  _hideSwitchOffer() {
+    const box = document.getElementById('switch-offer');
+    if (box) box.classList.add('hidden');
+    this._offeredStreamer = null;
+    this._offeredRecord = null;
+  }
+
+  // Ruční přepnutí (klik na tlačítko). Bývalý auto-switch měl race: detekce
+  // každé 3 s znovu vstupovala do přepínání, bumpla sekvenci a rozdělané
+  // přepnutí (emoty vyčištěné, nové nenačtené, providery napůl) zrušila;
+  // druhý průchod viděl config už změněný a nic neudělal → smíchané chaty a
+  // špatné emoty. Tady běží jedno přepnutí najednou, bez re-entry.
+  async _switchToStreamer(streamer) {
+    if (this._switching) return;
+    this._switching = true;
+    const login = (streamer.twitchLogin || '').toLowerCase();
+    this._hideSwitchOffer();
+    this._ucLog?.('Streamer', `switch → ${login}`);
+    try {
+      this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
+      await this._performAutoSwitch(streamer, this._autoSwitchSeq, login);
+    } catch (e) {
+      this._sys(`Přepnutí selhalo: ${e.message}`);
+      this._hideSwitchBanner();
+    } finally {
+      this._switching = false;
+    }
+  }
+
+  // Při startu: podporovaný streamer na aktivním tabu vyhrává, jinak Rob.
+  // Nastavuje jen config (nic ještě neběží), samotné načtení udělá _init.
+  async _pickBootStreamer() {
+    let target = null;
+    try {
+      const tab = await this._findStreamTab();
+      if (tab?.url) {
+        const platform = this._detectPlatformFromUrl(tab.url);
+        let contentHandle = null;
+        if (platform === 'youtube') {
+          const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+          contentHandle = resp?.channelHandle || null;
+        }
+        if (platform) target = await this._resolveSupportedStreamer(platform, tab.url, contentHandle);
+      }
+    } catch {}
+    if (!target) {
+      target = await this._lookupStreamer('twitch', PRIMARY_STREAMER).catch(() => null)
+        || { twitchLogin: PRIMARY_STREAMER, twitchUserId: '160028137', youtubeHandle: PRIMARY_STREAMER, kickSlug: PRIMARY_STREAMER };
+    }
+    const before = `${this.config.channel}/${this.config.ytChannel}/${this.config.kickChannel}`;
+    this.config.channel = target.twitchLogin || '';
+    this.config.ytChannel = target.youtubeHandle || '';
+    this.config.kickChannel = target.kickSlug || '';
+    if (target.twitchUserId) this.config._roomId = target.twitchUserId;
+    else if (before.split('/')[0] !== this.config.channel) this.config._roomId = null;
+    this._saveConfig();
+    this._refreshSettingsInputs();
+    this._ucLog?.('Streamer', `boot ${before} → ${this.config.channel}/${this.config.ytChannel}/${this.config.kickChannel} roomId=${this.config._roomId || '-'}`);
+  }
+
+  _ucLog(tag, text) {
+    try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag, text }).catch(() => {}); } catch {}
   }
 
   _getConfiguredHandle(platform) {
@@ -3915,11 +3885,6 @@ class UnityChat {
 
     this._showSwitchBanner(streamer);
 
-    // Persist pending messages to OLD channel's cache before switching.
-    if (this._msgCache.length > 0) {
-      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
-    }
-
     // Each platform's channel is strictly its own — never fall back cross-platform.
     this.config.channel = newTwitch;
     this.config.ytChannel = newYoutube;
@@ -3931,11 +3896,7 @@ class UnityChat {
     // are per-channel (LRU-evicted), so we leave them alone: returning to a
     // recently-visited channel keeps its dedup state intact and prevents DOM
     // scrape from re-rendering messages that are still sitting in Twitch's DOM.
-    this.chatEl.innerHTML = '';
-    this.msgCount = 0;
-    this._msgCache = [];
-    this._hydratedIdx = 0;
-    this._optimisticKeys = new Map();
+    this._resetChat();
     this._isModOnChannel = false; // re-detect from badges on new channel
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
@@ -4014,7 +3975,8 @@ class UnityChat {
     }
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
 
-    await this._loadCachedMessages();
+    await this._loadHistory();
+    this._fillMsgHistoryFromStore();
     if (mySeq !== this._autoSwitchSeq) { this._hideSwitchBanner(); return; }
 
     this._connectAll();
@@ -4203,6 +4165,58 @@ class UnityChat {
   _applyTimestampVisibility() {
     const show = this.config.showTimestamps !== false;
     document.body.classList.toggle('no-timestamps', !show);
+  }
+
+  // Kick badge key "type" or "type/count" → {url, title}. Subscriber tiers
+  // come from the channel API (highest tier ≤ months), everything else is a
+  // bundled SVG. Unknown types render nothing rather than a broken image.
+  _kickBadgeEntry(key) {
+    const [type, countStr] = key.split('/');
+    const count = parseInt(countStr, 10) || 0;
+    const titles = {
+      broadcaster: 'Broadcaster', moderator: 'Moderator', vip: 'VIP', og: 'OG',
+      founder: 'Founder', subscriber: 'Subscriber', sub_gifter: 'Sub Gifter',
+      verified: 'Verified', staff: 'Kick Staff', bot: 'Bot'
+    };
+    if (!titles[type]) return null;
+    let title = titles[type];
+    if (type === 'subscriber' && count) title += ` (${count} ${count === 1 ? 'měsíc' : count < 5 ? 'měsíce' : 'měsíců'})`;
+    if (type === 'sub_gifter' && count) title += ` (${count})`;
+    if (type === 'subscriber' && count && this._kickSubBadges.length) {
+      const tier = this._kickSubBadges
+        .filter((b) => b && b.months <= count && b.badge_image?.src)
+        .sort((a, b) => b.months - a.months)[0];
+      if (tier) return { url: tier.badge_image.src, title };
+    }
+    return { url: `icons/kick-badges/${type}.svg`, title };
+  }
+
+  // Nejstarší zpráva v DOM s časem > ts (prochází se odzadu, historie se
+  // doplňuje do konce chatu, takže to je pár kroků).
+  _olderThanDomTail(ts) {
+    if (!ts) return false;
+    for (let el = this.chatEl.lastElementChild; el; el = el.previousElementSibling) {
+      if (!el.classList.contains('msg')) continue;
+      const t = Number(el.dataset.ts);
+      return !!t && t > ts;
+    }
+    return false;
+  }
+
+  _firstNewerMsgEl(ts) {
+    let found = null;
+    for (let el = this.chatEl.lastElementChild; el; el = el.previousElementSibling) {
+      if (!el.classList.contains('msg')) continue;
+      const t = Number(el.dataset.ts);
+      if (!t) continue;
+      if (t > ts) found = el;
+      else break;
+    }
+    return found;
+  }
+
+  _applyReplyOneLine() {
+    document.body.classList.toggle('reply-oneline', this.config.replyOneLine === true);
   }
 
   // ---- Twitch Badges ----
@@ -4569,8 +4583,11 @@ class UnityChat {
     // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
     this._lastSentText = wireText;
     const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
+    // Id si držíme stranou: když odeslání selže, musí se tahle optimistická
+    // zpráva označit jako neodeslaná a vypadnout z cache (viz _markSendFailed).
+    const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     this._addMessage({
-      id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: optId,
       platform,
       username,
       message: displayText,
@@ -4585,7 +4602,11 @@ class UnityChat {
     // Send in background (don't block UI)
     try {
       const tab = await this._findStreamTab(platform);
-      if (!tab) { this._sys(`Nenalezen otevřený stream tab (${platform})`); return; }
+      if (!tab) {
+        this._markSendFailed(optId, `nenalezen stream tab (${platform})`);
+        this._sys(`Nenalezen otevřený stream tab (${platform})`);
+        return;
+      }
 
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
@@ -4618,9 +4639,12 @@ class UnityChat {
       }
 
       if (!resp?.ok) {
-        this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
+        const reason = resp?.error || 'nepodařilo se odeslat';
+        this._markSendFailed(optId, reason);
+        this._sys(`Chyba: ${reason}`);
       }
     } catch (err) {
+      this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
     }
   }
@@ -4887,6 +4911,7 @@ class UnityChat {
 
     this.kick.onMessage = (m) => this._addMessage(m);
     this.kick.onStatus = (s, d) => this._status('kick', s, d);
+    this.kick.onSubBadges = (list) => { this._kickSubBadges = list; };
     this.kick.onUserId = (id) => {
       if (this.emotes.channel7tv.size === 0) {
         this.emotes.loadChannel('kick', id);
@@ -4909,77 +4934,6 @@ class UnityChat {
     if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
-    // Doparsovat existující zprávy z Twitch tabu (pokud existuje)
-    setTimeout(() => this._scrapeExistingChat(), 1500);
-  }
-
-  async _scrapeExistingChat() {
-    // Always attempt scrape — per-channel dedup (_dedupChannels) drops
-    // duplicates that overlap with the cache, and missing the scrape
-    // entirely loses any messages that arrived during the gap between
-    // last cached message and now (e.g. user reopened UC after 30s).
-    const channel = (this.config.channel || '').toLowerCase();
-    if (!channel) return;
-
-    try {
-      // Only scrape tabs that match the configured channel — otherwise we'd
-      // import messages from an unrelated Twitch stream the user happens to have open.
-      const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
-      for (const tab of tabs) {
-        // Path-based match (case-insensitive — Twitch handles are not case-sensitive).
-        // Accept: /{channel}, /{channel}/..., /popout/{channel}/...
-        let isChannelTab = false;
-        try {
-          const parts = new URL(tab.url || '').pathname.toLowerCase().split('/').filter(Boolean);
-          isChannelTab = parts[0] === channel
-            || (parts[0] === 'popout' && parts[1] === channel);
-        } catch {}
-        if (!isChannelTab) continue;
-
-        const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
-        if (!resp?.ok || !resp.messages?.length) continue;
-
-        // Boundary detection: match on username sequence (not message text,
-        // because scraped text is often incomplete — emotes are img tags).
-        // Take last N cached Twitch usernames and find that sequence in scraped.
-        const cachedUsers = this._msgCache
-          .filter((m) => m.platform === 'twitch' && m.username)
-          .slice(-20)
-          .map((m) => m.username.toLowerCase());
-        const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
-
-        let boundary = -1;
-        // Try decreasing suffix lengths (5→2) of cached username sequence.
-        // Iterate scraped from START → END so we lock onto the EARLIEST
-        // occurrence of the suffix — when the same user-pair repeats later
-        // in the scraped chat, picking the latest match would silently
-        // drop the messages BETWEEN the two occurrences. Picking earliest
-        // may add a few duplicates, but those get caught by content-key
-        // dedup downstream.
-        for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
-          const suffix = cachedUsers.slice(-len);
-          for (let i = 0; i + len <= scrapedUsers.length; i++) {
-            let match = true;
-            for (let j = 0; j < len; j++) {
-              if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
-            }
-            if (match) {
-              boundary = i + len - 1;
-              break;
-            }
-          }
-        }
-
-        const newMessages = resp.messages.slice(boundary + 1);
-        if (newMessages.length) {
-          this._sys(`Doparsováno ${newMessages.length} zpráv z Twitch chatu`);
-          for (const msg of newMessages) {
-            this._addMessage(msg);
-          }
-        }
-        break;
-      }
-    } catch {}
   }
 
   _disconnectAll() {
@@ -5010,6 +4964,7 @@ class UnityChat {
     if (status === 'error' && detail) {
       this._sys(`${platform.toUpperCase()}: ${detail}`);
     }
+    if (status === 'connected') this._scheduleReconcile();
     // Mirror to loading-overlay pills so the user sees connection progress.
     this._updateLoadingPill(platform, status);
   }
@@ -5041,18 +4996,9 @@ class UnityChat {
       if (!msgEl) continue;
       this._markMessageCleared(msgEl, note);
     }
-    // Cache (so reload preserves)
-    let cacheDirty = false;
-    for (const m of this._msgCache) {
-      if (m.platform === 'twitch' && m.username && m.username.toLowerCase() === u) {
-        if (m._cleared !== note) {
-          m._cleared = note;
-          cacheDirty = true;
-        }
-      }
-    }
-    if (cacheDirty) {
-      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    // Data ve store (uzly mimo okno se vykreslí až po návratu — stav musí sedět)
+    for (const m of this.store.slice()) {
+      if (m.platform === 'twitch' && m.username && m.username.toLowerCase() === u) m._cleared = note;
     }
   }
 
@@ -5062,11 +5008,8 @@ class UnityChat {
     const note = 'Deleted by mod';
     const msgEl = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
     if (msgEl) this._markMessageCleared(msgEl, note);
-    const cached = this._msgCache.find((m) => m.id === msgId);
-    if (cached && cached._cleared !== note) {
-      cached._cleared = note;
-      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
-    }
+    const cached = this.store.get(msgId);
+    if (cached) cached._cleared = note;
   }
 
   // Apply the .cleared class + append (or update) the inline mod-action
@@ -5245,7 +5188,7 @@ class UnityChat {
       const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
       for (const un of this.chatEl.querySelectorAll(sel)) {
         const msgId = un.closest('.msg')?.dataset.msgId;
-        const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+        const cachedMsg = msgId ? this.store.get(msgId) : null;
         const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
         if (ucProfile?.color) continue;
         un.style.color = readableColor(col);
@@ -5314,7 +5257,7 @@ class UnityChat {
         const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
         for (const un of this.chatEl.querySelectorAll(sel)) {
           const msgId = un.closest('.msg')?.dataset.msgId;
-          const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+          const cachedMsg = msgId ? this.store.get(msgId) : null;
           const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
           if (ucProfile?.color) continue;
           un.style.color = readableColor(color);
@@ -5426,7 +5369,6 @@ class UnityChat {
       ytChannel: this.config.ytChannel,
       username: this.config.username,
       platforms: { tw: this.config.twitch, yt: this.config.youtube, ki: this.config.kick },
-      maxMessages: this.config.maxMessages,
       layout: this.config.layout,
       _platformUsernames: this._platformUsernames,
       _isModOnChannel: this._isModOnChannel,
@@ -5439,25 +5381,18 @@ class UnityChat {
       youtube: { connected: !!this.youtube?.connected, channel: this.youtube?.channel },
     });
 
-    // Cache sizes
-    let dedupIdsTotal = 0, dedupContentTotal = 0;
-    const dedupPerChannel = {};
-    if (this._dedupChannels) {
-      for (const [k, v] of this._dedupChannels) {
-        dedupIdsTotal += v.ids.size;
-        dedupContentTotal += v.content.size;
-        dedupPerChannel[k] = { ids: v.ids.size, content: v.content.size };
-      }
-    }
+    // Store / okno
     push('Cache stats', {
-      msgCacheSize: this._msgCache?.length || 0,
-      msgCacheOldest: this._msgCache?.[0]?.timestamp,
-      msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
-      dedupChannels: this._dedupChannels?.size || 0,
-      dedupChannelsLRU: this._dedupLRU?.slice() || [],
-      dedupIdsTotal,
-      dedupContentTotal,
-      dedupPerChannel,
+      storeLength: this.store.length,
+      storeOldest: this.store.at(0)?.timestamp,
+      storeNewest: this.store.at(this.store.length - 1)?.timestamp,
+      oldestCursor: this.store.oldestCursor,
+      historyFetches: this._historyFetches,
+      domMsgs: this.chatEl.querySelectorAll('.msg').length,
+      parkedTop: this._parkedTop.length,
+      parkedBottom: this._parkedBottom.length,
+      // Audit ingestu (scripts/ingest-audit.mjs): všechna platform:id ve store.
+      msgCacheIds: this.store.slice().filter((m) => m.id && m.platform && !String(m.id).startsWith('sent-')).map((m) => `${m.platform}:${m.id}|${m.timestamp || 0}|${(m.username || '')}|${String(m.message || '').slice(0, 40)}`),
       chatUsersEntries: this._chatUsers?.size || 0,
       twitchBadgesLoaded: Object.keys(this._twitchBadges || {}).length,
       sevenTvPaintsLoaded: (typeof _7TV_PAINTS !== 'undefined') ? Object.keys(_7TV_PAINTS).length : 'n/a',
@@ -5557,7 +5492,7 @@ class UnityChat {
     }
 
     // Recent messages snapshot — last 30 msgs with key flags
-    const recent = (this._msgCache || []).slice(-30).map((m) => ({
+    const recent = this.store.slice(-30).map((m) => ({
       ts: m.timestamp,
       platform: m.platform,
       username: m.username,
@@ -5630,7 +5565,7 @@ class UnityChat {
             const sel = `.un[data-platform="twitch"][data-username="${CSS.escape(login)}"]`;
             for (const un of this.chatEl.querySelectorAll(sel)) {
               const msgId = un.closest('.msg')?.dataset.msgId;
-              const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+              const cachedMsg = msgId ? this.store.get(msgId) : null;
               const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
               if (ucProfile?.color) continue;
               un.style.color = readableColor(col);
@@ -6474,7 +6409,7 @@ class UnityChat {
       const un = el.querySelector('.un');
       if (!un || un.dataset.username !== uname) continue;
       const mid = el.dataset.msgId;
-      const cached = mid ? this._msgCache.find((m) => m.id === mid) : null;
+      const cached = mid ? this.store.get(mid) : null;
       const ts = cached?.timestamp || 0;
       if (Math.abs(now - ts) > 10000) continue;
       // Upgrade reward name and append cost pill
@@ -6489,7 +6424,6 @@ class UnityChat {
       if (cached) {
         if (data.rewardName) cached.rewardName = data.rewardName;
         if (data.rewardCost != null) cached.rewardCost = data.rewardCost;
-        chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
       }
       return;
     }
@@ -7034,7 +6968,7 @@ class UnityChat {
       const tx = msgEl.querySelector('.tx');
       if (!tx) continue;
       const msgId = msgEl.dataset.msgId;
-      const cached = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+      const cached = msgId ? this.store.get(msgId) : null;
       if (!cached) continue;
       const ctx = { platform, author: cached.username || username };
       if (platform === 'twitch') {
@@ -7057,7 +6991,7 @@ class UnityChat {
     for (const un of this.chatEl.querySelectorAll(sel)) {
       // Respect user-set UnityChat nickname color override
       const msgId = un.closest('.msg')?.dataset.msgId;
-      const cachedMsg = msgId ? this._msgCache.find((m) => m.id === msgId) : null;
+      const cachedMsg = msgId ? this.store.get(msgId) : null;
       const ucProfile = cachedMsg ? this.nicknames.get('twitch', cachedMsg.username) : null;
       if (ucProfile?.color) continue;
       _7tvApplyPaintStyles(un, css);
@@ -7069,42 +7003,6 @@ class UnityChat {
   // of the LRU, and evicts the oldest entry if we're over the channel cap.
   // Returns {ids, content} — callers mutate them directly. Returns null if
   // the platform/channel can't be resolved (let the caller skip dedup).
-  _dedupEntry(msg) {
-    const platform = msg?.platform;
-    if (!platform) return null;
-    let channel;
-    if (platform === 'twitch') channel = this.config.channel;
-    else if (platform === 'youtube') channel = this.config.ytChannel;
-    else if (platform === 'kick') channel = this.config.kickChannel || this.config.channel;
-    if (!channel) return null;
-    const key = platform + ':' + String(channel).toLowerCase();
-    let entry = this._dedupChannels.get(key);
-    if (!entry) {
-      entry = { ids: new Set(), content: new Set() };
-      this._dedupChannels.set(key, entry);
-    }
-    // LRU bump: move key to end (most recent)
-    const lruIdx = this._dedupLRU.indexOf(key);
-    if (lruIdx !== -1) this._dedupLRU.splice(lruIdx, 1);
-    this._dedupLRU.push(key);
-    // Evict oldest if over channel cap
-    while (this._dedupLRU.length > this._dedupMaxChannels) {
-      const oldest = this._dedupLRU.shift();
-      this._dedupChannels.delete(oldest);
-    }
-    return entry;
-  }
-
-  // FIFO trim a channel's Set — Sets preserve insertion order, so dropping
-  // the first N entries removes the oldest. Called after every add.
-  _dedupTrim(set) {
-    const cap = this._dedupMaxPerChannel;
-    if (set.size <= cap) return;
-    const over = set.size - cap;
-    const it = set.values();
-    for (let i = 0; i < over; i++) set.delete(it.next().value);
-  }
-
   _addMessage(msg) {
     // Defensive drop: a regular chat message with no body is just a
     // "username:" line with empty text — these were showing up in
@@ -7218,54 +7116,22 @@ class UnityChat {
       }
     }
 
-    // Dedup podle ID + content, scoped per-channel via _dedupEntry. LRU caps
-    // total channel count (_dedupMaxChannels) and each channel caps its own
-    // ID/content sets (_dedupMaxPerChannel) so memory stays bounded even on
-    // 8h+ sessions with heavy channel hopping.
-    const dedup = this._dedupEntry(msg);
-    if (msg.id && dedup) {
-      if (dedup.ids.has(msg.id)) return;
-      dedup.ids.add(msg.id);
-      this._dedupTrim(dedup.ids);
-    }
-
-    // Content-based dedup pro scraped zprávy
-    // Normalizace: lowercase, sjednocené whitespace, jen alfanumerika a mezery
-    const norm = (s) => (s || '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim()
-      .substring(0, 80);
-    const contentKey = msg.username && msg.message
-      ? norm(msg.username) + '|' + norm(msg.message)
-      : null;
-    if (contentKey && dedup) {
-      if (dedup.content.has(contentKey)) {
-        if (msg._optimistic) {
-          // Optimistic messages always pass through — user can send same text twice
-          this._optimisticKeys.set(contentKey, msg.id);
-        } else if (msg.scraped) {
-          return; // always drop scraped duplicates
-        } else {
-          // Real message — try to upgrade matching optimistic message
-          const optId = this._optimisticKeys.get(contentKey);
-          if (optId) {
-            this._upgradeOptimistic(optId, msg);
-            this._optimisticKeys.delete(contentKey);
-            return; // upgraded in-place, don't render again
-          }
-          // No matching optimistic → legitimate repeat (e.g. bot responses
-          // like !bulgarians always send the same text). Let it through.
-        }
-      } else {
-        dedup.content.add(contentKey);
-        this._dedupTrim(dedup.content);
-        if (msg._optimistic) this._optimisticKeys.set(contentKey, msg.id);
+    // Párování optimistická ↔ echo z platformy (echo má jiné id, stejný text).
+    const contentKey = this._contentKey(msg.username, msg.message);
+    if (msg._optimistic) {
+      if (contentKey) this._optimisticKeys.set(contentKey, msg.id);
+    } else if (contentKey && this._optimisticKeys.has(contentKey)) {
+      const optId = this._optimisticKeys.get(contentKey);
+      this._optimisticKeys.delete(contentKey);
+      if (this.store.get(optId)) {
+        this.store.upgrade(optId, msg);
+        this._upgradeOptimistic(optId, msg);
+        return; // upgraded in-place, don't render again
       }
     }
 
-    this.msgCount++;
+    // Dedup jen podle platform:id (historie ze serveru ↔ živé zprávy ↔ reconnect).
+    if (this.store.add(msg) === 'dup') return;
 
     // Sbírat usernames + barvy (platform:username → color mapping)
     // Optimistic messages skip — their color may be wrong (from _platformColors fallback);
@@ -7377,6 +7243,7 @@ class UnityChat {
     el.className = 'msg';
     el.dataset.platform = msg.platform;
     if (msg.id) el.dataset.msgId = msg.id;
+    if (msg.timestamp) el.dataset.ts = String(msg.timestamp);
     if (msg.superChat) el.classList.add('superchat');
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
@@ -7530,9 +7397,9 @@ class UnityChat {
       const badgeCount = Object.keys(this._twitchBadges).length;
       for (const badge of msg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const entry = this._twitchBadges[badge];
+        const entry = msg.platform === 'kick' ? this._kickBadgeEntry(badge) : this._twitchBadges[badge];
         const url = entry && typeof entry === 'object' ? entry.url : entry;
-        if (!url && badgeCount > 0) {
+        if (!url && msg.platform !== 'kick' && badgeCount > 0) {
           console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
         }
         if (url) {
@@ -7684,11 +7551,10 @@ class UnityChat {
     }
     } // end isSystemEvent guard
 
+    // Historie (boot / starší stránka) není „nová zpráva" — bez unread logiky.
+    const isHistory = this._bootLoading || !!this._prependCursor;
     // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu).
-    // Skip this entire block when prepending *older* messages via lazy scroll-up
-    // hydration — those are not "new", they are pre-existing chat history being
-    // exposed to the viewer.
-    if (!this.autoScroll && !this._hydratingOlder) {
+    if (!this.autoScroll && !isHistory) {
       if (this._unreadCount === 0) {
         // První nová zpráva → vložit separator
         const sep = document.createElement('div');
@@ -7707,18 +7573,27 @@ class UnityChat {
     // occasionally nudges scrollTop during reflow (scrollbar gutter churn,
     // image-load height changes, etc). Explicit capture+restore keeps the
     // user's reading line dead still as new messages stack below.
-    const preserveScroll = !this.autoScroll && !this._hydratingOlder;
+    const preserveScroll = !this.autoScroll && !isHistory;
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
 
-    this.chatEl.appendChild(el);
+    if (this._prependCursor) {
+      // Starší stránka ze serveru (vzestupně) → před první dosavadní uzel.
+      this.chatEl.insertBefore(el, this._prependCursor);
+    } else if (!this._bootLoading && !msg._optimistic && this._olderThanDomTail(msg.timestamp)) {
+      // Historická zpráva mezi živými (reconcile po connectu, YT backlog
+      // z úvodní stránky) → podle času před první novější, ne na konec.
+      const anchor = this._firstNewerMsgEl(msg.timestamp);
+      if (anchor) this.chatEl.insertBefore(el, anchor); else this.chatEl.appendChild(el);
+    } else if (this._parkedBottom.length) {
+      // Uživatel je nahoře a pod oknem už jsou zaparkované uzly — nová
+      // zpráva patří až za ně, do parku (DOM se dotáhne scrollem dolů).
+      this._parkedBottom.push(el);
+      return;
+    } else {
+      this.chatEl.appendChild(el);
+    }
 
-    // Skip trim/scroll/cache writes while we're prepending *older* msgs via
-    // lazy scroll-up hydration. Those messages are already in _msgCache
-    // (that's where we pulled them from), re-caching would push them to
-    // the end and corrupt chronological order. _trim() would also run
-    // against the fragment instead of the real chat. _scroll() is a no-op
-    // on fragments but harmless — skipping it anyway.
-    if (this._hydratingOlder) return;
+    if (isHistory) return;
 
     if (preserveScroll && this.chatEl.scrollTop !== prevScrollTop) {
       // Suppress the scroll handler briefly so our restore doesn't get
@@ -7727,80 +7602,236 @@ class UnityChat {
       this.chatEl.scrollTop = prevScrollTop;
     }
 
-    if (this.msgCount > this.config.maxMessages) this._trim();
+    if (this.autoScroll) this._unloadTop();
     this._scroll();
-
-    // Cache zprávy (serializovatelná data, bez DOM)
-    this._cacheMsg(msg);
   }
 
-  // ---- Message cache (per-channel, 72h TTL, compact format) ----
+  // ---- Historie ze serveru + DOM okno ---------------------------------
 
-  get _cacheKey() {
-    return `uc_messages_${(this.config.channel || 'default').toLowerCase()}`;
+  // GET /chat/history — server je jediný zdroj historie (spec 2026-09-19).
+  // Zprávy jdou přes _addMessage (dedup ve store, render, sběr barev/jmen).
+  async _loadHistory({ before = null, limit = 100, reconcile = false } = {}) {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) return 0;
+    const url = new URL(`${UC_API}/chat/history`);
+    url.searchParams.set('channel', channel);
+    url.searchParams.set('limit', String(limit));
+    if (before) url.searchParams.set('before', before);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    let added = 0;
+    try {
+      const r = await fetch(url, { signal: ctrl.signal });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (!data?.ok) throw new Error(data?.error || 'bad response');
+      const list = data.messages || [];
+      if (before) {
+        // Starší stránka: vkládat vzestupně před první dosavadní uzel.
+        this._prependCursor = this.chatEl.querySelector('.msg') || this.chatEl.firstElementChild || null;
+      } else if (!reconcile) {
+        this._bootLoading = true;
+      }
+      // reconcile: nic z toho — historické zprávy se zařadí podle času mezi živé.
+      try {
+        for (const m of list) {
+          const beforeLen = this.store.length;
+          this._addMessage(m);
+          if (this.store.length > beforeLen) added++;
+        }
+      } finally {
+        this._prependCursor = null;
+        this._bootLoading = false;
+      }
+      if (!reconcile) this.store.oldestCursor = data.nextBefore || null;
+      this._historyFetches++;
+      this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
+      if (!before && !reconcile) { this.autoScroll = true; this.chatEl.scrollTop = this.chatEl.scrollHeight; this._clearUnread(); }
+    } catch (err) {
+      this._sys(`Historie nedostupná (${err.name === 'AbortError' ? 'timeout' : err.message})`);
+      this._historyCooldownUntil = performance.now() + 3000;
+      this._ucLog('History', `error before=${before || '-'} ${err.message}`);
+    } finally {
+      clearTimeout(t);
+    }
+    return added;
   }
 
-  _compactMsg(msg) {
-    const m = {};
-    for (const [k, v] of Object.entries(msg)) {
-      // Strip null, undefined, false, empty string
-      if (v === null || v === undefined || v === false || v === '') continue;
-      m[k] = v;
-    }
-    // rgb() → #hex (shorter)
-    if (m.color?.startsWith('rgb')) {
-      const [r, g, b] = m.color.match(/\d+/g);
-      m.color = '#' + [r, g, b].map(c => (+c).toString(16).padStart(2, '0')).join('');
-    }
-    // Slim replyTo: keep id, username and message
-    if (m.replyTo && typeof m.replyTo === 'object') {
-      m.replyTo = { id: m.replyTo.id, username: m.replyTo.username, message: m.replyTo.message || null };
-    }
-    return m;
+  // ArrowUp/Down historie odeslaných zpráv — z toho, co server vrátil.
+  // Mezera mezi odpovědí /chat/history a JOINem na platformu (log 2026-09-19
+  // 17:33: historie 44.18 s, Twitch connected 46.07 s → 4 zprávy v rušném
+  // chatu propadly). Po každém 'connected' se historie stáhne ještě jednou;
+  // dedup podle id nechá jen to, co chybí, a zařadí to podle času.
+  _scheduleReconcile() {
+    clearTimeout(this._reconcileT);
+    this._reconcileT = setTimeout(() => {
+      this._reconcileT = null;
+      this._loadHistory({ reconcile: true, limit: 100 }).catch(() => {});
+    }, 2500);
   }
 
-  _expandMsg(msg) {
-    // Restore defaults expected by _addMessage
-    if (!('firstMsg' in msg)) msg.firstMsg = false;
-    if (!('replyTo' in msg)) msg.replyTo = null;
-    if (!('twitchEmotes' in msg)) msg.twitchEmotes = null;
-    // _compactMsg strips empty strings to save space — restore message
-    // to '' so the _addMessage empty-body drop fires correctly and we
-    // don't end up with msg.message === undefined inside renderers.
-    if (!('message' in msg)) msg.message = '';
-    // Expand string replyTo (legacy compact) to object
-    if (typeof msg.replyTo === 'string') {
-      msg.replyTo = { id: msg.replyTo, username: null, message: null };
+  _fillMsgHistoryFromStore() {
+    const myNames = new Set();
+    if (this.config.username) myNames.add(this.config.username.toLowerCase());
+    for (const name of Object.values(this._platformUsernames)) if (name) myNames.add(name.toLowerCase());
+    if (!myNames.size) return;
+    const hist = [];
+    for (const m of this.store.slice()) {
+      if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
+        const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
+        if (text) hist.push(text);
+      }
     }
-    // Expand replyTo missing message field
-    if (msg.replyTo && !('message' in msg.replyTo)) msg.replyTo.message = null;
-    return msg;
+    this._msgHistory = hist.slice(-50);
   }
 
-  _cacheMsg(msg) {
-    this._msgCache.push(this._compactMsg(msg));
-    // Cache is bounded by AGE (72h), not count — full 72h of chat activity is
-    // preserved so reload restores everything. Age-prune in batches every 50
-    // pushes to keep the hot path cheap on busy streams.
-    if (!this._cachePruneN) this._cachePruneN = 0;
-    if (++this._cachePruneN >= 50) {
-      this._cachePruneN = 0;
-      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-      this._msgCache = this._msgCache.filter((m) => !m.timestamp || m.timestamp > cutoff);
-    }
-    // Save immediately — extension reload can kill context anytime
-    chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+  // Vyčistit vše — nový store, prázdný DOM, žádné parky (přepnutí streamera, dev tlačítko).
+  _resetChat() {
+    this.store = new ChatStore();
+    this.chatEl.innerHTML = '';
+    this._parkedTop = [];
+    this._parkedBottom = [];
+    this._prependCursor = null;
+    this._optimisticKeys = new Map();
+    this._clearUnread();
   }
 
-  // Upgrade an optimistic message to a real one (IRC echo arrived)
+  // Nad oknem: uzly, co vypadly nahoře, se odpojí a schovají (ne zahodí),
+  // ať je scroll nahoru vrátí bez renderu. Volá se jen když je uživatel dole.
+  _unloadTop() {
+    const over = this.chatEl.children.length - this.DOM_WINDOW;
+    if (over <= 0) return;
+    for (let i = 0; i < over; i++) {
+      const first = this.chatEl.firstElementChild;
+      if (!first) break;
+      first.remove();
+      this._parkedTop.push(first);
+    }
+    // Pojistka proti neomezenému růstu za dlouhou session (data zůstávají ve store).
+    if (this._parkedTop.length > 5000) this._parkedTop.splice(0, this._parkedTop.length - 5000);
+  }
+
+  _unloadBottom() {
+    const over = this.chatEl.children.length - this.DOM_WINDOW;
+    if (over <= 0) return;
+    const taken = [];
+    for (let i = 0; i < over; i++) {
+      const last = this.chatEl.lastElementChild;
+      if (!last) break;
+      last.remove();
+      taken.unshift(last);
+    }
+    this._parkedBottom = taken.concat(this._parkedBottom);
+    this.autoScroll = false;
+  }
+
+  async _extendUp() {
+    if (this._historyBusy || performance.now() < this._historyCooldownUntil) return;
+    this._historyBusy = true;
+    try {
+      const prevHeight = this.chatEl.scrollHeight, prevTop = this.chatEl.scrollTop;
+      if (this._parkedTop.length) {
+        const batch = this._parkedTop.splice(-100, 100);
+        const first = this.chatEl.firstElementChild;
+        for (const node of batch) this.chatEl.insertBefore(node, first);
+      } else if (this.store.oldestCursor) {
+        const spinner = document.createElement('div');
+        spinner.className = 'hydrate-spinner';
+        spinner.innerHTML = '<span class="hs-ring" aria-hidden="true"></span><span class="hs-label">Načítání starších zpráv…</span>';
+        this.chatEl.insertBefore(spinner, this.chatEl.firstChild);
+        await new Promise((r) => requestAnimationFrame(() => r()));
+        const h0 = this.chatEl.scrollHeight, t0 = this.chatEl.scrollTop;
+        const added = await this._loadHistory({ before: this.store.oldestCursor });
+        spinner.remove();
+        if (!added) return;
+        this._programmaticScrollUntil = performance.now() + 50;
+        this.chatEl.scrollTop = t0 + (this.chatEl.scrollHeight - h0);
+        this._unloadBottom();
+        return;
+      } else {
+        return;
+      }
+      this._programmaticScrollUntil = performance.now() + 50;
+      this.chatEl.scrollTop = prevTop + (this.chatEl.scrollHeight - prevHeight);
+      this._unloadBottom();
+    } finally {
+      this._historyBusy = false;
+    }
+  }
+
+  _extendDown() {
+    if (!this._parkedBottom.length) return;
+    const batch = this._parkedBottom.splice(0, 100);
+    for (const node of batch) this.chatEl.appendChild(node);
+    // Uvolnit místo nahoře, ať okno nepřeroste.
+    const over = this.chatEl.children.length - this.DOM_WINDOW;
+    for (let i = 0; i < over; i++) {
+      const first = this.chatEl.firstElementChild;
+      if (!first) break;
+      first.remove();
+      this._parkedTop.push(first);
+    }
+  }
+
+  // „N nových" / konec chatu: vrátit vše zpod okna, ořezat nahoře, dolů.
+  _jumpToLatest() {
+    if (this._parkedBottom.length) {
+      for (const node of this._parkedBottom) this.chatEl.appendChild(node);
+      this._parkedBottom = [];
+    }
+    this.autoScroll = true;
+    this._unloadTop();
+    this._clearUnread();
+    this._programmaticScrollUntil = performance.now() + 200;
+    this.chatEl.scrollTop = this.chatEl.scrollHeight;
+  }
+
+  _contentKey(username, message) {
+    if (!username || !message) return null;
+    const norm = (s) => (s || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .substring(0, 80);
+    return norm(username) + '|' + norm(message);
+  }
+
+  // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
+  // Dosud zůstala v DOM i v cache s _optimistic:true a po reloadu se vykreslila
+  // znovu — z pohledu uživatele "poslal jsem to", přitom nikam nešla.
+  _markSendFailed(optId, reason) {
+    const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+    if (el) {
+      el.classList.add('send-failed');
+      el.title = `Neodesláno: ${reason} — klikni pro vložení zpět do inputu`;
+      el.addEventListener('click', () => {
+        const tx = el.querySelector('.tx');
+        if (!tx || !this.msgInput) return;
+        this.msgInput.value = tx.textContent.trim();
+        this.msgInput.focus();
+        this._autoResizeInput?.();
+      }, { once: true });
+    }
+
+    this.store.markFailed(optId);
+
+    // Uvolnit párovací klíč — pozdější reálná zpráva se stejným textem
+    // (třeba po ručním poslání ve vanilla chatu) by jinak tuhle mrtvou
+    // optimistickou zprávu "upgradla" místo aby se vykreslila sama.
+    for (const [key, id] of this._optimisticKeys) {
+      if (id === optId) { this._optimisticKeys.delete(key); break; }
+    }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'SendFail', args: [optId, reason] }).catch(() => {});
+    } catch {}
+  }
+
   _upgradeOptimistic(optId, realMsg) {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
-    if (el && realMsg.id) el.dataset.msgId = realMsg.id;
-    if (realMsg.id) {
-      const dedup = this._dedupEntry(realMsg);
-      if (dedup) { dedup.ids.add(realMsg.id); this._dedupTrim(dedup.ids); }
-    }
+    if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
 
     // Update username color — prefer UnityChat custom color over IRC color
     if (el) {
@@ -7854,20 +7885,6 @@ class UnityChat {
       }
     }
 
-    // Update cache entry: replace optimistic data with real data
-    const cacheIdx = this._msgCache.findIndex(m => m.id === optId);
-    if (cacheIdx !== -1) {
-      const cached = this._msgCache[cacheIdx];
-      if (realMsg.id) cached.id = realMsg.id;
-      const ucColor = this.nicknames.getColor(realMsg.platform, realMsg.username);
-      cached.color = ucColor || realMsg.color || cached.color;
-      if (realMsg.badgesRaw) cached.badgesRaw = realMsg.badgesRaw;
-      if (realMsg.twitchEmotes) cached.twitchEmotes = realMsg.twitchEmotes;
-      if (realMsg.twitchEmotesOffset != null) cached.twitchEmotesOffset = realMsg.twitchEmotesOffset;
-      delete cached._optimistic;
-      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
-    }
-
     // Update _chatUsers with the correct color from the real message —
     // preserve any DOM/GQL-resolved color/paint state so we don't downgrade.
     if (realMsg.color && realMsg.username) {
@@ -7890,191 +7907,10 @@ class UnityChat {
     }
   }
 
-  // Prepend a batch of older messages from _msgCache when user scrolls near
-  // the top. Preserves scroll position by measuring scrollHeight before and
-  // after insert and restoring scrollTop via the delta, so the viewport
-  // stays locked on the user's current reading position.
-  async _hydrateOlderMessages() {
-    if (this._hydratingOlder) return;
-    if (!this._msgCache?.length || !(this._hydratedIdx > 0)) return;
-    this._hydratingOlder = true;
-
-    // Show an inline spinner at the very top of the chat so the viewer sees
-    // WHY the scroll just nudged forward. Sits inside chatEl (so its height
-    // counts toward scrollHeight), visible for the ~100-200ms render window,
-    // then swapped for the actual messages. Animation is CSS; the label is
-    // pluralized via _formatNewMsgCount but uses a dedicated "starší zprávy"
-    // wording so users don't confuse it with the "new messages" pill.
-    const spinner = document.createElement('div');
-    spinner.className = 'hydrate-spinner';
-    spinner.innerHTML = '<span class="hs-ring" aria-hidden="true"></span><span class="hs-label">Načítání starších zpráv…</span>';
-    const realChat = this.chatEl;
-    realChat.insertBefore(spinner, realChat.firstChild);
-
-    try {
-      // One-frame delay so the spinner paints before we start the (cheaper,
-      // but still non-trivial) render work. Without this the user sees a
-      // scroll jump with no indicator of what happened.
-      await new Promise((r) => requestAnimationFrame(() => r()));
-      // Capture scroll metrics AFTER the rAF yield, not before — the user
-      // may have scrolled further up during the frame gap. Using a stale
-      // prevTop would mis-place the viewport after prepend and make the
-      // chat look like messages skipped out of order. This snapshot runs
-      // synchronously on the same tick as the work below, so no scroll
-      // event can sneak between capture and restore.
-      const prevHeight = realChat.scrollHeight;
-      const prevTop = realChat.scrollTop;
-
-      const batch = 150;
-      const startIdx = Math.max(0, this._hydratedIdx - batch);
-      const slice = this._msgCache.slice(startIdx, this._hydratedIdx)
-        // Safety re-sort: even if _msgCache arrived out-of-chronological
-        // order (scraped fills, cross-source merges), the prepended batch
-        // itself renders in ascending timestamp order. Otherwise a slice
-        // spanning 17:14 and 17:46 messages would flip their order inside
-        // the newly visible block.
-        .slice()
-        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-      // Build a detached fragment so we don't trigger layout per insert,
-      // then splice it in front of the oldest currently-rendered msg.
-      // _addMessage appends to this.chatEl, so we temporarily swap chatEl
-      // for a fragment, render into it, then prepend the fragment.
-      const frag = document.createDocumentFragment();
-      this.chatEl = frag;
-      try {
-        for (const m of slice) {
-          try { this._addMessage(this._expandMsg(m)); } catch {}
-        }
-      } finally {
-        this.chatEl = realChat;
-      }
-      spinner.remove();
-      realChat.insertBefore(frag, realChat.firstChild);
-      this._programmaticScrollUntil = performance.now() + 200;
-      const newHeight = realChat.scrollHeight;
-      // Scroll-restore policy:
-      // - User was AT the very top (prevTop < 40px): land them at the top
-      //   of the newly prepended block (scrollTop = 0) so they immediately
-      //   see the freshly-loaded old messages they were asking for.
-      // - User was scrolled mid-chat: keep their current reading line
-      //   fixed by adding the prepended block's height to scrollTop.
-      if (prevTop < 40) {
-        realChat.scrollTop = 0;
-      } else {
-        realChat.scrollTop = prevTop + (newHeight - prevHeight);
-      }
-      this._hydratedIdx = startIdx;
-    } catch (e) {
-      spinner.remove();
-      throw e;
-    } finally {
-      this._hydratingOlder = false;
-    }
-  }
-
-  async _loadCachedMessages() {
-    try {
-      const data = await chrome.storage.local.get(this._cacheKey);
-      const raw = data[this._cacheKey];
-      if (!raw?.length) return;
-
-      // 72h TTL filter + drop legacy "empty body" junk. Earlier versions
-      // cached messages whose scraped text extractor yielded "" — the
-      // compactor then stripped the `message` key so on load they show
-      // up as plain "username:" lines. System events (raid, sub, gift,
-      // redeem, announcement, highlight, cleared, /me) legitimately
-      // have no body, so we keep those.
-      const cutoff = Date.now() - 72 * 60 * 60 * 1000;
-      const msgs = raw.filter((m) => {
-        if (m.timestamp && m.timestamp <= cutoff) return false;
-        const body = typeof m.message === 'string' && m.message.trim();
-        const platformContent = (m.ytRuns?.length > 0)
-          || (typeof m.kickContent === 'string' && m.kickContent.trim().length > 0);
-        const isSystem = m.isRaid || m.isAnnouncement || m.isSubEvent
-          || m.isGiftBundle || m.isSubGift || m.isRedeem
-          || m.isMilestone
-          || m.isHighlight || m._cleared || m.isAction;
-        return body || platformContent || isSystem;
-      });
-
-      // Sort by timestamp — _msgCache insertion order can drift from real
-      // chronology when scraped messages (Twitch DOM backfill) arrive late
-      // but carry older timestamps than the live messages already cached.
-      // Without this sort, lazy-scroll-up prepends slice out a chunk whose
-      // internal order mixes 17:14 + 17:46 messages, and the user sees
-      // obvious timeline hops inside a single batch.
-      msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-      // Storage trim: keep at most maxMessages (default 5000) in _msgCache.
-      // Actual DOM render is bounded separately by initialRender (see below)
-      // so we can hold many msgs in memory without paying the render cost
-      // up front. Older msgs load on scroll-up via _hydrateOlderMessages.
-      const storageCap = this.config.maxMessages || 5000;
-      const fullCache = msgs.slice(-storageCap);
-      this._msgCache = fullCache;
-
-      // Boot render: only the most recent initialRender msgs go into the DOM
-      // now. Older msgs live in _msgCache and get prepended on demand when
-      // the user scrolls to the top. This keeps boot under 2s even with a
-      // 5000-msg cache.
-      const renderN = this.config.initialRender || 250;
-      const toRender = fullCache.slice(-renderN);
-      this._hydratedIdx = fullCache.length - toRender.length; // first un-rendered idx in fullCache
-
-      // Chunked insert: yield to the event loop every CHUNK msgs so the UI
-      // thread can paint, scroll, and respond to clicks during hydration.
-      const CHUNK = 40;
-      const yieldNow = () => new Promise((r) => {
-        if (typeof requestIdleCallback === 'function') requestIdleCallback(() => r(), { timeout: 50 });
-        else setTimeout(r, 0);
-      });
-      for (let i = 0; i < toRender.length; i += CHUNK) {
-        const end = Math.min(i + CHUNK, toRender.length);
-        for (let j = i; j < end; j++) {
-          try { this._addMessage(this._expandMsg(toRender[j])); } catch {}
-        }
-        if (end < toRender.length) await yieldNow();
-      }
-
-      // Populate message history from cached user messages (for ArrowUp/Down).
-      // We walk the FULL cache here so users get history even from msgs that
-      // aren't rendered yet. Match all known username variants.
-      const myNames = new Set();
-      if (this.config.username) myNames.add(this.config.username.toLowerCase());
-      for (const name of Object.values(this._platformUsernames)) {
-        if (name) myNames.add(name.toLowerCase());
-      }
-      for (const m of fullCache) {
-        if (m.username && myNames.has(m.username.toLowerCase()) && m.message) {
-          const text = m.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
-          if (text) this._msgHistory.push(text);
-        }
-      }
-      if (this._msgHistory.length > 50) this._msgHistory = this._msgHistory.slice(-50);
-    } catch (e) {
-      console.error('Cache load failed:', e);
-      // DON'T reset _msgCache — keep whatever was there so beforeunload
-      // doesn't overwrite the storage with an empty array
-    }
-  }
-
   _clearUnread() {
     this._unreadCount = 0;
     this.scrollBtn.classList.add('hidden');
     document.getElementById('unread-separator')?.remove();
-  }
-
-  _trim() {
-    const c = this.chatEl.children;
-    const n = Math.max(0, c.length - this.config.maxMessages);
-    for (let i = 0; i < n; i++) c[0].remove();
-    // Keep the lazy-load cursor in sync — N rendered msgs fell off the top,
-    // so the first un-rendered idx in _msgCache advances by N (those rows
-    // are effectively "re-hidden" and become eligible for re-hydration).
-    if (n > 0 && typeof this._hydratedIdx === 'number') {
-      this._hydratedIdx = Math.min((this._msgCache?.length || 0), this._hydratedIdx + n);
-    }
   }
 
   // Czech plural rules for the "N new messages" pill. 1 → singular;

@@ -1,6 +1,6 @@
 {
   "name": "unitychat-backend",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "UnityChat backend API - user database, message log, cross-platform sync",
   "type": "module",
   "private": true,
@@ -14,7 +14,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --env-file=.env.test --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",

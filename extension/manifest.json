@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.38.62",
+  "version": "3.39.3",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",
@@ -9,8 +9,7 @@
     "tabs",
     "scripting",
     "cookies",
-    "downloads",
-    "alarms"
+    "downloads"
   ],
   "host_permissions": [
     "https://kick.com/*",
@@ -36,14 +35,6 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "sidebar_action": {
-    "default_panel": "sidepanel.html",
-    "default_title": "UnityChat",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png"
-    }
-  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -62,30 +53,45 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.twitch.tv/*"],
-      "js": ["content/twitch.js"],
+      "matches": [
+        "*://*.twitch.tv/*"
+      ],
+      "js": [
+        "content/twitch.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://*.youtube.com/*"],
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
       "all_frames": true,
-      "js": ["content/youtube.js"],
+      "js": [
+        "content/youtube.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://*.kick.com/*"],
-      "js": ["content/kick.js"],
+      "matches": [
+        "*://*.kick.com/*"
+      ],
+      "js": [
+        "content/kick.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/icon16.png", "icons/icon48.png", "icons/icon128.png"],
-      "matches": ["*://*.twitch.tv/*", "*://*.youtube.com/*"]
-    },
-    {
-      "resources": ["streamer.html"],
-      "matches": ["https://jouki.cz/*", "https://api.jouki.cz/*"]
+      "resources": [
+        "icons/icon16.png",
+        "icons/icon48.png",
+        "icons/icon128.png"
+      ],
+      "matches": [
+        "*://*.twitch.tv/*",
+        "*://*.youtube.com/*"
+      ]
     }
   ]
 }

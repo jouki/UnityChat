@@ -7,12 +7,11 @@
 //     We call sidePanel.setPanelBehavior to make the toolbar action open it.
 //
 //   Opera:
-//     chrome.sidePanel is undefined. Opera uses the "sidebar_action" manifest
-//     key (Firefox-style) to surface UnityChat in its native left sidebar —
-//     no JS is needed for that, Opera picks it up from the manifest.
-//     As a second entry point, the toolbar action creates a popup window, so
-//     users who prefer a floating window (or who haven't pinned the sidebar)
-//     still have something to click.
+//     chrome.sidePanel is undefined. The toolbar action opens UnityChat as a
+//     regular tab next to the stream tab (see openUcTab). The manifest is
+//     Chrome-only since v3.38.67 — no "sidebar_action" key, so there is no
+//     native Opera sidebar entry; the Opera store build will get its own
+//     manifest if that is ever wanted.
 
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
@@ -31,8 +30,7 @@ if (HAS_SIDE_PANEL) {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
 } else {
-  // Opera path: the native sidebar is wired via "sidebar_action" in the
-  // manifest. The toolbar action opens UnityChat as a regular tab next to
+  // Opera path: the toolbar action opens UnityChat as a regular tab next to
   // the stream tab (openerTabId → Opera may auto-group them into a tab
   // island). Popup-window mode was replaced in v3.38.56 — a tab works with
   // Opera Split Screen, a popup window does not.
@@ -87,81 +85,6 @@ function isPlatformTab(tab) {
   } catch { return false; }
 }
 
-// UC_STORE_STRIP_START: self-update badge + poll (CWS forbids out-of-store updates)
-// Restore the update-available badge on service-worker startup. MV3 workers
-// shut down under idle and lose in-memory state, but chrome.action badge is
-// persistent in browser session; we still re-assert from storage to survive
-// `chrome.action.*` internal clears between worker lifecycles.
-(async () => {
-  try {
-    const d = await chrome.storage.local.get('uc_update');
-    if (d?.uc_update?.version) {
-      chrome.action.setBadgeText({ text: '!' });
-      chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
-      if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
-      chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${d.uc_update.version})` });
-    }
-  } catch {}
-})();
-
-// Periodic update poll — fires every 15 min via chrome.alarms (survives
-// service-worker shutdown). Also runs once on each worker spin-up so the
-// badge appears within seconds of an extension install/restart even before
-// the alarm clock ticks. Sidepanel does its own check on open, so a freshly
-// opened panel never sees stale state either.
-const UC_UPDATE_ALARM = 'uc-update-check';
-const UC_UPDATE_MANIFEST_URL = 'https://jouki.cz/download/manifest.json';
-
-function _ucIsNewerVersion(remote, current) {
-  const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
-  const a = parse(remote);
-  const b = parse(current);
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const x = a[i] || 0;
-    const y = b[i] || 0;
-    if (x > y) return true;
-    if (x < y) return false;
-  }
-  return false;
-}
-
-async function ucCheckForUpdate() {
-  try {
-    const current = chrome.runtime.getManifest().version;
-    const r = await fetch(UC_UPDATE_MANIFEST_URL, { cache: 'no-store' });
-    if (!r.ok) return;
-    const remote = await r.json();
-    const latest = remote?.version;
-    if (!latest) return;
-    if (_ucIsNewerVersion(latest, current)) {
-      chrome.action.setBadgeText({ text: '!' });
-      chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
-      if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
-      chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${latest})` });
-      await chrome.storage.local.set({ uc_update: { version: latest, at: Date.now() } });
-      // Notify any open sidepanel so its in-panel tooltip lights up live,
-      // without waiting for the user to close+reopen the panel.
-      chrome.runtime.sendMessage({ type: 'UC_UPDATE_AVAILABLE', version: latest }).catch(() => {});
-    } else {
-      chrome.action.setBadgeText({ text: '' });
-      chrome.action.setTitle({ title: 'UnityChat - Otevřít sjednocený chat' });
-      await chrome.storage.local.remove('uc_update');
-      chrome.runtime.sendMessage({ type: 'UC_UPDATE_CLEARED' }).catch(() => {});
-    }
-  } catch {}
-}
-
-// Create/refresh the alarm on every worker spin-up — chrome.alarms.create
-// with the same name is a no-op if it already exists with the same period,
-// so this is cheap and self-healing.
-chrome.alarms.create(UC_UPDATE_ALARM, { periodInMinutes: 15 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === UC_UPDATE_ALARM) ucCheckForUpdate();
-});
-// Also kick off a check immediately on this worker spin-up.
-ucCheckForUpdate();
-// UC_STORE_STRIP_END
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 chrome.runtime.onInstalled.addListener(async () => {
@@ -304,23 +227,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
-  // UC_STORE_STRIP_START: update badge messages (self-update path)
-  if (msg.type === 'SET_UPDATE_BADGE') {
-    const v = msg.version || '?';
-    chrome.action.setBadgeText({ text: '!' });
-    chrome.action.setBadgeBackgroundColor({ color: '#e5484d' });
-    if (chrome.action.setBadgeTextColor) chrome.action.setBadgeTextColor({ color: '#ffffff' });
-    chrome.action.setTitle({ title: `UnityChat — UPDATE available (v${v})` });
-    chrome.storage.local.set({ uc_update: { version: v, at: Date.now() } }).catch(() => {});
-    return;
-  }
-  if (msg.type === 'CLEAR_UPDATE_BADGE') {
-    chrome.action.setBadgeText({ text: '' });
-    chrome.action.setTitle({ title: 'UnityChat - Otevřít sjednocený chat' });
-    chrome.storage.local.remove('uc_update').catch(() => {});
-    return;
-  }
-  // UC_STORE_STRIP_END
   if (msg.type === 'GET_CHAT_COLORS') {
     fetchChatColors(msg.usernames || [])
       .then((users) => sendResponse({ ok: true, users }))

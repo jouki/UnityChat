@@ -10,40 +10,10 @@
   <!-- Header -->
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
-    <!-- UC_STORE_STRIP_START: self-update tooltip (CWS forbids out-of-store updates) -->
-    <!-- Update notification tooltip template — JS relocates this into
-         #hdr-logo-wrap (built at init time) so the dot and tooltip hang
-         off the UnityChat logo on the left of the header. -->
-    <template id="update-tooltip-tpl">
-      <!-- Speech-bubble arrow pointing up to the logo. Outer wedge is the
-           border color, inner wedge is the panel fill. Kept as siblings
-           of .update-tooltip (not children) so tooltip's overflow:hidden
-           doesn't clip them. -->
-      <span class="ut-arrow-outer" aria-hidden="true"></span>
-      <span class="ut-arrow-inner" aria-hidden="true"></span>
-      <div class="update-tooltip">
-        <div class="ut-title">Nová verze k dispozici</div>
-        <div class="ut-version">v<span id="ut-version-num">?</span></div>
-        <div class="ut-text">
-          Můžeš updatovat pomocí <code>update.bat</code> ve složce extensionu,
-          nebo si stáhni <a id="ut-download-link" href="https://jouki.cz/download/unitychat.zip" target="_blank" rel="noopener">novou verzi</a>.
-        </div>
-        <div class="ut-explorer" aria-hidden="true">
-          <div class="ut-exp-path">&#128193; extension</div>
-          <ul class="ut-exp-list">
-            <li>&#128196; background.js</li>
-            <li>&#128196; sidepanel.html</li>
-            <li>&#128196; sidepanel.js</li>
-            <li>&#128196; manifest.json</li>
-            <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
-          </ul>
-        </div>
-        <!-- 10s auto-reveal countdown bar, shrinks right-edge-leftward. -->
-        <span class="ut-countdown" aria-hidden="true"></span>
-      </div>
-    </template>
-    <!-- UC_STORE_STRIP_END -->
     <div id="header-actions">
+      <button id="btn-reconnect" title="Znovu připojit ke všem chatům" aria-label="Znovu připojit">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg>
+      </button>
       <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
       <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
       <button id="btn-settings" title="Nastavení">&#9881;</button>
@@ -55,9 +25,6 @@
     <details class="settings-section" id="channels-section">
       <summary>
         <span>Kanály</span>
-        <!-- UC_STORE_STRIP_START: streamer OAuth entry point -->
-        <button id="btn-im-streamer" class="btn-streamer-inline" title="Otevřít stránku pro přihlášení streamera">Jsem streamer</button>
-        <!-- UC_STORE_STRIP_END -->
       </summary>
       <div class="setting-row">
         <label for="input-channel">Twitch</label>
@@ -103,10 +70,11 @@
         Zobrazit časové značky
       </label>
     </div>
-    <div class="setting-row actions">
-      <button id="btn-connect" class="btn-primary" title="Znovu se připojit ke všem dostupným chatům aktuálního streamera">Připojit</button>
-      <button id="btn-disconnect">Odpojit</button>
-      <button id="btn-clear">Vyčistit chat</button>
+    <div class="setting-row">
+      <label class="platform-check" for="chk-reply-oneline">
+        <input type="checkbox" id="chk-reply-oneline">
+        Odpovědi zobrazit na jeden řádek
+      </label>
     </div>
     <div class="setting-row dev-mode-row">
       <label class="platform-check">
@@ -127,17 +95,20 @@
     </div>
   </div>
 
+  <!-- Nabídka přepnutí na jiného podporovaného streamera (jen ručně) -->
+  <div id="switch-offer" class="hidden">
+    <button id="btn-switch-streamer" type="button">Přepnout chat</button>
+  </div>
+
   <!-- Status + Filter Bar -->
   <div id="bar">
-    <div id="statuses">
-      <span class="st" id="st-twitch" title="Twitch"><span class="dot"></span>TW</span>
-      <span class="st" id="st-youtube" title="YouTube"><span class="dot"></span>YT</span>
-      <span class="st" id="st-kick" title="Kick"><span class="dot"></span>KI</span>
-    </div>
+    <!-- Filtr + stav připojení v jednom: tečka = stav platformy
+         (červená nepřipojeno, žlutá připojuje se, zelená připojeno),
+         šedá = platforma vyfiltrovaná (tlačítko vypnuté). -->
     <div id="filters">
-      <button class="fbtn active" data-platform="twitch">TW</button>
-      <button class="fbtn active" data-platform="youtube">YT</button>
-      <button class="fbtn active" data-platform="kick">KI</button>
+      <button class="fbtn active" data-platform="twitch" id="st-twitch" title="Twitch"><span class="dot"></span>TW</button>
+      <button class="fbtn active" data-platform="youtube" id="st-youtube" title="YouTube"><span class="dot"></span>YT</button>
+      <button class="fbtn active" data-platform="kick" id="st-kick" title="Kick"><span class="dot"></span>KI</button>
     </div>
   </div>
 
@@ -194,6 +165,7 @@
     <button id="btn-send" disabled>&#10148;</button>
   </div>
 
+  <script src="chat-store.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

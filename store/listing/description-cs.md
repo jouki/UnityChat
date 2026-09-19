@@ -34,18 +34,18 @@ UnityChat spojí live chat z Twitche, YouTube a Kicku do jednoho panelu vedle st
 • Připnuté zprávy — banner nad chatem ukáže, co streamer připnul
 • Raidy a první zprávy — nové chattery a příchozí raidy panel odliší
 • Přezdívky — komukoli můžeš nastavit vlastní jméno a barvu, které se drží napříč platformami
-• Historie chatu — po zavření a otevření panelu konverzace nezmizí
+• Historie chatu — po otevření panelu se načte, co v chatu proběhlo, i když jsi ho měl zavřený
 • Tři velikosti rozhraní a tmavý vzhled, který nebije do očí vedle streamu
 
 ━━━ JAK TO FUNGUJE ━━━
 
-Otevři stream na Twitchi, YouTube nebo Kicku a klikni na ikonu UnityChat. Panel sám pozná, na jakém kanálu jsi, a připojí se. Nic nenastavuješ.
+UnityChat je dělaný pro konkrétní komunitu: otevři stream RobDiesALota na Twitchi, YouTube nebo Kicku, klikni na ikonu UnityChat a panel se připojí ke všem třem chatům najednou. Podporovaní jsou zatím tři streameři — RobDiesALot, TenSterakdary a ArcadeBulls; když máš otevřený stream jiného z nich, panel ti nabídne přepnutí jedním tlačítkem. Na ostatních kanálech zůstává u RobDiesALota. Nic nenastavuješ.
 
 Zprávy odcházejí přes přihlášení, které už v prohlížeči máš — UnityChat od tebe nechce žádné heslo ani vlastní účet.
 
 ━━━ SOUKROMÍ ━━━
 
-Historie chatu dnes zůstává lokálně ve tvém prohlížeči. Na server UnityChatu jde jméno, kterým jsi na platformě přihlášený, sledovaný kanál a přezdívky, které sám nastavíš. Připravuje se archiv chatu, který bude veřejné zprávy ukládat i na serveru — zatím není aktivní. Podrobnosti: https://jouki.cz/UnityChat/privacy
+Historii chatu načítá panel ze serveru UnityChatu, který veřejné zprávy z chatů podporovaných streamerů (Twitch, YouTube, Kick) archivuje — ukládá se text zprávy, jméno autora, čas a odznaky či emoty potřebné k zobrazení, bez časového omezení; smazání na žádost. Ze samotného rozšíření jde na server jen jméno, kterým jsi na platformě přihlášený, sledovaný kanál a přezdívky, které sám nastavíš. Podrobnosti: https://jouki.cz/UnityChat/privacy
 
 ━━━ POZNÁMKY ━━━
 

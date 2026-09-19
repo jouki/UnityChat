@@ -1,4 +1,4 @@
-# UnityChat - Chrome/Opera Extension + Backend v3.38.57
+# UnityChat - Chrome Extension + Backend v3.38.67
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -14,16 +14,14 @@ UnityChat/
 │   ├── sidepanel.html          # UI
 │   ├── sidepanel.css           # Dark theme styling
 │   ├── sidepanel.js            # ~3000 řádků - UI/messaging logika
-│   ├── backup.html             # Export/import extension data (sync + local storage)
-│   ├── backup.js               # Backup logic (external JS, MV3 CSP blocks inline)
-│   ├── update.bat              # One-click updater (stáhne ZIP, přepíše soubory)
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
-│   │   ├── twitch.js           # Twitch DOM (Slate editor) + scrape + reply
+│   │   ├── twitch.js           # Twitch DOM (Slate editor) + send + reply
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
+│       └── platform/           # twitch/youtube/kick.svg badge loga + *-gold.svg pro UC uživatele
 # landing/ — POZOR: web jouki.cz je v SAMOSTATNÉM privátním repu github.com/jouki/jouki.cz
 #            (ne tady). Viz sekce "Landing page" níže. Tento repo dává jen extension/.
 ├── backend/                 # Node.js + Fastify + Drizzle + Postgres API server
@@ -54,17 +52,15 @@ const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
 ```
 
-Manifest obsahuje **oba side panel mechanismy** (`side_panel` pro Chrome + `sidebar_action` pro Operu). Každý browser vezme ten svůj, druhý ignoruje jako neznámý key (jen warning, extension se načte OK).
+**Od v3.38.67 je manifest čistě Chrome** (`side_panel`, bez `sidebar_action`) — `extension/` je přesně to, co jde do Chrome Web Store, žádná dev-only vrstva. V Opeře se UnityChat otevírá jako tab (toolbar action → `openUcTab`), nativní Opera sidebar nemá (rozhodnutí usera 2026-09-19: „nativní sidebar v Opeře stejně nikdo nevyužije"). Opera store release dostane případně vlastní manifest.
 
 | | Chrome | Opera |
 |---|---|---|
 | `chrome.sidePanel` API | ✅ dostupné | ❌ undefined |
 | `HAS_SIDE_PANEL` | `true` | `false` |
-| Primary UI entry | native side panel přes `setPanelBehavior({ openPanelOnActionClick: true })` | native Opera sidebar přes `sidebar_action` manifest key (user si připne přes "Customize sidebar") |
-| Secondary UI entry | n/a (sidebar = main) | toolbar action → `chrome.windows.create({ type: 'popup' })` (pro userů co sidebar nepoužívají) |
+| UI entry | native side panel přes `setPanelBehavior({ openPanelOnActionClick: true })` | toolbar action → UnityChat jako regular tab vedle stream tabu (`openUcTab`, v3.38.56) |
 | Manifest `sidePanel` permission | aktivní | Opera (Chromium-based) přijímá syntakticky, ale API nepoužívá |
 | Manifest `side_panel` key | Chrome load | Opera ignoruje |
-| Manifest `sidebar_action` key | Chrome ignoruje (unknown key warning) | Opera load |
 
 Side panel JS používá `_getActiveBrowserTab()` který volá `chrome.windows.getLastFocused({ windowTypes: ['normal'] })` - funguje pro všechny scénáře (Chrome side panel, Opera sidebar, Opera popup).
 
@@ -197,16 +193,12 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Content script cache: výsledek se kešuje per URL, `MutationObserver` + `popstate` invalidují při SPA navigaci
 - Settings UI se refreshne když platform username dorazí asynchronně
 
-**Message cache:**
-- `chrome.storage.local`, klíč `uc_messages`
-- Max 200 zpráv, ořezává na 150
-- Debounce 500ms zápis + `beforeunload` handler pro okamžité uložení
-- Načítá se v `_init()` PO emote loading (aby se renderovaly s emoty)
-
-**Globální dedup:**
-- `_seenMsgIds` - dedup podle msg.id (cache + live)
-- `_seenContentKeys` - normalized `username|first80chars` pro scraped zprávy
-- Boundary detection při scrape: najít poslední cached zprávu v scraped DOM, vzít jen vše PO ní
+**Historie a data zpráv (v3.39+):**
+- `ChatStore` (`extension/chat-store.js`) — jediný držitel zpráv, řazení `timestamp ASC, id`; dedup jen `platform:id`
+- Boot: `GET /chat/history?channel&limit=100` → každá zpráva přes `_addMessage` (dedup ve store, render, sběr barev/jmen) → scroll dolů
+- Scroll nahoru: nejdřív zaparkované uzly (`_parkedTop`), pak `before=<cursor>` po 100 (`_extendUp`); DOM nad 300 uzlů se ořezává do parku (`_unloadTop/_unloadBottom`), „N nových" = `_jumpToLatest`
+- Timestamp = čas platformy (`tmi-sent-ts`, `created_at`, `timestampUsec`); optimistická zpráva má `Date.now()` do echa (`_optimisticKeys` → `store.upgrade`)
+- Žádná lokální cache, žádný DOM scrape, žádný import z Twitch tabu — historii dává server (backend `ingest/`); staré klíče `uc_messages_*` se při startu smažou
 
 **@Mention zvýraznění:**
 - Kontroluje `msg.message.includes('@' + username)` (case insensitive)
@@ -289,14 +281,6 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Klik na button → smooth scroll na konec + clear unread
 - Auto-scroll PAUSE když uživatel scrolluje nahoru (atBottom < 60px threshold)
 
-**Twitch chat scrape:**
-- Po `_connectAll` (1.5s delay) zavolá `_scrapeExistingChat`
-- Pošle `SCRAPE_CHAT` na všechny Twitch taby
-- Content script parsuje `.seventv-message, .chat-line__message` selektory
-- Extrahuje username, color, message text
-- Boundary detection: najít poslední cached zprávu v scraped → vzít jen vše PO ní
-- Synthetic IDs `scraped-N-timestamp`
-
 ## Content scripty
 
 ### content/twitch.js
@@ -304,13 +288,6 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 1. `findInput()` selektory: `[data-a-target="chat-input"] [contenteditable="true"]`, textarea fallback
 2. Slate editor: DataTransfer paste primary → InputEvent beforeinput → execCommand fallback
 3. Send button: `[data-a-target="chat-send-button"]`, Enter fallback
-
-**Scrape chat:**
-- Iteruje `.seventv-message, .seventv-chat-line, .chat-line__message`
-- Extrahuje username z `.seventv-chat-user-username, [data-a-user]`
-- Color z `.seventv-chat-user style`
-- Text z `.seventv-message-body, .text-fragment, [data-a-target="chat-message-text"]`
-- Synthetic timestamps + ID
 
 **Reply:** delegováno na background přes `TW_REPLY` (potřebuje GQL)
 
@@ -383,7 +360,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.38.62** (dev)
+- Aktuální: **v3.39.0** (dev)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -396,15 +373,34 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 > review; **bumpnout `extension/manifest.json`**, store nepřijme stejnou nebo
 > nižší verzi.
 
-`extension/` zůstává jediný dev zdroj (Chrome + Opera, no build step). Store
-balíček je z něj **generovaný derivát**, protože CWS zakazuje update
-mechanismy mimo store.
+**Od v3.38.67 je `extension/` přímo store verze.** Dřívější dvouvrstvý model
+(dev zdroj + stripovaný store derivát přes `UC_STORE_STRIP` markery) je zrušený
+na explicitní pokyn usera 2026-09-19: „chci udržovat jen jednu verzi a to
+takovou, kterou můžeme poslat do storu". Odstraněno ze zdroje:
+
+| Pryč | Proč |
+|---|---|
+| `_checkForUpdate()`, background update alarm, update dot + tooltip | CWS zakazuje out-of-store update; store se aktualizuje sám |
+| `update.bat` | spustitelný updater |
+| `streamer.html/js/css` + tlačítko „Jsem streamer" | streamer OAuth se nepouští (git history ho má, commit před 3.38.67) |
+| `backup.html/js` | z UI nedosažitelné |
+| `sidebar_action` (manifest) | Opera klíč; Opera bere tab mode |
+| `alarms` permission | používal ho jen update poll |
+
+Auto-switch přes `/streamers/lookup` **zůstává** — čtení veřejného directory.
+Debug dump (💾, `downloads`) a audio easter egg zůstávají také.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build-store.ps1   # balíček
 powershell -ExecutionPolicy Bypass -File scripts\build-promo.ps1   # ikona, dlaždice, screenshot
 ```
-→ `store/build/unpacked/` (Load unpacked test) + `store/build/unitychat-store-vX.Y.Z.zip`
+→ `store/build/unpacked/` (kopie `extension/`) + `store/build/unitychat-store-vX.Y.Z.zip`
+
+`build-store.ps1` už nic nestříhá — jen kopíruje, ověřuje (manifest parsuje,
+`node --check` na každém skriptu, žádný `jouki.cz/download` / `update.bat` /
+`UC_STORE_STRIP` / `sidebar_action`, žádný z odstraněných souborů) a zipuje.
+**Nový kód, který by porušoval CWS policy, se nepíše vůbec** — není kam ho
+schovat.
 
 `build-promo.ps1` renderuje headless Chromem z `store/listing/assets/`:
 `icon.html` → ikona 128×128 (průhledná, 96×96 kresba + glow), `promo.html`
@@ -420,42 +416,6 @@ dvojtečku za jméno navíc k té z `.un::after`, opraveno 2026-09-15).
 Texty pro Developer Dashboard (single purpose, permission justifikace, data
 disclosure, listing CS/EN, assety) žijí v `store/listing/` — **tracked**,
 `store/build/` je v `.gitignore`.
-
-### ⚠️ UC_STORE_STRIP markery — pravidlo pro každou novou změnu
-
-Kód, který nemá jít do store verze, se obaluje markery. V dev verzi jsou to
-jen komentáře, build skript vyřízne řádky mezi nimi včetně markerů:
-
-```js
-// UC_STORE_STRIP_START: důvod
-...kód...
-// UC_STORE_STRIP_END
-```
-```html
-<!-- UC_STORE_STRIP_START: důvod --> ... <!-- UC_STORE_STRIP_END -->
-```
-
-**Pozor na `else if` řetězy** — stripnutá větev nesmí nechat osamocené
-`else`. Proto je větev `UC_UPDATE_*` v `_wireBackgroundUpdateListener`
-schválně poslední v řetězu. Build skript má `node --check` na každém skriptu,
-takže rozbitá syntaxe build shodí, ale ušetří to kolo navíc.
-
-### Co se ze store buildu vyřezává
-
-| Vyříznuto | Proč |
-|---|---|
-| `_checkForUpdate()`, background update alarm, update tooltip | CWS zakazuje out-of-store update |
-| `update.bat` | spustitelný updater |
-| `streamer.html/js/css` + tlačítko „Jsem streamer" | streamer OAuth se do store verze nepouští (rozhodnutí usera 2026-09-15) |
-| `backup.html/js` | z UI nedosažitelné, mrtvý kód navíc |
-| `sidebar_action` (manifest) | Opera/Firefox klíč |
-| `alarms` permission | používal ho jen update poll |
-
-Auto-switch přes `/streamers/lookup` **zůstává** — to je čtení veřejného
-directory, ne přihlašování.
-
-Build skript fail-uje, pokud v balíčku přežije zakázaný string, excludovaný
-soubor, zbylý marker, nevalidní manifest nebo JS se syntax errorem.
 
 Navazující cíle (Firefox / Opera store / mobil) jsou v `store/listing/README.md`.
 
@@ -488,8 +448,7 @@ Navazující cíle (Firefox / Opera store / mobil) jsou v `store/listing/README.
 
 **Cache + dedup:**
 - `_seenMsgIds` pro ID-based dedup
-- `_seenContentKeys` pro scraped messages (synthetic IDs nematchují)
-- Boundary detection při scrape - najít poslední cached match
+- `_seenContentKeys` pro párování optimistické zprávy s IRC echem
 - YouTube `_seen` set NEMAZAT při disconnect (jinak duplikace na reconnect)
 
 **Aktivní tab detekce (Chrome side panel + Opera popup):**
@@ -595,7 +554,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.2.0)
+## Backend (v0.3.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -622,6 +581,15 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 - `GET /dev` — dev download page HTML (dev mode only)
 - `GET /dev/download` — dev branch extension ZIP (dev mode only)
 - `POST /webhook/deploy` — GitHub webhook → git pull + signal file
+- `GET /chat/history?channel&limit&before` — historie chatu pro panel ze
+  serverového logu (ingest níže). Kurzor `<sent_at_ms>:<id>`, odpověď
+  `{ok, messages[nejstarší→nejnovější], nextBefore}`, tvar zprávy = to, co
+  posílají živé providery (`historical: true`). `no-store`, 10 req/s/IP.
+- `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
+  verze čekající na review, policy varování). Landing page z toho kreslí řádek
+  „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
+  při výpadku CWS API se hodinu vrací poslední známý stav. Bez
+  `CWS_SERVICE_ACCOUNT` vrací 503.
 
 ### Dev
 ```bash
@@ -633,8 +601,33 @@ npm run db:push    # apply schema to DB
 npm run dev        # hot reload na :3000
 ```
 
+### Chat ingest (v0.3.0, spec `docs/superpowers/specs/2026-09-19-server-chat-log-design.md`)
+
+`backend/src/ingest/`: `twitch.ts` (anonymní IRC), `kick.ts` (Pusher),
+`youtube.ts` (live_chat poller, režim „všechny zprávy", page-refresh
+fallback), `normalize.ts` (payload → řádek, čas z platformy: `tmi-sent-ts`,
+`created_at`, `timestampUsec`), `store.ts` (INSERT … ON CONFLICT DO NOTHING +
+retence), `index.ts` (orchestrace, dávkový zápis 500 ms/50 ks, retence 1×/h,
+`/health.ingest`). Env `CHAT_INGEST_CHANNELS` (prázdné = vypnuto),
+`CHAT_RETENTION_DAYS` (**0 = bez retence**, rozhodnutí usera 2026-09-19: archiv držet po neurčitou dobu, mazání na žádost; kladná hodnota zapne hodinové mazání). USERNOTICE (raid/sub) se zatím neukládá.
+Testy `npm test` (node --test přes tsx, `.env.test`), listenery mají
+injektovaný WebSocket/fetch. Audit kompletnosti: `scripts/ingest-audit.mjs`.
+
 ### Deploy
 Coolify Application resource nastavený s Base Directory `backend/`, build z `Dockerfile`. `DATABASE_URL` injectnutý Coolify přes "magic" env variable napojenou na `unitychat-db` Postgres resource na stejné Docker síti.
+
+### ⚠️ Coolify env proměnné: víceřádkové hodnoty rozbijí build
+
+Coolify vkládá env proměnné do generovaného Dockerfile jako `ARG key=value`.
+Víceřádková hodnota (typicky JSON klíč service accountu) ukončí ARG na prvním
+newline a **deploy spadne na syntaxi Dockerfile**. Aplikace přitom běží dál na
+staré image, takže se to tváří jako „změna se nenasadila", ne jako výpadek.
+
+Proto je `CWS_SERVICE_ACCOUNT` v Coolify uložený **base64**; `cwsApi.ts`
+přijímá obě podoby, aby v GitHub Actions mohl zůstat plain JSON.
+
+Další past: `watch_paths = 'backend/**'` znamená, že **prázdný commit deploy
+nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 
 ### Tech poznámky
 - **Drizzle ORM** místo Prisma: lightweight, zero codegen, SQL-like queries, perfect type inference, menší bundle
@@ -707,6 +700,23 @@ Coolify Application resource nastavený s Base Directory `backend/`, build z `Do
 - **v3.38.55** - **Twitch verified send (fix občasného neodeslání)**: `sendChat` byl fire-and-forget od v3.3.9 — fixních 150 ms mezi paste eventem a klikem na send button, bez verifikace výsledku. React/Slate zpracovává paste async přes scheduler, který Chrome throttluje když má fokus sidepanel (in-repo důkaz: 500–800 ms naměřeno u rewards popoveru). Commit paste > 150 ms → klik trefil "prázdný input" stav → Twitch neodeslal, text zůstal viset v inputu, další zpráva se appendla a odešly spojené. Fix: condition-based wait (text v editoru + button enabled, cap 1.5 s), post-click verifikace vyprázdnění inputu (okno 2 s proti double-send), retry 3×, pak `ok:false` → chyba v UC. UC_LOG tag `TwSend` (start/pre-click/sent/not-cleared).
 - **v3.38.56** - **Opera tab mode + stream-tab URL-scan fix**: (1) Opera toolbar/chat-header klik otevírá UnityChat jako regular tab (openerTabId + index vedle stream tabu → Opera tab island best-effort; existující UC tab se fokusne, žádné duplicity) místo popup okna. (2) `_findStreamTab(platform?)` — aktivní tab má přednost, fallback URL-scan přes všechny taby (jen channel stránky, preferuje nakonfigurovaný kanál, sticky drží poslední aktivní platformu; YouTube přijímá i /watch). Nahrazuje `_getActiveBrowserTab()` v `_detectActivePlatform`, `_sendMessage`, `_openUserCard` + boot username detect → chat v Opera split screenu už nešediví, když je aktivní UnityChat tab. Split poměr = ruční divider (Opera nemá split API), `chrome.tabGroups` v Opeře neexistuje. UC_LOG tagy `StreamTab` + `TabOpen` (cleanup po user verifikaci).
 - **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider.
+- **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
+- **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
+- **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.39.0** - **Historie ze serveru (Task 13 plánu)**: klient bere historii z `GET /chat/history`, `ChatStore` drží data, DOM okno 300 uzlů s parkováním odpojených uzlů nad/pod oknem (scroll oběma směry bez re-renderu), starší stránky přes kurzor. Smazáno: `_msgCache` + storage cache, `_loadCachedMessages`, `_hydrateOlderMessages`, `_trim`, per-channel dedup LRU, content-key dedup, import z Twitch tabu (`TW_HISTORY`). Audit ingestu na Stérově streamu PASS (Twitch 84/84, p95 733 ms; YT 7/7, p95 4,9 s).
+- **v3.38.81** - **Ruční přepínání streamera**: primární Rob, whitelist Rob + TenSterakdary, start podle aktivního tabu, jinak tlačítko „Přepnout chat na …" nad chatem. Root cause míchání chatů/emotů: re-entry auto-switche z 3s detekce rušila rozdělané přepnutí.
+- **v3.38.78–80** - DIAG `msgCacheIds` pro audit, čas z platformy v providerech, `ChatStore` + testy (`scripts/test-chat-store.js`, `test-provider-timestamps.js`).
+- **v3.38.76–77** - obnovený SEND_CHAT handler, `TwHistory` log s rozsahy časů.
+- **v3.38.75** - **Doplnění Twitch historie z React props** (zrušeno ve v3.39.0): náhrada scrape. Background `TW_HISTORY` (executeScript MAIN world) přečte z `.chat-line__message` fiber `memoizedProps.message` — reálné `id` (= IRC tag id → přesný dedup), `timestamp` ms, `messageBody`, `messageParts` (0 text / 4 mention / 5 link / 6 emote → IRC emotes tag v code pointech), `badges` {set:ver} → `badgesRaw`, `user`, `reply`. Ověřeno na živém tabu: 50/50 zpráv, parts == body. `_importTwitchHistory()` 1,5 s po connectu, `_historyToMsg()`, `msg.historical` → `_addMessage` vloží podle `dataset.ts` před první novější zprávu (`_firstNewerMsgEl`). Systémový řádek „Doplněno N zpráv z Twitch chatu“, UC_LOG `TwHistory`.
+- **v3.38.74** - **Twitch DOM scrape zrušen**: po reloadu (v3.38.72) panel „doparsoval" 10 zpráv ze začátku streamu s časem teď a jeden řádek měl místo textu čas („Strainer8: 10:12:") — scrape dával syntetické timestampy (`baseTime + idx*1000`) a text četl heuristikou přes textContent včetně 7TV timestampu. Spec serverového chat logu ho stejně ruší; odstraněn `_scrapeExistingChat`, `SCRAPE_CHAT` handler i `scrapeMessages()`. Mezeru po reloadu vyplní serverová historie.
+- **v3.38.73** - **Twitch zpráva s textem 2×**: report PanPixu — jeden Enter, na streamu jedna zpráva s textem dvakrát. `waitReady` 1,5 s prohrál se Slate commitem → repaste za rozpracovaný paste. Reprodukováno v `scripts/test-send-race.js` (mock: Slate stav sync, DOM později, DOM výběr přebírá s ~100 ms zpožděním). Fix: čekání 4 s, sonda z obou konců, select-all + 150 ms před repastem, detekce zdvojení před klikem → přepis nebo SendFail, nikdy klik nad zdvojeným textem.
+- **v3.38.72** - **Reload ikona + stav ve filtrech**: Připojit/Odpojit/Vyčistit pryč, reload v hlavičce; tečka stavu uvnitř TW/YT/KI filtrů (červená/žlutá/zelená, šedá = vyfiltrováno).
+- **v3.38.71** - **Kick badge**: provider četl neexistující `is_moderator` apod.; teď `sender.identity.badges[]` → `badgesRaw`, `_kickBadgeEntry()`, oficiální SVG (moderator/subscriber/founder/verified/bot z DOM), aproximace pro broadcaster/vip/og/sub_gifter/staff. UC_LOG `KickBadge`.
+- **v3.38.68–70** - Oficiální loga platforem (zlaté od usera), glow přes drop-shadow, velikosti 16/18/20, nastavení „Odpovědi zobrazit na jeden řádek".
+- **v3.38.67** - **Jeden zdroj = store verze**: zrušen dvouvrstvý model dev/store. Ze zdroje smazáno vše, co `build-store.ps1` dřív vyřezával (self-update check + alarm + update dot/tooltip, `update.bat`, `streamer.*` + „Jsem streamer", `backup.*`, `sidebar_action`, `alarms`), včetně mrtvého CSS. `build-store.ps1` je teď jen kopie + verifikace + zip. Opera: tab mode přes toolbar action, bez nativního sidebaru. Landing page (repo jouki.cz) odkazuje jen na store, ZIP zůstává pro `/UnityChat/dev`.
+- **v3.38.66** - **Logo i u badge vedle inputu + větší badge**: `#active-badge.tw` (ID selektor) přebíjel `.badge.tw` z v3.38.65. Velikosti 18/20/22 px (small/medium/large), input 22 px, reply indikátor 18 px.
+- **v3.38.63** - **První zpráva po otevření panelu se ztrácela jako „odeslaná"**: `sendChatNow` volal `findInput()` jednorázově → před mountem Twitch inputu hodil chybu, ale optimistická zpráva zůstala v DOM i cache. Fix: polling na input 3 s + `_markSendFailed()` (červený pruh „neodesláno", klik vrátí text do inputu, vypadne z cache, uvolní párovací klíč). `_contentKey()` extrahován. UC_LOG `SendFail`, `TwSend input-wait`, `Guard`.
+- **v3.38.60–62** - YouTube all-messages režim, serializace Twitch sendů, YT barvy jmen + @přezdívky (VPS session).
 - **v3.38.59** - **Store assety + medium layout jako výchozí**: `DEFAULTS.layout` small → medium (jen nové instalace, uložené configy si své nastavení nechávají). Přibyl `scripts/build-promo.ps1` — headless Chrome renderuje ikonu, obě promo dlaždice i screenshot 1280×800 ze zdrojů v `store/listing/assets/` (sdílené `brand.css`, vektorové `logo.svg` vytažené z logo-designer.html). **Položka odeslána do CWS ke kontrole 16. 9. 2026.**
 - **v3.38.58** - **Chrome Web Store build pipeline**: `extension/` zůstává jediný dev zdroj, store balíček je generovaný derivát přes `scripts/build-store.ps1` (markerové stříhání `UC_STORE_STRIP_START/END`, patch manifestu, verifikace + `node --check`, ZIP). Vyříznuto: self-update check (`_checkForUpdate` + background alarm + update tooltip — CWS zakazuje out-of-store update), `update.bat`, streamer OAuth (`streamer.*` + „Jsem streamer" tlačítko), `backup.*`, `sidebar_action` klíč, `alarms` permission. Refaktor v `_wireBackgroundUpdateListener`: větve `UC_UPDATE_*` přesunuty na konec `else if` řetězu, aby strip nenechal osamocené `else` (chování beze změny). Podklady pro Developer Dashboard v `store/listing/` — single purpose, per-permission justifikace (nejcitlivější `cookies` + Twitch auth-token a `scripting` MAIN world), data disclosure checkboxy podložené auditem všech volání `UC_API`, listing CS/EN, asset checklist + store ikona s 16px paddingem. Cílová viditelnost: Public.
 - **v3.38.60** - **YouTube: režim „všechny zprávy" místo Top chatu**: user hlásil chybějící YT zprávy v panelu, které na streamu vidět byly. `/live_chat` servíruje default režim „Nejlepší zprávy", který část zpráv zahodí jako domnělý spam; UnityChat bral continuation z `contents.liveChatRenderer.continuations` = token právě vybraného (filtrovaného) režimu. Token druhého režimu („Chat", *Zobrazí se všechny zprávy*) žije v `header.liveChatHeaderRenderer.viewSelector.sortFilterSubMenuRenderer.subMenuItems[1].continuation.reloadContinuationData` a nikdy se nečetl. Nové helpery `_lcr(data)` (sjednocuje `contents.liveChatRenderer` vs. `continuationContents.liveChatContinuation`) + `_pickAllChatToken(lcr)`; `connect()` po prvním fetchi stránku znovu načte přes `?continuation=<allToken>`, `_fetchChatPage(variant, cont)` a `_pollPageRefresh` token respektují, API polling ho dědí přes continuation řetěz. Ověřeno proti živému streamu před pushem: POST `get_live_chat` s tokenem → 200 + 77 akcí + `selected=("Chat", true)`, GET `live_chat?continuation` → 78 akcí, taktéž režim Chat. UC_LOG `YT` rozšířen o `chatMode`.
@@ -840,8 +850,8 @@ obě na stejné verzi:
 
 | Cíl | Jak | Kdo to dostane |
 |---|---|---|
-| **jouki.cz ZIP** | PR `dev → master`, Coolify rebuild | Opera, dev větev, ruční instalace |
-| **Chrome Web Store** | `build-store.ps1` → dashboard „Package → Upload new package" → Submit | Chrome / Edge / Brave — **většina uživatelů** |
+| **jouki.cz ZIP** | PR `dev → master`, Coolify rebuild | jen dev větev (`/UnityChat/dev`) a ruční Load unpacked; landing na ZIP od 19. 9. 2026 neodkazuje |
+| **Chrome Web Store** | `cws-release.yml` automaticky po merge do master (ručně `build-store.ps1` + `cws.mjs release`) | Chrome / Edge / Brave / Opera — **všichni uživatelé** |
 
 **Když uděláš master release, udělej i upload do storu.** Jinak dostanou
 uživatelé ze storu starší build než ti, co si stahují ZIP — a protože store
@@ -997,7 +1007,6 @@ Memory soubory v `~/.claude/projects/D---BACKUP-2-0-Code-Projects-UnityChat/memo
 - Dev branch se NIKDY nemaže při merge
 - Push na `dev` → VPS dev API servíruje dev ZIP + manifest (jouki.cz/UnityChat/dev)
 - Push/merge na `master` → Coolify auto-deploy produkce (jouki.cz/UnityChat)
-- `update.bat` v extension složce — one-click updater pro uživatele
 - Auto-sync: webhook-driven (`/webhook/deploy` → VPS `git pull` + touch signal → PC `inotifywait` + `git pull`)
 - `scripts/auto-sync.ps1` — systray ikona, balloon notifikace, spouští se automaticky při přihlášení
 - `gh` CLI autentizovaný na VPS i PC — oba mohou vytvářet PR
@@ -1056,8 +1065,3 @@ Memory soubory v `~/.claude/projects/D---BACKUP-2-0-Code-Projects-UnityChat/memo
 - `_syncProfile(platform, username)` — odesílá nové usernames na backend (`POST /users/seen`)
 - `_syncedProfiles` Set + `uc_synced` v `chrome.storage.local` pro local dedup
 - Odesílá jen usernames co nejsou v lokálním seznamu; při selhání odstraní z lokální sady pro retry
-
-### Backup utility (v3.23.12)
-- `extension/backup.html` + `extension/backup.js` — export/import veškerých extension dat (`chrome.storage.sync` + `local`)
-- External JS soubor (MV3 CSP blokuje inline skripty)
-- Export přes `chrome.downloads` API (saveAs dialog)
