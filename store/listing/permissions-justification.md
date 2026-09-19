@@ -121,7 +121,7 @@ wss://irc-ws.chat.twitch.tv: Twitch's public IRC gateway, how the extension read
 
 api.ivr.fi: public API for Twitch badge images (subscriber, mod, VIP) shown next to usernames. badges.twitch.tv: Twitch's own endpoint, fallback for the same images.
 
-api.jouki.cz: the extension's own backend. It stores the cross-platform nicknames users assign to each other and the list of channels the extension has been used on. See the privacy policy for exactly what is sent.
+api.jouki.cz: the extension's own backend. It stores cross-platform nicknames, the channels the extension is used on, and serves the chat history archive the panel loads on open. See the privacy policy for what is sent.
 ```
 
 **Proč seskupené:** dashboard má jedno pole na všechny host permissions.

@@ -48,6 +48,12 @@
       return;
     }
 
+    if (msg.type === 'UC_PANEL_STATE' && isMainFrame && !isLiveChat) {
+      try { if (msg.open) onUcPanelOpened(); else showYtChat(); } catch {}
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg.type === 'SEND_CHAT') {
       if (isLiveChat && isMainFrame) {
         // Only handle in live_chat if it's a top-level popout window,
@@ -96,21 +102,53 @@
   // Receives UC_HIDE_CHAT from iframe and hides ytd-live-chat-frame
   if (isMainFrame) {
     let _ucEnteredTheater = false;
+    // true = naše layout styly (skrytý chat) jsou na stránce aktivní
+    let _ucLayoutApplied = false;
+    // Atributy, kterými YouTube říká „chat je otevřený" a podle nich rezervuje
+    // místo vpravo (#columns::after spacer = sidebar + margin, theater player
+    // užší o panel). Nativní zavření chatu je sundá; my je sundáme taky a při
+    // show vrátíme jen ty, které jsme odebrali.
+    const UC_PANEL_ATTRS = ['live-chat-present-and-expanded', 'panel-expanded', 'fixed-panel-expanded', 'watch-while-panels-active'];
+    let _ucRemovedAttrs = [];
+    function _ucDropPanelAttrs() {
+      const flexy = document.querySelector('ytd-watch-flexy');
+      if (!flexy) return;
+      for (const a of UC_PANEL_ATTRS) {
+        if (flexy.hasAttribute(a)) { flexy.removeAttribute(a); if (!_ucRemovedAttrs.includes(a)) _ucRemovedAttrs.push(a); }
+      }
+    }
 
     function hideYtChat() {
+      // Jen na stránce s live chatem. Na běžném videu #secondary nese
+      // doporučená videa — skrýt je znamená „zmizel sidebar" (report 2026-09-19).
+      if (!document.querySelector('ytd-live-chat-frame')) return;
+      _ucLayoutApplied = true;
       // Move #chat off-screen (NOT display:none — iframe must stay alive for DOM send)
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = 'display:none!important;';
-      // #secondary je sloupec, ve kterém #chat sedí. Chat je sice off-screen,
-      // ale sloupec dál drží šířku (computed 402px / min 320px) — v theater
-      // layoutu je to ten prázdný obdélník vedle related videí pod playerem.
-      // Nulová šířka místo display:none: iframe uvnitř musí zůstat živý
-      // (DOM send), a #chat je fixed, takže nic z něj nevyčnívá.
-      const secondary = document.querySelector('#secondary');
-      if (secondary) {
-        secondary.style.cssText = 'width:0!important;min-width:0!important;max-width:0!important;flex:0 0 0!important;padding:0!important;margin:0!important;overflow:hidden!important;';
+      // Cíl = nativní stav „chat zavřený": theater player, #primary normální
+      // šířky, #secondary s doporučenými videi. Ten „prázdný obdélník" (v3.38.64)
+      // nedělal #secondary, ale obal #chat-container: #chat je fixed mimo
+      // obrazovku, jenže obal si drží výšku z YouTube CSS (~890 px, měřeno
+      // 2026-09-20). Zkolabovat jen obal — #secondary, #columns ani #primary
+      // se nesahá (zúžení sloupce zabilo related videa, v3.39.5).
+      const chatContainer = document.querySelector('#chat-container');
+      if (chatContainer) chatContainer.style.cssText = 'height:0!important;min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;';
+      // Player nedosahoval k okraji a vpravo zůstávalo prázdno (report 2026-09-20):
+      // YouTube má chat pořád za „otevřený panel" a drží pro něj místo.
+      _ucDropPanelAttrs();
+      // Ověřeno v DevTools (user, 2026-09-20): za ~700 px prázdno vpravo od
+      // related videí může jediné pravidlo
+      //   ytd-watch-flexy[fixed-panels] #columns { padding-right: var(--ytd-watch-flexy-sidebar-width) }
+      // — po jeho vypnutí je layout shodný s nativně zavřeným chatem.
+      // #primary ani #secondary se nesahá (related videa zůstávají vpravo).
+      const columns = document.querySelector('#columns');
+      if (columns) columns.style.cssText = 'padding-right:0!important;';
+      for (const sel of ['#secondary', '#primary']) { // úklid po 3.38.64–3.39.10
+        const el = document.querySelector(sel);
+        if (el && el.style.cssText) el.style.cssText = '';
       }
       // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
@@ -124,7 +162,54 @@
       // žádný impuls k přepočtu — player zůstane v šířce sloupce, dokud uživatel
       // nepřepne fullscreen (což je přesně resize event). Pošleme ho sami.
       window.dispatchEvent(new Event('resize'));
+      _ucEnableOpenPanelBtn();
       _logYtLayout('hide');
+    }
+
+    // Nativní „Otevřít panel" je při otevřeném (= námi skrytém) chatu disabled.
+    // User 2026-09-20: má být klikatelné a vrátit chat na obrazovku. YouTube
+    // ho vypíná trojicí disabled + aria-disabled + třída; sundáme ji a klik
+    // chytíme v capture fázi na documentu, aby YouTube handler nedostal nic.
+    // Barvu tonal tlačítka nese třída …Mono (měřeno 2026-09-20 na „Sdílet":
+    // bg rgba(255,255,255,.1), text #f1f1f1); v disabled stavu ji YouTube
+    // nahrazuje třídou …Disabled. Bez Mono je tlačítko průhledné a „zmizí".
+    const OPEN_PANEL_SEL = '.ytTextCarouselItemViewModelButton button';
+    const YT_DISABLED_CLS = 'ytSpecButtonShapeNextDisabled';
+    const YT_MONO_CLS = 'ytSpecButtonShapeNextMono';
+    function _ucEnableOpenPanelBtn() {
+      const b = document.querySelector(OPEN_PANEL_SEL);
+      if (!b || !b.disabled) return;
+      b.disabled = false;
+      b.removeAttribute('disabled');
+      b.setAttribute('aria-disabled', 'false');
+      b.classList.remove(YT_DISABLED_CLS);
+      b.classList.add(YT_MONO_CLS);
+      b.title = 'Zobrazit YouTube chat (UnityChat)';
+      b.dataset.ucEnabled = '1';
+      _ucLog('YtLayout', 'open-panel button enabled');
+    }
+    function _ucRestoreOpenPanelBtn() {
+      const b = document.querySelector(OPEN_PANEL_SEL);
+      if (!b || b.dataset.ucEnabled !== '1') return;
+      b.disabled = true;
+      b.setAttribute('aria-disabled', 'true');
+      b.classList.add(YT_DISABLED_CLS);
+      b.classList.remove(YT_MONO_CLS);
+      b.title = '';
+      delete b.dataset.ucEnabled;
+    }
+    document.addEventListener('click', (e) => {
+      if (!_ucLayoutApplied) return;
+      const b = e.target?.closest?.(OPEN_PANEL_SEL);
+      if (!b || b.dataset.ucEnabled !== '1') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      _ucLog('YtLayout', 'open-panel button clicked → showYtChat');
+      showYtChat();
+    }, true);
+
+    function _ucLog(tag, text) {
+      try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag, args: [text] }).catch?.(() => {}); } catch {}
     }
 
     // Diagnostika do UC dumpu: co layout dělá po hide/show. Bez tohohle se
@@ -137,23 +222,39 @@
           innerW: window.innerWidth,
           playerW: (q('#movie_player') || q('#player'))?.offsetWidth ?? null,
           secondaryW: q('#secondary')?.offsetWidth ?? null,
+          belowW: q('#below')?.offsetWidth ?? null,
+          chatContainerH: q('#chat-container')?.offsetHeight ?? null,
+          primaryW: q('#primary')?.offsetWidth ?? null,
+          columnsPadR: q('#columns') ? getComputedStyle(q('#columns')).paddingRight : null,
+          relatedW: q('#related')?.offsetWidth ?? null,
+          relatedInSecondary: !!q('#secondary #related'),
           theater: !!flexy?.hasAttribute('theater'),
           twoCol: !!flexy?.hasAttribute('is-two-columns_'),
           singleCol: !!flexy?.hasAttribute('is-single-column'),
+          flexyAttrs: flexy ? [...flexy.attributes].map((a) => a.name).filter((a) => /theater|chat|panel|column|bleed|split/i.test(a)).join(',') : null,
+          columnsW: q('#columns')?.offsetWidth ?? null,
         })] }).catch?.(() => {});
       } catch {}
     }
 
     function showYtChat() {
+      _ucLayoutApplied = false;
+      _ucRestoreOpenPanelBtn();
+      const flexyEl = document.querySelector('ytd-watch-flexy');
+      if (flexyEl) for (const a of _ucRemovedAttrs) flexyEl.setAttribute(a, '');
+      _ucRemovedAttrs = [];
       // Restore #chat
       const chat = document.querySelector('#chat');
       if (chat) chat.style.cssText = '';
       // Restore #panels-full-bleed-container
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = '';
-      // Restore #secondary (sloupec s chatem) — protějšek nulové šířky v hideYtChat
-      const secondary = document.querySelector('#secondary');
-      if (secondary) secondary.style.cssText = '';
+      const chatContainer = document.querySelector('#chat-container');
+      if (chatContainer) chatContainer.style.cssText = '';
+      for (const sel of ['#secondary', '#columns', '#primary']) {
+        const el = document.querySelector(sel);
+        if (el) el.style.cssText = '';
+      }
       // Exit theater mode via native button (if we entered it)
       if (_ucEnteredTheater) {
         const theaterBtn = document.querySelector('.ytp-size-button');
@@ -171,93 +272,115 @@
       if (e.data?.type === 'UC_HIDE_CHAT') hideYtChat();
     });
 
-    // Periodic layout fix: if #secondary takes up space but chat is not
-    // actually showing live content, collapse it. Catches X button close,
-    // SPA navigation, or any state mismatch.
+    // Periodic layout fix — jen dokud jsou naše styly aktivní (_ucLayoutApplied):
+    // YouTube při SPA navigaci / rerenderu inline styly zahodí, tak je vrátíme.
+    // Dřív interval schovával #secondary vždy, když nebyl aktivní chat iframe —
+    // na běžném videu (bez ytd-live-chat-frame) tím zmizel celý sidebar
+    // s doporučenými videy. Na stránce bez live chatu se styly naopak sundají.
     setInterval(() => {
-      const secondary = document.querySelector('#secondary');
-      if (!secondary || secondary.style.display === 'none') return;
-      // If secondary has width but chat iframe is not active → fix layout
-      if (secondary.offsetWidth > 50) {
-        const chatFrame = document.querySelector('ytd-live-chat-frame');
-        const iframe = chatFrame?.querySelector('#chatframe');
-        const isChatActive = iframe && iframe.offsetHeight > 100;
-        if (!isChatActive) {
-          hideYtChat();
-        }
-      }
+      if (!_ucLayoutApplied) return;
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      if (!chatFrame) { showYtChat(); return; }
+      const cc = document.querySelector('#chat-container');
+      const flexyEl = document.querySelector('ytd-watch-flexy');
+      const attrsBack = flexyEl && UC_PANEL_ATTRS.some((a) => flexyEl.hasAttribute(a));
+      if ((cc && cc.offsetHeight > 50) || attrsBack) hideYtChat();
+      else _ucEnableOpenPanelBtn();
     }, 1500);
 
-    // ---- UnityChat button next to "Otevřít panel" ----
+    // UC panel se otevřel (pill v chat liště, ikona v toolbaru, cokoli) →
+    // schovat vanilla chat. Zavřený chat se nejdřív otevře (iframe musí žít
+    // kvůli DOM sendu) a hned schová. Idempotentní — background i pill to
+    // můžou zavolat po sobě.
+    let _ucOpening = false;
+    function onUcPanelOpened() {
+      if (_ucLayoutApplied || _ucOpening) return;
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      if (!chatFrame) return;
+      const iframe = chatFrame.querySelector('#chatframe');
+      const chatIsOpen = iframe && iframe.offsetHeight > 100;
+      if (chatIsOpen) { hideYtChat(); return; }
+      const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+      if (!openPanelBtn || openPanelBtn.disabled) return;
+      _ucOpening = true;
+      openPanelBtn.click();
+      const closeObs = new MutationObserver(() => {
+        const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+        if (closeBtn) { closeObs.disconnect(); _ucOpening = false; hideYtChat(); }
+      });
+      closeObs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { closeObs.disconnect(); _ucOpening = false; }, 10000);
+    }
+
+    // ---- UnityChat ikona v mastheadu (jako na Twitchi v hlavičce chatu) ----
+    // User 2026-09-20: pill „UnityChat" z řádku „Chat" pryč, místo něj jen
+    // ikona nahoře v liště YouTube před ostatními tlačítky (#end). Masthead
+    // přežívá SPA navigaci, takže stačí vložit jednou; interval jen hlídá,
+    // že tam ikona zůstala.
     const UC_BTN_ID = 'uc-yt-open-btn';
 
     function buildYtButton() {
       const btn = document.createElement('button');
       btn.id = UC_BTN_ID;
       btn.title = 'Otevřít UnityChat';
+      btn.setAttribute('aria-label', 'Otevřít UnityChat');
       Object.assign(btn.style, {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        gap: '6px', padding: '6px 12px', margin: '0 7px',
-        background: 'linear-gradient(135deg, rgb(255, 192, 0), rgb(255, 122, 0))',
-        border: 'none', borderRadius: '18px', cursor: 'pointer',
-        fontFamily: 'Roboto, Arial, sans-serif', fontSize: '12px',
-        fontWeight: '500', color: 'rgb(10, 10, 13)', lineHeight: '1',
-        transition: 'filter 0.15s',
+        width: '40px', height: '40px', minWidth: '40px', padding: '0', margin: '0 4px 0 0',
+        background: 'transparent', border: 'none', borderRadius: '50%',
+        cursor: 'pointer', flexShrink: '0', transition: 'background 0.15s ease',
       });
-      btn.textContent = 'UnityChat';
-      btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
+      const img = document.createElement('img');
+      img.src = chrome.runtime.getURL('icons/icon48.png');
+      img.alt = 'UC';
+      Object.assign(img.style, { width: '24px', height: '24px', display: 'block', pointerEvents: 'none' });
+      btn.appendChild(img);
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,255,255,0.1)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
           if (!resp) return;
-          if (resp.action === 'opened') {
-            // Opening UC → hide vanilla YouTube chat
-            const chatFrame = document.querySelector('ytd-live-chat-frame');
-            const iframe = chatFrame?.querySelector('#chatframe');
-            const chatIsOpen = iframe && iframe.offsetHeight > 100;
-            if (chatIsOpen) {
-              hideYtChat();
-            } else {
-              // Chat closed → click "Otevřít panel", wait, then hide
-              const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
-              if (openPanelBtn && !openPanelBtn.disabled) {
-                openPanelBtn.click();
-                const closeObs = new MutationObserver(() => {
-                  const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
-                  if (closeBtn) { closeObs.disconnect(); hideYtChat(); }
-                });
-                closeObs.observe(document.body, { childList: true, subtree: true });
-                setTimeout(() => closeObs.disconnect(), 10000);
-              }
-            }
-          } else if (resp.action === 'closed') {
-            // Closing UC → show vanilla YouTube chat back
-            showYtChat();
-          }
+          if (resp.action === 'opened') onUcPanelOpened();
+          else if (resp.action === 'closed') showYtChat();
         });
       });
       return btn;
     }
 
+    // Jen na živém streamu (user 2026-09-20). Měřeno: běžné video nemá
+    // ytd-live-chat-frame ani badge; záznam streamu (chat replay) frame MÁ,
+    // ale .ytp-live-badge je display:none; živý stream má badge viditelný.
+    // Badge je tedy jediný spolehlivý rozlišovač live vs. replay.
+    function _ucIsLiveStream() {
+      const badge = document.querySelector('.ytp-live-badge');
+      return !!badge && getComputedStyle(badge).display !== 'none';
+    }
+
+    let _ucBtnShown = null;
     function injectYtButton() {
-      if (document.getElementById(UC_BTN_ID)) return;
-      const frame = document.querySelector('ytd-live-chat-frame');
-      const carousel = document.querySelector('#teaser-carousel');
-      const container = document.querySelector('.ytVideoMetadataCarouselViewModelCarouselContainer');
-      const targetBtn = document.querySelector('.ytTextCarouselItemViewModelButton');
-      console.log('[UC] inject attempt:', { frame: !!frame, carousel: !!carousel, container: !!container, targetBtn: !!targetBtn });
-      if (targetBtn) {
-        targetBtn.parentElement.insertBefore(buildYtButton(), targetBtn);
-        console.log('[UC] button injected!');
+      let btn = document.getElementById(UC_BTN_ID);
+      if (!btn) {
+        const end = document.querySelector('ytd-masthead #end');
+        if (!end) return;
+        // Před všechno viditelné (i před tlačítka cizích rozšíření), skeleton
+        // ikony YouTube nechat na začátku.
+        const skel = end.querySelector('#masthead-skeleton-icons');
+        btn = buildYtButton();
+        end.insertBefore(btn, skel ? skel.nextSibling : end.firstChild);
+        _ucLog('YtLayout', 'masthead button injected');
+      }
+      const show = _ucIsLiveStream();
+      btn.style.display = show ? 'inline-flex' : 'none';
+      if (show !== _ucBtnShown) {
+        _ucBtnShown = show;
+        _ucLog('YtLayout', `masthead button ${show ? 'shown (live)' : 'hidden (not live)'} ${location.pathname}`);
       }
     }
 
-    const injectInterval = setInterval(() => {
-      if (document.getElementById(UC_BTN_ID)) { clearInterval(injectInterval); return; }
-      injectYtButton();
-    }, 500);
+    setInterval(injectYtButton, 2000);
+    injectYtButton();
   }
 
   // Přímé odeslání v live_chat iframe

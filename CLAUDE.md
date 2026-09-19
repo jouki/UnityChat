@@ -366,8 +366,11 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 
 > **✅ PUBLIKOVÁNO 18. 9. 2026** — review prošla za 2 dny. Položka je veřejná
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
-> Verze 3.38.59, item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS.
-> Podklady pro dashboard: `store/listing/README.md`.
+> Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
+> **3.39.3 odeslána ke kontrole 19. 9. 2026** (PR #21, workflow cws-release.yml).
+> Podklady pro dashboard: `store/listing/README.md`; **kompletní záznam všeho,
+> co je v dashboardu zadané (texty, oprávnění, data-use checkboxy, prohlášení):
+> `store/listing/dashboard-state.md`** — při každé změně v dashboardu aktualizovat.
 >
 > Další verze se nahrává přes „Package → Upload new package" a jde znovu přes
 > review; **bumpnout `extension/manifest.json`**, store nepřijme stejnou nebo
