@@ -4850,78 +4850,10 @@ class UnityChat {
     if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
     if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
-
-    // Doparsovat existující zprávy z Twitch tabu (pokud existuje)
-    setTimeout(() => this._scrapeExistingChat(), 1500);
-  }
-
-  async _scrapeExistingChat() {
-    // Always attempt scrape — per-channel dedup (_dedupChannels) drops
-    // duplicates that overlap with the cache, and missing the scrape
-    // entirely loses any messages that arrived during the gap between
-    // last cached message and now (e.g. user reopened UC after 30s).
-    const channel = (this.config.channel || '').toLowerCase();
-    if (!channel) return;
-
-    try {
-      // Only scrape tabs that match the configured channel — otherwise we'd
-      // import messages from an unrelated Twitch stream the user happens to have open.
-      const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
-      for (const tab of tabs) {
-        // Path-based match (case-insensitive — Twitch handles are not case-sensitive).
-        // Accept: /{channel}, /{channel}/..., /popout/{channel}/...
-        let isChannelTab = false;
-        try {
-          const parts = new URL(tab.url || '').pathname.toLowerCase().split('/').filter(Boolean);
-          isChannelTab = parts[0] === channel
-            || (parts[0] === 'popout' && parts[1] === channel);
-        } catch {}
-        if (!isChannelTab) continue;
-
-        const resp = await chrome.tabs.sendMessage(tab.id, { type: 'SCRAPE_CHAT' }).catch(() => null);
-        if (!resp?.ok || !resp.messages?.length) continue;
-
-        // Boundary detection: match on username sequence (not message text,
-        // because scraped text is often incomplete — emotes are img tags).
-        // Take last N cached Twitch usernames and find that sequence in scraped.
-        const cachedUsers = this._msgCache
-          .filter((m) => m.platform === 'twitch' && m.username)
-          .slice(-20)
-          .map((m) => m.username.toLowerCase());
-        const scrapedUsers = resp.messages.map((m) => (m.username || '').toLowerCase());
-
-        let boundary = -1;
-        // Try decreasing suffix lengths (5→2) of cached username sequence.
-        // Iterate scraped from START → END so we lock onto the EARLIEST
-        // occurrence of the suffix — when the same user-pair repeats later
-        // in the scraped chat, picking the latest match would silently
-        // drop the messages BETWEEN the two occurrences. Picking earliest
-        // may add a few duplicates, but those get caught by content-key
-        // dedup downstream.
-        for (let len = Math.min(cachedUsers.length, 5); len >= 2 && boundary === -1; len--) {
-          const suffix = cachedUsers.slice(-len);
-          for (let i = 0; i + len <= scrapedUsers.length; i++) {
-            let match = true;
-            for (let j = 0; j < len; j++) {
-              if (scrapedUsers[i + j] !== suffix[j]) { match = false; break; }
-            }
-            if (match) {
-              boundary = i + len - 1;
-              break;
-            }
-          }
-        }
-
-        const newMessages = resp.messages.slice(boundary + 1);
-        if (newMessages.length) {
-          this._sys(`Doparsováno ${newMessages.length} zpráv z Twitch chatu`);
-          for (const msg of newMessages) {
-            this._addMessage(msg);
-          }
-        }
-        break;
-      }
-    } catch {}
+    // Doparsování Twitch DOM po připojení zrušeno ve v3.38.74 — syntetické
+    // časy a heuristické čtení textu dávaly staré zprávy s časem „teď"
+    // (i řádek s časem místo textu). Mezeru po reloadu vyplní serverová
+    // historie (docs/superpowers/specs/2026-09-19-server-chat-log-design.md).
   }
 
   _disconnectAll() {

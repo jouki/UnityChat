@@ -17,7 +17,7 @@ UnityChat/
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
-│   │   ├── twitch.js           # Twitch DOM (Slate editor) + scrape + reply
+│   │   ├── twitch.js           # Twitch DOM (Slate editor) + send + reply
 │   │   ├── youtube.js          # YouTube live_chat iframe + API fallback
 │   │   └── kick.js             # Kick DOM + API fallback
 │   └── icons/                  # 16/48/128 PNG (oranžový gradient logo)
@@ -201,8 +201,7 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 
 **Globální dedup:**
 - `_seenMsgIds` - dedup podle msg.id (cache + live)
-- `_seenContentKeys` - normalized `username|first80chars` pro scraped zprávy
-- Boundary detection při scrape: najít poslední cached zprávu v scraped DOM, vzít jen vše PO ní
+- `_seenContentKeys` - normalized `username|first80chars` (optimistická zpráva ↔ IRC echo)
 
 **@Mention zvýraznění:**
 - Kontroluje `msg.message.includes('@' + username)` (case insensitive)
@@ -285,14 +284,6 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Klik na button → smooth scroll na konec + clear unread
 - Auto-scroll PAUSE když uživatel scrolluje nahoru (atBottom < 60px threshold)
 
-**Twitch chat scrape:**
-- Po `_connectAll` (1.5s delay) zavolá `_scrapeExistingChat`
-- Pošle `SCRAPE_CHAT` na všechny Twitch taby
-- Content script parsuje `.seventv-message, .chat-line__message` selektory
-- Extrahuje username, color, message text
-- Boundary detection: najít poslední cached zprávu v scraped → vzít jen vše PO ní
-- Synthetic IDs `scraped-N-timestamp`
-
 ## Content scripty
 
 ### content/twitch.js
@@ -300,13 +291,6 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 1. `findInput()` selektory: `[data-a-target="chat-input"] [contenteditable="true"]`, textarea fallback
 2. Slate editor: DataTransfer paste primary → InputEvent beforeinput → execCommand fallback
 3. Send button: `[data-a-target="chat-send-button"]`, Enter fallback
-
-**Scrape chat:**
-- Iteruje `.seventv-message, .seventv-chat-line, .chat-line__message`
-- Extrahuje username z `.seventv-chat-user-username, [data-a-user]`
-- Color z `.seventv-chat-user style`
-- Text z `.seventv-message-body, .text-fragment, [data-a-target="chat-message-text"]`
-- Synthetic timestamps + ID
 
 **Reply:** delegováno na background přes `TW_REPLY` (potřebuje GQL)
 
@@ -467,8 +451,7 @@ Navazující cíle (Firefox / Opera store / mobil) jsou v `store/listing/README.
 
 **Cache + dedup:**
 - `_seenMsgIds` pro ID-based dedup
-- `_seenContentKeys` pro scraped messages (synthetic IDs nematchují)
-- Boundary detection při scrape - najít poslední cached match
+- `_seenContentKeys` pro párování optimistické zprávy s IRC echem
 - YouTube `_seen` set NEMAZAT při disconnect (jinak duplikace na reconnect)
 
 **Aktivní tab detekce (Chrome side panel + Opera popup):**
@@ -706,6 +689,11 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.57** - **Boot hang na FFZ výpadku — emote/badge fetche s 8s timeoutem**: 6× watchdog auto-dump 2026-09-05 (18:23–18:28), boot vždy stál po `7TV globals loaded` + `Badges Total: 511`, nikdy nedošel k `channel emotes+badges loaded`. `_init` awaituje `Promise.allSettled` přes 5 provider loadů; curl potvrdil `api.frankerfacez.com` (global i room) přijme TCP+TLS (33/63 ms) a pak nepošle ani byte. Chrome fetch nemá idle timeout → `loadFFZ` se nikdy nesettlnul → panel visel za loading overlay. Fix: `EmoteManager._fetch()` = fetch + `AbortSignal.timeout(8000)`, použit ve všech 7 loader fetchech (7TV global/channel, BTTV global/channel, FFZ global/channel, Twitch GQL sub emotes); stejný timeout na 2 IVR badge fetche v background `loadTwitchBadges`. UC_LOG tag `EmoteFetch` (kind + elapsed ms + url) → boot dump pojmenuje zaseklý provider.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
+- **v3.38.74** - **Twitch DOM scrape zrušen**: po reloadu (v3.38.72) panel „doparsoval" 10 zpráv ze začátku streamu s časem teď a jeden řádek měl místo textu čas („Strainer8: 10:12:") — scrape dával syntetické timestampy (`baseTime + idx*1000`) a text četl heuristikou přes textContent včetně 7TV timestampu. Spec serverového chat logu ho stejně ruší; odstraněn `_scrapeExistingChat`, `SCRAPE_CHAT` handler i `scrapeMessages()`. Mezeru po reloadu vyplní serverová historie.
+- **v3.38.73** - **Twitch zpráva s textem 2×**: report PanPixu — jeden Enter, na streamu jedna zpráva s textem dvakrát. `waitReady` 1,5 s prohrál se Slate commitem → repaste za rozpracovaný paste. Reprodukováno v `scripts/test-send-race.js` (mock: Slate stav sync, DOM později, DOM výběr přebírá s ~100 ms zpožděním). Fix: čekání 4 s, sonda z obou konců, select-all + 150 ms před repastem, detekce zdvojení před klikem → přepis nebo SendFail, nikdy klik nad zdvojeným textem.
+- **v3.38.72** - **Reload ikona + stav ve filtrech**: Připojit/Odpojit/Vyčistit pryč, reload v hlavičce; tečka stavu uvnitř TW/YT/KI filtrů (červená/žlutá/zelená, šedá = vyfiltrováno).
+- **v3.38.71** - **Kick badge**: provider četl neexistující `is_moderator` apod.; teď `sender.identity.badges[]` → `badgesRaw`, `_kickBadgeEntry()`, oficiální SVG (moderator/subscriber/founder/verified/bot z DOM), aproximace pro broadcaster/vip/og/sub_gifter/staff. UC_LOG `KickBadge`.
+- **v3.38.68–70** - Oficiální loga platforem (zlaté od usera), glow přes drop-shadow, velikosti 16/18/20, nastavení „Odpovědi zobrazit na jeden řádek".
 - **v3.38.67** - **Jeden zdroj = store verze**: zrušen dvouvrstvý model dev/store. Ze zdroje smazáno vše, co `build-store.ps1` dřív vyřezával (self-update check + alarm + update dot/tooltip, `update.bat`, `streamer.*` + „Jsem streamer", `backup.*`, `sidebar_action`, `alarms`), včetně mrtvého CSS. `build-store.ps1` je teď jen kopie + verifikace + zip. Opera: tab mode přes toolbar action, bez nativního sidebaru. Landing page (repo jouki.cz) odkazuje jen na store, ZIP zůstává pro `/UnityChat/dev`.
 - **v3.38.66** - **Logo i u badge vedle inputu + větší badge**: `#active-badge.tw` (ID selektor) přebíjel `.badge.tw` z v3.38.65. Velikosti 18/20/22 px (small/medium/large), input 22 px, reply indikátor 18 px.
 - **v3.38.63** - **První zpráva po otevření panelu se ztrácela jako „odeslaná"**: `sendChatNow` volal `findInput()` jednorázově → před mountem Twitch inputu hodil chybu, ale optimistická zpráva zůstala v DOM i cache. Fix: polling na input 3 s + `_markSendFailed()` (červený pruh „neodesláno", klik vrátí text do inputu, vypadne z cache, uvolní párovací klíč). `_contentKey()` extrahován. UC_LOG `SendFail`, `TwSend input-wait`, `Guard`.

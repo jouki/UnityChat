@@ -827,21 +827,6 @@
       return;
     }
 
-    if (msg.type === 'SCRAPE_CHAT') {
-      try {
-        sendResponse({ ok: true, messages: scrapeMessages() });
-      } catch (e) {
-        sendResponse({ ok: false, error: e.message });
-      }
-      return;
-    }
-
-    if (msg.type === 'SEND_CHAT') {
-      sendChat(msg.text)
-        .then(() => sendResponse({ ok: true }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
   });
 
   // Resolve rendered username colors from the live Twitch/7TV chat DOM. The
@@ -868,98 +853,6 @@
       if (col) out[name] = col;
     });
     return out;
-  }
-
-  function scrapeMessages() {
-    const messages = [];
-    const seenLines = new Set();
-
-    // Najít všechny chat lines (7TV i nativní Twitch)
-    const lineSelectors = [
-      '.seventv-message',
-      '.seventv-chat-line',
-      '.chat-line__message',
-      '[data-a-target="chat-line-message"]'
-    ];
-    const lines = [];
-    for (const sel of lineSelectors) {
-      document.querySelectorAll(sel).forEach((el) => {
-        if (!seenLines.has(el)) {
-          seenLines.add(el);
-          lines.push(el);
-        }
-      });
-    }
-
-    // Synthetic timestamps - každá zpráva 1s rozestup, posledni je nejnovější (just before now)
-    const now = Date.now();
-    const baseTime = now - lines.length * 1000;
-
-    let idx = 0;
-    for (const line of lines) {
-      // Username
-      const userEl = line.querySelector(
-        '.seventv-chat-user-username, [data-a-user] .chat-author__display-name, ' +
-        '.chat-author__display-name, [data-a-target="chat-message-username"]'
-      );
-      const username = (userEl?.textContent || '').trim();
-      if (!username) continue;
-
-      // Color z parent .seventv-chat-user nebo z elementu samotného
-      const colorEl = line.querySelector('.seventv-chat-user, [data-a-user]') || userEl;
-      const color = colorEl?.style?.color || '#9146ff';
-
-      // Walk DOM (include img alt text — emotes are <img> with alt=emoteName)
-      const walk = (node) => {
-        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          if (node.tagName === 'IMG') return ' ' + (node.alt || '') + ' ';
-          let t = '';
-          for (const c of node.childNodes) t += walk(c);
-          return t;
-        }
-        return '';
-      };
-
-      // Body: prefer outermost message container (has ALL fragments as children).
-      // Twitch native chat splits message into multiple .text-fragment + .mention-fragment
-      // spans — picking just the first one (querySelector default) would truncate.
-      let text = '';
-      const container = line.querySelector(
-        '.seventv-message-body, [data-a-target="chat-message-text"], ' +
-        '[class*="message-body"], [class*="message-content"]'
-      );
-      if (container) {
-        text = walk(container);
-      } else {
-        // No container — concatenate all known fragment types in document order.
-        const frags = line.querySelectorAll('.text-fragment, .mention-fragment, [class*="text-fragment"]');
-        for (const f of frags) text += walk(f);
-      }
-      // Strip UC_MARKER (Braille blank, U+2800) before emptiness check
-      // — trim() alone doesn't recognise it as whitespace, so marker-
-      // only extractions would pass through as garbage.
-      text = text.replace(/\u2800/g, '').replace(/\s+/g, ' ').trim();
-
-      if (!text) {
-        const fullText = (line.textContent || '').trim();
-        text = fullText.replace(username, '').replace(/\u2800/g, '').replace(/^[\s:]+/, '').trim();
-      }
-      if (!text) continue;
-
-      messages.push({
-        platform: 'twitch',
-        username,
-        message: text,
-        color,
-        timestamp: baseTime + idx * 1000,
-        id: 'scraped-' + idx + '-' + now,
-        scraped: true
-      });
-      idx++;
-    }
-
-    return messages;
   }
 
   function findInput() {
