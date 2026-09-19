@@ -34,18 +34,18 @@ UnityChat merges the live chat of Twitch, YouTube and Kick into a single panel n
 • Pinned messages — a banner above the chat shows what the streamer pinned
 • Raids and first-time chatters — incoming raids and new chatters stand out from the rest
 • Nicknames — give anyone a custom name and colour that follows them across all three platforms
-• Chat history — close and reopen the panel without losing the conversation
+• Chat history — when you open the panel it loads what happened in chat, even while it was closed
 • Three interface sizes and a dark theme that does not fight with the stream next to it
 
 ━━━ HOW IT WORKS ━━━
 
-Open a stream on Twitch, YouTube or Kick and click the UnityChat icon. The panel detects the channel you are on and connects. There is nothing to configure.
+UnityChat is built for one community: open RobDiesALot's stream on Twitch, YouTube or Kick, click the UnityChat icon and the panel connects to all three chats at once. Three streamers are supported so far — RobDiesALot, TenSterakdary and ArcadeBulls; when you have another of them open, the panel offers a one-click switch. On any other channel it stays on RobDiesALot. There is nothing to configure.
 
 Messages are sent through the login you already have in your browser — UnityChat never asks for a password and has no account of its own.
 
 ━━━ PRIVACY ━━━
 
-Chat history currently stays locally in your browser. What goes to the UnityChat server is the username you are signed in with, the channel you are watching, and any nicknames you choose to set. A chat archive that will also store public messages on the server is in preparation and is not active yet. Details: https://jouki.cz/UnityChat/privacy
+The panel loads chat history from the UnityChat server, which archives the public chat of the supported streamers (Twitch, YouTube, Kick) — message text, author name, time and the badges or emotes needed to display it — without a time limit; deletion on request. The extension itself sends only the username you are signed in with, the channel you are watching, and any nicknames you choose to set. Details: https://jouki.cz/UnityChat/privacy
 
 ━━━ NOTES ━━━
 

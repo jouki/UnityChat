@@ -24,8 +24,9 @@ zazipuje. Co dřív vyřezával, je ze zdroje smazané (self-update, streamer
 OAuth, backup stránky, Opera `sidebar_action`, `alarms`); kdo to potřebuje,
 najde to v git history před 3.38.67.
 
-Auto-switch přes `/streamers/lookup` zůstává — to je čtení veřejného
-directory, ne přihlašování.
+`/streamers/lookup` zůstává (čtení veřejného directory pro start panelu a
+nabídku ručního přepnutí mezi podporovanými streamery; auto-switch zrušen
+v3.38.81).
 
 ## Stav položky
 

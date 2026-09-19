@@ -47,9 +47,10 @@ co v rozšíření není.
 
 ```
 Stores the user's settings (which channels to follow, which platforms are
-enabled, layout size, display name colour) in chrome.storage.sync, and the
-local chat history cache in chrome.storage.local so reopening the panel does
-not lose the conversation. Nothing in either store leaves the user's browser.
+enabled, layout size, display name colour) in chrome.storage.sync, plus small
+local bookkeeping in chrome.storage.local (which usernames were already
+reported to our API). Chat history is not cached in the browser - it is loaded
+from our server on demand. Nothing in either store leaves the user's browser.
 ```
 
 ### `tabs`
@@ -150,15 +151,17 @@ a musí se změnit.
 ⚠️ **Limit tohoto pole je 500 znaků**, ne 1 000 jako u ostatních.
 
 Uživatelské jméno a heslo nechat **prázdné** — UnityChat vlastní účet nemá.
-Do „Další pokyny" jde tohle (496 znaků):
+Do „Další pokyny" jde tohle (469 znaků):
 
 ```
-The panel stays empty unless a stream is actually live - expected, not a bug. No account or login is needed to read chat. UI is in Czech, matching the listing.
+No account needed to read chat; UI is in Czech. UnityChat serves one community: by default it connects to the Twitch/YouTube/Kick chat of channel robdiesalot (also supported: tensterakdary, arcadebulls).
 
-Test: open any LIVE channel on twitch.tv, then click the UnityChat toolbar icon. It detects the channel from the tab URL and shows its chat within seconds (purple TW badge). YouTube and Kick work the same (red YT / green KI); YouTube needs a live stream, not a replay.
+Test: open twitch.tv/robdiesalot, click the UnityChat toolbar icon. The panel loads recent history from our server and, if the stream is live, new messages appear in seconds. On other channels it stays on robdiesalot.
 
-Sending needs you logged in to that platform in the same browser.
+Sending needs you logged in to that platform.
 ```
 
-**Proč to tam patří:** reviewer, který otevře panel mimo živý stream, uvidí
-prázdné okno a snadno to vyhodnotí jako nefunkční rozšíření. Navíc je UI česky.
+**Proč to tam patří:** reviewer, který otevře náhodný kanál, by viděl chat
+robdiesalota a vyhodnotil to jako chybu — od v3.38.81 se přepíná jen mezi
+podporovanými streamery. Navíc je UI česky. Historie ze serveru znamená, že
+panel není prázdný ani mimo živý stream.
