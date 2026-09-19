@@ -360,7 +360,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.0** (dev)
+- Aktuální: **v3.39.14** (dev = master)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -368,6 +368,11 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
 > Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
 > **3.39.3 odeslána ke kontrole 19. 9. 2026** (PR #21, workflow cws-release.yml).
+> **3.39.14 je na masteru (PR #22, 20. 9. 2026), ale CWS upload workflow spadl:
+> `NOT_UPDATEABLE — You may not edit or publish an item that is in review`.**
+> Dokud review 3.39.3 běží, store nepřijme nic. Až `GET api.jouki.cz/store/status`
+> přestane hlásit `pending`, spustit znovu: `gh run rerun 35474769185`
+> (nebo v dashboardu zrušit odeslání 3.39.3 a rerun hned).
 > Podklady pro dashboard: `store/listing/README.md`; **kompletní záznam všeho,
 > co je v dashboardu zadané (texty, oprávnění, data-use checkboxy, prohlášení):
 > `store/listing/dashboard-state.md`** — při každé změně v dashboardu aktualizovat.
