@@ -1037,8 +1037,15 @@
     // Slate placeholder ani zero-width výplně ho neobsahují, takže je
     // spolehlivější než empty-check přes textContent.
     const probe = text.trim().slice(0, 20);
+    // Druhá sonda z konce: začíná-li zpráva emotem, Slate ho v editoru
+    // vykreslí jako obrázek a hlavní sonda v textContent chybí — tail
+    // zabrání zbytečnému repaste. Počítání výskytů odhalí zdvojený text.
+    const tail = text.trim().slice(-20);
+    const countOf = (hay, needle) => (needle ? hay.split(needle).length - 1 : 0);
+    const hasOurText = (cur) => cur.includes(probe) || (tail.length >= 8 && cur.includes(tail));
+    const isDoubled = (cur) => countOf(cur, probe) >= 2 || (tail.length >= 8 && countOf(cur, tail) >= 2);
 
-    const insertText = (replaceExisting) => {
+    const insertText = async (replaceExisting) => {
       const el = liveInput();
       el.focus();
 
@@ -1066,6 +1073,10 @@
           sel.removeAllRanges();
           sel.addRange(range);
         } catch {}
+        // slate-react přebírá DOM výběr přes throttlovaný `selectionchange`
+        // (~100 ms). Paste hned po select-all Slate vloží na STAROU pozici
+        // kurzoru = za existující text → zdvojení (PanPixu 2026-09-19).
+        await sleep(150);
       }
 
       // Metoda 1: DataTransfer paste (nejspolehlivější pro Slate)
@@ -1110,7 +1121,7 @@
     // Počkat chvíli na focus
     await sleep(50);
 
-    insertText(false);
+    await insertText(false);
 
     // Condition-based wait místo původního fixního 150ms timeoutu.
     // React/Slate zpracovává paste asynchronně přes svůj scheduler — a když
@@ -1119,12 +1130,17 @@
     // TW_OPEN_REWARDS_POPOVER handleru). Pevných 150 ms občas prohrálo
     // závod → klik trefil send ve stavu "prázdný input" → Twitch neodeslal
     // a text zůstal viset v inputu (další zpráva se pak appendla za něj).
-    const waitReady = async () => {
+    // Původních 1 500 ms nestačilo: když Slate commitnul paste později,
+    // smyčka níž text „chybějící" v editoru vložila znovu a Slate ho
+    // připojil za ten první — na Twitch odešla JEDNA zpráva s textem 2×
+    // (report PanPixu 2026-09-19, reprodukováno v scripts/test-send-race.js).
+    // 4 s je 5× nejhorší naměřený lag; repaste je až poslední možnost.
+    const waitReady = async (maxMs = 4000) => {
       const t0 = performance.now();
       let ok = false;
-      while (performance.now() - t0 < 1500) {
+      while (performance.now() - t0 < maxMs) {
         const btn = findSendBtn();
-        if (readInput().includes(probe) && btn && !btnDisabled(btn)) { ok = true; break; }
+        if (hasOurText(readInput()) && btn && !btnDisabled(btn)) { ok = true; break; }
         await sleep(50);
       }
       log('pre-click', {
@@ -1144,14 +1160,26 @@
       // Náš text v editoru není? Klik by odešel naprázdno — a prázdný input
       // by pak v ověření níž prošel jako "odesláno" (přesně tahle díra dělala
       // z neodeslané zprávy tichý úspěch). Vložit znovu místo slepého kliku.
-      if (!readInput().includes(probe)) {
+      if (!hasOurText(readInput())) {
         log('repaste', { attempt, cur: readInput().slice(0, 60) });
-        insertText(true);
-        await waitReady();
+        await insertText(true);
+        await waitReady(2000);
+      }
+      // Pojistka proti zdvojení: je-li náš text v editoru 2×, přepsat ho
+      // (select-all + paste) a ověřit; když ani pak nesedí, NEklikat —
+      // zdvojená zpráva na streamu je horší než „neodesláno" v panelu.
+      if (isDoubled(readInput())) {
+        log('dup-fix', { attempt, cur: readInput().slice(0, 80) });
+        await insertText(true);
+        await waitReady(2000);
+        if (isDoubled(readInput())) {
+          log('dup-stuck', { attempt, cur: readInput().slice(0, 80) });
+          throw new Error('text se v Twitch inputu zdvojil, neodesláno (pojistka proti duplicitní zprávě)');
+        }
       }
       // Jen když text prokazatelně v editoru byl, je jeho zmizení po kliku
       // důkazem odeslání.
-      const hadText = readInput().includes(probe);
+      const hadText = hasOurText(readInput());
       const before = readInput().trim();
       if (hadText) sawText = true;
 
@@ -1190,7 +1218,7 @@
         // Náš text známe → stačí, že zmizel. Klikali-li jsme na cizí obsah
         // (probe se neshodl), důkazem je jen úplně prázdný editor — jinak by
         // "neobsahuje probe" platilo od začátku a prošlo by to naprázdno.
-        if (hadText ? !cur.includes(probe) : !cur.trim()) { cleared = true; break; }
+        if (hadText ? !hasOurText(cur) : !cur.trim()) { cleared = true; break; }
       }
       log(cleared ? (hadText ? 'sent' : 'sent-blind') : 'not-cleared', {
         attempt, viaBtn: !!sendBtn, hadText,
