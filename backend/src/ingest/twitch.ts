@@ -1,0 +1,106 @@
+import { normalizeTwitchPrivmsg } from './normalize.js';
+import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+
+export interface Logger {
+  info(o: object, msg: string): void;
+  warn(o: object, msg: string): void;
+  error(o: object, msg: string): void;
+}
+export const noopLog: Logger = { info() {}, warn() {}, error() {} };
+
+interface Opts { WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number }
+
+/**
+ * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
+ * (sidepanel.js), bez UI: jen PRIVMSG → onMessage. USERNOTICE (raid, sub…)
+ * se zatím neukládá — klient je renderuje živě a v historii by potřeboval
+ * vlastní render cestu; přidá se, až bude klientská část hotová.
+ */
+export class TwitchListener implements IngestListener {
+  private ws: WebSocket | null = null;
+  private st: PlatformStatus = 'off';
+  private last: Date | null = null;
+  private stopped = true;
+  private attempt = 0;
+  private timer: NodeJS.Timeout | null = null;
+  private readonly Ctor: typeof WebSocket;
+  private readonly log: Logger;
+  private readonly baseMs: number;
+
+  constructor(
+    private readonly channel: string,
+    private readonly onMessage: (m: IngestMessage) => void,
+    opts: Opts = {},
+  ) {
+    this.Ctor = opts.WebSocketCtor ?? WebSocket;
+    this.log = opts.log ?? noopLog;
+    this.baseMs = opts.reconnectBaseMs ?? 1000;
+  }
+
+  status() { return this.st; }
+  lastMessageAt() { return this.last; }
+
+  start() {
+    this.stopped = false;
+    this.connect();
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) { try { ws.onclose = null; ws.close(); } catch { /* socket už může být pryč */ } }
+    this.st = 'off';
+  }
+
+  private connect() {
+    this.st = this.attempt ? 'reconnecting' : 'connecting';
+    let ws: WebSocket;
+    try {
+      ws = new this.Ctor('wss://irc-ws.chat.twitch.tv:443');
+    } catch (err) {
+      this.log.error({ err, channel: this.channel }, 'twitch ingest: WebSocket ctor selhal');
+      this.scheduleReconnect();
+      return;
+    }
+    this.ws = ws;
+    ws.onopen = () => {
+      const nick = 'justinfan' + Math.floor(10000 + Math.random() * 90000);
+      ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+      ws.send('PASS SCHMOOPIIE');
+      ws.send('NICK ' + nick);
+      ws.send('JOIN #' + this.channel);
+      this.st = 'connected';
+      this.attempt = 0;
+      this.log.info({ channel: this.channel }, 'twitch ingest: connected');
+    };
+    ws.onmessage = (e: MessageEvent) => {
+      const data = typeof e.data === 'string' ? e.data : String(e.data);
+      for (const line of data.split('\r\n')) {
+        if (!line) continue;
+        if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
+        if (!line.includes('PRIVMSG')) continue;
+        const m = normalizeTwitchPrivmsg(line, this.channel);
+        if (!m) continue;
+        this.last = m.sentAt;
+        try { this.onMessage(m); } catch (err) { this.log.error({ err }, 'twitch ingest: onMessage threw'); }
+      }
+    };
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      this.log.warn({ channel: this.channel }, 'twitch ingest: socket closed');
+      this.scheduleReconnect();
+    };
+    ws.onerror = (e: Event) => this.log.warn({ channel: this.channel, e: String(e) }, 'twitch ingest: socket error');
+  }
+
+  private scheduleReconnect() {
+    if (this.stopped) return;
+    this.st = 'reconnecting';
+    const delay = Math.min(30000, this.baseMs * 2 ** Math.min(this.attempt, 5));
+    this.attempt++;
+    this.timer = setTimeout(() => { this.timer = null; if (!this.stopped) this.connect(); }, delay);
+  }
+}
