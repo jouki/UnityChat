@@ -1,0 +1,225 @@
+import { normalizeYoutubeAction } from './normalize.js';
+import { noopLog, type Logger } from './twitch.js';
+import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+
+interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; minPollMs?: number }
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
+const HEADERS = { 'User-Agent': UA, 'Accept-Language': 'cs,en;q=0.8' };
+
+/** Brace-counting extrakce `var ytInitialData = {...}` — regex selže na vnořených objektech. */
+export function extractJson(html: string, varName: string): unknown {
+  const markers = [`var ${varName} = `, `window["${varName}"] = `, `window['${varName}'] = `];
+  let start = -1;
+  for (const m of markers) { const i = html.indexOf(m); if (i !== -1) { start = i + m.length; break; } }
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\' && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) { try { return JSON.parse(html.substring(start, i + 1)); } catch { return null; } }
+    }
+  }
+  return null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Lcr = any;
+export function lcr(data: unknown): Lcr | null {
+  const d = data as { contents?: { liveChatRenderer?: Lcr }; continuationContents?: { liveChatContinuation?: Lcr } };
+  return d?.contents?.liveChatRenderer || d?.continuationContents?.liveChatContinuation || null;
+}
+
+/** Reload token režimu „Chat" (všechny zprávy); null když už v něm jsme / chybí. */
+export function pickAllChatToken(l: Lcr): string | null {
+  const items = l?.header?.liveChatHeaderRenderer?.viewSelector?.sortFilterSubMenuRenderer?.subMenuItems;
+  if (!Array.isArray(items) || items.length < 2) return null;
+  const all = items[items.length - 1];
+  if (all?.selected) return null;
+  return all?.continuation?.reloadContinuationData?.continuation || null;
+}
+
+export function pickTimedContinuation(l: Lcr): { continuation: string; timeoutMs: number } | null {
+  for (const c of l?.continuations || []) {
+    if (c?.timedContinuationData?.continuation) {
+      return { continuation: c.timedContinuationData.continuation, timeoutMs: c.timedContinuationData.timeoutMs || 5000 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Port YouTubeProvider z extension: findLiveVideoId → live_chat (popout,
+ * přepnutí na režim „všechny zprávy") → get_live_chat polling, při ztrátě
+ * timed continuation page-refresh. Bez cookies, vlastní UA.
+ */
+export class YouTubeListener implements IngestListener {
+  private st: PlatformStatus = 'off';
+  private last: Date | null = null;
+  private stopped = true;
+  private timer: NodeJS.Timeout | null = null;
+  private videoId: string | null = null;
+  private apiKey = '';
+  private clientVersion = '2.20250401.00.00';
+  private cont: string | null = null;
+  private allCont: string | null = null;
+  private usePageRefresh = false;
+  private apiFails = 0;
+  private seen = new Set<string>();
+  private readonly fetchImpl: typeof fetch;
+  private readonly log: Logger;
+  private readonly liveCheckMs: number;
+  private readonly minPollMs: number;
+
+  constructor(
+    private readonly handle: string,
+    private readonly onMessage: (m: IngestMessage) => void,
+    opts: Opts = {},
+  ) {
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.log = opts.log ?? noopLog;
+    this.liveCheckMs = opts.liveCheckMs ?? 60000;
+    this.minPollMs = opts.minPollMs ?? 1500;
+  }
+
+  status() { return this.st; }
+  lastMessageAt() { return this.last; }
+  start() { this.stopped = false; void this.connect(); }
+  stop() { this.stopped = true; if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.st = 'off'; }
+
+  private schedule(fn: () => Promise<void>, ms: number) {
+    if (this.stopped) return;
+    this.timer = setTimeout(() => { this.timer = null; void fn(); }, Math.max(ms, this.minPollMs));
+  }
+
+  private async get(url: string): Promise<string> {
+    const r = await this.fetchImpl(url, { headers: HEADERS, redirect: 'follow' });
+    if (!r.ok) throw new Error(`${url.split('?')[0]} → ${r.status}`);
+    return r.text();
+  }
+
+  private async findLiveVideoId(): Promise<string | null> {
+    for (const url of [`https://www.youtube.com/${this.handle}/live`, `https://www.youtube.com/@${this.handle}/live`]) {
+      try {
+        const html = await this.get(url);
+        const isLive = html.includes('"isLive":true') || html.includes('"isLiveNow":true') || html.includes('"isLiveBroadcast":true');
+        const m = html.match(/"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/);
+        if (isLive && m) return m[1];
+      } catch (err) {
+        this.log.warn({ err, url }, 'youtube ingest: findLive selhal');
+      }
+    }
+    return null;
+  }
+
+  private chatPage(cont?: string | null): Promise<string> {
+    const qs = cont ? `continuation=${encodeURIComponent(cont)}` : `v=${this.videoId}&is_popout=1`;
+    return this.get(`https://www.youtube.com/live_chat?${qs}`);
+  }
+
+  private async connect() {
+    if (this.stopped) return;
+    this.st = 'connecting';
+    this.cont = null; this.allCont = null; this.usePageRefresh = false; this.apiFails = 0;
+    try {
+      this.videoId = await this.findLiveVideoId();
+      if (!this.videoId) {
+        this.log.info({ handle: this.handle }, 'youtube ingest: není live, zkusím za minutu');
+        this.schedule(() => this.connect(), this.liveCheckMs);
+        return;
+      }
+      const html = await this.chatPage();
+      let l = lcr(extractJson(html, 'ytInitialData'));
+      if (!l) throw new Error('ytInitialData bez liveChatRenderer');
+      const allTok = pickAllChatToken(l);
+      if (allTok) {
+        const allL = lcr(extractJson(await this.chatPage(allTok), 'ytInitialData'));
+        if (allL) { l = allL; this.allCont = allTok; }
+      }
+      this.apiKey = html.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/)?.[1] || '';
+      this.clientVersion = html.match(/"clientVersion"\s*:\s*"([^"]+)"/)?.[1] || this.clientVersion;
+      const timed = pickTimedContinuation(l);
+      this.cont = timed?.continuation || null;
+      this.usePageRefresh = !this.cont || !this.apiKey;
+      this.processActions(l.actions || []);
+      this.st = 'connected';
+      this.log.info({ handle: this.handle, videoId: this.videoId, mode: this.usePageRefresh ? 'page' : 'api', all: !!this.allCont }, 'youtube ingest: connected');
+      this.schedule(() => this.poll(), timed?.timeoutMs || 5000);
+    } catch (err) {
+      this.st = 'reconnecting';
+      this.log.warn({ err, handle: this.handle }, 'youtube ingest: connect selhal');
+      this.schedule(() => this.connect(), 15000);
+    }
+  }
+
+  private async poll() {
+    if (this.stopped) return;
+    if (this.usePageRefresh) return this.pollPage();
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 15000);
+      const resp = await this.fetchImpl(`https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${this.apiKey}&prettyPrint=false`, {
+        method: 'POST', signal: ctrl.signal,
+        headers: { ...HEADERS, 'Content-Type': 'application/json', 'X-YouTube-Client-Name': '1', 'X-YouTube-Client-Version': this.clientVersion },
+        body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: this.clientVersion, hl: 'cs', gl: 'CZ' } }, continuation: this.cont }),
+      });
+      clearTimeout(t);
+      if (!resp.ok) throw new Error(`get_live_chat ${resp.status}`);
+      const l = lcr(await resp.json());
+      if (!l) {
+        if (++this.apiFails >= 3) {
+          this.log.info({ handle: this.handle }, 'youtube ingest: API bez obsahu 3×, stream skončil? → znovu hledám live');
+          this.schedule(() => this.connect(), 5000);
+          return;
+        }
+        this.schedule(() => this.poll(), 5000);
+        return;
+      }
+      const timed = pickTimedContinuation(l);
+      if (timed) this.cont = timed.continuation; else this.usePageRefresh = true;
+      const actions = l.actions || [];
+      if (actions.length) this.apiFails = 0; else if (++this.apiFails >= 5) this.usePageRefresh = true;
+      this.processActions(actions);
+      this.schedule(() => this.poll(), timed?.timeoutMs || 5000);
+    } catch (err) {
+      this.log.warn({ err, handle: this.handle }, 'youtube ingest: API poll selhal');
+      if (++this.apiFails >= 3) this.usePageRefresh = true;
+      this.schedule(() => this.poll(), 5000);
+    }
+  }
+
+  private async pollPage() {
+    try {
+      const l = lcr(extractJson(await this.chatPage(this.allCont), 'ytInitialData'));
+      if (!l) {
+        this.allCont = null;
+        if (++this.apiFails >= 3) { this.schedule(() => this.connect(), 5000); return; }
+        this.schedule(() => this.pollPage(), 8000);
+        return;
+      }
+      this.apiFails = 0;
+      this.processActions(l.actions || []);
+      this.schedule(() => this.pollPage(), 3000);
+    } catch (err) {
+      this.log.warn({ err, handle: this.handle }, 'youtube ingest: page poll selhal');
+      this.schedule(() => this.pollPage(), 10000);
+    }
+  }
+
+  private processActions(actions: unknown[]) {
+    for (const a of actions) {
+      const m = normalizeYoutubeAction(a, this.handle);
+      if (!m || this.seen.has(m.platformMessageId)) continue;
+      this.seen.add(m.platformMessageId);
+      if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2500));
+      this.last = m.sentAt;
+      try { this.onMessage(m); } catch (err) { this.log.error({ err }, 'youtube ingest: onMessage threw'); }
+    }
+  }
+}
