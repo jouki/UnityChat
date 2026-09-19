@@ -139,16 +139,17 @@
       // Player nedosahoval k okraji a vpravo zůstávalo prázdno (report 2026-09-20):
       // YouTube má chat pořád za „otevřený panel" a drží pro něj místo.
       _ucDropPanelAttrs();
-      // Dump 3.39.8 (2560 px): columns 2545, ale below 1105 + secondary 712 —
-      // #primary má max-width na šířku playeru a #columns padding-right pro
-      // panel, takže vpravo od related videí zůstávalo ~700 px prázdno.
-      // Nativní zavření má primary roztažené. #secondary se nesahá (related).
+      // Ověřeno v DevTools (user, 2026-09-20): za ~700 px prázdno vpravo od
+      // related videí může jediné pravidlo
+      //   ytd-watch-flexy[fixed-panels] #columns { padding-right: var(--ytd-watch-flexy-sidebar-width) }
+      // — po jeho vypnutí je layout shodný s nativně zavřeným chatem.
+      // #primary ani #secondary se nesahá (related videa zůstávají vpravo).
       const columns = document.querySelector('#columns');
       if (columns) columns.style.cssText = 'padding-right:0!important;';
-      const primary = document.querySelector('#primary');
-      if (primary) primary.style.cssText = 'max-width:none!important;';
-      const secondary = document.querySelector('#secondary');
-      if (secondary && secondary.style.cssText) secondary.style.cssText = ''; // úklid po 3.38.64–3.39.5
+      for (const sel of ['#secondary', '#primary']) { // úklid po 3.38.64–3.39.10
+        const el = document.querySelector(sel);
+        if (el && el.style.cssText) el.style.cssText = '';
+      }
       // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy && !flexy.hasAttribute('theater')) {
