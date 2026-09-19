@@ -162,7 +162,48 @@
       // žádný impuls k přepočtu — player zůstane v šířce sloupce, dokud uživatel
       // nepřepne fullscreen (což je přesně resize event). Pošleme ho sami.
       window.dispatchEvent(new Event('resize'));
+      _ucEnableOpenPanelBtn();
       _logYtLayout('hide');
+    }
+
+    // Nativní „Otevřít panel" je při otevřeném (= námi skrytém) chatu disabled.
+    // User 2026-09-20: má být klikatelné a vrátit chat na obrazovku. YouTube
+    // ho vypíná trojicí disabled + aria-disabled + třída; sundáme ji a klik
+    // chytíme v capture fázi na documentu, aby YouTube handler nedostal nic.
+    const OPEN_PANEL_SEL = '.ytTextCarouselItemViewModelButton button';
+    const YT_DISABLED_CLS = 'ytSpecButtonShapeNextDisabled';
+    function _ucEnableOpenPanelBtn() {
+      const b = document.querySelector(OPEN_PANEL_SEL);
+      if (!b || !b.disabled) return;
+      b.disabled = false;
+      b.removeAttribute('disabled');
+      b.setAttribute('aria-disabled', 'false');
+      b.classList.remove(YT_DISABLED_CLS);
+      b.title = 'Zobrazit YouTube chat (UnityChat)';
+      b.dataset.ucEnabled = '1';
+      _ucLog('YtLayout', 'open-panel button enabled');
+    }
+    function _ucRestoreOpenPanelBtn() {
+      const b = document.querySelector(OPEN_PANEL_SEL);
+      if (!b || b.dataset.ucEnabled !== '1') return;
+      b.disabled = true;
+      b.setAttribute('aria-disabled', 'true');
+      b.classList.add(YT_DISABLED_CLS);
+      b.title = '';
+      delete b.dataset.ucEnabled;
+    }
+    document.addEventListener('click', (e) => {
+      if (!_ucLayoutApplied) return;
+      const b = e.target?.closest?.(OPEN_PANEL_SEL);
+      if (!b || b.dataset.ucEnabled !== '1') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      _ucLog('YtLayout', 'open-panel button clicked → showYtChat');
+      showYtChat();
+    }, true);
+
+    function _ucLog(tag, text) {
+      try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag, args: [text] }).catch?.(() => {}); } catch {}
     }
 
     // Diagnostika do UC dumpu: co layout dělá po hide/show. Bez tohohle se
@@ -192,6 +233,7 @@
 
     function showYtChat() {
       _ucLayoutApplied = false;
+      _ucRestoreOpenPanelBtn();
       const flexyEl = document.querySelector('ytd-watch-flexy');
       if (flexyEl) for (const a of _ucRemovedAttrs) flexyEl.setAttribute(a, '');
       _ucRemovedAttrs = [];
@@ -237,6 +279,7 @@
       const flexyEl = document.querySelector('ytd-watch-flexy');
       const attrsBack = flexyEl && UC_PANEL_ATTRS.some((a) => flexyEl.hasAttribute(a));
       if ((cc && cc.offsetHeight > 50) || attrsBack) hideYtChat();
+      else _ucEnableOpenPanelBtn();
     }, 1500);
 
     // UC panel se otevřel (pill v chat liště, ikona v toolbaru, cokoli) →
@@ -263,25 +306,31 @@
       setTimeout(() => { closeObs.disconnect(); _ucOpening = false; }, 10000);
     }
 
-    // ---- UnityChat button next to "Otevřít panel" ----
+    // ---- UnityChat ikona v mastheadu (jako na Twitchi v hlavičce chatu) ----
+    // User 2026-09-20: pill „UnityChat" z řádku „Chat" pryč, místo něj jen
+    // ikona nahoře v liště YouTube před ostatními tlačítky (#end). Masthead
+    // přežívá SPA navigaci, takže stačí vložit jednou; interval jen hlídá,
+    // že tam ikona zůstala.
     const UC_BTN_ID = 'uc-yt-open-btn';
 
     function buildYtButton() {
       const btn = document.createElement('button');
       btn.id = UC_BTN_ID;
       btn.title = 'Otevřít UnityChat';
+      btn.setAttribute('aria-label', 'Otevřít UnityChat');
       Object.assign(btn.style, {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        gap: '6px', padding: '6px 12px', margin: '0 7px',
-        background: 'linear-gradient(135deg, rgb(255, 192, 0), rgb(255, 122, 0))',
-        border: 'none', borderRadius: '18px', cursor: 'pointer',
-        fontFamily: 'Roboto, Arial, sans-serif', fontSize: '12px',
-        fontWeight: '500', color: 'rgb(10, 10, 13)', lineHeight: '1',
-        transition: 'filter 0.15s',
+        width: '40px', height: '40px', minWidth: '40px', padding: '0', margin: '0 4px 0 0',
+        background: 'transparent', border: 'none', borderRadius: '50%',
+        cursor: 'pointer', flexShrink: '0', transition: 'background 0.15s ease',
       });
-      btn.textContent = 'UnityChat';
-      btn.addEventListener('mouseenter', () => { btn.style.filter = 'brightness(1.15)'; });
-      btn.addEventListener('mouseleave', () => { btn.style.filter = ''; });
+      const img = document.createElement('img');
+      img.src = chrome.runtime.getURL('icons/icon48.png');
+      img.alt = 'UC';
+      Object.assign(img.style, { width: '24px', height: '24px', display: 'block', pointerEvents: 'none' });
+      btn.appendChild(img);
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,255,255,0.1)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -295,22 +344,19 @@
     }
 
     function injectYtButton() {
-      if (document.getElementById(UC_BTN_ID)) return;
-      const frame = document.querySelector('ytd-live-chat-frame');
-      const carousel = document.querySelector('#teaser-carousel');
-      const container = document.querySelector('.ytVideoMetadataCarouselViewModelCarouselContainer');
-      const targetBtn = document.querySelector('.ytTextCarouselItemViewModelButton');
-      console.log('[UC] inject attempt:', { frame: !!frame, carousel: !!carousel, container: !!container, targetBtn: !!targetBtn });
-      if (targetBtn) {
-        targetBtn.parentElement.insertBefore(buildYtButton(), targetBtn);
-        console.log('[UC] button injected!');
-      }
+      if (document.getElementById(UC_BTN_ID)) return true;
+      const end = document.querySelector('ytd-masthead #end');
+      if (!end) return false;
+      // Před všechno viditelné (i před tlačítka cizích rozšíření), skeleton
+      // ikony YouTube nechat na začátku.
+      const skel = end.querySelector('#masthead-skeleton-icons');
+      end.insertBefore(buildYtButton(), skel ? skel.nextSibling : end.firstChild);
+      _ucLog('YtLayout', 'masthead button injected');
+      return true;
     }
 
-    const injectInterval = setInterval(() => {
-      if (document.getElementById(UC_BTN_ID)) { clearInterval(injectInterval); return; }
-      injectYtButton();
-    }, 500);
+    setInterval(injectYtButton, 2000);
+    injectYtButton();
   }
 
   // Přímé odeslání v live_chat iframe
