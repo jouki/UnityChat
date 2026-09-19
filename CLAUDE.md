@@ -557,7 +557,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.2.0)
+## Backend (v0.3.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -584,6 +584,10 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 - `GET /dev` — dev download page HTML (dev mode only)
 - `GET /dev/download` — dev branch extension ZIP (dev mode only)
 - `POST /webhook/deploy` — GitHub webhook → git pull + signal file
+- `GET /chat/history?channel&limit&before` — historie chatu pro panel ze
+  serverového logu (ingest níže). Kurzor `<sent_at_ms>:<id>`, odpověď
+  `{ok, messages[nejstarší→nejnovější], nextBefore}`, tvar zprávy = to, co
+  posílají živé providery (`historical: true`). `no-store`, 10 req/s/IP.
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
@@ -599,6 +603,18 @@ cp .env.example .env
 npm run db:push    # apply schema to DB
 npm run dev        # hot reload na :3000
 ```
+
+### Chat ingest (v0.3.0, spec `docs/superpowers/specs/2026-09-19-server-chat-log-design.md`)
+
+`backend/src/ingest/`: `twitch.ts` (anonymní IRC), `kick.ts` (Pusher),
+`youtube.ts` (live_chat poller, režim „všechny zprávy", page-refresh
+fallback), `normalize.ts` (payload → řádek, čas z platformy: `tmi-sent-ts`,
+`created_at`, `timestampUsec`), `store.ts` (INSERT … ON CONFLICT DO NOTHING +
+retence), `index.ts` (orchestrace, dávkový zápis 500 ms/50 ks, retence 1×/h,
+`/health.ingest`). Env `CHAT_INGEST_CHANNELS` (prázdné = vypnuto),
+`CHAT_RETENTION_DAYS` (7). USERNOTICE (raid/sub) se zatím neukládá.
+Testy `npm test` (node --test přes tsx, `.env.test`), listenery mají
+injektovaný WebSocket/fetch. Audit kompletnosti: `scripts/ingest-audit.mjs`.
 
 ### Deploy
 Coolify Application resource nastavený s Base Directory `backend/`, build z `Dockerfile`. `DATABASE_URL` injectnutý Coolify přes "magic" env variable napojenou na `unitychat-db` Postgres resource na stejné Docker síti.

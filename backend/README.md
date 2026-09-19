@@ -28,13 +28,46 @@ npm run db:push    # apply schema to DB
 npm run dev        # starts server on :3000 with hot reload
 ```
 
-## Endpoints (v0.1.0)
+## Endpoints (v0.3.0)
 
 - `GET /` — service info
-- `GET /health` — basic liveness, returns uptime
+- `GET /health` — liveness, uptime, SSE clients, `cwsConfigured`, `ingest` status
 - `GET /health/db` — database connectivity check (503 if down)
+- `GET /nicknames`, `PUT /nicknames`, `DELETE /nicknames`, `GET /nicknames/stream` (SSE)
+- `POST /users/seen`, `GET /users`
+- `GET /streamers/lookup`, streamer OAuth routes (`/streamers/oauth/*`)
+- `GET /store/status` — Chrome Web Store item status (cached 10 min)
+- `GET /chat/history` — chat history for the extension (see below)
 
-More endpoints will be added as features land.
+### Chat ingest + `GET /chat/history`
+
+The server listens to Twitch (anonymous IRC), Kick (Pusher) and YouTube
+(live_chat polling) itself and stores every public message in `messages`
+with the **platform's own timestamp** (`sent_at`); `created_at` is the time the
+server received it, so `created_at - sent_at` is ingest latency. Duplicates are
+dropped by the unique index `(platform, platform_message_id)`. Messages older
+than `CHAT_RETENTION_DAYS` are deleted hourly.
+
+Env:
+
+```
+CHAT_INGEST_CHANNELS=twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot   # empty = ingest off
+CHAT_RETENTION_DAYS=7
+```
+
+```
+GET /chat/history?channel=robdiesalot&limit=100[&before=<sent_at_ms>:<id>]
+```
+
+- `channel` — Twitch login; YouTube/Kick names come from the `streamers` directory row (falls back to the same name).
+- `limit` — 1..200, default 100.
+- `before` — cursor from the previous page's `nextBefore` (`sent_at DESC, id DESC` ordering, stable across equal timestamps).
+- Response: `{ ok, messages: [oldest → newest], nextBefore: string | null }`. Message shape matches what the
+  extension's live providers emit (`platform, id, username, message, timestamp, color, badgesRaw, twitchEmotes,
+  replyTo, kickContent, ytRuns, superChat, historical: true`).
+- `Cache-Control: no-store`; 10 req/s per IP.
+
+Tests: `npm test` (`node --test`, env from `.env.test`; the DB integration test runs only with `TEST_DATABASE_URL`).
 
 ## Database migrations
 
