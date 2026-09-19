@@ -1051,6 +1051,11 @@
     };
 
     await waitReady();
+    // Text v DOM ≠ text ve stavu Twitch composeru: klik 107 ms po pastu
+    // (log 2026-09-19 17:25) odeslal prázdno, verifikace čekala 2 s a až
+    // druhý klik prošel. Dřívější kód měl mezi pastem a klikem vždy ≥150 ms
+    // fixně — vrátit ten odstup jako settle po ready.
+    await sleep(150);
 
     // Klik + verifikace + retry. Úspěšný send input vyprázdní (jakmile
     // React commitne) — dokud v něm náš text visí, send neproběhl.
