@@ -10,6 +10,8 @@ import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
+import { parseIngestChannels } from './ingest/channels.js';
+import { createIngest } from './ingest/index.js';
 
 const startedAt = Date.now();
 
@@ -30,22 +32,35 @@ await app.register(cors, {
   credentials: true,
 });
 
+// Server-side chat log: poslouchá platformy podle CHAT_INGEST_CHANNELS a
+// plní tabulku messages; /chat/history z ní čte. Prázdná konfigurace =
+// vše 'off', start() nic nespustí.
+const ingest = createIngest({
+  channels: parseIngestChannels(config.CHAT_INGEST_CHANNELS),
+  retentionDays: config.CHAT_RETENTION_DAYS,
+  log: app.log,
+});
+app.addHook('onReady', async () => { ingest.start(); });
+app.addHook('onClose', async () => { await ingest.stop(); });
+
 app.get('/', async () => ({
   service: 'unitychat-backend',
-  version: '0.1.0',
+  version: '0.3.0',
   docs: '/health',
 }));
 
 app.get('/health', async () => ({
   ok: true,
   service: 'unitychat-backend',
-  version: '0.2.0',
+  version: '0.3.0',
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
   // Diagnostika: bez klice vraci /store/status 503 a landing page nezobrazi
   // radek o verzi cekajici na schvaleni. Snazsi zjistit odsud nez z kontejneru.
   cwsConfigured: cwsConfigured(),
+  // Stav chat ingestu per platforma + poslední přijatá zpráva (čas platformy).
+  ingest: ingest.status(),
 }));
 
 await app.register(nicknameRoutes);
