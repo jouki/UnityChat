@@ -31,6 +31,11 @@ const EnvSchema = z.object({
   CWS_SERVICE_ACCOUNT: z.string().optional(),
   CWS_PUBLISHER_ID: z.string().default(''),
   CWS_ITEM_ID: z.string().default('picaeipbmkgcippknkpkbnbgjlkblbnp'),
+  // Server-side chat log (spec 2026-09-19). Prázdné = ingest vypnutý.
+  // Formát: "twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot"
+  CHAT_INGEST_CHANNELS: z.string().default(''),
+  // Retence zpráv v tabulce messages (dny). Jedno číslo ke změně.
+  CHAT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
 });
 
 export const config = EnvSchema.parse(process.env);
