@@ -5441,6 +5441,9 @@ class UnityChat {
     }
     push('Cache stats', {
       msgCacheSize: this._msgCache?.length || 0,
+      // Audit serverového ingestu (scripts/ingest-audit.mjs): všechna platform:id
+      // z cache, ať jde spočítat recall proti tabulce messages.
+      msgCacheIds: (this._msgCache || []).filter((m) => m.id && m.platform && !String(m.id).startsWith('opt-')).map((m) => `${m.platform}:${m.id}|${m.timestamp || 0}|${(m.username || '')}|${String(m.message || '').slice(0, 40)}`),
       msgCacheOldest: this._msgCache?.[0]?.timestamp,
       msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
       dedupChannels: this._dedupChannels?.size || 0,
