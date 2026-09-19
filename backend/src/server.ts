@@ -8,6 +8,7 @@ import devDownloadRoutes from './routes/dev-download.js';
 import streamerRoutes from './routes/streamers.js';
 import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
+import chatRoutes from './routes/chat.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 import { parseIngestChannels } from './ingest/channels.js';
@@ -68,6 +69,7 @@ await app.register(userRoutes);
 await app.register(streamerRoutes);
 await app.register(oauthRoutes);
 await app.register(storeRoutes);
+await app.register(chatRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
