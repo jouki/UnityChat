@@ -4907,9 +4907,19 @@ class UnityChat {
         if (this.msgCount > before) added++;
       }
       if (added) this._sys(`Doplněno ${added} zpráv z Twitch chatu`);
+      // Vždy logovat, co v DOM bylo (ne jen nové) a co panel považuje za
+      // nejnovější — jinak se při „new=0" nedá říct, jestli DOM neměl
+      // novější zprávy, nebo je panel měl už z cache.
+      const all = (resp.messages || []).filter((m) => m.timestamp).map((m) => m.timestamp);
+      const iso = (t) => new Date(t).toISOString().slice(11, 19);
+      const lastEl = this._firstNewerMsgEl(0) ? null : this.chatEl.querySelector('.msg:last-of-type');
+      const newestDom = lastEl ? Number(lastEl.dataset.ts) : 0;
+      const cacheNewest = this._msgCache.reduce((mx, m) => (m.platform === 'twitch' && m.timestamp > mx ? m.timestamp : mx), 0);
       log(`tab=${tab.id} dom=${resp.total} got=${resp.messages?.length || 0} new=${list.length} added=${added}`
         + ` noFiber=${resp.noFiber} noMsg=${resp.noMsg}`
-        + (list.length ? ` range=${new Date(list[0].timestamp).toISOString()}..${new Date(list[list.length - 1].timestamp).toISOString()}` : ''));
+        + (all.length ? ` domRange=${iso(Math.min(...all))}..${iso(Math.max(...all))}` : '')
+        + ` cacheNewestTw=${cacheNewest ? iso(cacheNewest) : '-'} domNewestPanel=${newestDom ? iso(newestDom) : '-'}`
+        + (list.length ? ` newRange=${iso(list[0].timestamp)}..${iso(list[list.length - 1].timestamp)}` : ''));
     } catch (e) {
       log(`error: ${e.message}`);
     }
