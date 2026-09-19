@@ -908,6 +908,13 @@ body.layout-large #settings details summary { font-size: 15px; }
 /* User-toggled via settings — hides timestamps without re-rendering msgs. */
 body.no-timestamps .msg .ts { display: none; }
 
+/* User-toggled via settings — reply context on one line, rest cut with … */
+body.reply-oneline .reply-ctx {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .msg .bdg {
   margin-right: 2px;
   display: inline;

@@ -22,6 +22,7 @@ const DEFAULTS = {
   username: '',
   layout: 'medium',
   showTimestamps: true,
+  replyOneLine: false,
 };
 
 // =============================================================
@@ -2760,6 +2761,17 @@ class UnityChat {
         this._applyTimestampVisibility();
       });
     }
+    // Reply context on one line (ellipsis) — CSS-only toggle
+    const rolBox = $('chk-reply-oneline');
+    if (rolBox) {
+      rolBox.checked = this.config.replyOneLine === true;
+      this._applyReplyOneLine();
+      rolBox.addEventListener('change', () => {
+        this.config.replyOneLine = rolBox.checked;
+        this._saveConfig();
+        this._applyReplyOneLine();
+      });
+    }
     // Auto-resize textarea + auto @username suggest
     this.msgInput.addEventListener('input', () => {
       this._autoResizeInput();
@@ -4079,6 +4091,10 @@ class UnityChat {
   _applyTimestampVisibility() {
     const show = this.config.showTimestamps !== false;
     document.body.classList.toggle('no-timestamps', !show);
+  }
+
+  _applyReplyOneLine() {
+    document.body.classList.toggle('reply-oneline', this.config.replyOneLine === true);
   }
 
   // ---- Twitch Badges ----
