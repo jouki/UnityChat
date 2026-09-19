@@ -609,7 +609,7 @@ fallback), `normalize.ts` (payload → řádek, čas z platformy: `tmi-sent-ts`,
 `created_at`, `timestampUsec`), `store.ts` (INSERT … ON CONFLICT DO NOTHING +
 retence), `index.ts` (orchestrace, dávkový zápis 500 ms/50 ks, retence 1×/h,
 `/health.ingest`). Env `CHAT_INGEST_CHANNELS` (prázdné = vypnuto),
-`CHAT_RETENTION_DAYS` (7). USERNOTICE (raid/sub) se zatím neukládá.
+`CHAT_RETENTION_DAYS` (**0 = bez retence**, rozhodnutí usera 2026-09-19: archiv držet po neurčitou dobu, mazání na žádost; kladná hodnota zapne hodinové mazání). USERNOTICE (raid/sub) se zatím neukládá.
 Testy `npm test` (node --test přes tsx, `.env.test`), listenery mají
 injektovaný WebSocket/fetch. Audit kompletnosti: `scripts/ingest-audit.mjs`.
 
