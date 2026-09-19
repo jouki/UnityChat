@@ -10,39 +10,6 @@
   <!-- Header -->
   <div id="header">
     <div id="header-title">&#9889; UnityChat</div>
-    <!-- UC_STORE_STRIP_START: self-update tooltip (CWS forbids out-of-store updates) -->
-    <!-- Update notification tooltip template — JS relocates this into
-         #hdr-logo-wrap (built at init time) so the dot and tooltip hang
-         off the UnityChat logo on the left of the header. -->
-    <template id="update-tooltip-tpl">
-      <!-- Speech-bubble arrow pointing up to the logo. Outer wedge is the
-           border color, inner wedge is the panel fill. Kept as siblings
-           of .update-tooltip (not children) so tooltip's overflow:hidden
-           doesn't clip them. -->
-      <span class="ut-arrow-outer" aria-hidden="true"></span>
-      <span class="ut-arrow-inner" aria-hidden="true"></span>
-      <div class="update-tooltip">
-        <div class="ut-title">Nová verze k dispozici</div>
-        <div class="ut-version">v<span id="ut-version-num">?</span></div>
-        <div class="ut-text">
-          Můžeš updatovat pomocí <code>update.bat</code> ve složce extensionu,
-          nebo si stáhni <a id="ut-download-link" href="https://jouki.cz/download/unitychat.zip" target="_blank" rel="noopener">novou verzi</a>.
-        </div>
-        <div class="ut-explorer" aria-hidden="true">
-          <div class="ut-exp-path">&#128193; extension</div>
-          <ul class="ut-exp-list">
-            <li>&#128196; background.js</li>
-            <li>&#128196; sidepanel.html</li>
-            <li>&#128196; sidepanel.js</li>
-            <li>&#128196; manifest.json</li>
-            <li class="ut-exp-highlight">&#128196; update.bat <span class="ut-exp-arrow">&#11013;</span></li>
-          </ul>
-        </div>
-        <!-- 10s auto-reveal countdown bar, shrinks right-edge-leftward. -->
-        <span class="ut-countdown" aria-hidden="true"></span>
-      </div>
-    </template>
-    <!-- UC_STORE_STRIP_END -->
     <div id="header-actions">
       <button id="btn-popout" title="Otevřít v samostatném okně">&#10548;</button>
       <button id="btn-dump" title="Stáhnout debug log">&#128190;</button>
@@ -55,9 +22,6 @@
     <details class="settings-section" id="channels-section">
       <summary>
         <span>Kanály</span>
-        <!-- UC_STORE_STRIP_START: streamer OAuth entry point -->
-        <button id="btn-im-streamer" class="btn-streamer-inline" title="Otevřít stránku pro přihlášení streamera">Jsem streamer</button>
-        <!-- UC_STORE_STRIP_END -->
       </summary>
       <div class="setting-row">
         <label for="input-channel">Twitch</label>

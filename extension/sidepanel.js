@@ -2544,45 +2544,13 @@ class UnityChat {
   }
 
   async _init() {
-    // Verze v titulku — wrap the logo so the update dot + tooltip can hang
-    // off it (dot anchors to the top-right corner of the logo, tooltip
-    // drops to the right from the logo's left edge).
+    // Verze v titulku.
     const ver = chrome.runtime.getManifest().version;
     const title = document.getElementById('header-title');
     title.innerHTML =
       `<span class="hdr-logo-wrap" id="hdr-logo-wrap">
         <img src="icons/icon48.png" class="hdr-logo" alt="UnityChat">
-        <span class="update-dot" aria-hidden="true"></span>
       </span> UnityChat <span class="hdr-ver">v${ver}</span> <span class="hdr-beta">[BETA]</span>`;
-    // UC_STORE_STRIP_START: update tooltip mount (self-update UI)
-    // Clone the update tooltip template into the logo wrap so hover on the
-    // logo reveals it. Pulled from a <template> in sidepanel.html so the
-    // markup stays authored in HTML and readable.
-    const tpl = document.getElementById('update-tooltip-tpl');
-    const logoWrap = document.getElementById('hdr-logo-wrap');
-    if (tpl && logoWrap) {
-      logoWrap.appendChild(tpl.content.cloneNode(true));
-      // Hover-intent: 250ms hide delay covers the pixel gap between the logo
-      // and the tooltip card (CSS-only :hover would drop as soon as the
-      // cursor left the logo, killing the "move down to click the link" UX).
-      const tip = logoWrap.querySelector('.update-tooltip');
-      let hideT = null;
-      const show = () => {
-        clearTimeout(hideT);
-        logoWrap.classList.add('is-hovering');
-      };
-      const hide = () => {
-        clearTimeout(hideT);
-        hideT = setTimeout(() => logoWrap.classList.remove('is-hovering'), 250);
-      };
-      logoWrap.addEventListener('mouseenter', show);
-      logoWrap.addEventListener('mouseleave', hide);
-      if (tip) {
-        tip.addEventListener('mouseenter', show);
-        tip.addEventListener('mouseleave', hide);
-      }
-    }
-    // UC_STORE_STRIP_END
 
     this._bootMark('_init start');
     // Arm background watchdog — if _bootMark('_init done') never arrives,
@@ -2696,10 +2664,6 @@ class UnityChat {
     this._connectAll();
     this._bootMark('_connectAll dispatched');
     this._detectLoop();
-    // UC_STORE_STRIP_START: self-update check call
-    // Fire-and-forget update check against the public landing page manifest.
-    this._checkForUpdate().catch(() => {});
-    // UC_STORE_STRIP_END
     // Background broadcast listener (Twitch redeems/highlights/credits, plus
     // the self-update badge in non-store builds).
     this._wireBackgroundUpdateListener();
@@ -2717,52 +2681,8 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_END' }).catch(() => {}); } catch {}
   }
 
-  // UC_STORE_STRIP_START: self-update check + tooltip (CWS forbids out-of-store updates)
-  async _checkForUpdate() {
-    try {
-      const current = chrome.runtime.getManifest().version;
-      const resp = await fetch('https://jouki.cz/download/manifest.json', { cache: 'no-store' });
-      if (!resp.ok) return;
-      const remote = await resp.json();
-      const latest = remote?.version;
-      const wrap = document.getElementById('hdr-logo-wrap');
-      const num = document.getElementById('ut-version-num');
-      const hasUpdate = latest && this._isNewerVersion(latest, current);
-      if (!hasUpdate) {
-        // User is on latest (or ahead — update.bat was run). Clear any stale
-        // badge from a previous session.
-        chrome.runtime.sendMessage({ type: 'CLEAR_UPDATE_BADGE' }).catch(() => {});
-        return;
-      }
-      if (num) num.textContent = latest;
-      if (wrap) wrap.classList.add('has-update');
-      // Browser action icon: red ! badge + hover title "UPDATE available"
-      chrome.runtime.sendMessage({ type: 'SET_UPDATE_BADGE', version: latest }).catch(() => {});
-      // Auto-reveal the tooltip for 10s with a shrinking countdown bar so
-      // the user sees the notice even without hovering the logo.
-      this._autoRevealUpdateTooltip();
-    } catch {}
-  }
 
-  _autoRevealUpdateTooltip() {
-    const wrap = document.getElementById('hdr-logo-wrap');
-    if (!wrap || !wrap.classList.contains('has-update')) return;
-    // Restart the countdown bar animation on repeat calls by removing and
-    // re-adding the class on the next frame.
-    wrap.classList.remove('auto-reveal');
-    // Force reflow so the animation restart actually takes effect
-    void wrap.offsetWidth;
-    wrap.classList.add('auto-reveal');
-    clearTimeout(this._autoRevealT);
-    this._autoRevealT = setTimeout(() => {
-      wrap.classList.remove('auto-reveal');
-    }, 10000);
-  }
-  // UC_STORE_STRIP_END
-
-  // Background broadcasts for panel-wide state. UC_UPDATE_* come from the
-  // 15-min self-update alarm and are kept last in the chain so the store
-  // build can strip them without orphaning an `else if`.
+  // Background broadcasts for panel-wide state.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
@@ -2775,42 +2695,10 @@ class UnityChat {
         // Twitch fired a floating "+N" reward animation — content script
         // caught it from DOM mutations. We just flash the amount.
         this._flashPointsDelta(msg.amount);
-      // UC_STORE_STRIP_START: self-update broadcasts
-      } else if (msg?.type === 'UC_UPDATE_AVAILABLE' && msg.version) {
-        const wrap = document.getElementById('hdr-logo-wrap');
-        const num = document.getElementById('ut-version-num');
-        if (!wrap) return;
-        const isNew = !wrap.classList.contains('has-update');
-        if (num) num.textContent = msg.version;
-        wrap.classList.add('has-update');
-        // Only auto-reveal on transition (false→true), not on every periodic
-        // re-confirmation, otherwise the tooltip would pop every 15 min.
-        if (isNew) this._autoRevealUpdateTooltip();
-      } else if (msg?.type === 'UC_UPDATE_CLEARED') {
-        const wrap = document.getElementById('hdr-logo-wrap');
-        if (wrap) {
-          wrap.classList.remove('has-update', 'auto-reveal', 'is-hovering');
-        }
-      // UC_STORE_STRIP_END
       }
     });
   }
 
-  // UC_STORE_STRIP_START: version compare, only used by the self-update check
-  _isNewerVersion(remote, current) {
-    const parse = (v) => (v || '0').split('.').map((n) => parseInt(n, 10) || 0);
-    const a = parse(remote);
-    const b = parse(current);
-    const len = Math.max(a.length, b.length);
-    for (let i = 0; i < len; i++) {
-      const x = a[i] || 0;
-      const y = b[i] || 0;
-      if (x > y) return true;
-      if (x < y) return false;
-    }
-    return false;
-  }
-  // UC_STORE_STRIP_END
 
   // ---- Config ----
 
@@ -3086,18 +2974,6 @@ class UnityChat {
       this.msgCount = 0;
     });
 
-    // UC_STORE_STRIP_START: streamer OAuth entry point (not shipped to the store)
-    // "Jsem streamer" button — opens streamer.html in a new tab.
-    // Stop propagation so click doesn't toggle the <details> section.
-    const imStreamerBtn = $('btn-im-streamer');
-    if (imStreamerBtn) {
-      imStreamerBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        chrome.tabs.create({ url: chrome.runtime.getURL('streamer.html') });
-      });
-    }
-    // UC_STORE_STRIP_END
 
     // Dev mode
     $('chk-devmode').addEventListener('change', () => {

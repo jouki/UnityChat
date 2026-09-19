@@ -97,112 +97,6 @@ body.layout-large #settings details summary { font-size: 15px; }
   filter: drop-shadow(0 0 6px rgba(255, 140, 0, 0.5));
 }
 
-/* Update dot + tooltip: both hidden unless .has-update is on the wrap.
-   Tooltip anchors to the left edge of the logo so it doesn't run off the
-   right side of a narrow side panel — the panel can be as tight as
-   ~300px and the tooltip is ~290px wide. */
-.hdr-logo-wrap .update-dot,
-.hdr-logo-wrap .update-tooltip {
-  display: none;
-}
-.hdr-logo-wrap.has-update {
-  cursor: pointer;
-}
-/* Inside the tooltip, revert to the default text/arrow cursor — the whole
-   card isn't clickable, only the inline link is. Link gets pointer back
-   via the <a> user-agent default. */
-.hdr-logo-wrap.has-update .update-tooltip {
-  cursor: default;
-}
-.hdr-logo-wrap.has-update .update-dot {
-  display: block;
-  position: absolute;
-  top: -2px;
-  right: -3px;
-  width: 9px;
-  height: 9px;
-  background: #e5484d;
-  border: 1.5px solid var(--bg);
-  border-radius: 50%;
-  box-shadow: 0 0 8px rgba(229, 72, 77, 0.85);
-  animation: update-pulse 1.5s ease-in-out infinite;
-  pointer-events: none;
-}
-.hdr-logo-wrap.has-update .update-tooltip {
-  display: block;
-  position: absolute;
-  /* Offset enough for the arrow to sit between the logo and the card. */
-  top: calc(100% + 14px);
-  left: -8px;
-  min-width: 260px;
-  /* Layout-scale variable drives size across layout-small/medium/large.
-     Resolves to 1 by default, 1.1 at medium, 1.22 at large. */
-  --ut-scale: 1;
-  max-width: min(calc(300px * var(--ut-scale)), calc(100vw - 24px));
-  padding: calc(14px * var(--ut-scale));
-  background: #151518;
-  border: 1px solid rgba(255, 140, 0, 0.45);
-  border-radius: 6px;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 140, 0, 0.15);
-  z-index: 200;
-  font-size: calc(12px * var(--ut-scale));
-  line-height: 1.45;
-  color: var(--text-primary);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
-  overflow: hidden; /* so countdown bar matches tooltip corners */
-}
-
-/* Scale tooltip with layout size (body.layout-medium/large set globally) */
-body.layout-medium .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.1; }
-body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22; }
-
-/* Speech-bubble arrow pointing up to the logo. Two stacked triangles
-   (outer=border color, inner=panel fill) positioned between logo and
-   tooltip. Rendered as direct children of .hdr-logo-wrap (not inside
-   .update-tooltip) so the tooltip's overflow:hidden doesn't clip them. */
-.hdr-logo-wrap.has-update .ut-arrow-outer,
-.hdr-logo-wrap.has-update .ut-arrow-inner {
-  position: absolute;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.18s, transform 0.18s;
-  transform: translateY(-4px);
-  z-index: 201;
-}
-.hdr-logo-wrap.has-update .ut-arrow-outer {
-  top: calc(100% + 2px);
-  left: 4px;
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-bottom: 12px solid rgba(255, 140, 0, 0.55);
-  filter: drop-shadow(0 -1px 0 rgba(255, 140, 0, 0.25));
-}
-.hdr-logo-wrap.has-update .ut-arrow-inner {
-  top: calc(100% + 4px);
-  left: 5px;
-  border-left: 11px solid transparent;
-  border-right: 11px solid transparent;
-  border-bottom: 11px solid #151518;
-}
-
-/* Show tooltip + arrow on JS-controlled hover-intent OR during auto-reveal.
-   JS toggles .is-hovering with a 250ms hide delay, so the cursor can cross
-   the pixel gap between logo and tooltip without losing visibility. */
-.hdr-logo-wrap.has-update.is-hovering .update-tooltip,
-.hdr-logo-wrap.has-update.is-hovering .ut-arrow-outer,
-.hdr-logo-wrap.has-update.is-hovering .ut-arrow-inner,
-.hdr-logo-wrap.has-update.auto-reveal .update-tooltip,
-.hdr-logo-wrap.has-update.auto-reveal .ut-arrow-outer,
-.hdr-logo-wrap.has-update.auto-reveal .ut-arrow-inner {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-}
 
 /* Countdown bar — starts 100% width, scales to 0 from the right edge over
    10s. Visible only during .auto-reveal phase. transform-origin: left
@@ -257,10 +151,6 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   line-height: 1;
 }
 
-@keyframes update-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(1.25); opacity: 0.7; }
-}
 .ut-title {
   font-size: 13px;
   font-weight: 700;
@@ -483,21 +373,6 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   justify-content: space-between;
   gap: 8px;
 }
-.btn-streamer-inline {
-  padding: 4px 10px;
-  background: var(--accent-gradient);
-  color: #000;
-  font-weight: 600;
-  font-size: 12px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  letter-spacing: 0.2px;
-  line-height: 1.4;
-  margin-right: 8px;
-}
-.btn-streamer-inline:hover { filter: brightness(1.1); }
-.btn-streamer-inline:active { transform: translateY(1px); }
 
 /* Auto-switch loading banner (shown during reconnect to new streamer) */
 .switch-banner {

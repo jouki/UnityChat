@@ -16,40 +16,16 @@ store/build/unpacked/                      # pro "Load unpacked" test v Chrome
 store/build/unitychat-store-vX.Y.Z.zip     # tohle se nahrává do dashboardu
 ```
 
-Skript sám spadne, pokud v balíčku přežije cokoli zakázaného (self-update
-endpoint, `update.bat`, streamer OAuth, `sidebar_action`, zbylý strip marker)
-nebo pokud strip rozbije JS syntaxi (`node --check` na každém skriptu).
-
-### Co store build nemá oproti `extension/`
-
-| Vyříznuto | Proč |
-|---|---|
-| `_checkForUpdate()` + 15min alarm + update tooltip | CWS zakazuje update mechanismy mimo store (Program Policies) |
-| `update.bat` | spustitelný updater |
-| `streamer.html/js/css` + tlačítko „Jsem streamer" | streamer OAuth přihlašování se do store verze nepouští |
-| `backup.html/js` | není dosažitelné z UI, jen mrtvý kód navíc pro reviewera |
-| `sidebar_action` v manifestu | Opera/Firefox klíč, v Chrome balíčku jen šum |
-| `alarms` permission | používal ho výhradně update poll |
+**Od v3.38.67 je `extension/` přímo store verze** — žádné stříhání. Skript
+složku zkopíruje, ověří (manifest parsuje, `node --check` na každém skriptu,
+nesmí se objevit `jouki.cz/download`, `update.bat`, `UC_STORE_STRIP`,
+`sidebar_action` ani soubory `update.bat` / `backup.*` / `streamer.*`) a
+zazipuje. Co dřív vyřezával, je ze zdroje smazané (self-update, streamer
+OAuth, backup stránky, Opera `sidebar_action`, `alarms`); kdo to potřebuje,
+najde to v git history před 3.38.67.
 
 Auto-switch přes `/streamers/lookup` zůstává — to je čtení veřejného
 directory, ne přihlašování.
-
-### Jak funguje stříhání
-
-Ve zdrojích v `extension/` jsou markery, v dev verzi jsou to jen komentáře:
-
-```js
-// UC_STORE_STRIP_START: důvod
-...kód...
-// UC_STORE_STRIP_END
-```
-
-V HTML totéž jako `<!-- UC_STORE_STRIP_START: důvod -->`.
-
-**Když přidáváš kód, který nemá jít do store verze, obal ho markerem.**
-Pozor na `else if` řetězy — stripnutá větev nesmí nechat osamocené `else`.
-Proto je v `_wireBackgroundUpdateListener` větev `UC_UPDATE_*` schválně až na
-konci řetězu.
 
 ## Stav položky
 
@@ -133,10 +109,11 @@ v sekci Podrobnosti — tam patří `https://jouki.cz/UnityChat`.
 
 ## Navazující kroky (mimo tenhle balíček)
 
-- **Firefox** — `build-store.ps1` je strukturovaný tak, aby šel rozšířit o
-  další cíl: `sidebar_action` se pro Firefox naopak ponechává a odstraňuje se
-  `side_panel`, MV3 service worker se mění na `background.scripts`.
-  addons.mozilla.org navíc vyžaduje zdrojáky, což tady není problém.
-- **Opera** — addons.opera.com bere prakticky stejný balíček jako Chrome,
-  jen se `sidebar_action` nechává.
+- **Firefox** — bude potřebovat vlastní manifest (`sidebar_action` místo
+  `side_panel`, MV3 service worker → `background.scripts`); ve zdroji dnes
+  nic z toho není. addons.mozilla.org navíc vyžaduje zdrojáky, což tady není
+  problém.
+- **Opera** — addons.opera.com bere stejný balíček jako Chrome; UnityChat se
+  v Opeře otevírá jako tab (nativní sidebar by chtěl `sidebar_action`, který
+  jsme 2026-09-19 zahodili — „stejně ho nikdo nevyužije").
 - **Mobil** — zásadně jiná architektura, tohle sdílet nebude.
