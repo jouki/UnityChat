@@ -103,6 +103,15 @@
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = 'display:none!important;';
+      // #secondary je sloupec, ve kterém #chat sedí. Chat je sice off-screen,
+      // ale sloupec dál drží šířku (computed 402px / min 320px) — v theater
+      // layoutu je to ten prázdný obdélník vedle related videí pod playerem.
+      // Nulová šířka místo display:none: iframe uvnitř musí zůstat živý
+      // (DOM send), a #chat je fixed, takže nic z něj nevyčnívá.
+      const secondary = document.querySelector('#secondary');
+      if (secondary) {
+        secondary.style.cssText = 'width:0!important;min-width:0!important;max-width:0!important;flex:0 0 0!important;padding:0!important;margin:0!important;overflow:hidden!important;';
+      }
       // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy && !flexy.hasAttribute('theater')) {
@@ -111,6 +120,28 @@
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) chatPanel.dataset.ucHidden = '1';
+      // Když už flexy `theater` má, klik nahoře se přeskočí a YouTube nedostane
+      // žádný impuls k přepočtu — player zůstane v šířce sloupce, dokud uživatel
+      // nepřepne fullscreen (což je přesně resize event). Pošleme ho sami.
+      window.dispatchEvent(new Event('resize'));
+      _logYtLayout('hide');
+    }
+
+    // Diagnostika do UC dumpu: co layout dělá po hide/show. Bez tohohle se
+    // "video se nezarovnalo" nedá z logu odlišit od "theater se nezapnul".
+    function _logYtLayout(phase) {
+      try {
+        const q = (s) => document.querySelector(s);
+        const flexy = q('ytd-watch-flexy');
+        chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'YtLayout', args: [phase, JSON.stringify({
+          innerW: window.innerWidth,
+          playerW: (q('#movie_player') || q('#player'))?.offsetWidth ?? null,
+          secondaryW: q('#secondary')?.offsetWidth ?? null,
+          theater: !!flexy?.hasAttribute('theater'),
+          twoCol: !!flexy?.hasAttribute('is-two-columns_'),
+          singleCol: !!flexy?.hasAttribute('is-single-column'),
+        })] }).catch?.(() => {});
+      } catch {}
     }
 
     function showYtChat() {
@@ -120,6 +151,9 @@
       // Restore #panels-full-bleed-container
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = '';
+      // Restore #secondary (sloupec s chatem) — protějšek nulové šířky v hideYtChat
+      const secondary = document.querySelector('#secondary');
+      if (secondary) secondary.style.cssText = '';
       // Exit theater mode via native button (if we entered it)
       if (_ucEnteredTheater) {
         const theaterBtn = document.querySelector('.ytp-size-button');
@@ -128,6 +162,8 @@
       }
       const chatPanel = document.querySelector('ytd-live-chat-frame');
       if (chatPanel) delete chatPanel.dataset.ucHidden;
+      window.dispatchEvent(new Event('resize'));
+      _logYtLayout('show');
     }
 
     window.addEventListener('message', (e) => {
