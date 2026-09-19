@@ -3,7 +3,16 @@
 // Twitch používá Slate-based rich text editor - vyžaduje speciální handling
 
 (function () {
-  if (window._ucTwitch) return;
+  if (window._ucTwitch) {
+    // Instrumentace pro hypotézu "orphaned content script po reloadu
+    // extension" (Explore 2026-09-19 §5C): pokud by tenhle guard blokoval
+    // nový skript, zatímco starý má invalidované chrome.* API, žádný
+    // listener by nežil. Zatím jen log — fix až s daty z dumpu.
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Guard', args: ['twitch.js already loaded in this world, skipping'] });
+    } catch {}
+    return;
+  }
   window._ucTwitch = true;
 
   // ---- Side panel opener button injected into Twitch chat header ----
@@ -986,15 +995,29 @@
   }
 
   async function sendChatNow(text, queuedBehind) {
-    let input = findInput();
-    if (!input) throw new Error('Twitch chat input nenalezen');
-
     const log = (step, extra) => {
       try {
         chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'TwSend', args: [step, extra ? JSON.stringify(extra) : ''] });
       } catch {}
     };
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // Twitch chat input je React komponenta mountovaná až po document_idle a
+    // přemountovaná při channel switchi / 7TV rerenderu. První SEND_CHAT po
+    // otevření panelu ho běžně předběhne — jednorázový findInput() pak hodil
+    // chybu, zatímco optimistická zpráva už v panelu visela jako odeslaná.
+    // waitReady() níže sice polluje, ale až po vložení textu; tady se čeká
+    // na samotný element. 3 s pokrývá i pomalý mount na slabém stroji.
+    let input = findInput();
+    if (!input) {
+      const t0 = Date.now();
+      while (!input && Date.now() - t0 < 3000) {
+        await sleep(50);
+        input = findInput();
+      }
+      log('input-wait', { ms: Date.now() - t0, found: !!input, queuedBehind });
+    }
+    if (!input) throw new Error('Twitch chat input nenalezen ani po 3 s');
     // Twitch může chat přemountovat uprostřed odesílání (channel switch,
     // 7TV rerender) — vždy číst z živého elementu.
     const liveInput = () => {

@@ -1077,6 +1077,26 @@ body.no-timestamps .msg .ts { display: none; }
   background: rgba(200, 50, 50, 0.35);
 }
 
+/* Odeslani selhalo - optimisticka zprava, ktera nikam nesla. Klik vlozi
+   text zpet do inputu (viz _markSendFailed). */
+.msg.send-failed {
+  background: rgba(200, 50, 50, 0.12);
+  border-left: 2px solid #cc3333;
+  padding-left: 8px;
+  opacity: 0.75;
+  cursor: pointer;
+}
+.msg.send-failed:hover { opacity: 1; background: rgba(200, 50, 50, 0.22); }
+.msg.send-failed .tx::after {
+  content: 'neodeslano';
+  margin-left: 6px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #e5484d;
+  font-style: normal;
+}
+
 /* First-time chatter */
 .msg.first-msg {
   background: rgba(145, 70, 255, 0.12);

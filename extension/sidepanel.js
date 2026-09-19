@@ -4569,8 +4569,11 @@ class UnityChat {
     // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
     this._lastSentText = wireText;
     const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
+    // Id si držíme stranou: když odeslání selže, musí se tahle optimistická
+    // zpráva označit jako neodeslaná a vypadnout z cache (viz _markSendFailed).
+    const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     this._addMessage({
-      id: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: optId,
       platform,
       username,
       message: displayText,
@@ -4585,7 +4588,11 @@ class UnityChat {
     // Send in background (don't block UI)
     try {
       const tab = await this._findStreamTab(platform);
-      if (!tab) { this._sys(`Nenalezen otevřený stream tab (${platform})`); return; }
+      if (!tab) {
+        this._markSendFailed(optId, `nenalezen stream tab (${platform})`);
+        this._sys(`Nenalezen otevřený stream tab (${platform})`);
+        return;
+      }
 
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
@@ -4618,9 +4625,12 @@ class UnityChat {
       }
 
       if (!resp?.ok) {
-        this._sys(`Chyba: ${resp?.error || 'nepodařilo se odeslat'}`);
+        const reason = resp?.error || 'nepodařilo se odeslat';
+        this._markSendFailed(optId, reason);
+        this._sys(`Chyba: ${reason}`);
       }
     } catch (err) {
+      this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
     }
   }
@@ -7229,17 +7239,8 @@ class UnityChat {
       this._dedupTrim(dedup.ids);
     }
 
-    // Content-based dedup pro scraped zprávy
-    // Normalizace: lowercase, sjednocené whitespace, jen alfanumerika a mezery
-    const norm = (s) => (s || '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim()
-      .substring(0, 80);
-    const contentKey = msg.username && msg.message
-      ? norm(msg.username) + '|' + norm(msg.message)
-      : null;
+    // Content-based dedup pro scraped zprávy + párování optimistická ↔ echo
+    const contentKey = this._contentKey(msg.username, msg.message);
     if (contentKey && dedup) {
       if (dedup.content.has(contentKey)) {
         if (msg._optimistic) {
@@ -7793,6 +7794,56 @@ class UnityChat {
   }
 
   // Upgrade an optimistic message to a real one (IRC echo arrived)
+  // Normalizovaný klíč "user|text" — pro content dedup scraped zpráv a pro
+  // párování optimistické zprávy s jejím IRC echem. Jediný zdroj pravdy pro
+  // tenhle tvar; _addMessage i _markSendFailed ho musí počítat stejně.
+  _contentKey(username, message) {
+    if (!username || !message) return null;
+    const norm = (s) => (s || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .substring(0, 80);
+    return norm(username) + '|' + norm(message);
+  }
+
+  // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
+  // Dosud zůstala v DOM i v cache s _optimistic:true a po reloadu se vykreslila
+  // znovu — z pohledu uživatele "poslal jsem to", přitom nikam nešla.
+  _markSendFailed(optId, reason) {
+    const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+    if (el) {
+      el.classList.add('send-failed');
+      el.title = `Neodesláno: ${reason} — klikni pro vložení zpět do inputu`;
+      el.addEventListener('click', () => {
+        const tx = el.querySelector('.tx');
+        if (!tx || !this.msgInput) return;
+        this.msgInput.value = tx.textContent.trim();
+        this.msgInput.focus();
+        this._autoResizeInput?.();
+      }, { once: true });
+    }
+
+    // Z cache pryč, jinak se po reloadu vykreslí znovu jako odeslaná.
+    const before = this._msgCache.length;
+    this._msgCache = this._msgCache.filter((m) => m.id !== optId);
+    if (this._msgCache.length !== before) {
+      chrome.storage.local.set({ [this._cacheKey]: this._msgCache }).catch(() => {});
+    }
+
+    // Uvolnit párovací klíč — pozdější reálná zpráva se stejným textem
+    // (třeba po ručním poslání ve vanilla chatu) by jinak tuhle mrtvou
+    // optimistickou zprávu "upgradla" místo aby se vykreslila sama.
+    for (const [key, id] of this._optimisticKeys) {
+      if (id === optId) { this._optimisticKeys.delete(key); break; }
+    }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'SendFail', args: [optId, reason] }).catch(() => {});
+    } catch {}
+  }
+
   _upgradeOptimistic(optId, realMsg) {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
