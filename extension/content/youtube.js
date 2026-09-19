@@ -112,6 +112,14 @@
       if (secondary) {
         secondary.style.cssText = 'width:0!important;min-width:0!important;max-width:0!important;flex:0 0 0!important;padding:0!important;margin:0!important;overflow:hidden!important;';
       }
+      // Obsah pod playerem (#below) zůstával úzký i po zúžení #secondary:
+      // YouTube v theater layoutu rezervuje sidebar přes padding-right na
+      // #columns (= --ytd-watch-flexy-sidebar-width, ~368px) a #primary má
+      // max-width na šířku playeru. Ověřeno 2026-09-19: #below 952 → 1320 px.
+      const columns = document.querySelector('#columns');
+      if (columns) columns.style.cssText = 'padding-right:0!important;';
+      const primary = document.querySelector('#primary');
+      if (primary) primary.style.cssText = 'max-width:none!important;';
       // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy && !flexy.hasAttribute('theater')) {
@@ -137,6 +145,8 @@
           innerW: window.innerWidth,
           playerW: (q('#movie_player') || q('#player'))?.offsetWidth ?? null,
           secondaryW: q('#secondary')?.offsetWidth ?? null,
+          belowW: q('#below')?.offsetWidth ?? null,
+          columnsPadR: q('#columns') ? getComputedStyle(q('#columns')).paddingRight : null,
           theater: !!flexy?.hasAttribute('theater'),
           twoCol: !!flexy?.hasAttribute('is-two-columns_'),
           singleCol: !!flexy?.hasAttribute('is-single-column'),
@@ -154,6 +164,10 @@
       // Restore #secondary (sloupec s chatem) — protějšek nulové šířky v hideYtChat
       const secondary = document.querySelector('#secondary');
       if (secondary) secondary.style.cssText = '';
+      const columns = document.querySelector('#columns');
+      if (columns) columns.style.cssText = '';
+      const primary = document.querySelector('#primary');
+      if (primary) primary.style.cssText = '';
       // Exit theater mode via native button (if we entered it)
       if (_ucEnteredTheater) {
         const theaterBtn = document.querySelector('.ytp-size-button');
