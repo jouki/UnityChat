@@ -622,6 +622,11 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
 - `GET /dev` — dev download page HTML (dev mode only)
 - `GET /dev/download` — dev branch extension ZIP (dev mode only)
 - `POST /webhook/deploy` — GitHub webhook → git pull + signal file
+- `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
+  verze čekající na review, policy varování). Landing page z toho kreslí řádek
+  „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
+  při výpadku CWS API se hodinu vrací poslední známý stav. Bez
+  `CWS_SERVICE_ACCOUNT` vrací 503.
 
 ### Dev
 ```bash
@@ -635,6 +640,19 @@ npm run dev        # hot reload na :3000
 
 ### Deploy
 Coolify Application resource nastavený s Base Directory `backend/`, build z `Dockerfile`. `DATABASE_URL` injectnutý Coolify přes "magic" env variable napojenou na `unitychat-db` Postgres resource na stejné Docker síti.
+
+### ⚠️ Coolify env proměnné: víceřádkové hodnoty rozbijí build
+
+Coolify vkládá env proměnné do generovaného Dockerfile jako `ARG key=value`.
+Víceřádková hodnota (typicky JSON klíč service accountu) ukončí ARG na prvním
+newline a **deploy spadne na syntaxi Dockerfile**. Aplikace přitom běží dál na
+staré image, takže se to tváří jako „změna se nenasadila", ne jako výpadek.
+
+Proto je `CWS_SERVICE_ACCOUNT` v Coolify uložený **base64**; `cwsApi.ts`
+přijímá obě podoby, aby v GitHub Actions mohl zůstat plain JSON.
+
+Další past: `watch_paths = 'backend/**'` znamená, že **prázdný commit deploy
+nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 
 ### Tech poznámky
 - **Drizzle ORM** místo Prisma: lightweight, zero codegen, SQL-like queries, perfect type inference, menší bundle
