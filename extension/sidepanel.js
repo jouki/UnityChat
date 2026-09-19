@@ -12,7 +12,7 @@ const UC_MARKER = '\u2800';
 // přepíná jen ručně tlačítkem nad chatem. Ostatní streamery addon ignoruje
 // (rozhodnutí usera 2026-09-19 — chaty se míchaly a emoty se nepřenačítaly).
 const PRIMARY_STREAMER = 'robdiesalot';
-const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary']);
+const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary', 'arcadebulls']);
 
 const DEFAULTS = {
   channel: 'robdiesalot',

@@ -51,7 +51,8 @@ than `CHAT_RETENTION_DAYS` are deleted hourly.
 Env:
 
 ```
-CHAT_INGEST_CHANNELS=twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot   # empty = ingest off
+CHAT_INGEST_CHANNELS=twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot   # empty = ingest off; more channels comma-separated
+# Production (2026-09-19): + twitch:tensterakdary,youtube:tensterakdary,twitch:arcadebulls,youtube:arcadebulls
 CHAT_RETENTION_DAYS=7
 ```
 
