@@ -233,7 +233,7 @@ body.layout-large #settings details summary { font-size: 15px; }
 #btn-dump, #btn-popout {
   font-size: 14px;
 }
-#btn-reconnect { display: inline-flex; align-items: center; }
+#btn-reconnect, #btn-popout { display: inline-flex; align-items: center; }
 #btn-reconnect:active svg { transform: rotate(-90deg); transition: transform 0.15s; }
 
 #btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
