@@ -39,7 +39,7 @@ body {
 /* ---- Layout sizes ---- */
 body.layout-medium { font-size: 14px; }
 body.layout-medium .msg { padding: 4px 12px; line-height: 1.5; }
-body.layout-medium .msg .pi { width: 16px; height: 16px; }
+body.layout-medium .msg .pi { width: 20px; height: 20px; }
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
 body.layout-medium .msg .tx img.emote { height: 2.25em; }
@@ -51,7 +51,7 @@ body.layout-medium #settings button { font-size: 14px; }
 
 body.layout-large { font-size: 16px; }
 body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
-body.layout-large .msg .pi { width: 18px; height: 18px; }
+body.layout-large .msg .pi { width: 22px; height: 22px; }
 body.layout-large .msg .ts { font-size: 12px; }
 body.layout-large .bdg-img { height: 22px; width: 22px; }
 body.layout-large .msg .tx img.emote { height: 2.5em; }
@@ -430,8 +430,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 
 .badge.tw, .badge.yt, .badge.ki {
   display: inline-block;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   vertical-align: middle;
   background: center / contain no-repeat;
@@ -1008,8 +1008,8 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 
 .msg .pi {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   margin-right: 3px;
   vertical-align: middle;
   border-radius: 3px;
@@ -2568,9 +2568,18 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   flex-shrink: 0;
   letter-spacing: 0.3px;
 }
-#active-badge.tw { background: var(--tw); }
-#active-badge.yt { background: var(--yt); }
-#active-badge.ki { background: var(--ki); color: #000; }
+#active-badge.tw, #active-badge.yt, #active-badge.ki {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: center / contain no-repeat;
+  font-size: 0;
+  color: transparent;
+  overflow: hidden;
+}
+#active-badge.tw { background-image: url(icons/platform/twitch.svg); }
+#active-badge.yt { background-image: url(icons/platform/youtube.svg); }
+#active-badge.ki { background-image: url(icons/platform/kick.svg); }
 
 #msg-input {
   flex: 1;
