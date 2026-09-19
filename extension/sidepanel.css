@@ -39,7 +39,7 @@ body {
 /* ---- Layout sizes ---- */
 body.layout-medium { font-size: 14px; }
 body.layout-medium .msg { padding: 4px 12px; line-height: 1.5; }
-body.layout-medium .msg .pi { font-size: 9px; line-height: 16px; padding: 1px 4px; }
+body.layout-medium .msg .pi { width: 16px; height: 16px; }
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
 body.layout-medium .msg .tx img.emote { height: 2.25em; }
@@ -51,7 +51,7 @@ body.layout-medium #settings button { font-size: 14px; }
 
 body.layout-large { font-size: 16px; }
 body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
-body.layout-large .msg .pi { font-size: 10px; line-height: 18px; padding: 1px 5px; }
+body.layout-large .msg .pi { width: 18px; height: 18px; }
 body.layout-large .msg .ts { font-size: 12px; }
 body.layout-large .bdg-img { height: 22px; width: 22px; }
 body.layout-large .msg .tx img.emote { height: 2.5em; }
@@ -428,9 +428,20 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
   line-height: 14px;
 }
 
-.badge.tw { background: var(--tw); }
-.badge.yt { background: var(--yt); }
-.badge.ki { background: var(--ki); color: #000; }
+.badge.tw, .badge.yt, .badge.ki {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  vertical-align: middle;
+  background: center / contain no-repeat;
+  font-size: 0;
+  color: transparent;
+  overflow: hidden;
+}
+.badge.tw { background-image: url(icons/platform/twitch.svg); }
+.badge.yt { background-image: url(icons/platform/youtube.svg); }
+.badge.ki { background-image: url(icons/platform/kick.svg); }
 
 .actions {
   flex-direction: row;
@@ -997,20 +1008,21 @@ body.layout-large  .hdr-logo-wrap.has-update .update-tooltip { --ut-scale: 1.22;
 
 .msg .pi {
   display: inline-block;
-  font-size: 8px;
-  font-weight: 800;
-  padding: 0 3px;
-  border-radius: 2px;
-  color: #fff;
+  width: 14px;
+  height: 14px;
   margin-right: 3px;
   vertical-align: middle;
-  line-height: 14px;
-  letter-spacing: 0.3px;
+  border-radius: 3px;
+  background: center / contain no-repeat;
+  /* Text (TW/YT/KI) zůstává v DOM kvůli kopírování/čtečkám, vizuálně ho nahrazuje logo. */
+  font-size: 0;
+  color: transparent;
+  overflow: hidden;
 }
 
-.msg .pi.tw { background: var(--tw); }
-.msg .pi.yt { background: var(--yt); }
-.msg .pi.ki { background: var(--ki); color: #000; }
+.msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
+.msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
+.msg .pi.ki { background-image: url(icons/platform/kick.svg); }
 
 .msg .ts {
   color: var(--text-muted);
@@ -1035,7 +1047,11 @@ body.no-timestamps .msg .ts { display: none; }
   margin-right: 1px;
 }
 
-.msg .pi.uc { background: linear-gradient(160deg, #ffc800, #ff8c00); color: #000; box-shadow: 0 0 6px rgba(255, 140, 0, 0.5); }
+/* UnityChat user — zlaté verze log (icons/platform/*-gold.svg) + glow */
+.msg .pi.uc { box-shadow: 0 0 6px rgba(255, 140, 0, 0.5); }
+.msg .pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
+.msg .pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }
+.msg .pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
 
 /* Custom tooltip pro platform badges — JS-positioned, viewport-clamped */
 .msg .pi[data-tooltip] {
