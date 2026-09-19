@@ -81,6 +81,7 @@ export function createIngest(opts: CreateOpts) {
   };
 
   const runRetention = async () => {
+    if (!(opts.retentionDays > 0)) return; // 0 = bez retence
     try {
       const n = await deleteOld(opts.retentionDays);
       if (n) opts.log.info({ deleted: n, days: opts.retentionDays }, 'chat ingest: retence');
@@ -97,8 +98,10 @@ export function createIngest(opts: CreateOpts) {
         listeners.set(`${c.platform}:${c.channel}`, l);
         l.start();
       }
-      void runRetention();
-      retentionTimer = setInterval(() => void runRetention(), retentionMs);
+      if (opts.retentionDays > 0) {
+        void runRetention();
+        retentionTimer = setInterval(() => void runRetention(), retentionMs);
+      }
       opts.log.info({ channels: opts.channels }, 'chat ingest: started');
     },
     async stop() {

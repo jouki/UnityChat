@@ -60,3 +60,13 @@ test('createIngest: dva kanály na jedné platformě dostanou každý svůj list
   assert.equal(ing.status().twitch, 'connected');
   await ing.stop();
 });
+
+test('createIngest: retentionDays=0 → deleteOld se nikdy nevolá', async () => {
+  let calls = 0;
+  const l: IngestListener = { start() {}, stop() {}, status: () => 'connected', lastMessageAt: () => null };
+  const ing = createIngest({ channels: [{ platform: 'twitch', channel: 'c' }], retentionDays: 0, log: silent, insert: async () => 0, deleteOld: async () => { calls++; return 0; }, listenerFactory: () => l, retentionMs: 5 });
+  ing.start();
+  await new Promise((r) => setTimeout(r, 30));
+  await ing.stop();
+  assert.equal(calls, 0);
+});

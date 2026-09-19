@@ -34,8 +34,9 @@ const EnvSchema = z.object({
   // Server-side chat log (spec 2026-09-19). Prázdné = ingest vypnutý.
   // Formát: "twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot"
   CHAT_INGEST_CHANNELS: z.string().default(''),
-  // Retence zpráv v tabulce messages (dny). Jedno číslo ke změně.
-  CHAT_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+  // Retence zpráv v tabulce messages (dny). 0 = neomezeně (rozhodnutí usera
+  // 2026-09-19: zprávy držet po neurčitou dobu, mazání na žádost).
+  CHAT_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(0),
 });
 
 export const config = EnvSchema.parse(process.env);

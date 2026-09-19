@@ -45,15 +45,15 @@ The server listens to Twitch (anonymous IRC), Kick (Pusher) and YouTube
 (live_chat polling) itself and stores every public message in `messages`
 with the **platform's own timestamp** (`sent_at`); `created_at` is the time the
 server received it, so `created_at - sent_at` is ingest latency. Duplicates are
-dropped by the unique index `(platform, platform_message_id)`. Messages older
-than `CHAT_RETENTION_DAYS` are deleted hourly.
+dropped by the unique index `(platform, platform_message_id)`. Messages are kept indefinitely
+(`CHAT_RETENTION_DAYS=0`); a positive value enables hourly deletion of older rows.
 
 Env:
 
 ```
 CHAT_INGEST_CHANNELS=twitch:robdiesalot,kick:robdiesalot,youtube:robdiesalot   # empty = ingest off; more channels comma-separated
 # Production (2026-09-19): + twitch:tensterakdary,youtube:tensterakdary,twitch:arcadebulls,youtube:arcadebulls
-CHAT_RETENTION_DAYS=7
+CHAT_RETENTION_DAYS=0   # days; 0 = keep indefinitely (deletion on request)
 ```
 
 ```
