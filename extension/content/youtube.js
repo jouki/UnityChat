@@ -48,6 +48,12 @@
       return;
     }
 
+    if (msg.type === 'UC_PANEL_STATE' && isMainFrame && !isLiveChat) {
+      try { if (msg.open) onUcPanelOpened(); else showYtChat(); } catch {}
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg.type === 'SEND_CHAT') {
       if (isLiveChat && isMainFrame) {
         // Only handle in live_chat if it's a top-level popout window,
@@ -225,6 +231,30 @@
       if ((cc && cc.offsetHeight > 50) || attrsBack) hideYtChat();
     }, 1500);
 
+    // UC panel se otevřel (pill v chat liště, ikona v toolbaru, cokoli) →
+    // schovat vanilla chat. Zavřený chat se nejdřív otevře (iframe musí žít
+    // kvůli DOM sendu) a hned schová. Idempotentní — background i pill to
+    // můžou zavolat po sobě.
+    let _ucOpening = false;
+    function onUcPanelOpened() {
+      if (_ucLayoutApplied || _ucOpening) return;
+      const chatFrame = document.querySelector('ytd-live-chat-frame');
+      if (!chatFrame) return;
+      const iframe = chatFrame.querySelector('#chatframe');
+      const chatIsOpen = iframe && iframe.offsetHeight > 100;
+      if (chatIsOpen) { hideYtChat(); return; }
+      const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
+      if (!openPanelBtn || openPanelBtn.disabled) return;
+      _ucOpening = true;
+      openPanelBtn.click();
+      const closeObs = new MutationObserver(() => {
+        const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
+        if (closeBtn) { closeObs.disconnect(); _ucOpening = false; hideYtChat(); }
+      });
+      closeObs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { closeObs.disconnect(); _ucOpening = false; }, 10000);
+    }
+
     // ---- UnityChat button next to "Otevřít panel" ----
     const UC_BTN_ID = 'uc-yt-open-btn';
 
@@ -249,30 +279,8 @@
         e.stopPropagation();
         chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
           if (!resp) return;
-          if (resp.action === 'opened') {
-            // Opening UC → hide vanilla YouTube chat
-            const chatFrame = document.querySelector('ytd-live-chat-frame');
-            const iframe = chatFrame?.querySelector('#chatframe');
-            const chatIsOpen = iframe && iframe.offsetHeight > 100;
-            if (chatIsOpen) {
-              hideYtChat();
-            } else {
-              // Chat closed → click "Otevřít panel", wait, then hide
-              const openPanelBtn = document.querySelector('.ytTextCarouselItemViewModelButton button');
-              if (openPanelBtn && !openPanelBtn.disabled) {
-                openPanelBtn.click();
-                const closeObs = new MutationObserver(() => {
-                  const closeBtn = document.querySelector('ytd-live-chat-frame #close-button button');
-                  if (closeBtn) { closeObs.disconnect(); hideYtChat(); }
-                });
-                closeObs.observe(document.body, { childList: true, subtree: true });
-                setTimeout(() => closeObs.disconnect(), 10000);
-              }
-            }
-          } else if (resp.action === 'closed') {
-            // Closing UC → show vanilla YouTube chat back
-            showYtChat();
-          }
+          if (resp.action === 'opened') onUcPanelOpened();
+          else if (resp.action === 'closed') showYtChat();
         });
       });
       return btn;

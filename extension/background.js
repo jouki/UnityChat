@@ -18,10 +18,22 @@ const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
 
 // Track side panel state via persistent port connection (survives SW restarts)
 let _panelPort = null;
+// Otevření/zavření panelu jakoukoli cestou (toolbar ikona, křížek panelu,
+// pill na YouTube) → YouTube taby schovají / vrátí vanilla chat. Dřív to
+// dělal jen pill přes odpověď na TOGGLE_SIDE_PANEL; toolbar ikonu obsluhuje
+// Chrome sám (openPanelOnActionClick), takže jediný spolehlivý signál je port.
+function notifyYtPanelState(open) {
+  chrome.tabs.query({ url: ['*://www.youtube.com/*'] }, (tabs) => {
+    for (const t of tabs || []) {
+      chrome.tabs.sendMessage(t.id, { type: 'UC_PANEL_STATE', open }).catch?.(() => {});
+    }
+  });
+}
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidepanel') {
     _panelPort = port;
-    port.onDisconnect.addListener(() => { _panelPort = null; });
+    notifyYtPanelState(true);
+    port.onDisconnect.addListener(() => { _panelPort = null; notifyYtPanelState(false); });
   }
 });
 
