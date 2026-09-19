@@ -51,12 +51,19 @@ let allOk = true;
 for (const [platform, list] of Object.entries(byPlatform)) {
   if (!list.length) { console.log(`\n${platform}: v dumpech nic`); continue; }
   const ids = list.map((v) => v.id);
+  // Latence jen pro zprávy přijaté živě: backlog z úvodní stránky (YouTube dá
+  // při connectu i desítky minut starých zpráv) má created_at = čas startu,
+  // ne latenci ingestu → vyloučit vše se sent_at před prvním zápisem kanálu.
   const rows = await sql`
-    select platform_message_id as id, extract(epoch from (created_at - sent_at)) * 1000 as lat
-    from messages where platform = ${platform} and platform_message_id in ${sql(ids)}`;
-  const found = new Map(rows.map((r) => [r.id, Number(r.lat)]));
+    with f as (select platform, channel, min(created_at) as first_in from messages group by 1, 2)
+    select m.platform_message_id as id,
+           extract(epoch from (m.created_at - m.sent_at)) * 1000 as lat,
+           (m.sent_at >= f.first_in) as live
+    from messages m join f using (platform, channel)
+    where m.platform = ${platform} and m.platform_message_id in ${sql(ids)}`;
+  const found = new Map(rows.map((r) => [r.id, { lat: Number(r.lat), live: !!r.live }]));
   const missing = list.filter((v) => !found.has(v.id));
-  const lat = [...found.values()];
+  const lat = [...found.values()].filter((x) => x.live).map((x) => x.lat);
   const recall = (found.size / list.length) * 100;
   const p95 = pct(lat, 0.95);
   const ok = recall >= crit[platform].recall && (p95 ?? Infinity) < crit[platform].p95;
