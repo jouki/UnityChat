@@ -109,23 +109,19 @@
       if (chat) chat.style.cssText = 'position:fixed!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;';
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = 'display:none!important;';
-      // #secondary je sloupec, ve kterém #chat sedí. Chat je sice off-screen,
-      // ale sloupec dál drží šířku (computed 402px / min 320px) — v theater
-      // layoutu je to ten prázdný obdélník vedle related videí pod playerem.
-      // Nulová šířka místo display:none: iframe uvnitř musí zůstat živý
-      // (DOM send), a #chat je fixed, takže nic z něj nevyčnívá.
-      const secondary = document.querySelector('#secondary');
-      if (secondary) {
-        secondary.style.cssText = 'width:0!important;min-width:0!important;max-width:0!important;flex:0 0 0!important;padding:0!important;margin:0!important;overflow:hidden!important;';
+      // Cíl = nativní stav „chat zavřený": theater player, #primary normální
+      // šířky, #secondary s doporučenými videi. Ten „prázdný obdélník" (v3.38.64)
+      // nedělal #secondary, ale obal #chat-container: #chat je fixed mimo
+      // obrazovku, jenže obal si drží výšku z YouTube CSS (~890 px, měřeno
+      // 2026-09-20). Zkolabovat jen obal — #secondary, #columns ani #primary
+      // se nesahá (zúžení sloupce zabilo related videa, v3.39.5).
+      const chatContainer = document.querySelector('#chat-container');
+      if (chatContainer) chatContainer.style.cssText = 'height:0!important;min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;';
+      // Úklid po starších verzích (3.38.64–3.39.5) — kdyby styly přežily reload.
+      for (const sel of ['#secondary', '#columns', '#primary']) {
+        const el = document.querySelector(sel);
+        if (el && el.style.cssText) el.style.cssText = '';
       }
-      // Obsah pod playerem (#below) zůstával úzký i po zúžení #secondary:
-      // YouTube v theater layoutu rezervuje sidebar přes padding-right na
-      // #columns (= --ytd-watch-flexy-sidebar-width, ~368px) a #primary má
-      // max-width na šířku playeru. Ověřeno 2026-09-19: #below 952 → 1320 px.
-      const columns = document.querySelector('#columns');
-      if (columns) columns.style.cssText = 'padding-right:0!important;';
-      const primary = document.querySelector('#primary');
-      if (primary) primary.style.cssText = 'max-width:none!important;';
       // Enter theater mode via native button (YouTube handles player resize properly)
       const flexy = document.querySelector('ytd-watch-flexy');
       if (flexy && !flexy.hasAttribute('theater')) {
@@ -152,7 +148,9 @@
           playerW: (q('#movie_player') || q('#player'))?.offsetWidth ?? null,
           secondaryW: q('#secondary')?.offsetWidth ?? null,
           belowW: q('#below')?.offsetWidth ?? null,
-          columnsPadR: q('#columns') ? getComputedStyle(q('#columns')).paddingRight : null,
+          chatContainerH: q('#chat-container')?.offsetHeight ?? null,
+          relatedW: q('#related')?.offsetWidth ?? null,
+          relatedInSecondary: !!q('#secondary #related'),
           theater: !!flexy?.hasAttribute('theater'),
           twoCol: !!flexy?.hasAttribute('is-two-columns_'),
           singleCol: !!flexy?.hasAttribute('is-single-column'),
@@ -168,13 +166,12 @@
       // Restore #panels-full-bleed-container
       const pfbc = document.querySelector('#panels-full-bleed-container');
       if (pfbc) pfbc.style.cssText = '';
-      // Restore #secondary (sloupec s chatem) — protějšek nulové šířky v hideYtChat
-      const secondary = document.querySelector('#secondary');
-      if (secondary) secondary.style.cssText = '';
-      const columns = document.querySelector('#columns');
-      if (columns) columns.style.cssText = '';
-      const primary = document.querySelector('#primary');
-      if (primary) primary.style.cssText = '';
+      const chatContainer = document.querySelector('#chat-container');
+      if (chatContainer) chatContainer.style.cssText = '';
+      for (const sel of ['#secondary', '#columns', '#primary']) {
+        const el = document.querySelector(sel);
+        if (el) el.style.cssText = '';
+      }
       // Exit theater mode via native button (if we entered it)
       if (_ucEnteredTheater) {
         const theaterBtn = document.querySelector('.ytp-size-button');
@@ -201,8 +198,8 @@
       if (!_ucLayoutApplied) return;
       const chatFrame = document.querySelector('ytd-live-chat-frame');
       if (!chatFrame) { showYtChat(); return; }
-      const secondary = document.querySelector('#secondary');
-      if (secondary && secondary.offsetWidth > 50) hideYtChat();
+      const cc = document.querySelector('#chat-container');
+      if (cc && cc.offsetHeight > 50) hideYtChat();
     }, 1500);
 
     // ---- UnityChat button next to "Otevřít panel" ----
