@@ -21,7 +21,7 @@ if (!url) {
   console.error('usage: node scripts/ingest-audit.mjs --db <DATABASE_URL> dump.txt [...]  (nebo DATABASE_URL v env)');
   process.exit(2);
 }
-const files = args.filter((_a, i) => i !== dbIdx && i !== dbIdx + 1);
+const files = dbIdx === -1 ? args.slice() : args.filter((_a, i) => i !== dbIdx && i !== dbIdx + 1);
 if (!files.length) { console.error('žádné dumpy'); process.exit(2); }
 
 // "platform:id|ts|user|text" → {platform, id, ts, user, text}
