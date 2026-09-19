@@ -170,8 +170,12 @@
     // User 2026-09-20: má být klikatelné a vrátit chat na obrazovku. YouTube
     // ho vypíná trojicí disabled + aria-disabled + třída; sundáme ji a klik
     // chytíme v capture fázi na documentu, aby YouTube handler nedostal nic.
+    // Barvu tonal tlačítka nese třída …Mono (měřeno 2026-09-20 na „Sdílet":
+    // bg rgba(255,255,255,.1), text #f1f1f1); v disabled stavu ji YouTube
+    // nahrazuje třídou …Disabled. Bez Mono je tlačítko průhledné a „zmizí".
     const OPEN_PANEL_SEL = '.ytTextCarouselItemViewModelButton button';
     const YT_DISABLED_CLS = 'ytSpecButtonShapeNextDisabled';
+    const YT_MONO_CLS = 'ytSpecButtonShapeNextMono';
     function _ucEnableOpenPanelBtn() {
       const b = document.querySelector(OPEN_PANEL_SEL);
       if (!b || !b.disabled) return;
@@ -179,6 +183,7 @@
       b.removeAttribute('disabled');
       b.setAttribute('aria-disabled', 'false');
       b.classList.remove(YT_DISABLED_CLS);
+      b.classList.add(YT_MONO_CLS);
       b.title = 'Zobrazit YouTube chat (UnityChat)';
       b.dataset.ucEnabled = '1';
       _ucLog('YtLayout', 'open-panel button enabled');
@@ -189,6 +194,7 @@
       b.disabled = true;
       b.setAttribute('aria-disabled', 'true');
       b.classList.add(YT_DISABLED_CLS);
+      b.classList.remove(YT_MONO_CLS);
       b.title = '';
       delete b.dataset.ucEnabled;
     }
