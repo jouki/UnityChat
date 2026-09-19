@@ -4193,6 +4193,16 @@ class UnityChat {
 
   // Nejstarší zpráva v DOM s časem > ts (prochází se odzadu, historie se
   // doplňuje do konce chatu, takže to je pár kroků).
+  _olderThanDomTail(ts) {
+    if (!ts) return false;
+    for (let el = this.chatEl.lastElementChild; el; el = el.previousElementSibling) {
+      if (!el.classList.contains('msg')) continue;
+      const t = Number(el.dataset.ts);
+      return !!t && t > ts;
+    }
+    return false;
+  }
+
   _firstNewerMsgEl(ts) {
     let found = null;
     for (let el = this.chatEl.lastElementChild; el; el = el.previousElementSibling) {
@@ -4954,6 +4964,7 @@ class UnityChat {
     if (status === 'error' && detail) {
       this._sys(`${platform.toUpperCase()}: ${detail}`);
     }
+    if (status === 'connected') this._scheduleReconcile();
     // Mirror to loading-overlay pills so the user sees connection progress.
     this._updateLoadingPill(platform, status);
   }
@@ -7568,9 +7579,9 @@ class UnityChat {
     if (this._prependCursor) {
       // Starší stránka ze serveru (vzestupně) → před první dosavadní uzel.
       this.chatEl.insertBefore(el, this._prependCursor);
-    } else if (msg.historical && !this._bootLoading) {
-      // Historická zpráva mezi živými (např. druhá stránka, která dojela
-      // později) → podle času před první novější.
+    } else if (!this._bootLoading && !msg._optimistic && this._olderThanDomTail(msg.timestamp)) {
+      // Historická zpráva mezi živými (reconcile po connectu, YT backlog
+      // z úvodní stránky) → podle času před první novější, ne na konec.
       const anchor = this._firstNewerMsgEl(msg.timestamp);
       if (anchor) this.chatEl.insertBefore(el, anchor); else this.chatEl.appendChild(el);
     } else if (this._parkedBottom.length) {
@@ -7599,7 +7610,7 @@ class UnityChat {
 
   // GET /chat/history — server je jediný zdroj historie (spec 2026-09-19).
   // Zprávy jdou přes _addMessage (dedup ve store, render, sběr barev/jmen).
-  async _loadHistory({ before = null, limit = 100 } = {}) {
+  async _loadHistory({ before = null, limit = 100, reconcile = false } = {}) {
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel) return 0;
     const url = new URL(`${UC_API}/chat/history`);
@@ -7618,9 +7629,10 @@ class UnityChat {
       if (before) {
         // Starší stránka: vkládat vzestupně před první dosavadní uzel.
         this._prependCursor = this.chatEl.querySelector('.msg') || this.chatEl.firstElementChild || null;
-      } else {
+      } else if (!reconcile) {
         this._bootLoading = true;
       }
+      // reconcile: nic z toho — historické zprávy se zařadí podle času mezi živé.
       try {
         for (const m of list) {
           const beforeLen = this.store.length;
@@ -7631,10 +7643,10 @@ class UnityChat {
         this._prependCursor = null;
         this._bootLoading = false;
       }
-      this.store.oldestCursor = data.nextBefore || null;
+      if (!reconcile) this.store.oldestCursor = data.nextBefore || null;
       this._historyFetches++;
-      this._ucLog('History', `before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
-      if (!before) { this.autoScroll = true; this.chatEl.scrollTop = this.chatEl.scrollHeight; this._clearUnread(); }
+      this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
+      if (!before && !reconcile) { this.autoScroll = true; this.chatEl.scrollTop = this.chatEl.scrollHeight; this._clearUnread(); }
     } catch (err) {
       this._sys(`Historie nedostupná (${err.name === 'AbortError' ? 'timeout' : err.message})`);
       this._historyCooldownUntil = performance.now() + 3000;
@@ -7646,6 +7658,18 @@ class UnityChat {
   }
 
   // ArrowUp/Down historie odeslaných zpráv — z toho, co server vrátil.
+  // Mezera mezi odpovědí /chat/history a JOINem na platformu (log 2026-09-19
+  // 17:33: historie 44.18 s, Twitch connected 46.07 s → 4 zprávy v rušném
+  // chatu propadly). Po každém 'connected' se historie stáhne ještě jednou;
+  // dedup podle id nechá jen to, co chybí, a zařadí to podle času.
+  _scheduleReconcile() {
+    clearTimeout(this._reconcileT);
+    this._reconcileT = setTimeout(() => {
+      this._reconcileT = null;
+      this._loadHistory({ reconcile: true, limit: 100 }).catch(() => {});
+    }, 2500);
+  }
+
   _fillMsgHistoryFromStore() {
     const myNames = new Set();
     if (this.config.username) myNames.add(this.config.username.toLowerCase());
