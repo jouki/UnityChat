@@ -349,16 +349,34 @@
       return btn;
     }
 
+    // Jen na živém streamu (user 2026-09-20). Měřeno: běžné video nemá
+    // ytd-live-chat-frame ani badge; záznam streamu (chat replay) frame MÁ,
+    // ale .ytp-live-badge je display:none; živý stream má badge viditelný.
+    // Badge je tedy jediný spolehlivý rozlišovač live vs. replay.
+    function _ucIsLiveStream() {
+      const badge = document.querySelector('.ytp-live-badge');
+      return !!badge && getComputedStyle(badge).display !== 'none';
+    }
+
+    let _ucBtnShown = null;
     function injectYtButton() {
-      if (document.getElementById(UC_BTN_ID)) return true;
-      const end = document.querySelector('ytd-masthead #end');
-      if (!end) return false;
-      // Před všechno viditelné (i před tlačítka cizích rozšíření), skeleton
-      // ikony YouTube nechat na začátku.
-      const skel = end.querySelector('#masthead-skeleton-icons');
-      end.insertBefore(buildYtButton(), skel ? skel.nextSibling : end.firstChild);
-      _ucLog('YtLayout', 'masthead button injected');
-      return true;
+      let btn = document.getElementById(UC_BTN_ID);
+      if (!btn) {
+        const end = document.querySelector('ytd-masthead #end');
+        if (!end) return;
+        // Před všechno viditelné (i před tlačítka cizích rozšíření), skeleton
+        // ikony YouTube nechat na začátku.
+        const skel = end.querySelector('#masthead-skeleton-icons');
+        btn = buildYtButton();
+        end.insertBefore(btn, skel ? skel.nextSibling : end.firstChild);
+        _ucLog('YtLayout', 'masthead button injected');
+      }
+      const show = _ucIsLiveStream();
+      btn.style.display = show ? 'inline-flex' : 'none';
+      if (show !== _ucBtnShown) {
+        _ucBtnShown = show;
+        _ucLog('YtLayout', `masthead button ${show ? 'shown (live)' : 'hidden (not live)'} ${location.pathname}`);
+      }
     }
 
     setInterval(injectYtButton, 2000);
