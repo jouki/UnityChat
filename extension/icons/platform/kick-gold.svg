@@ -1,4 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill-rule="evenodd" clip-rule="evenodd">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffc800"/><stop offset="1" stop-color="#ff8c00"/></linearGradient></defs>
-  <path d="M37 .036h164.448v113.621h54.71v-56.82h54.731V.036h164.448v170.777h-54.73v56.82h-54.711v56.8h54.71v56.82h54.73V512.03H310.89v-56.82h-54.73v-56.8h-54.711v113.62H37V.036z" fill="url(#g)"/>
-</svg>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd" stroke-linejoin="round" stroke-miterlimit="2"><defs><linearGradient id="unitychat-gold" x1="0" y1="0" x2="0.35" y2="1" gradientUnits="objectBoundingBox"><stop offset="0%" stop-color="#FFCC00"/><stop offset="48%" stop-color="#FFB800"/><stop offset="100%" stop-color="#FF9500"/></linearGradient></defs><path d="M37 .036h164.448v113.621h54.71v-56.82h54.731V.036h164.448v170.777h-54.73v56.82h-54.711v56.8h54.71v56.82h54.73V512.03H310.89v-56.82h-54.73v-56.8h-54.711v113.62H37V.036z" fill="url(#unitychat-gold)"/></svg>

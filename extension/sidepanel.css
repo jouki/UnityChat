@@ -39,7 +39,7 @@ body {
 /* ---- Layout sizes ---- */
 body.layout-medium { font-size: 14px; }
 body.layout-medium .msg { padding: 4px 12px; line-height: 1.5; }
-body.layout-medium .msg .pi { width: 20px; height: 20px; }
+body.layout-medium .msg .pi { width: 18px; height: 18px; }
 body.layout-medium .msg .ts { font-size: 11px; }
 body.layout-medium .bdg-img { height: 20px; width: 20px; }
 body.layout-medium .msg .tx img.emote { height: 2.25em; }
@@ -51,7 +51,7 @@ body.layout-medium #settings button { font-size: 14px; }
 
 body.layout-large { font-size: 16px; }
 body.layout-large .msg { padding: 5px 14px; line-height: 1.5; }
-body.layout-large .msg .pi { width: 22px; height: 22px; }
+body.layout-large .msg .pi { width: 20px; height: 20px; }
 body.layout-large .msg .ts { font-size: 12px; }
 body.layout-large .bdg-img { height: 22px; width: 22px; }
 body.layout-large .msg .tx img.emote { height: 2.5em; }
@@ -883,8 +883,8 @@ body.layout-large #settings details summary { font-size: 15px; }
 
 .msg .pi {
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   margin-right: 3px;
   vertical-align: middle;
   border-radius: 3px;
@@ -923,7 +923,7 @@ body.no-timestamps .msg .ts { display: none; }
 }
 
 /* UnityChat user — zlaté verze log (icons/platform/*-gold.svg) + glow */
-.msg .pi.uc { box-shadow: 0 0 6px rgba(255, 140, 0, 0.5); }
+.msg .pi.uc { filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
 .msg .pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
 .msg .pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }
 .msg .pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
