@@ -1307,7 +1307,7 @@ class TwitchProvider {
       _needsColorLookup: !ircColor,
       // Twitch numeric user-id — needed to look up 7TV profile (nickname paint).
       userId: tags['user-id'] || null,
-      timestamp: Date.now(),
+      timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
       id: tags.id || crypto.randomUUID(),
       badgesRaw,
       twitchEmotes: tags.emotes || null,
@@ -1345,7 +1345,7 @@ class TwitchProvider {
         username: raider,
         message: `raiduje s ${viewers} diváky!`,
         color: '#ff6b6b',
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         isRaid: true,
         raidViewers: viewers,
@@ -1376,7 +1376,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1401,7 +1401,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         isGiftBundle: true,
@@ -1425,7 +1425,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         isSubGift: true,
@@ -1469,7 +1469,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1500,7 +1500,7 @@ class TwitchProvider {
         color,
         _needsColorLookup: !ircColor,
         userId: tags['user-id'] || null,
-        timestamp: Date.now(),
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
         id: tags.id || crypto.randomUUID(),
         badgesRaw: tags.badges || '',
         twitchEmotes: tags.emotes || null,
@@ -1712,7 +1712,7 @@ class KickProvider {
         message: this._textOnly(content), // plain text fallback
         color,
         badgesRaw,
-        timestamp: Date.now(),
+        timestamp: Date.parse(data.created_at) || Date.now(), // čas z Kicku (ISO created_at)
         id: data.id || crypto.randomUUID(),
         replyTo
       });
@@ -2284,7 +2284,7 @@ class YouTubeProvider {
         ytRuns: runs,
         color: isSuperChat ? '#ffd600' : this._authorColor(renderer, rawName),
         badges,
-        timestamp: Date.now(),
+        timestamp: Math.floor(Number(renderer.timestampUsec) / 1000) || Date.now(), // čas z YouTube (µs → ms)
         id,
         superChat: isSuperChat
       });
@@ -5443,7 +5443,7 @@ class UnityChat {
       msgCacheSize: this._msgCache?.length || 0,
       // Audit serverového ingestu (scripts/ingest-audit.mjs): všechna platform:id
       // z cache, ať jde spočítat recall proti tabulce messages.
-      msgCacheIds: (this._msgCache || []).filter((m) => m.id && m.platform && !String(m.id).startsWith('opt-')).map((m) => `${m.platform}:${m.id}|${m.timestamp || 0}|${(m.username || '')}|${String(m.message || '').slice(0, 40)}`),
+      msgCacheIds: (this._msgCache || []).filter((m) => m.id && m.platform && !String(m.id).startsWith('sent-')).map((m) => `${m.platform}:${m.id}|${m.timestamp || 0}|${(m.username || '')}|${String(m.message || '').slice(0, 40)}`),
       msgCacheOldest: this._msgCache?.[0]?.timestamp,
       msgCacheNewest: this._msgCache?.[this._msgCache.length - 1]?.timestamp,
       dedupChannels: this._dedupChannels?.size || 0,
