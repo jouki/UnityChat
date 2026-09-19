@@ -10,15 +10,17 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const postgres = require('../backend/node_modules/postgres');
+// Lokálně z repa (../backend/node_modules), v backend kontejneru (/app) přímo 'postgres'.
+let postgres;
+try { postgres = require('../backend/node_modules/postgres'); } catch { postgres = require('postgres'); }
 
 const args = process.argv.slice(2);
 const dbIdx = args.indexOf('--db');
-if (dbIdx === -1 || !args[dbIdx + 1]) {
-  console.error('usage: node scripts/ingest-audit.mjs --db <DATABASE_URL> dump.txt [...]');
+const url = dbIdx !== -1 ? args[dbIdx + 1] : process.env.DATABASE_URL;
+if (!url) {
+  console.error('usage: node scripts/ingest-audit.mjs --db <DATABASE_URL> dump.txt [...]  (nebo DATABASE_URL v env)');
   process.exit(2);
 }
-const url = args[dbIdx + 1];
 const files = args.filter((_a, i) => i !== dbIdx && i !== dbIdx + 1);
 if (!files.length) { console.error('žádné dumpy'); process.exit(2); }
 
