@@ -43,11 +43,26 @@ function b64url(input: string): string {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/**
+ * Klic prijima jako JSON i jako base64 JSON.
+ *
+ * Base64 varianta existuje kvuli Coolify: to vklada env promenne do
+ * Dockerfile jako `ARG key=value`, takze viceradkovy JSON rozbije build
+ * ("ARG CWS_SERVICE_ACCOUNT={" a dalsi radky uz Dockerfile necte).
+ * V GitHub Actions projde plain JSON bez problemu, proto obe cesty.
+ */
 function loadKey(): ServiceAccountKey {
-  if (!config.CWS_SERVICE_ACCOUNT) {
+  const raw = config.CWS_SERVICE_ACCOUNT;
+  if (!raw) {
     throw new Error('CWS_SERVICE_ACCOUNT není nastavený');
   }
-  return JSON.parse(config.CWS_SERVICE_ACCOUNT) as ServiceAccountKey;
+
+  const trimmed = raw.trim();
+  const json = trimmed.startsWith('{')
+    ? trimmed
+    : Buffer.from(trimmed, 'base64').toString('utf8');
+
+  return JSON.parse(json) as ServiceAccountKey;
 }
 
 /** Access token z podepsaného JWT. Tokeny žijí hodinu, cachujeme je zvlášť. */
