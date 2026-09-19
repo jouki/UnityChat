@@ -367,12 +367,14 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 > **✅ PUBLIKOVÁNO 18. 9. 2026** — review prošla za 2 dny. Položka je veřejná
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
 > Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
-> **3.39.3 odeslána ke kontrole 19. 9. 2026** (PR #21, workflow cws-release.yml).
-> **3.39.14 je na masteru (PR #22, 20. 9. 2026), ale CWS upload workflow spadl:
-> `NOT_UPDATEABLE — You may not edit or publish an item that is in review`.**
-> Dokud review 3.39.3 běží, store nepřijme nic. Až `GET api.jouki.cz/store/status`
-> přestane hlásit `pending`, spustit znovu: `gh run rerun 35474769185`
-> (nebo v dashboardu zrušit odeslání 3.39.3 a rerun hned).
+> **3.39.14 čeká na review od 20. 9. 2026** (PR #22). Původně odeslaná 3.39.3
+> (PR #21) byla zrušena přes `cancelSubmission`, protože store při probíhající
+> review odmítá jakýkoli upload (`NOT_UPDATEABLE`).
+>
+> **Když čeká starší verze na review a chceš poslat novější:**
+> `gh workflow run cws-release.yml --ref master -f cancel_pending=true -f force=true`
+> (ručně: `node scripts/cws.mjs cancel`, pak `release <zip>`). Zrušení je
+> vratné jen novým odesláním, proto nikdy automaticky při pushi.
 > Podklady pro dashboard: `store/listing/README.md`; **kompletní záznam všeho,
 > co je v dashboardu zadané (texty, oprávnění, data-use checkboxy, prohlášení):
 > `store/listing/dashboard-state.md`** — při každé změně v dashboardu aktualizovat.

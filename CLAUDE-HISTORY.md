@@ -145,6 +145,7 @@ Záznamy změn, které nejsou vázané na source code commit (memory restruktura
 
 Formát: `YYYY-MM-DD [autor/session] — popis`
 
+- **2026-09-20** — CLAUDE.md Store: 3.39.3 zrušena (cancelSubmission), 3.39.14 v review; postup `cancel_pending` pro příště. Memory `feedback_release_two_targets.md` + checkpoint.
 - **2026-09-20** — CLAUDE.md: release 3.39.14 (PR #22) + CWS upload blokovaný recenzí 3.39.3 (NOT_UPDATEABLE), postup rerunu; memory checkpoint aktualizován.
 - **2026-09-20** — `memory/feedback_youtube_layout.md`: pravidlo č. 7 (`#columns padding-right:0`, jediný zdroj prázdna vpravo od related videí = `ytd-watch-flexy[fixed-panels] #columns` rule, ověřeno userem v DevTools; `#primary` nesahat).
 - **2026-04-15** [session post-v3.37.3] — Archiv založen. Přesunuty milestones v1.x–v3.30.3 z `CLAUDE.md` do `CLAUDE-HISTORY.md` (CLAUDE.md překročil 40k threshold, performance warning od Claude Code). `CLAUDE.md` teď obsahuje jen v3.31.0+ milestones + pointer na tento soubor. Memory `project_unitychat.md` doplněn o pravidlo logování.
