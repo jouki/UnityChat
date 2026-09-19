@@ -8,6 +8,12 @@
 // Vkládá se za mezeru, aby neovlivnil trailing emoty.
 const UC_MARKER = '\u2800';
 
+// Podporovaní streameři (Twitch login). Primární je Rob; na jiného se
+// přepíná jen ručně tlačítkem nad chatem. Ostatní streamery addon ignoruje
+// (rozhodnutí usera 2026-09-19 — chaty se míchaly a emoty se nepřenačítaly).
+const PRIMARY_STREAMER = 'robdiesalot';
+const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary']);
+
 const DEFAULTS = {
   channel: 'robdiesalot',
   kickChannel: 'robdiesalot',
@@ -2578,6 +2584,8 @@ class UnityChat {
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
     this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
+    await this._pickBootStreamer();
+    this._bootMark('streamer picked', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
     if (this.config._platformUsernames) {
       this._platformUsernames = { ...this.config._platformUsernames };
     }
@@ -3075,6 +3083,14 @@ class UnityChat {
       this.autoScroll = true;
       this._clearUnread();
     });
+
+    // Ruční přepnutí streamera (nabídka nad chatem)
+    const switchBtn = $('btn-switch-streamer');
+    if (switchBtn) {
+      switchBtn.addEventListener('click', () => {
+        if (this._offeredRecord) this._switchToStreamer(this._offeredRecord);
+      });
+    }
 
     // Filtry
     document.querySelectorAll('.fbtn').forEach((btn) => {
@@ -3612,7 +3628,7 @@ class UnityChat {
   async _detectActivePlatform() {
     try {
       const tab = await this._findStreamTab();
-      if (!tab) { this._setActivePlatform(null); return; }
+      if (!tab) { this._setActivePlatform(null); this._hideSwitchOffer(); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
 
@@ -3659,12 +3675,13 @@ class UnityChat {
         this._saveConfig();
       }
 
-      // Auto-switch: zkontroluj jestli jsme na známém streamerovi a přepni pokud ano.
-      // Pokud content script nereaguje, detekujeme platformu z URL — auto-switch
-      // má fungovat i bez funkčního content scriptu.
+      // Nabídka přepnutí: když tab patří podporovanému streamerovi, který
+      // není ten připojený, ukáže se tlačítko. Nic se nepřepíná samo.
       if (tab.url) {
         const p = resp?.platform || this._detectPlatformFromUrl(tab.url);
-        if (p) this._checkAutoSwitch(p, tab.url, resp?.channelHandle).catch(() => {});
+        if (p) this._checkSwitchOffer(p, tab.url, resp?.channelHandle).catch(() => {});
+      } else {
+        this._hideSwitchOffer();
       }
     } catch {
       this._setActivePlatform(null);
@@ -3758,38 +3775,107 @@ class UnityChat {
     return null;
   }
 
-  async _checkAutoSwitch(platform, tabUrl, contentHandle) {
-    if (!platform || !tabUrl) return;
+  // Handle z URL/tabu → záznam podporovaného streamera (nebo null).
+  async _resolveSupportedStreamer(platform, tabUrl, contentHandle) {
     let handle = this._parseChannelFromUrl(tabUrl, platform);
-    // YouTube /watch pages don't have channel handle in URL — use DOM-resolved
-    // handle from content script as fallback.
-    if (!handle && contentHandle) {
-      handle = String(contentHandle).toLowerCase().replace(/^@/, '');
-    }
-    if (!handle) return;
-
-    // Skip if the handle already matches our current config for this platform.
-    const currentConfigHandle = this._getConfiguredHandle(platform);
-    if (currentConfigHandle === handle && this._autoSwitchedTo === handle) return;
-
-    // Cancel any in-flight switch: a new URL change trumps older work.
-    this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
-    const mySeq = this._autoSwitchSeq;
-
+    // YouTube /watch nemá handle v URL — bere se z content scriptu.
+    if (!handle && contentHandle) handle = String(contentHandle).toLowerCase().replace(/^@/, '');
+    if (!handle) return null;
     const streamer = await this._lookupStreamer(platform, handle);
-    if (mySeq !== this._autoSwitchSeq) return;
+    const login = (streamer?.twitchLogin || '').toLowerCase();
+    if (!login || !SUPPORTED_STREAMERS.has(login)) return null;
+    return streamer;
+  }
 
-    // Known streamer → full cross-platform map. Unknown streamer → only the
-    // current platform's channel is set; others cleared (per design — we don't
-    // guess cross-platform handles for unregistered streamers).
-    const target = streamer || {
-      twitchLogin: platform === 'twitch' ? handle : null,
-      youtubeHandle: platform === 'youtube' ? handle : null,
-      kickSlug: platform === 'kick' ? handle : null,
-    };
+  _streamerDisplay(streamer) {
+    return streamer.twitchDisplayName || streamer.twitchLogin || streamer.youtubeTitle || streamer.kickDisplayName || '?';
+  }
 
-    await this._performAutoSwitch(target, mySeq, handle);
-    this._sendSeenPing(platform, handle);
+  async _checkSwitchOffer(platform, tabUrl, contentHandle) {
+    if (!platform || !tabUrl || this._switching) return;
+    const streamer = await this._resolveSupportedStreamer(platform, tabUrl, contentHandle);
+    if (!streamer) { this._hideSwitchOffer(); return; }
+    const login = streamer.twitchLogin.toLowerCase();
+    if (login === (this.config.channel || '').toLowerCase()) { this._hideSwitchOffer(); return; }
+    this._showSwitchOffer(streamer);
+  }
+
+  _showSwitchOffer(streamer) {
+    const box = document.getElementById('switch-offer');
+    const btn = document.getElementById('btn-switch-streamer');
+    if (!box || !btn) return;
+    const login = streamer.twitchLogin.toLowerCase();
+    if (this._offeredStreamer !== login) {
+      this._offeredStreamer = login;
+      this._offeredRecord = streamer;
+      btn.textContent = `Přepnout chat na ${this._streamerDisplay(streamer)}`;
+      this._ucLog?.('Streamer', `offer ${login}`);
+    }
+    box.classList.remove('hidden');
+  }
+
+  _hideSwitchOffer() {
+    const box = document.getElementById('switch-offer');
+    if (box) box.classList.add('hidden');
+    this._offeredStreamer = null;
+    this._offeredRecord = null;
+  }
+
+  // Ruční přepnutí (klik na tlačítko). Bývalý auto-switch měl race: detekce
+  // každé 3 s znovu vstupovala do přepínání, bumpla sekvenci a rozdělané
+  // přepnutí (emoty vyčištěné, nové nenačtené, providery napůl) zrušila;
+  // druhý průchod viděl config už změněný a nic neudělal → smíchané chaty a
+  // špatné emoty. Tady běží jedno přepnutí najednou, bez re-entry.
+  async _switchToStreamer(streamer) {
+    if (this._switching) return;
+    this._switching = true;
+    const login = (streamer.twitchLogin || '').toLowerCase();
+    this._hideSwitchOffer();
+    this._ucLog?.('Streamer', `switch → ${login}`);
+    try {
+      this._autoSwitchSeq = (this._autoSwitchSeq || 0) + 1;
+      await this._performAutoSwitch(streamer, this._autoSwitchSeq, login);
+    } catch (e) {
+      this._sys(`Přepnutí selhalo: ${e.message}`);
+      this._hideSwitchBanner();
+    } finally {
+      this._switching = false;
+    }
+  }
+
+  // Při startu: podporovaný streamer na aktivním tabu vyhrává, jinak Rob.
+  // Nastavuje jen config (nic ještě neběží), samotné načtení udělá _init.
+  async _pickBootStreamer() {
+    let target = null;
+    try {
+      const tab = await this._findStreamTab();
+      if (tab?.url) {
+        const platform = this._detectPlatformFromUrl(tab.url);
+        let contentHandle = null;
+        if (platform === 'youtube') {
+          const resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+          contentHandle = resp?.channelHandle || null;
+        }
+        if (platform) target = await this._resolveSupportedStreamer(platform, tab.url, contentHandle);
+      }
+    } catch {}
+    if (!target) {
+      target = await this._lookupStreamer('twitch', PRIMARY_STREAMER).catch(() => null)
+        || { twitchLogin: PRIMARY_STREAMER, twitchUserId: '160028137', youtubeHandle: PRIMARY_STREAMER, kickSlug: PRIMARY_STREAMER };
+    }
+    const before = `${this.config.channel}/${this.config.ytChannel}/${this.config.kickChannel}`;
+    this.config.channel = target.twitchLogin || '';
+    this.config.ytChannel = target.youtubeHandle || '';
+    this.config.kickChannel = target.kickSlug || '';
+    if (target.twitchUserId) this.config._roomId = target.twitchUserId;
+    else if (before.split('/')[0] !== this.config.channel) this.config._roomId = null;
+    this._saveConfig();
+    this._refreshSettingsInputs();
+    this._ucLog?.('Streamer', `boot ${before} → ${this.config.channel}/${this.config.ytChannel}/${this.config.kickChannel} roomId=${this.config._roomId || '-'}`);
+  }
+
+  _ucLog(tag, text) {
+    try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag, text }).catch(() => {}); } catch {}
   }
 
   _getConfiguredHandle(platform) {

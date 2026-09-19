@@ -376,6 +376,30 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 8px;
 }
 
+/* Nabídka přepnutí streamera — nad chatem, celá šířka, brand gradient */
+#switch-offer {
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#switch-offer.hidden { display: none; }
+#btn-switch-streamer {
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent-gradient);
+  color: #000;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(255, 140, 0, 0.35);
+}
+#btn-switch-streamer:hover { filter: brightness(1.08); }
+#btn-switch-streamer:active { transform: translateY(1px); }
+
 /* Auto-switch loading banner (shown during reconnect to new streamer) */
 .switch-banner {
   padding: 8px 14px;
