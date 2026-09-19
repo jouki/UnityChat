@@ -247,6 +247,79 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
+  if (msg.type === 'TW_HISTORY' && msg.tabId) {
+    // Twitch chat lines keep the full message object in React props (id,
+    // timestamp ms, messageBody, messageParts, badges, user, reply). That is
+    // the IRC message itself, so ids dedup against live IRC and timestamps
+    // are real — unlike the former DOM-text scrape (removed in v3.38.74).
+    chrome.scripting.executeScript({
+      target: { tabId: msg.tabId },
+      world: 'MAIN',
+      args: [msg.limit || 200],
+      func: (limit) => {
+        const out = [];
+        const lines = document.querySelectorAll('.chat-line__message');
+        const start = Math.max(0, lines.length - limit);
+        let noFiber = 0, noMsg = 0;
+        for (let i = start; i < lines.length; i++) {
+          const el = lines[i];
+          const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+          if (!key) { noFiber++; continue; }
+          let f = el[key]; let m = null; let hops = 0;
+          while (f && hops < 12) {
+            const p = f.memoizedProps;
+            if (p && p.message && typeof p.message === 'object' && p.message.id && p.message.timestamp) { m = p.message; break; }
+            f = f.return; hops++;
+          }
+          if (!m) { noMsg++; continue; }
+          if (m.deleted || m.banned) continue;
+          const u = m.user || {};
+          const badges = m.badges && typeof m.badges === 'object'
+            ? Object.entries(m.badges).map(([set, ver]) => `${set}/${ver}`).join(',') : '';
+          // messageParts: 0 text, 4 mention {recipient}, 5 link {displayText,url},
+          // 6 emote {alt, emoteID}. Joined texts == messageBody (ověřeno na 50/50).
+          const parts = Array.isArray(m.messageParts) ? m.messageParts.map((pt) => {
+            const c = pt && pt.content;
+            if (typeof c === 'string') return { text: c };
+            if (c && typeof c === 'object') {
+              return {
+                text: typeof c.recipient === 'string' ? '@' + c.recipient
+                  : typeof c.alt === 'string' ? c.alt
+                  : typeof c.displayText === 'string' ? c.displayText
+                  : typeof c.text === 'string' ? c.text
+                  : typeof c.url === 'string' ? c.url : '',
+                emoteId: typeof c.emoteID === 'string' ? c.emoteID : null
+              };
+            }
+            return { text: '' };
+          }) : [];
+          out.push({
+            id: m.id,
+            timestamp: Number(m.timestamp),
+            login: u.userLogin || '',
+            displayName: u.userDisplayName || u.userLogin || '',
+            userId: u.userID || null,
+            color: u.color || null,
+            body: typeof m.messageBody === 'string' ? m.messageBody : '',
+            parts,
+            badges,
+            firstMsg: !!m.isFirstMsg,
+            reply: m.reply && m.reply.parentMsgId ? {
+              id: m.reply.parentMsgId,
+              username: m.reply.parentDisplayName || m.reply.parentUserLogin || '',
+              message: m.reply.parentMessageBody || ''
+            } : null
+          });
+        }
+        return { ok: true, messages: out, total: lines.length, noFiber, noMsg };
+      }
+    }).then((res) => {
+      const r = res && res[0] && res[0].result;
+      sendResponse(r || { ok: false, error: 'no result' });
+    }).catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
   if (msg.type === 'CHECK_PIN') {
     checkPin(msg.channel, msg.messageId)
       .then(sendResponse)

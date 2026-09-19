@@ -4132,6 +4132,20 @@ class UnityChat {
     return { url: `icons/kick-badges/${type}.svg`, title };
   }
 
+  // Nejstarší zpráva v DOM s časem > ts (prochází se odzadu, historie se
+  // doplňuje do konce chatu, takže to je pár kroků).
+  _firstNewerMsgEl(ts) {
+    let found = null;
+    for (let el = this.chatEl.lastElementChild; el; el = el.previousElementSibling) {
+      if (!el.classList.contains('msg')) continue;
+      const t = Number(el.dataset.ts);
+      if (!t) continue;
+      if (t > ts) found = el;
+      else break;
+    }
+    return found;
+  }
+
   _applyReplyOneLine() {
     document.body.classList.toggle('reply-oneline', this.config.replyOneLine === true);
   }
@@ -4850,10 +4864,102 @@ class UnityChat {
     if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
     if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
-    // Doparsování Twitch DOM po připojení zrušeno ve v3.38.74 — syntetické
-    // časy a heuristické čtení textu dávaly staré zprávy s časem „teď"
-    // (i řádek s časem místo textu). Mezeru po reloadu vyplní serverová
-    // historie (docs/superpowers/specs/2026-09-19-server-chat-log-design.md).
+
+    // Doplnit zprávy, které proběhly, když byl panel zavřený — z React props
+    // otevřeného Twitch tabu (reálná id + časy), viz _importTwitchHistory.
+    setTimeout(() => this._importTwitchHistory(), 1500);
+  }
+
+  // Bývalý DOM scrape (zrušen v3.38.74) četl text heuristikou a časy si
+  // vymýšlel. Tohle bere z Twitch tabu přímo message objekty z React props
+  // (background TW_HISTORY, MAIN world): id je totéž, co posílá IRC, takže
+  // dedup je přesný, timestamp je skutečný a zpráva se zařadí podle něj.
+  async _importTwitchHistory() {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel || !this.config.twitch) return;
+    const log = (text) => {
+      try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'TwHistory', text }).catch(() => {}); } catch {}
+    };
+    try {
+      const tabs = await chrome.tabs.query({ url: ['*://*.twitch.tv/*'] });
+      const tab = tabs.find((t) => {
+        try {
+          const parts = new URL(t.url || '').pathname.toLowerCase().split('/').filter(Boolean);
+          return parts[0] === channel || (parts[0] === 'popout' && parts[1] === channel);
+        } catch { return false; }
+      });
+      if (!tab) { log('no channel tab'); return; }
+
+      const resp = await chrome.runtime.sendMessage({ type: 'TW_HISTORY', tabId: tab.id, limit: 200 }).catch(() => null);
+      if (!resp?.ok) { log(`failed: ${resp?.error || 'no response'}`); return; }
+
+      const dedup = this._dedupChannels.get(`twitch:${channel}`);
+      const list = (resp.messages || [])
+        .filter((m) => m.id && m.timestamp && m.body && !(dedup && dedup.ids.has(m.id)))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      let added = 0;
+      for (const m of list) {
+        const msg = this._historyToMsg(m);
+        if (!msg) continue;
+        const before = this.msgCount;
+        this._addMessage(msg);
+        if (this.msgCount > before) added++;
+      }
+      if (added) this._sys(`Doplněno ${added} zpráv z Twitch chatu`);
+      log(`tab=${tab.id} dom=${resp.total} got=${resp.messages?.length || 0} new=${list.length} added=${added}`
+        + ` noFiber=${resp.noFiber} noMsg=${resp.noMsg}`
+        + (list.length ? ` range=${new Date(list[0].timestamp).toISOString()}..${new Date(list[list.length - 1].timestamp).toISOString()}` : ''));
+    } catch (e) {
+      log(`error: ${e.message}`);
+    }
+  }
+
+  // React message → tvar, který posílá TwitchProvider z IRC. Emote tag
+  // (id:start-end) se skládá z messageParts; pozice jsou v code pointech
+  // jako v IRC. Když se části neposkládají přesně na messageBody, emoty
+  // se vynechají (7TV/BTTV/FFZ se dohledají podle jména i tak).
+  _historyToMsg(m) {
+    const joined = (m.parts || []).map((p) => p.text || '').join('');
+    let twitchEmotes = null;
+    if (joined === m.body && (m.parts || []).some((p) => p.emoteId)) {
+      const byId = new Map();
+      let cp = 0;
+      for (const p of m.parts) {
+        const len = [...(p.text || '')].length;
+        if (p.emoteId && len) {
+          if (!byId.has(p.emoteId)) byId.set(p.emoteId, []);
+          byId.get(p.emoteId).push(`${cp}-${cp + len - 1}`);
+        }
+        cp += len;
+      }
+      twitchEmotes = [...byId].map(([id, ranges]) => `${id}:${ranges.join(',')}`).join('/');
+    }
+    // Reply: Twitch dává @user prefix do těla, IRC cesta ho stripuje.
+    let message = m.body;
+    let twitchEmotesOffset = 0;
+    if (m.reply && message.startsWith('@')) {
+      const sp = message.indexOf(' ');
+      if (sp !== -1) { message = message.substring(sp + 1); twitchEmotesOffset = sp + 1; }
+    }
+    if (!message.trim()) return null;
+    return {
+      platform: 'twitch',
+      username: m.displayName || m.login,
+      message,
+      color: m.color || undefined,
+      _needsColorLookup: !m.color,
+      userId: m.userId,
+      timestamp: m.timestamp,
+      id: m.id,
+      badgesRaw: m.badges || '',
+      twitchEmotes,
+      twitchEmotesOffset,
+      replyTo: m.reply ? { username: m.reply.username, message: m.reply.message, id: m.reply.id } : null,
+      firstMsg: !!m.firstMsg,
+      isAction: false,
+      historical: true
+    };
   }
 
   _disconnectAll() {
@@ -7242,6 +7348,7 @@ class UnityChat {
     el.className = 'msg';
     el.dataset.platform = msg.platform;
     if (msg.id) el.dataset.msgId = msg.id;
+    if (msg.timestamp) el.dataset.ts = String(msg.timestamp);
     if (msg.superChat) el.classList.add('superchat');
     if (isMentioned) el.classList.add('mentioned');
     if (msg.firstMsg) el.classList.add('first-msg');
@@ -7575,7 +7682,11 @@ class UnityChat {
     const preserveScroll = !this.autoScroll && !this._hydratingOlder;
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
 
-    this.chatEl.appendChild(el);
+    // Doplněná historie (Twitch tab) má reálný čas — zařadit před první
+    // novější zprávu, ne na konec (live IRC zprávy už mohly přijít).
+    const anchor = msg.historical && !this._hydratingOlder ? this._firstNewerMsgEl(msg.timestamp) : null;
+    if (anchor) this.chatEl.insertBefore(el, anchor);
+    else this.chatEl.appendChild(el);
 
     // Skip trim/scroll/cache writes while we're prepending *older* msgs via
     // lazy scroll-up hydration. Those messages are already in _msgCache
