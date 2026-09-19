@@ -222,6 +222,21 @@ async function cmdPublish(token) {
   return res;
 }
 
+/**
+ * Zruší čekající odeslání (review). Store při probíhající review odmítá
+ * jakýkoli upload (`NOT_UPDATEABLE — You may not edit or publish an item
+ * that is in review`, stalo se 2026-09-20 s 3.39.3 vs 3.39.14). Bez čekající
+ * submission je volání neškodné.
+ */
+async function cmdCancel(token) {
+  const before = await fetchStatus(token);
+  const submitted = versionOf(before.submittedItemRevisionStatus);
+  if (!submitted) { console.log('  nic nečeká na review — není co rušit'); return; }
+  console.log(`  ruším čekající odeslání v${submitted}…`);
+  await api(token, itemPath('cancelSubmission'), { method: 'POST' });
+  console.log('  ✅ zrušeno');
+}
+
 // ----------------------------------------------------------------- main ----
 
 async function main() {
@@ -235,6 +250,7 @@ Chrome Web Store API v2
   node scripts/cws.mjs check-version <verze>
   node scripts/cws.mjs upload <zip>
   node scripts/cws.mjs publish
+  node scripts/cws.mjs cancel             # zrušit čekající review
   node scripts/cws.mjs release <zip>      # upload + publish
 
 Klíč: env CWS_SERVICE_ACCOUNT (obsah JSON) nebo --key <cesta>
@@ -252,6 +268,7 @@ Dále: CWS_PUBLISHER_ID, volitelně CWS_ITEM_ID
     case 'check-version': await cmdCheckVersion(token, arg); break;
     case 'upload':        await cmdUpload(token, arg); break;
     case 'publish':       await cmdPublish(token); break;
+    case 'cancel':        await cmdCancel(token); break;
     case 'release':
       await cmdUpload(token, arg);
       await cmdPublish(token);

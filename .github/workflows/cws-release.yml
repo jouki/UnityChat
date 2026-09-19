@@ -25,6 +25,10 @@ on:
         description: 'Odeslat i když se verze nezměnila (upload stejně selže, pokud není vyšší)'
         type: boolean
         default: false
+      cancel_pending:
+        description: 'Nejdřív zrušit verzi čekající na review (store jinak upload odmítne: NOT_UPDATEABLE)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -72,6 +76,16 @@ jobs:
           CWS_SERVICE_ACCOUNT: ${{ secrets.CWS_SERVICE_ACCOUNT }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
         run: node scripts/cws.mjs status
+
+      # Ruční volba: store nepřijme nový balíček, dokud předchozí verze čeká na
+      # review. Zrušení je vratné jen znovuodesláním — proto jen na explicitní
+      # vstup, nikdy automaticky při pushi.
+      - name: Zrušit verzi čekající na review
+        if: github.event_name == 'workflow_dispatch' && inputs.cancel_pending
+        env:
+          CWS_SERVICE_ACCOUNT: ${{ secrets.CWS_SERVICE_ACCOUNT }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: node scripts/cws.mjs cancel
 
       - name: Sestavit store balíček
         if: steps.version.outputs.changed == 'true'
