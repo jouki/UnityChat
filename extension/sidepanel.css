@@ -2475,9 +2475,12 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   color: transparent;
   overflow: hidden;
 }
-#active-badge.tw { background-image: url(icons/platform/twitch.svg); }
-#active-badge.yt { background-image: url(icons/platform/youtube.svg); }
-#active-badge.ki { background-image: url(icons/platform/kick.svg); }
+/* Badge u inputu = já jako UnityChat uživatel → rovnou zlaté logo + glow
+   (user 2026-09-20), stejné jako .msg .pi.uc u vlastních zpráv. */
+#active-badge.tw, #active-badge.yt, #active-badge.ki { filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
+#active-badge.tw { background-image: url(icons/platform/twitch-gold.svg); }
+#active-badge.yt { background-image: url(icons/platform/youtube-gold.svg); }
+#active-badge.ki { background-image: url(icons/platform/kick-gold.svg); }
 
 #msg-input {
   flex: 1;
