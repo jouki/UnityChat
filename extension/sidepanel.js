@@ -27,6 +27,7 @@ const DEFAULTS = {
   layout: 'medium',
   showTimestamps: true,
   replyOneLine: false,
+  acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
 };
 
 // =============================================================
@@ -3233,7 +3234,7 @@ class UnityChat {
       matches = this._acUserMatches(partial.substring(1).toLowerCase());
     } else {
       // Emote autocomplete — honors the per-session "Fulltext" toggle
-      matches = this.emotes.findCompletions(partial, { fulltext: this._acFulltext });
+      matches = this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true });
     }
     if (!matches.length) { this._acHide(); return; }
 
@@ -3247,7 +3248,7 @@ class UnityChat {
   _acRefilter() {
     const ac = this._ac;
     if (!ac || ac.kind !== 'emote' || !ac.prefix) return;
-    const next = this.emotes.findCompletions(ac.prefix, { fulltext: this._acFulltext });
+    const next = this.emotes.findCompletions(ac.prefix, { fulltext: this.config.acFulltext === true });
     if (!next.length) { this._acHide(); return; }
     ac.matches = next;
     ac.index = 0;
@@ -3350,7 +3351,7 @@ class UnityChat {
     // when checked, future findCompletions() calls match by `includes`
     // rather than `startsWith`, so middle-of-name matches show up too.
     if (ac.kind === 'emote') {
-      const checked = this._acFulltext ? ' checked' : '';
+      const checked = this.config.acFulltext === true ? ' checked' : '';
       html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
     }
     for (let i = winStart; i < winEnd; i++) {
@@ -3393,7 +3394,8 @@ class UnityChat {
     if (ftBox) {
       ftBox.addEventListener('change', (e) => {
         e.stopPropagation();
-        this._acFulltext = ftBox.checked;
+        this.config.acFulltext = ftBox.checked;
+        this._saveConfig();
         this._acRefilter();
         this.msgInput.focus();
       });
