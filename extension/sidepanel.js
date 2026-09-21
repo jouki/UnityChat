@@ -1821,8 +1821,13 @@ class UnityChat {
       const sel = i === idx ? ' selected' : '';
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('/uc ') || name.startsWith('!')) {
-        // UC / chat command: oranžová tečka
+      if (name.startsWith('!')) {
+        // Chat command: logo zdroje (Židolišta / StreamElements)
+        const src = this._acSource(name);
+        const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
+        html += `<img class="es-logo" src="${logo}" alt="${this.emotes._ea(src)}">`;
+      } else if (name.startsWith('/uc ')) {
+        // UC command: oranžová tečka
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka

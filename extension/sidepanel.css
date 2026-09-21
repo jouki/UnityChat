@@ -2773,6 +2773,9 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   flex-shrink: 0;
 }
 
+/* Logo zdroje commandu (Židolišta / StreamElements) v seznamu návrhů */
+.es-item img.es-logo { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; }
+
 .es-dot {
   width: 20px;
   height: 20px;
