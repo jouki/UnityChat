@@ -13,8 +13,9 @@ const between = (a, b) => {
   if (i === -1 || j === -1 || j < i) throw new Error(`anchor ${a} / ${b} nenalezen`);
   return src.slice(i, j);
 };
-// TwitchProvider → KickProvider → YouTubeProvider jdou za sebou, před class UnityChat.
-const code = between('class TwitchProvider', 'class UnityChat');
+// KickProvider → YouTubeProvider jdou za sebou, před class UnityChat. TwitchProvider je v core (require(esm)).
+const code = between('class KickProvider', 'class UnityChat');
+const { TwitchProvider } = require('../extension/core/twitch-irc.js');
 
 const sandbox = {
   console,
@@ -28,13 +29,13 @@ const sandbox = {
   performance,
 };
 vm.createContext(sandbox);
-vm.runInContext(code + '\nthis.TwitchProvider = TwitchProvider; this.KickProvider = KickProvider; this.YouTubeProvider = YouTubeProvider;', sandbox);
+vm.runInContext(code + '\nthis.KickProvider = KickProvider; this.YouTubeProvider = YouTubeProvider;', sandbox);
 
 let fails = 0;
 const check = (name, cond) => { console.log((cond ? 'PASS ' : 'FAIL ') + name); if (!cond) fails++; };
 let got;
 
-const tw = new sandbox.TwitchProvider();
+const tw = new TwitchProvider();
 tw.onMessage = (m) => { got = m; };
 tw._parse('@id=m1;display-name=A;tmi-sent-ts=1789820014396;user-id=1 :a!a@a PRIVMSG #c :hi');
 check('twitch PRIVMSG: timestamp = tmi-sent-ts', got && got.timestamp === 1789820014396);
