@@ -960,6 +960,8 @@ class UnityChat {
     this._platformColors = {};    // per-platform user color (from IRC/API)
     this._syncedProfiles = new Set(); // platform:username pairs already synced with API
     this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
+    this._ucCommands = [];        // chat commandy ze Židolišty (backend GET /commands) — jméno = spouštěč bez '!', roles, source
+    this._ucCommandsTimer = null;
     this._msgHistory = [];         // sent message history (newest last)
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
     this._msgHistoryDraft = '';    // unsent text before browsing history
@@ -1127,6 +1129,7 @@ class UnityChat {
 
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
+    this._loadUcCommands().catch(() => {});
 
     // Spinner up before any heavy work — it covers cache hydration + the
     // first round of provider connects. Cleared on first rendered message,
@@ -1267,10 +1270,12 @@ class UnityChat {
       } else if (partial.startsWith('!') && partial.length >= 2 && ws === 0) {
         // !command autocomplete (only at start of message)
         const prefix = partial.substring(1).toLowerCase();
-        const matches = this._seCommands
+        const role = this._myChatRole();
+        const matches = [...new Set(this._allBangCommands()
           .filter(c => c.name.toLowerCase().startsWith(prefix))
+          .filter(c => !Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role))
           .sort((a, b) => a.name.localeCompare(b.name))
-          .map(c => '!' + c.name);
+          .map(c => '!' + c.name))];
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
           this._acRender();
@@ -1764,6 +1769,7 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
+    if (name.startsWith('!')) return this._allBangCommands().find((c) => '!' + c.name === name)?.source || 'SE';
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
@@ -1815,8 +1821,8 @@ class UnityChat {
       const sel = i === idx ? ' selected' : '';
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('/uc ')) {
-        // UC command: oranžová tečka
+      if (name.startsWith('/uc ') || name.startsWith('!')) {
+        // UC / chat command: oranžová tečka
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
@@ -2356,6 +2362,7 @@ class UnityChat {
     // scrape from re-rendering messages that are still sitting in Twitch's DOM.
     this._resetChat();
     this._isModOnChannel = false; // re-detect from badges on new channel
+    this._loadUcCommands().catch(() => {});
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -2696,6 +2703,53 @@ class UnityChat {
   }
 
   // ---- StreamElements bot commands (for ! autocomplete) ----
+
+  /** „!" commandy pro autocomplete: Židolišta (přes backend, klíč zůstává na serveru) + StreamElements. */
+  _allBangCommands() {
+    return [...this._ucCommands, ...this._seCommands.map((c) => ({ ...c, source: 'SE' }))];
+  }
+
+  /** Moje role na Twitchi podle badge z vlastních zpráv — commandy Židolišty jen pro mody se divákům nenabízí. */
+  _myChatRole() {
+    const me = (this._platformUsernames.twitch || this.config.username || '').toLowerCase();
+    if (!me) return 'viewer';
+    if (me === (this.config.channel || '').toLowerCase()) return 'broadcaster';
+    const b = this._chatUsers.get(`twitch:${me}`)?.badgesRaw || '';
+    if (/(^|,)broadcaster\//.test(b)) return 'broadcaster';
+    if (/(^|,)moderator\//.test(b) || this._isModOnChannel) return 'moderator';
+    if (/(^|,)vip\//.test(b)) return 'vip';
+    if (/(^|,)(subscriber|founder)\//.test(b)) return 'sub';
+    return 'viewer';
+  }
+
+  // Chat commandy streamera ze Židolišty (RobJewsALot): backend GET /commands?channel=
+  // vrací jen jméno, literál spouštěče a role (regex už převedený na serveru).
+  // Obnova každých 5 minut — commandy se editují na stránce Commandy.
+  async _loadUcCommands() {
+    if (this._ucCommandsTimer) { clearInterval(this._ucCommandsTimer); this._ucCommandsTimer = null; }
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) { this._ucCommands = []; return; }
+    const tick = async () => {
+      try {
+        const r = await fetch(`${UC_API}/commands?channel=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        const out = [];
+        for (const c of j.commands || []) {
+          for (const t of c.triggers || [c.trigger]) {
+            if (!t || !t.startsWith('!')) continue;
+            out.push({ name: t.slice(1), label: c.name || '', roles: Array.isArray(c.roles) ? c.roles : [], source: 'Židolišta' });
+          }
+        }
+        this._ucCommands = out;
+        this._ucLog('Cmd', `Židolišta ${channel}: ${out.length} spouštěčů${j.stale ? ' (stará cache)' : ''}`);
+      } catch (e) {
+        this._ucLog('Cmd', `Židolišta fail ${e?.message || e}`);
+      }
+    };
+    await tick();
+    this._ucCommandsTimer = setInterval(() => { tick().catch(() => {}); }, 5 * 60 * 1000);
+  }
 
   async _loadSECommands() {
     try {

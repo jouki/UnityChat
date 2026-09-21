@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.39.21
+# UnityChat - Chrome Extension + Backend v3.39.22
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.21** (dev; master = 3.39.14)
+- Aktuální: **v3.39.22** (dev; master = 3.39.14)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -805,6 +805,7 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.39.22** - **Našeptávání commandů Židolišty**: `_loadUcCommands()` bere `GET /commands?channel=` z backendu (jméno, literál spouštěče, role) a slučuje se StreamElements v `!` autocomplete (`_allBangCommands()`), zdroj v seznamu „Židolišta"/„SE"; commandy jen pro mody se divákům nenabízí (`_myChatRole()` z badge vlastních zpráv). Obnova 5 min, znovu při přepnutí streamera. UC_LOG `Cmd`. Port z webu (pokyn usera 2026-09-22).
 - **v3.39.17–21** - **`extension/core/` — sdílený core s webovou verzí** (plán web v0.1, Task 1–5): postupné vytažení `ChatStore`, barev jmen + HTML helperů (+ `log.js`), `TwitchProvider`, `KickProvider` a `EmoteManager` ze `sidepanel.js` (−1 550 řádků) do ES modulů bez `chrome.*`/DOM; log, WebSocket, fetch a assetUrl injektované přes `opts`. Kick HTML fragmenty se parsují bez `document` (`core/html.js`). Addon je konzumuje přes `core-bridge.js` (module) + `sidepanel.js` s `defer`. Testy: `scripts/test-core-helpers.js` (19), `test-twitch-irc.js` (18), `test-kick.js` (12), `test-emotes.js` (12), starší testy převedené na `import()`/`require(esm)`. Chování addonu beze změny (smoke test u usera zatím neproběhl — reload rozšíření!).
 - **v3.39.9–16** - YouTube: panel ↔ vanilla chat (toolbar), `#columns padding-right:0` (jediný zdroj prázdna, ověřeno v DevTools), ikona v mastheadu jen na live (`.ytp-live-badge`), nativní „Otevřít panel" odemčené (Disabled→Mono) → vrací chat; popout ikona ze SVG; Fulltext přepínač persistentní (`config.acFulltext`); badge u inputu zlatý. **Release 3.39.14 (PR #22) → CWS review (3.39.3 zrušena přes `cancelSubmission`).**
 - **v3.39.0** - **Historie ze serveru (Task 13 plánu)**: klient bere historii z `GET /chat/history`, `ChatStore` drží data, DOM okno 300 uzlů s parkováním odpojených uzlů nad/pod oknem (scroll oběma směry bez re-renderu), starší stránky přes kurzor. Smazáno: `_msgCache` + storage cache, `_loadCachedMessages`, `_hydrateOlderMessages`, `_trim`, per-channel dedup LRU, content-key dedup, import z Twitch tabu (`TW_HISTORY`). Audit ingestu na Stérově streamu PASS (Twitch 84/84, p95 733 ms; YT 7/7, p95 4,9 s).
