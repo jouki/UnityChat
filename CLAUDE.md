@@ -1077,6 +1077,7 @@ Memory soubory v `~/.claude/projects/D---BACKUP-2-0-Code-Projects-UnityChat/memo
 - **YouTube invalidation continuation**: nelze pollovat HTTP, je push-only. Skipnout kanály co dávají jen invalidation (vědomě nefixujeme).
 - **Coolify force=1**: cross-repo deploy trigger MUSÍ mít, jinak dedup → silent fail.
 - **Active tab detection**: `chrome.tabs.query({currentWindow: true})` v Opera popup vrací popup tab, ne hlavní. Use `_getActiveBrowserTab()` helper s `chrome.windows.getLastFocused({windowTypes:['normal']})`.
+- **Backend za Traefikem = `trustProxy: true`** (od 0.5.0): bez něj je `req.ip` pro všechny klienty 10.0.1.2 a per-IP limity (`/chat/stream` 10 streamů, `/chat/history` 10 req/s) platí globálně — 2026-09-21 to shodilo YouTube stream na webu (429 pro všechny). SSE klienty uklízet i přes `reply.raw` 'close'/'error' + kontrolu mrtvého socketu při keepalive.
 
 ## Release workflow
 
