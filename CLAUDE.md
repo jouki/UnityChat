@@ -509,6 +509,13 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
   platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
 - Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
   změny core/backendu a tenhle pointer. Backend zůstává na api.jouki.cz.
+- **Stav 2026-09-22: web v0.4** — v0.3 parita (odpojení platformy, odpovědi,
+  @zmínky, sdílené přezdívky, nastavení ⚙ + profil přezdívka/barva s auto-párováním
+  na všechny propojené účty) + **živé změny přezdívek**: web poslouchá stejné SSE
+  `GET /nicknames/stream` jako addon, `WebChat.applyNickname()` přepíše u
+  vykreslených zpráv jméno, barvu, title i `.mention` spany (revert přes
+  `data-display` / `data-color`), nová @zmínka novou přezdívkou se překládá hned.
+  Kanál `robdiesalot` má prázdnou historii, dokud Rob nestreamuje (ingest od 19. 9.).
 - **Stav 2026-09-21 večer: web v0.2 (přihlášení + posílání) běží na https://robdiesalot.com/chat/**
   — badge u inputu + šipka = menu Twitch / Kick / YouTube (Přihlásit / přepnout /
   Odhlásit), zprávy přes `POST /chat/send`, optimistická zpráva + echo.
