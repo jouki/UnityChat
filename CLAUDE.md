@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.38.67
+# UnityChat - Chrome Extension + Backend v3.39.21
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -15,8 +15,14 @@ UnityChat/
 │   ├── sidepanel.css           # Dark theme styling
 │   ├── sidepanel.js            # ~6500 řádků - UI/messaging logika (klasický skript, defer)
 │   ├── core-bridge.js          # module script: importuje core/ a vystaví window.UC_CORE
-│   ├── core/                   # SDÍLENÝ CORE s webovou verzí — ES moduly bez chrome.*/DOM
-│   │   └── chat-store.js       #   ChatStore (v3.39.17; další moduly přibývají po tascích plánu web v0.1)
+│   ├── core/                   # SDÍLENÝ CORE s webovou verzí — ES moduly bez chrome.*/DOM (v3.39.17–21)
+│   │   ├── chat-store.js       #   ChatStore (data zpráv, řazení, dedup)
+│   │   ├── colors.js           #   twitchDefaultColor, readableColor, ytNameColor, isTwitchOgFaceName
+│   │   ├── html.js             #   escapeHtml/Attr, decodeEntities, stripTags, tagAttrs (Kick HTML bez DOM)
+│   │   ├── log.js              #   makeLog — injektované logování (addon → UC_LOG, web → console/overlay)
+│   │   ├── twitch-irc.js       #   TwitchProvider (anonymní IRC), WebSocket injektovatelný
+│   │   ├── kick.js             #   KickProvider (Pusher), fetch + WebSocket injektovatelné
+│   │   └── emotes.js           #   EmoteManager (7TV/BTTV/FFZ/Twitch/Kick/UC, render segmentů, autocomplete)
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
@@ -363,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.14** (dev = master)
+- Aktuální: **v3.39.21** (dev; master = 3.39.14)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -502,8 +508,18 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
   Nikdy tiše nechat jednu variantu pozadu. Přihlášení uživatele + výběr
   platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
 - Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
-  změny core/backendu a tenhle pointer. Deploy webu = FTP na sdílený hosting
-  robdiesalot.com (credentials v `SERVER.md`), backend zůstává na api.jouki.cz.
+  změny core/backendu a tenhle pointer. Backend zůstává na api.jouki.cz.
+- **Stav 2026-09-21: web v0.1 (read-only) běží na https://robdiesalot.com/chat/**
+  (kořen domény = WordPress Roba, nesahat). Deploy je **z PC**:
+  `cd UnityChat-web/web && npm run deploy` (build + `scripts/deploy-ftp.mjs`,
+  heslo z `SERVER.md`). Hosting profiwh.com pouští FTP login **jen z českých
+  IP** (GitHub runner timeout, Hetzner VPS „530 Access denied"), proto ne CI.
+  Ladění na cizím streamu: `?debug=1&channel=<login>` (jinak natvrdo Rob).
+- **Jak addon načítá core bez buildu:** `sidepanel.html` má
+  `<script type="module" src="core-bridge.js">` + `<script defer src="sidepanel.js">`;
+  bridge vystaví `window.UC_CORE` (+ globály `ChatStore`, `TwitchProvider`,
+  `KickProvider`, `EmoteManager`). Oba skripty jsou v deferred frontě v pořadí
+  dokumentu, `DOMContentLoaded` listener v sidepanel.js dál funguje.
 
 ## Landing page (jouki.cz/UnityChat)
 
@@ -588,7 +604,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.3.0)
+## Backend (v0.4.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -619,6 +635,11 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   serverového logu (ingest níže). Kurzor `<sent_at_ms>:<id>`, odpověď
   `{ok, messages[nejstarší→nejnovější], nextBefore}`, tvar zprávy = to, co
   posílají živé providery (`historical: true`). `no-store`, 10 req/s/IP.
+- `GET /chat/stream?channel&platforms` — **SSE živých zpráv z ingestu** (v0.4.0,
+  pro web verzi): `event: hello`, `event: message` (tvar jako `/chat/history`,
+  `historical:false`, emitované PŘED dávkovým zápisem do DB), keepalive 15 s,
+  bez replay (klient dorovná přes `/chat/history`), max 5 streamů/IP.
+  Implementace `sse/chatBus.ts` + hook `onLive` v `ingest/index.ts`.
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
@@ -737,6 +758,8 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.39.17–21** - **`extension/core/` — sdílený core s webovou verzí** (plán web v0.1, Task 1–5): postupné vytažení `ChatStore`, barev jmen + HTML helperů (+ `log.js`), `TwitchProvider`, `KickProvider` a `EmoteManager` ze `sidepanel.js` (−1 550 řádků) do ES modulů bez `chrome.*`/DOM; log, WebSocket, fetch a assetUrl injektované přes `opts`. Kick HTML fragmenty se parsují bez `document` (`core/html.js`). Addon je konzumuje přes `core-bridge.js` (module) + `sidepanel.js` s `defer`. Testy: `scripts/test-core-helpers.js` (19), `test-twitch-irc.js` (18), `test-kick.js` (12), `test-emotes.js` (12), starší testy převedené na `import()`/`require(esm)`. Chování addonu beze změny (smoke test u usera zatím neproběhl — reload rozšíření!).
+- **v3.39.9–16** - YouTube: panel ↔ vanilla chat (toolbar), `#columns padding-right:0` (jediný zdroj prázdna, ověřeno v DevTools), ikona v mastheadu jen na live (`.ytp-live-badge`), nativní „Otevřít panel" odemčené (Disabled→Mono) → vrací chat; popout ikona ze SVG; Fulltext přepínač persistentní (`config.acFulltext`); badge u inputu zlatý. **Release 3.39.14 (PR #22) → CWS review (3.39.3 zrušena přes `cancelSubmission`).**
 - **v3.39.0** - **Historie ze serveru (Task 13 plánu)**: klient bere historii z `GET /chat/history`, `ChatStore` drží data, DOM okno 300 uzlů s parkováním odpojených uzlů nad/pod oknem (scroll oběma směry bez re-renderu), starší stránky přes kurzor. Smazáno: `_msgCache` + storage cache, `_loadCachedMessages`, `_hydrateOlderMessages`, `_trim`, per-channel dedup LRU, content-key dedup, import z Twitch tabu (`TW_HISTORY`). Audit ingestu na Stérově streamu PASS (Twitch 84/84, p95 733 ms; YT 7/7, p95 4,9 s).
 - **v3.38.81** - **Ruční přepínání streamera**: primární Rob, whitelist Rob + TenSterakdary, start podle aktivního tabu, jinak tlačítko „Přepnout chat na …" nad chatem. Root cause míchání chatů/emotů: re-entry auto-switche z 3s detekce rušila rozdělané přepnutí.
 - **v3.38.78–80** - DIAG `msgCacheIds` pro audit, čas z platformy v providerech, `ChatStore` + testy (`scripts/test-chat-store.js`, `test-provider-timestamps.js`).
