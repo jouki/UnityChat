@@ -13,7 +13,10 @@ UnityChat/
 │   ├── background.js           # Service worker s runtime feature-detection
 │   ├── sidepanel.html          # UI
 │   ├── sidepanel.css           # Dark theme styling
-│   ├── sidepanel.js            # ~3000 řádků - UI/messaging logika
+│   ├── sidepanel.js            # ~6500 řádků - UI/messaging logika (klasický skript, defer)
+│   ├── core-bridge.js          # module script: importuje core/ a vystaví window.UC_CORE
+│   ├── core/                   # SDÍLENÝ CORE s webovou verzí — ES moduly bez chrome.*/DOM
+│   │   └── chat-store.js       #   ChatStore (v3.39.17; další moduly přibývají po tascích plánu web v0.1)
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
@@ -194,7 +197,7 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Settings UI se refreshne když platform username dorazí asynchronně
 
 **Historie a data zpráv (v3.39+):**
-- `ChatStore` (`extension/chat-store.js`) — jediný držitel zpráv, řazení `timestamp ASC, id`; dedup jen `platform:id`
+- `ChatStore` (`extension/core/chat-store.js`, ES modul přes `core-bridge.js`) — jediný držitel zpráv, řazení `timestamp ASC, id`; dedup jen `platform:id`
 - Boot: `GET /chat/history?channel&limit=100` → každá zpráva přes `_addMessage` (dedup ve store, render, sběr barev/jmen) → scroll dolů
 - Scroll nahoru: nejdřív zaparkované uzly (`_parkedTop`), pak `before=<cursor>` po 100 (`_extendUp`); DOM nad 300 uzlů se ořezává do parku (`_unloadTop/_unloadBottom`), „N nových" = `_jumpToLatest`
 - Timestamp = čas platformy (`tmi-sent-ts`, `created_at`, `timestampUsec`); optimistická zpráva má `Date.now()` do echa (`_optimisticKeys` → `store.upgrade`)

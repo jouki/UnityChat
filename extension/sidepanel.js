@@ -2483,7 +2483,7 @@ class UnityChat {
     this.autoScroll = true;
     this.filters = { twitch: true, youtube: true, kick: true };
     this.activePlatform = null;
-    // Jediný držitel dat zpráv (extension/chat-store.js). Historie jde ze
+    // Jediný držitel dat zpráv (extension/core/chat-store.js přes core-bridge). Historie jde ze
     // serveru (/chat/history), lokální cache i scrape zmizely ve v3.39.
     this.store = new ChatStore();
     // DOM okno: v chatu je naživo max ~300 uzlů. Co vypadne nahoře/dole, se
