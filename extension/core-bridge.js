@@ -13,7 +13,9 @@ import * as colors from './core/colors.js';
 import * as html from './core/html.js';
 import { makeLog } from './core/log.js';
 import { TwitchProvider } from './core/twitch-irc.js';
+import { KickProvider } from './core/kick.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider });
 window.TwitchProvider = TwitchProvider;
+window.KickProvider = KickProvider;
 window.ChatStore = ChatStore; // zpětná kompatibilita: sidepanel.js dělá `new ChatStore()`
