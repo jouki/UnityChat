@@ -11,6 +11,9 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
+import { publishChat, chatStreamClientCount, disconnectAllChatStreams } from './sse/chatBus.js';
+import { toClientMessage } from './routes/chat.js';
+import { toRow } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
 
@@ -40,23 +43,26 @@ const ingest = createIngest({
   channels: parseIngestChannels(config.CHAT_INGEST_CHANNELS),
   retentionDays: config.CHAT_RETENTION_DAYS,
   log: app.log,
+  // GET /chat/stream: rozeslat hned po přijetí (před DB dávkou), stejný tvar jako /chat/history.
+  onLive: (m) => { publishChat(m.channel, m.platform, toClientMessage(toRow(m), false)); },
 });
 app.addHook('onReady', async () => { ingest.start(); });
 app.addHook('onClose', async () => { await ingest.stop(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
-  version: '0.3.0',
+  version: '0.4.0',
   docs: '/health',
 }));
 
 app.get('/health', async () => ({
   ok: true,
   service: 'unitychat-backend',
-  version: '0.3.0',
+  version: '0.4.0',
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
+  chatStreamClients: chatStreamClientCount(),
   // Diagnostika: bez klice vraci /store/status 503 a landing page nezobrazi
   // radek o verzi cekajici na schvaleni. Snazsi zjistit odsud nez z kontejneru.
   cwsConfigured: cwsConfigured(),
@@ -88,6 +94,7 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info(`${signal} received, shutting down gracefully`);
   try {
     disconnectSSE();
+  disconnectAllChatStreams();
     await app.close();
     await closeDb();
     process.exit(0);

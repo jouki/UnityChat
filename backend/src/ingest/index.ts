@@ -24,6 +24,12 @@ interface CreateOpts {
   listenerFactory?: (c: IngestChannel, onMessage: (m: IngestMessage) => void) => IngestListener;
   flushMs?: number;
   retentionMs?: number;
+  /**
+   * Živé rozesílání (GET /chat/stream): volá se synchronně pro každou přijatou
+   * zprávu PŘED zařazením do dávky, aby SSE nečekalo na flush. Chyba se
+   * zaloguje a ingest jede dál.
+   */
+  onLive?: (m: IngestMessage) => void;
 }
 
 function defaultFactory(log: Logger) {
@@ -75,6 +81,9 @@ export function createIngest(opts: CreateOpts) {
 
   const onMessage = (m: IngestMessage) => {
     lastAt = !lastAt || m.sentAt > lastAt ? m.sentAt : lastAt;
+    if (opts.onLive) {
+      try { opts.onLive(m); } catch (err) { opts.log.error({ err }, 'chat ingest: onLive selhal'); }
+    }
     queue.push(m);
     if (queue.length >= 50) { void flush(); return; }
     if (!flushTimer) flushTimer = setTimeout(() => void flush(), flushMs);

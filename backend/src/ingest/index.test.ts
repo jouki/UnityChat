@@ -70,3 +70,30 @@ test('createIngest: retentionDays=0 → deleteOld se nikdy nevolá', async () =>
   await ing.stop();
   assert.equal(calls, 0);
 });
+
+test('createIngest: onLive dostane zprávu synchronně před flushem, chyba v něm ingest nezastaví', async () => {
+  const live: string[] = [];
+  const batches: number[] = [];
+  let emit: ((m: IngestMessage) => void) | null = null;
+  const fakeListener: IngestListener = { start() {}, stop() {}, status: () => 'connected', lastMessageAt: () => null };
+  let calls = 0;
+  const ing = createIngest({
+    channels: [{ platform: 'twitch', channel: 'c' }],
+    retentionDays: 0,
+    log: silent,
+    flushMs: 10,
+    insert: async (rows) => { batches.push(rows.length); return rows.length; },
+    deleteOld: async () => 0,
+    listenerFactory: (_c, onMessage) => { emit = onMessage; return fakeListener; },
+    onLive: (m) => { calls++; if (calls === 2) throw new Error('boom'); live.push(m.platformMessageId); },
+  });
+  ing.start();
+  emit!(msg('a'));
+  assert.deepEqual(live, ['a'], 'onLive proběhl hned, bez čekání na flush');
+  assert.deepEqual(batches, [], 'DB flush ještě neproběhl');
+  emit!(msg('b')); // onLive hodí — nesmí shodit ingest
+  emit!(msg('c'));
+  assert.deepEqual(live, ['a', 'c']);
+  await ing.stop();
+  assert.deepEqual(batches, [3], 'všechny tři zprávy došly do DB dávky');
+});

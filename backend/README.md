@@ -38,6 +38,7 @@ npm run dev        # starts server on :3000 with hot reload
 - `GET /streamers/lookup`, streamer OAuth routes (`/streamers/oauth/*`)
 - `GET /store/status` — Chrome Web Store item status (cached 10 min)
 - `GET /chat/history` — chat history for the extension (see below)
+- `GET /chat/stream` — live messages from the ingest as SSE (web version; see below)
 
 ### Chat ingest + `GET /chat/history`
 
@@ -83,3 +84,20 @@ npm run db:studio    # visual DB browser
 ## Deployment
 
 Deployed to Coolify as a single Docker application built from this directory's `Dockerfile`. Coolify injects `DATABASE_URL` as an env variable (points to the Coolify-managed `unitychat-db` Postgres instance on the same Docker network).
+
+### `GET /chat/stream` (v0.4.0)
+
+```
+GET /chat/stream?channel=robdiesalot[&platforms=twitch,kick,youtube]
+```
+
+Server-Sent Events. `channel` is the Twitch login; Kick/YouTube names are
+resolved through the `streamers` directory exactly like `/chat/history`.
+`platforms` defaults to all three.
+
+- `event: hello` — `{channels, platforms}` right after connecting
+- `event: message` — same shape as a `/chat/history` item, with `historical: false`;
+  emitted by the ingest **before** the batched DB insert (no flush delay)
+- `: keepalive` comment every 15 s
+- no replay on reconnect — the client reconciles through `/chat/history`
+- max 5 concurrent streams per IP (429 otherwise)

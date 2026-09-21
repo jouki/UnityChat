@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
+import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -27,11 +28,19 @@ export interface ClientMessage {
   kickContent?: string;
   ytRuns?: unknown[];
   superChat?: boolean;
-  historical: true;
+  /** true = z /chat/history (DB), false = živě z /chat/stream (ingest, před zápisem). */
+  historical: boolean;
 }
 
-/** Řádek z DB → tvar, který panel dostává od providerů (renderer má jednu cestu). */
-export function toClientMessage(row: Message): ClientMessage {
+/** Pole, která mapování potřebuje — DB řádek (Message) i čerstvý řádek z ingestu (toRow) je mají. */
+export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platformUserId' | 'platformUsername' | 'content' | 'sentAt'> & {
+  contentRaw?: unknown;
+  isReply?: boolean | null;
+  replyToMessageId?: string | null;
+};
+
+/** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
+export function toClientMessage(row: ClientRow, historical = true): ClientMessage {
   const raw = (row.contentRaw || {}) as Record<string, unknown>;
   const base = {
     platform: row.platform,
@@ -40,7 +49,7 @@ export function toClientMessage(row: Message): ClientMessage {
     userId: row.platformUserId,
     message: row.content,
     timestamp: row.sentAt.getTime(),
-    historical: true as const,
+    historical,
   };
   if (row.platform === 'twitch') {
     return {
@@ -98,27 +107,65 @@ export class RateLimiter {
   }
 }
 
+const CHANNEL_RE = /^[a-z0-9_]{1,40}$/;
+const PLATFORMS = ['twitch', 'kick', 'youtube'] as const;
+const MAX_STREAMS_PER_IP = 5;
+
+/**
+ * Kanál je Twitch login; YouTube/Kick jména podle streamers directory.
+ * Když mapování chybí, vrací se jen jméno samotné (zprávy uložené pod ním).
+ */
+export async function resolveChannels(channel: string): Promise<string[]> {
+  const dir = await db
+    .select({ yt: streamers.youtubeHandle, kick: streamers.kickSlug })
+    .from(streamers)
+    .where(eq(streamers.twitchLogin, channel))
+    .limit(1);
+  return [...new Set([channel, dir[0]?.yt?.toLowerCase(), dir[0]?.kick?.toLowerCase()].filter((c): c is string => !!c))];
+}
+
 export default async function chatRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 10);
+
+  // Živé zprávy z ingestu (spec web verze §3.3): SSE, event `message` = stejný
+  // tvar jako /chat/history s historical:false; `hello` po připojení;
+  // keepalive komentář každých 15 s. Bez replay — klient po reconnectu
+  // dorovná přes /chat/history.
+  app.get<{ Querystring: { channel?: string; platforms?: string } }>('/chat/stream', async (req, reply) => {
+    const channel = (req.query.channel || '').trim().toLowerCase();
+    if (!CHANNEL_RE.test(channel)) { reply.code(400); return { ok: false, error: 'channel' }; }
+    const wanted = (req.query.platforms || PLATFORMS.join(','))
+      .split(',').map((p) => p.trim().toLowerCase()).filter((p): p is typeof PLATFORMS[number] => (PLATFORMS as readonly string[]).includes(p));
+    if (!wanted.length) { reply.code(400); return { ok: false, error: 'platforms' }; }
+    if (chatStreamClientsForIp(req.ip) >= MAX_STREAMS_PER_IP) { reply.code(429); return { ok: false, error: 'too many streams' }; }
+
+    const channels = await resolveChannels(channel);
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',
+    });
+    const unsubscribe = subscribeChatStream(reply, { ip: req.ip, channels, platforms: wanted });
+    req.raw.on('close', unsubscribe);
+    return undefined; // hijacknuto — odpověď drží SSE, Fastify nic neposílá
+  });
 
   app.get<{ Querystring: { channel?: string; limit?: string; before?: string } }>('/chat/history', async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
     if (!limiter.allow(req.ip)) { reply.code(429); return { ok: false, error: 'too many requests' }; }
 
     const channel = (req.query.channel || '').trim().toLowerCase();
-    if (!/^[a-z0-9_]{1,40}$/.test(channel)) { reply.code(400); return { ok: false, error: 'channel' }; }
+    if (!CHANNEL_RE.test(channel)) { reply.code(400); return { ok: false, error: 'channel' }; }
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || '100', 10) || 100));
     const cursor = req.query.before ? decodeCursor(req.query.before) : null;
     if (req.query.before && !cursor) { reply.code(400); return { ok: false, error: 'before' }; }
 
-    // Kanál je Twitch login; YouTube/Kick jména podle streamers directory.
-    // Když mapování chybí, vrací se jen zprávy uložené pod stejným jménem.
-    const dir = await db
-      .select({ yt: streamers.youtubeHandle, kick: streamers.kickSlug })
-      .from(streamers)
-      .where(eq(streamers.twitchLogin, channel))
-      .limit(1);
-    const channels = [...new Set([channel, dir[0]?.yt?.toLowerCase(), dir[0]?.kick?.toLowerCase()].filter((c): c is string => !!c))];
+    const channels = await resolveChannels(channel);
 
     const conds = [inArray(messages.channel, channels)];
     if (cursor) {
@@ -137,7 +184,7 @@ export default async function chatRoutes(app: FastifyInstance) {
     const oldest = page[page.length - 1];
     return {
       ok: true,
-      messages: page.reverse().map(toClientMessage),
+      messages: page.reverse().map((r) => toClientMessage(r)),
       nextBefore: hasMore && oldest ? encodeCursor(oldest.sentAt.getTime(), oldest.id) : null,
     };
   });

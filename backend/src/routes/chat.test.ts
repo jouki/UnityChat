@@ -40,3 +40,11 @@ test('RateLimiter: 10 tokenů, doplňuje 10/s', () => {
   assert.equal(rl.allow('ip'), false);
   assert.equal(rl.allow('other'), true);
 });
+
+test('toClientMessage: historical=false pro živé zprávy z ingestu (řádek bez id)', () => {
+  const { id: _id, createdAt: _c, userId: _u, ...fresh } = base;
+  const c = toClientMessage(fresh, false);
+  assert.equal(c.historical, false);
+  assert.equal(c.id, 'abc');
+  assert.equal(c.timestamp, 1789820014396);
+});
