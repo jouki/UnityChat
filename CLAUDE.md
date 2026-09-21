@@ -790,6 +790,7 @@ Detaily + příklady (správně vs špatně z v3.38.x): viz `memory/feedback_no_
 4. **`memory/feedback_release_workflow.md`** — commit+push default, branch policy
 5. **`memory/checkpoint_v3_38_26_pin_stable.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s pin bannerem
 6. **`memory/security_streamer_tokens.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s OAuth tokens / streamer auth
+7. **`docs/handoff/2026-09-21-web-version-handoff.md`** ⚠️ — POVINNÉ pokud jde o **webovou verzi UnityChatu** (robdiesalot.com): závazná rozhodnutí (web žije v tomto repu, žádná branch `UnityChatWeb`, **pravidlo portování addon ↔ web**), ověřená fakta o providerech/backendu a otevřené otázky pro brainstorming
 
 ### Workflow loop (typická iterace)
 
