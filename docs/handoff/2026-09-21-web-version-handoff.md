@@ -4,6 +4,17 @@
 > Účel: nová session v UnityChat začíná odsud, nic z toho níže nemusí znovu zjišťovat.
 > Nic v tomto souboru není implementované. Je to výchozí stav pro brainstorming a spec.
 
+> **Aktualizace 2026-09-21 večer (brainstorming v UnityChat session, schváleno userem):**
+> §2 „kde web žije" se mění — web žije v **privátním repu `jouki/UnityChat-web`**
+> (mirror kopie tohoto repa + složka `web/`, upstream = tento repo, automatický
+> merge `upstream/dev → main` každých 15 min). Důvod: kód webu / robdiesalot.com
+> nemá být veřejný; GitHub fork veřejného repa privátní být nemůže, proto mirror.
+> Sdílený kód (`extension/`, `extension/core/`, `backend/`) se dál mění **jen tady**.
+> Ostatní rozhodnutí (stack Vite + vanilla, live zprávy jako addon + YouTube přes
+> backend SSE, OAuth na 3 platformy + výběr platformy u inputu, port policy
+> „ptát se před implementací", deploy FTP na sdílený hosting robdiesalot.com)
+> jsou ve specu **v privátním repu**: `UnityChat-web/docs/superpowers/specs/2026-09-21-web-version-design.md`.
+
 ## 1. Co user chce
 
 - **Experimentální stránka**, zatím u sebe, později přímo na **robdiesalot.com**.

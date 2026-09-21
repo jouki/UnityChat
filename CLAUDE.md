@@ -481,6 +481,27 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
 - `MutationObserver` na `document.body` re-injektuje button po Twitch chat remountech (změna kanálu, 7TV rerender)
 - Selektory pro chat header: `.stream-chat-header`, `[data-a-target="stream-chat-header"]`, `.chat-room__header`, `.chat-shell__header`, `.chat-header` + fallback přes parent collapse toggle buttonu
 
+## Web verze (robdiesalot.com) — privátní repo `jouki/UnityChat-web`
+
+> Rozhodnuto 2026-09-21. Web verze UnityChatu **není v tomto repu**. Žije
+> v privátním repu `jouki/UnityChat-web`, které je **mirror kopie tohoto repa
+> + složka `web/`** (Vite + vanilla JS). Upstream = tento repo; GitHub Action
+> tam každých 15 min merguje `dev → main`. Lokální klon: `D:\_BACKUP_2.0\Code Projects\UnityChat-web`.
+
+**Pravidla, která platí tady:**
+- **Sdílený kód se mění jen v tomto repu**: `extension/`, `extension/core/`
+  (ES moduly bez `chrome.*`/DOM, sdílené s webem), `backend/` (včetně
+  endpointů pro web: `/chat/stream` SSE, `/auth/*`, `/chat/send`). V privátním
+  repu se sdílené soubory needitují — merge by konfliktoval.
+- **Pravidlo portování (user 2026-09-21):** obecná funkcionalita implementovaná
+  pro addon nebo web jde do sdíleného core, nebo se **před implementací** user
+  zeptá, zda ji chce i ve druhé variantě (core / jen web / jen addon / oboje).
+  Nikdy tiše nechat jednu variantu pozadu. Přihlášení uživatele + výběr
+  platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
+- Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
+  změny core/backendu a tenhle pointer. Deploy webu = FTP na sdílený hosting
+  robdiesalot.com (credentials v `SERVER.md`), backend zůstává na api.jouki.cz.
+
 ## Landing page (jouki.cz/UnityChat)
 
 > ⚠️ **DŮLEŽITÉ — web žije v SAMOSTATNÉM repu.** Landing/web jouki.cz **NENÍ** v tomto
@@ -790,7 +811,7 @@ Detaily + příklady (správně vs špatně z v3.38.x): viz `memory/feedback_no_
 4. **`memory/feedback_release_workflow.md`** — commit+push default, branch policy
 5. **`memory/checkpoint_v3_38_26_pin_stable.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s pin bannerem
 6. **`memory/security_streamer_tokens.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s OAuth tokens / streamer auth
-7. **`docs/handoff/2026-09-21-web-version-handoff.md`** ⚠️ — POVINNÉ pokud jde o **webovou verzi UnityChatu** (robdiesalot.com): závazná rozhodnutí (web žije v tomto repu, žádná branch `UnityChatWeb`, **pravidlo portování addon ↔ web**), ověřená fakta o providerech/backendu a otevřené otázky pro brainstorming
+7. **`docs/handoff/2026-09-21-web-version-handoff.md`** ⚠️ — POVINNÉ pokud jde o **webovou verzi UnityChatu** (robdiesalot.com): závazná rozhodnutí (**web žije v privátním repu `jouki/UnityChat-web`**, viz sekce „Web verze" níže; **pravidlo portování addon ↔ web**), ověřená fakta o providerech/backendu; spec je v privátním repu
 
 ### Workflow loop (typická iterace)
 
