@@ -40,6 +40,12 @@ const EnvSchema = z.object({
   // Web verze: originy, na které smí OAuth callback vrátit uživatele (#uc_code)
   // a které dostanou CORS pro /auth/* + /chat/send. Čárkou oddělené.
   WEB_ORIGINS: z.string().default('https://robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
+  // Židolišta (RobJewsALot server): chat commandy streamera pro našeptávání „!".
+  // Klíč = env INTEGRATION_API_KEYS na straně Židolišty; NIKDY v gitu. Prázdný
+  // klíč = GET /commands vrací prázdný seznam. Mapování kanál → workspace slug.
+  ZIDOLISTA_API_BASE: z.string().url().default('https://api-zidolista.jouki.cz'),
+  ZIDOLISTA_API_KEY: z.string().default(''),
+  ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
 });
 
 export const config = EnvSchema.parse(process.env);

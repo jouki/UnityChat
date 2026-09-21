@@ -103,3 +103,14 @@ resolved through the `streamers` directory exactly like `/chat/history`.
 - `: keepalive` comment every 15 s
 - no replay on reconnect — the client reconciles through `/chat/history`
 - max 5 concurrent streams per IP (429 otherwise)
+
+### `GET /commands?channel=<twitch login>` (v0.5.1)
+
+Chat commandy streamera pro našeptávání „!" v panelu i na webu — ze Židolišty
+(RobJewsALot server `GET /integrations/:slug/chat-commands`, hlavička `X-Api-Key`).
+Klíč zůstává na serveru (`ZIDOLISTA_API_KEY`), kanál → workspace přes
+`ZIDOLISTA_WORKSPACES` (`robdiesalot=rob`). Odpověď `{ ok, channel, sources,
+commands[{ name, trigger, triggers[], roles[], cooldownSeconds, source }] }`,
+regex spouštěče se převádí na literál (`!topd ?reset` → `!topd reset`), cache 60 s,
+při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
+
