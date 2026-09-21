@@ -21,6 +21,10 @@ import { createIngest } from './ingest/index.js';
 const startedAt = Date.now();
 
 const app = Fastify({
+  // Za Coolify/Traefik: bez trustProxy je req.ip = IP proxy (10.0.1.2) pro
+  // všechny klienty → per-IP limity (/chat/stream, /chat/history) platily
+  // globálně (2026-09-21: 5 streamů = 429 pro celý web).
+  trustProxy: true,
   logger: {
     level: config.LOG_LEVEL,
     ...(config.NODE_ENV === 'development' && {

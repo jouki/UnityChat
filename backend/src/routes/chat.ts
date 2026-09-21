@@ -109,7 +109,7 @@ export class RateLimiter {
 
 const CHANNEL_RE = /^[a-z0-9_]{1,40}$/;
 const PLATFORMS = ['twitch', 'kick', 'youtube'] as const;
-const MAX_STREAMS_PER_IP = 5;
+const MAX_STREAMS_PER_IP = 10; // domácnost za NAT, víc tabů
 
 /**
  * Kanál je Twitch login; YouTube/Kick jména podle streamers directory.
