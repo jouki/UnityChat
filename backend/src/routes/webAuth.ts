@@ -192,6 +192,36 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     }
   });
 
+  // ---- je streamer live? (web: tečky ve filtrech) ----
+  // Twitch přes IVR (veřejné, `stream` != null), Kick přes channels API
+  // (`livestream` != null), YouTube = ingest listener má videoId živého streamu.
+  // Cache 30 s per kanál, ať se veřejná API nemlátí za každého návštěvníka.
+  const liveCache = new Map<string, { at: number; value: Record<string, boolean> }>();
+  app.get<{ Querystring: { channel?: string } }>('/chat/live', async (req, reply) => {
+    reply.header('Cache-Control', 'public, max-age=20');
+    const channel = (req.query.channel || DEFAULT_CHANNEL).trim().toLowerCase();
+    if (!/^[a-z0-9_]{1,40}$/.test(channel)) { reply.code(400); return { ok: false, error: 'channel' }; }
+    const hit = liveCache.get(channel);
+    if (hit && Date.now() - hit.at < 30_000) return { ok: true, channel, cached: true, ...hit.value };
+    const dir = await db
+      .select({ kickSlug: streamers.kickSlug, youtubeHandle: streamers.youtubeHandle })
+      .from(streamers).where(eq(streamers.twitchLogin, channel)).limit(1);
+    const kickSlug = dir[0]?.kickSlug || channel;
+    const ytHandle = dir[0]?.youtubeHandle || channel;
+    const [tw, ki] = await Promise.all([
+      fetch(`https://api.ivr.fi/v2/twitch/user?login=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(6000) })
+        .then(async (r) => { if (!r.ok) return false; const d = await r.json() as Array<{ stream?: unknown }> | { stream?: unknown }; const u = Array.isArray(d) ? d[0] : d; return !!u?.stream; })
+        .catch(() => false),
+      fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(kickSlug)}`, { headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 UnityChat' }, signal: AbortSignal.timeout(6000) })
+        .then(async (r) => { if (!r.ok) return false; const d = await r.json() as { livestream?: unknown }; return !!d?.livestream; })
+        .catch(() => false),
+    ]);
+    const yt = !!opts.ingest?.videoIdFor('youtube', ytHandle);
+    const value = { twitch: tw, kick: ki, youtube: yt };
+    liveCache.set(channel, { at: Date.now(), value });
+    return { ok: true, channel, cached: false, ...value };
+  });
+
   app.get('/auth/config', async () => ({
     ok: true,
     platforms: { twitch: twitch.twitchConfigured(), youtube: youtube.youtubeConfigured(), kick: kick.kickConfigured() },
