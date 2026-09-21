@@ -9,6 +9,9 @@
 // Core = kód sdílený s webovou verzí (privátní repo jouki/UnityChat-web):
 // žádné chrome.*, žádný DOM, logování přes injektovaný log(tag, text).
 import { ChatStore } from './core/chat-store.js';
+import * as colors from './core/colors.js';
+import * as html from './core/html.js';
+import { makeLog } from './core/log.js';
 
-window.UC_CORE = Object.freeze({ ChatStore });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog });
 window.ChatStore = ChatStore; // zpětná kompatibilita: sidepanel.js dělá `new ChatStore()`
