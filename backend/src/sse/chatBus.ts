@@ -49,20 +49,33 @@ export function subscribeChatStream(reply: FastifyReply, opts: { ip: string; cha
   clients.add(client);
   safeWrite(client, formatEvent('hello', { channels: [...client.channels], platforms: [...client.platforms] }));
 
-  if (!keepaliveTimer) {
-    keepaliveTimer = setInterval(() => {
-      for (const c of clients) safeWrite(c, ': keepalive\n\n');
-    }, KEEPALIVE_MS);
-    keepaliveTimer.unref?.();
-  }
-
-  return () => {
+  const unsubscribe = () => {
     clients.delete(client);
     if (clients.size === 0 && keepaliveTimer) {
       clearInterval(keepaliveTimer);
       keepaliveTimer = null;
     }
   };
+  // Odpojení klienta za proxy (Traefik) nepřijde vždy jako 'close' na requestu —
+  // raw.write() na mrtvý socket nehází, jen emituje 'error'/'close' na response.
+  // Bez tohohle klienti „zůstávali" (2026-09-21: 5 leaknutých → 429 pro celou IP).
+  const raw = reply.raw as unknown as NodeJS.EventEmitter & { destroyed?: boolean; writableEnded?: boolean };
+  raw.on?.('close', unsubscribe);
+  raw.on?.('error', unsubscribe);
+
+  if (!keepaliveTimer) {
+    keepaliveTimer = setInterval(() => {
+      for (const c of clients) {
+        const r = c.reply.raw as unknown as { destroyed?: boolean; writableEnded?: boolean; socket?: { destroyed?: boolean } | null };
+        if (r.destroyed || r.writableEnded || !r.socket || r.socket.destroyed) { clients.delete(c); continue; }
+        safeWrite(c, ': keepalive\n\n');
+      }
+      if (clients.size === 0 && keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+    }, KEEPALIVE_MS);
+    keepaliveTimer.unref?.();
+  }
+
+  return unsubscribe;
 }
 
 /** Doručí zprávu klientům, které odebírají daný kanál + platformu. Vrací počet doručení. */
