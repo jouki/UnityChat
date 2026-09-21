@@ -509,7 +509,14 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
   platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
 - Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
   změny core/backendu a tenhle pointer. Backend zůstává na api.jouki.cz.
-- **Stav 2026-09-21: web v0.1 (read-only) běží na https://robdiesalot.com/chat/**
+- **Stav 2026-09-21 večer: web v0.2 (přihlášení + posílání) běží na https://robdiesalot.com/chat/**
+  — badge u inputu + šipka = menu Twitch / Kick / YouTube (Přihlásit / přepnout /
+  Odhlásit), zprávy přes `POST /chat/send`, optimistická zpráva + echo.
+  **Ověřeno bez reálného loginu** (flow končí na `auth.twitch.tv` se správnými
+  scopes; user musí projít přihlášení sám). Známé podmínky: Kick dev app musí
+  mít povolený scope `chat:write`; Google consent screen musí mít
+  `youtube.force-ssl` (citlivý → do verifikace jen test users).
+- v0.1 (read-only) běžel od 2026-09-21 odpoledne na https://robdiesalot.com/chat/
   (kořen domény = WordPress Roba, nesahat). Deploy je **z PC**:
   `cd UnityChat-web/web && npm run deploy` (build + `scripts/deploy-ftp.mjs`,
   heslo z `SERVER.md`). Hosting profiwh.com pouští FTP login **jen z českých
@@ -604,7 +611,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.4.0)
+## Backend (v0.5.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -640,6 +647,20 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   `historical:false`, emitované PŘED dávkovým zápisem do DB), keepalive 15 s,
   bez replay (klient dorovná přes `/chat/history`), max 5 streamů/IP.
   Implementace `sse/chatBus.ts` + hook `onLive` v `ingest/index.ts`.
+- **Web přihlášení + posílání (v0.5.0, `routes/webAuth.ts`, `lib/webAuth.ts`, `lib/webSend.ts`):**
+  `POST /auth/:platform/start {returnTo}` (state `kind:'web'`, returnTo jen z
+  `WEB_ORIGINS`; Bearer = napojení další platformy na účet) → OAuth callbacky
+  **sdílené se streamer flow** (`/streamers/oauth/:platform/callback`, větvení
+  podle `kind` ve state, stejné redirect URI u providerů) → 302 na web
+  `#uc_code=…` → `POST /auth/exchange {code}` → Bearer session (SHA-256 hash v
+  `web_sessions`, 30 dní klouzavě). `GET /auth/me`, `POST /auth/logout`,
+  `DELETE /auth/:platform`, `GET /auth/config`. `POST /chat/send {platform,
+  text, replyTo?, channel?}`: Twitch Helix `chat/messages` (`user:write:chat`),
+  Kick public API `/chat` (`chat:write`), YouTube `liveChatMessages.insert`
+  (`youtube.force-ssl`, liveChatId z videoId ingestu → jen když stream běží);
+  refresh tokenů, UC marker (ne na `!`/`/`), rate limit 5 + 1/s per účet.
+  Tokeny v `web_identities` šifrované jako `streamer_tokens` (NIKDY z API).
+  Tabulky vytvořeny ručně SQL 2026-09-21 (drizzle-kit push přes tunel padal na ECONNRESET).
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,

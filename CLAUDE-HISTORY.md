@@ -145,6 +145,7 @@ Záznamy změn, které nejsou vázané na source code commit (memory restruktura
 
 Formát: `YYYY-MM-DD [autor/session] — popis`
 
+- **2026-09-21 večer** — CLAUDE.md: backend 0.5.0 (web auth + /chat/send), sekce „Web verze" stav v0.2; backend README endpointy; memory `project_web_version.md` (v0.2 live, podmínky Kick scope / Google verifikace, co ověřit).
 - **2026-09-21** — CLAUDE.md: struktura `extension/core/` (7 modulů), milestones 3.39.9–21, backend 0.4.0 `/chat/stream`, sekce „Web verze" doplněna o stav v0.1 (live na robdiesalot.com/chat/, deploy z PC kvůli geo-blokaci FTP, bridge mechanismus). Memory checkpoint + `project_web_version.md`.
 - **2026-09-21** — **Web verze: rozhodnuto privátní repo `jouki/UnityChat-web`** (mirror + `web/`, sync action). Handoff dostal addendum (§2 nahrazeno), CLAUDE.md novou sekci „Web verze" + upravený bod 7, memory `feedback_web_port_rule.md` aktualizována. Spec je v privátním repu (`docs/superpowers/specs/2026-09-21-web-version-design.md`), sem jen pointer. Credentials hostingu robdiesalot.com v `SERVER.md`.
 - **2026-09-21** — memory `feedback_web_port_rule.md` (+ řádek v MEMORY.md): pravidlo portování addon ↔ web a umístění web verze v tomto repu, aby platilo i mimo handoff dokument.

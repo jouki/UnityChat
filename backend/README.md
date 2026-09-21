@@ -39,6 +39,8 @@ npm run dev        # starts server on :3000 with hot reload
 - `GET /store/status` — Chrome Web Store item status (cached 10 min)
 - `GET /chat/history` — chat history for the extension (see below)
 - `GET /chat/stream` — live messages from the ingest as SSE (web version; see below)
+- `POST /auth/:platform/start`, `POST /auth/exchange`, `GET /auth/me`, `POST /auth/logout`, `DELETE /auth/:platform`, `GET /auth/config` — web version login (v0.5.0, Bearer sessions; OAuth callbacks shared with `/streamers/oauth/*`)
+- `POST /chat/send` — send a chat message with the logged-in user's token (Twitch Helix / Kick public API / YouTube liveChatMessages)
 
 ### Chat ingest + `GET /chat/history`
 
