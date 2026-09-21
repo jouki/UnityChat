@@ -678,6 +678,15 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   refresh tokenů, UC marker (ne na `!`/`/`), rate limit 5 + 1/s per účet.
   Tokeny v `web_identities` šifrované jako `streamer_tokens` (NIKDY z API).
   Tabulky vytvořeny ručně SQL 2026-09-21 (drizzle-kit push přes tunel padal na ECONNRESET).
+- `GET /commands?channel=<twitch login>` — **chat commandy ze Židolišty** (RobJewsALot
+  server `GET /integrations/:slug/chat-commands`, hlavička `X-Api-Key`) pro našeptávání
+  „!" v panelu a na webu. Klíč jen na serveru (`ZIDOLISTA_API_KEY` = `INTEGRATION_API_KEYS`
+  Židolišty, oba v Coolify envu, generováno 2026-09-22, nikde v gitu), kanál → workspace
+  přes `ZIDOLISTA_WORKSPACES` (`robdiesalot=rob`), regex spouštěče → literál
+  (`!topd ?reset` → `!topd reset`), role (`allowRoles`) klient filtruje podle vlastního
+  badge, cache 60 s, při výpadku poslední stav (`stale`). Židolišta zná jen commandy ze
+  své stránky Commandy (dnes jen „Reset Top D"); commandy ze Streamer.botu (COMMANDS.md)
+  by musel publikovat WebBridge — zatím ne (viz memory `project_web_version`).
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
