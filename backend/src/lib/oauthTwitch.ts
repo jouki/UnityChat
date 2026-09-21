@@ -10,17 +10,19 @@ const USER_URL = 'https://api.twitch.tv/helix/users';
 // Minimal scope — just identify the user. No moderation / chat write here;
 // those can be requested separately if future features need them.
 const SCOPES = ['user:read:email'] as const;
+// Web verze: posílání zpráv jako uživatel (Helix POST /chat/messages).
+export const WEB_SCOPES = ['user:read:email', 'user:write:chat'] as const;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/twitch/callback`;
 }
 
-export function buildAuthorizeUrl(state: string): string {
+export function buildAuthorizeUrl(state: string, scopes: readonly string[] = SCOPES): string {
   const params = new URLSearchParams({
     client_id: config.TWITCH_CLIENT_ID,
     redirect_uri: redirectUri(),
     response_type: 'code',
-    scope: SCOPES.join(' '),
+    scope: scopes.join(' '),
     state,
     force_verify: 'true',
   });
@@ -52,6 +54,18 @@ export async function exchangeCode(code: string): Promise<TwitchTokenResponse> {
     // Do NOT include body in error if it could contain token fragments.
     throw new Error(`Twitch token exchange failed: ${resp.status}`);
   }
+  return (await resp.json()) as TwitchTokenResponse;
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<TwitchTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.TWITCH_CLIENT_ID,
+    client_secret: config.TWITCH_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+  const resp = await fetch(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+  if (!resp.ok) throw new Error(`Twitch token refresh failed: ${resp.status}`);
   return (await resp.json()) as TwitchTokenResponse;
 }
 

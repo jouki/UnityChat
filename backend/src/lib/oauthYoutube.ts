@@ -13,17 +13,20 @@ const CHANNELS_URL = 'https://www.googleapis.com/youtube/v3/channels';
 const SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
 ] as const;
+// Web verze: liveChatMessages.insert vyžaduje youtube.force-ssl (citlivý scope
+// → Google verifikace; do schválení jen test users v consent screenu).
+export const WEB_SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl'] as const;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/youtube/callback`;
 }
 
-export function buildAuthorizeUrl(state: string): string {
+export function buildAuthorizeUrl(state: string, scopes: readonly string[] = SCOPES): string {
   const params = new URLSearchParams({
     client_id: config.GOOGLE_CLIENT_ID,
     redirect_uri: redirectUri(),
     response_type: 'code',
-    scope: SCOPES.join(' '),
+    scope: scopes.join(' '),
     state,
     access_type: 'offline',   // include refresh_token
     prompt: 'consent',        // force refresh_token on repeat auths
@@ -57,6 +60,18 @@ export async function exchangeCode(code: string): Promise<GoogleTokenResponse> {
   if (!resp.ok) {
     throw new Error(`Google token exchange failed: ${resp.status}`);
   }
+  return (await resp.json()) as GoogleTokenResponse;
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<GoogleTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.GOOGLE_CLIENT_ID,
+    client_secret: config.GOOGLE_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+  const resp = await fetch(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+  if (!resp.ok) throw new Error(`Google token refresh failed: ${resp.status}`);
   return (await resp.json()) as GoogleTokenResponse;
 }
 

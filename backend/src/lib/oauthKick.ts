@@ -11,6 +11,8 @@ const USERS_URL = 'https://api.kick.com/public/v1/users';
 
 // Minimal scope — reads username + streamer ID.
 const SCOPES = ['user:read'] as const;
+// Web verze: posílání zpráv (public API POST /chat). Scope musí být povolený v Kick dev appce.
+export const WEB_SCOPES = ['user:read', 'chat:write'] as const;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/kick/callback`;
@@ -24,12 +26,12 @@ export function generatePkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-export function buildAuthorizeUrl(state: string, codeChallenge: string): string {
+export function buildAuthorizeUrl(state: string, codeChallenge: string, scopes: readonly string[] = SCOPES): string {
   const params = new URLSearchParams({
     client_id: config.KICK_CLIENT_ID,
     redirect_uri: redirectUri(),
     response_type: 'code',
-    scope: SCOPES.join(' '),
+    scope: scopes.join(' '),
     state,
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
@@ -62,6 +64,18 @@ export async function exchangeCode(code: string, codeVerifier: string): Promise<
   if (!resp.ok) {
     throw new Error(`Kick token exchange failed: ${resp.status}`);
   }
+  return (await resp.json()) as KickTokenResponse;
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<KickTokenResponse> {
+  const body = new URLSearchParams({
+    client_id: config.KICK_CLIENT_ID,
+    client_secret: config.KICK_CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+  const resp = await fetch(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+  if (!resp.ok) throw new Error(`Kick token refresh failed: ${resp.status}`);
   return (await resp.json()) as KickTokenResponse;
 }
 

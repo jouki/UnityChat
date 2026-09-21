@@ -119,6 +119,11 @@ export function createIngest(opts: CreateOpts) {
       if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null; }
       await flush();
     },
+    /** videoId živého streamu daného kanálu (jen youtube listener), jinak null. */
+    videoIdFor(platform: IngestChannel['platform'], channel: string): string | null {
+      const l = listeners.get(`${platform}:${channel.toLowerCase()}`);
+      return l?.currentVideoId?.() ?? null;
+    },
     status(): IngestStatus {
       // Souhrn per platforma: connected, když aspoň jeden kanál běží; jinak
       // nejhorší z ostatních stavů (reconnecting > connecting > error).

@@ -63,6 +63,11 @@ interface StatePayload {
   nonce: string;
   sessionId?: string;    // optional — present when streamer is linking another platform to existing session
   codeVerifier?: string; // optional — PKCE verifier (Kick OAuth 2.1 requires)
+  // Web verze (lib/webAuth.ts): kind 'web' přepne callback na účet návštěvníka,
+  // returnTo = kam vrátit (origin z WEB_ORIGINS), webAccountId = napojení další platformy.
+  kind?: 'streamer' | 'web';
+  returnTo?: string;
+  webAccountId?: number;
   createdAt: number;
 }
 

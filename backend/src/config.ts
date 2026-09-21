@@ -37,6 +37,9 @@ const EnvSchema = z.object({
   // Retence zpráv v tabulce messages (dny). 0 = neomezeně (rozhodnutí usera
   // 2026-09-19: zprávy držet po neurčitou dobu, mazání na žádost).
   CHAT_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(0),
+  // Web verze: originy, na které smí OAuth callback vrátit uživatele (#uc_code)
+  // a které dostanou CORS pro /auth/* + /chat/send. Čárkou oddělené.
+  WEB_ORIGINS: z.string().default('https://robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
 });
 
 export const config = EnvSchema.parse(process.env);

@@ -9,6 +9,7 @@ import streamerRoutes from './routes/streamers.js';
 import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
+import webAuthRoutes from './routes/webAuth.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 import { publishChat, chatStreamClientCount, disconnectAllChatStreams } from './sse/chatBus.js';
@@ -51,14 +52,14 @@ app.addHook('onClose', async () => { await ingest.stop(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
-  version: '0.4.0',
+  version: '0.5.0',
   docs: '/health',
 }));
 
 app.get('/health', async () => ({
   ok: true,
   service: 'unitychat-backend',
-  version: '0.4.0',
+  version: '0.5.0',
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
@@ -76,6 +77,7 @@ await app.register(streamerRoutes);
 await app.register(oauthRoutes);
 await app.register(storeRoutes);
 await app.register(chatRoutes);
+await app.register(webAuthRoutes, { ingest });
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

@@ -9,6 +9,7 @@ import { encryptToken, isCryptoReady } from '../lib/crypto.js';
 import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
+import { completeWebCallback, webErrorRedirect } from './webAuth.js';
 
 const StartParams = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
 
@@ -272,6 +273,8 @@ export default async function oauthRoutes(app: FastifyInstance) {
     ) => {
       const { code, state, error, error_description } = req.query;
       if (error) {
+        const wp = state ? verifyState(decodeURIComponent(state)) : null;
+        if (wp && wp.kind === 'web') return webErrorRedirect(reply, wp.returnTo, `${platform}: ${error_description || error}`);
         reply.type('text/html');
         return errorPage(`${platform}: ${error_description || error}`);
       }
@@ -279,13 +282,18 @@ export default async function oauthRoutes(app: FastifyInstance) {
         reply.type('text/html');
         return errorPage('Chybí code nebo state parametr.');
       }
-      const unwrapped = unwrapState(state);
-      if (!unwrapped) {
+      // Web verze podepisuje state bez extension prefixu (kind:'web' v payloadu);
+      // streamer flow má "{extensionId}.{signed}".
+      const webPayload = verifyState(decodeURIComponent(state));
+      const isWeb = !!webPayload && webPayload.kind === 'web';
+      const unwrapped = isWeb ? null : unwrapState(state);
+      if (!isWeb && !unwrapped) {
         reply.type('text/html');
         return errorPage('Neplatný state parametr.');
       }
-      const payload = verifyState(unwrapped.signed);
+      const payload = isWeb ? webPayload : verifyState(unwrapped!.signed);
       if (!payload || payload.platform !== platform) {
+        if (isWeb) return webErrorRedirect(reply, webPayload?.returnTo, 'state expiroval, zkus to znovu');
         reply.type('text/html');
         return errorPage('State je neplatný nebo expiroval. Zkuste přihlášení znovu.');
       }
@@ -345,9 +353,15 @@ export default async function oauthRoutes(app: FastifyInstance) {
           };
         }
 
-        return completeCallback(req, reply, platform, unwrapped.extensionId, payload.sessionId, identity, tokens);
+        if (isWeb) {
+          return completeWebCallback(req, reply, platform, payload, {
+            platformUserId: identity.userId, login: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl,
+          }, tokens);
+        }
+        return completeCallback(req, reply, platform, unwrapped!.extensionId, payload.sessionId, identity, tokens);
       } catch (err) {
-        req.log.error({ err: (err as Error).message, platform }, 'OAuth callback failed');
+        req.log.error({ err: (err as Error).message, platform, web: isWeb }, 'OAuth callback failed');
+        if (isWeb) return webErrorRedirect(reply, payload.returnTo, `${platform}: přihlášení selhalo`);
         reply.type('text/html');
         return errorPage(`${platform}: autentizace selhala. Zkuste to znovu.`);
       }

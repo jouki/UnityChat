@@ -226,3 +226,62 @@ export type StreamerToken = typeof streamerTokens.$inferSelect;
 export type NewStreamerToken = typeof streamerTokens.$inferInsert;
 export type StreamerSession = typeof streamerSessions.$inferSelect;
 export type NewStreamerSession = typeof streamerSessions.$inferInsert;
+
+// --- Web verze: účty návštěvníků, jejich platformní identity + tokeny, session ---
+// (spec UnityChat-web 2026-09-21 §3.3). Tokeny šifrované stejně jako
+// streamer_tokens (AES-256-GCM, TOKEN_ENCRYPTION_KEY) — NIKDY nevracet z API.
+export const webAccounts = pgTable('web_accounts', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const webIdentities = pgTable(
+  'web_identities',
+  {
+    accountId: bigint('account_id', { mode: 'number' })
+      .notNull()
+      .references(() => webAccounts.id, { onDelete: 'cascade' }),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    platformUserId: text('platform_user_id').notNull(),
+    login: text('login').notNull(),          // lowercase handle (twitch login / kick slug / yt handle bez @)
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    accessTokenEncrypted: bytea('access_token_encrypted').notNull(),
+    refreshTokenEncrypted: bytea('refresh_token_encrypted'),
+    tokenIv: bytea('token_iv').notNull(),
+    tokenAuthTag: bytea('token_auth_tag').notNull(),
+    refreshIv: bytea('refresh_iv'),
+    refreshAuthTag: bytea('refresh_auth_tag'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    scopes: text('scopes').array(),
+    keyVersion: integer('key_version').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.accountId, t.platform], name: 'web_identities_pk' }),
+    platformUserIdx: uniqueIndex('web_identities_platform_user_idx').on(t.platform, t.platformUserId),
+  }),
+);
+
+// Session = náhodných 32 B; v DB jen SHA-256 hash, klient drží raw token
+// (localStorage, Authorization: Bearer). 30 dní klouzavě.
+export const webSessions = pgTable(
+  'web_sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    accountId: bigint('account_id', { mode: 'number' })
+      .notNull()
+      .references(() => webAccounts.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    accountIdx: index('web_sessions_account_idx').on(t.accountId),
+    expiresIdx: index('web_sessions_expires_idx').on(t.expiresAt),
+  }),
+);
+
+export type WebIdentity = typeof webIdentities.$inferSelect;
