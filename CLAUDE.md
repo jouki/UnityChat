@@ -509,6 +509,16 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
   platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
 - Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
   změny core/backendu a tenhle pointer. Backend zůstává na api.jouki.cz.
+- **Stav 2026-09-22 ráno: web v0.5 = parita s addonem** (pokyn usera „doimplementovat
+  všechny funkce"): autocomplete (emoty/Tab + Fulltext, @jména, `!` StreamElements,
+  `/uc`), historie ↑/↓, systémové události (raid, oznámení, sub/Prime/Tier, dary,
+  odměny, milníky), moderace z IRC (timeout/ban/smazání), banner s piny (Twitch GQL
+  `GetPinnedChat` přímo z prohlížeče — gql.twitch.tv posílá `Access-Control-Allow-Origin: *`)
+  a raidem, user card (GQL), náhled emotu, skutečné barvy jmen (GQL `chatColor`) +
+  7TV paints + osobní emote sety, zmínky bez zavináče, oddělovač nových zpráv,
+  parkování DOM uzlů, tooltipy, easter egg. Neportováno (Twitch tab / chrome.*):
+  credits pill, DOM redeemy, hype train, pin modem, přepínání streamera, pop-out,
+  dev mode. Detaily: `UnityChat-web/web/CLAUDE.md` + plán (Stav v0.5).
 - **Stav 2026-09-22: web v0.4** — v0.3 parita (odpojení platformy, odpovědi,
   @zmínky, sdílené přezdívky, nastavení ⚙ + profil přezdívka/barva s auto-párováním
   na všechny propojené účty) + **živé změny přezdívek**: web poslouchá stejné SSE

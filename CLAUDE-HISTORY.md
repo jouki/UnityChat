@@ -145,6 +145,7 @@ Záznamy změn, které nejsou vázané na source code commit (memory restruktura
 
 Formát: `YYYY-MM-DD [autor/session] — popis`
 
+- **2026-09-22 ráno** — CLAUDE.md „Web verze": stav v0.5 (parita s addonem, co je vědomě neportované); web/CLAUDE.md architektura, plán Stav v0.5, memory `project_web_version.md`.
 - **2026-09-22 po půlnoci** — CLAUDE.md „Web verze": stav v0.4 (profil, živé změny přezdívek přes `/nicknames/stream`). Memory `project_web_version.md` doplněna.
 - **2026-09-21 pozdě večer** — CLAUDE.md gotchas: `trustProxy` za Traefikem (per-IP limity byly globální), úklid SSE klientů. Web: login modal (reflektor podle AoE Inviter), OAuth v popupu, filtry v hlavičce, tečky = LIVE (`/chat/live`).
 - **2026-09-21 večer** — CLAUDE.md: backend 0.5.0 (web auth + /chat/send), sekce „Web verze" stav v0.2; backend README endpointy; memory `project_web_version.md` (v0.2 live, podmínky Kick scope / Google verifikace, co ověřit).
