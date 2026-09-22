@@ -21,8 +21,8 @@ export const POOP = Object.freeze({
   // na střed prvního řádku cílové zprávy (u víceřádkové tedy na řádek se jménem),
   // takže „to" padá na zprávu a Peepo stojí kousek pod ní.
   poopRatio: 0.88,
-  // Doladění podle usera: animace o jeden řádek níž, ať „to" dopadá přesně na zprávu.
-  offsetLines: 1,
+  // Doladění podle usera (dvě kola): animace o 1,7 řádku níž, ať „to" dopadá přesně na zprávu.
+  offsetLines: 1.7,
   // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
   // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
   // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
