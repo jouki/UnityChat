@@ -13,6 +13,9 @@ import { broadcast } from '../sse/bus.js';
 
 const Id = z.string().regex(/^[A-Za-z0-9_-]{12,64}$/);
 export const RawSettings = z.object({
+  // Rodina písma z katalogu konfigurátoru (web/src/fonts.js). Server jen hlídá tvar —
+  // seznam je na klientovi, který hodnotu ověřuje proti katalogu před zápisem do CSS.
+  fontFamily: z.string().max(60).regex(/^[A-Za-z0-9 ,'’\-]*$/).optional(),
   font: z.number().min(2).max(100).optional(),
   scale: z.number().min(0.5).max(3).optional(),
   width: z.number().min(200).max(4000).optional(),
