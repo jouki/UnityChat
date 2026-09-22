@@ -21,7 +21,7 @@ včetně browser source v OBS), synchronně a zacílenou na tutéž zprávu.
 |---|---|
 | `t = 0` | Chat u **všech** klientů plynule ztmavne (1,2 s), na cílovou zprávu se rozsvítí měkký reflektor. Chat zároveň plynule odscrolluje k cílové zprávě (bez zvýraznění/bliknutí). Video začíná hrát. |
 | `t = 0` | Tlačítko reakce **zmizí všem** modům i streamerovi (zámek). Další kliknutí serveru vrátí `409 busy`. |
-| `t = 7,2 s` | Jméno autora a logo platformy **u cílové zprávy** zhnědnou (`#6b4423`, logo přes filtr). Platí jen pro tu jednu zprávu. |
+| `t = 7,2 s` | Jméno autora, **text zprávy** a logo platformy **u cílové zprávy** zhnědnou (jméno `#6b4423`, text světlejší `#b5835a`, aby zůstal čitelný, logo přes filtr). Platí jen pro tu jednu zprávu. |
 | `t = 15 s` | Video končí, scéna se 1,2 s odtmívá, overlay se odstraní, tlačítko se **zpřístupní**. |
 | `t = 22,2 s` | Hnědá začíná 15 s plynule přecházet zpět na původní barvu (CSS `transition`). |
 | `t = 37,2 s` | Hotovo, vše v původním stavu. |
@@ -169,11 +169,17 @@ JS v `layout()`. Musí být i `-webkit-mask-image`.
 **Hnědnutí** (jen cílová zpráva):
 
 ```css
-.msg.uc-poop-brown .un { color: #6b4423 !important; }
+.msg.uc-poop-brown .un { color: #6b4423 !important; }               /* jméno tmavě */
+.msg.uc-poop-brown .tx,
+.msg.uc-poop-brown .tx a { color: #b5835a !important; }             /* text světleji, ať je čitelný */
 .msg.uc-poop-brown .pi { filter: grayscale(1) sepia(1) saturate(4) hue-rotate(-12deg) brightness(0.55); }
-.msg.uc-poop-fade .un { transition: color 15s linear; }    /* návrat zpět */
+.msg.uc-poop-fade .un,
+.msg.uc-poop-fade .tx,
+.msg.uc-poop-fade .tx a { transition: color 15s linear; }           /* návrat zpět */
 .msg.uc-poop-fade .pi { transition: filter 15s linear; }
 ```
+
+Emoty (`<img>`) barva neovlivní — zůstávají barevné záměrně.
 
 Pořadí v JS: `add('uc-poop-brown')` → po 15 s `add('uc-poop-fade')` +
 `remove('uc-poop-brown')` (spustí přechod zpět) → po dalších 15 s `remove` obojí.

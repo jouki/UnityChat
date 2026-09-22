@@ -2910,8 +2910,13 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
   mask-image: radial-gradient(ellipse 62% calc(var(--spot-h) * 2.6) at 50% var(--spot-y), rgba(0,0,0,0) 0%, rgba(0,0,0,0.12) 22%, rgba(0,0,0,0.55) 48%, rgba(0,0,0,0.88) 72%, #000 100%);
 }
 .uc-poop-video { position: absolute; display: block; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.6)); }
-/* Hnědé jméno + logo platformy u cílové zprávy: 15 s natvrdo, pak 15 s přechod zpět. */
+/* Hnědé jméno + logo platformy u cílové zprávy: 15 s natvrdo, pak 15 s přechod zpět.
+   Text zprávy taky, ale o dost světlejší odstín, ať zůstane čitelný. */
 .msg.uc-poop-brown .un { color: #6b4423 !important; }
+.msg.uc-poop-brown .tx,
+.msg.uc-poop-brown .tx a { color: #b5835a !important; }
 .msg.uc-poop-brown .pi { filter: grayscale(1) sepia(1) saturate(4) hue-rotate(-12deg) brightness(0.55); }
-.msg.uc-poop-fade .un { transition: color 15s linear; }
+.msg.uc-poop-fade .un,
+.msg.uc-poop-fade .tx,
+.msg.uc-poop-fade .tx a { transition: color 15s linear; }
 .msg.uc-poop-fade .pi { transition: filter 15s linear; }
