@@ -2777,7 +2777,14 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 /* Stejný box 28 px pro všechna loga, ať jsou zarovnaná na střed; menší logo (SE) má vnitřní okraj. */
 .es-item img.es-logo { width: 28px; height: 28px; padding: 3px; box-sizing: border-box; border-radius: 5px; object-fit: contain; }
 .es-item img.es-logo-zidolista { padding: 0; filter: drop-shadow(0px 2px 1px black); }
-.es-item .es-logos { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.es-item .es-logos { display: inline-flex; align-items: center; flex-shrink: 0; }
+.es-item .es-logos img { margin-right: 4px; }
+.es-item .es-logos img:last-child { margin-right: 0; }
+/* Změna zdrojů za běhu: nové logo si udělá místo (šířka od nuly) a prolne se, odebrané vybledne a místo se zavře. */
+.es-item .es-logos img.es-logo-in { animation: es-logo-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.es-item .es-logos img.es-logo-out { animation: es-logo-out 320ms ease both; pointer-events: none; }
+@keyframes es-logo-in { from { width: 0; margin-right: 0; opacity: 0; transform: scale(0.6); } 55% { width: 28px; margin-right: 4px; opacity: 0; transform: scale(0.85); } to { width: 28px; margin-right: 4px; opacity: 1; transform: scale(1); } }
+@keyframes es-logo-out { from { width: 28px; margin-right: 4px; opacity: 1; } 45% { opacity: 0; } to { width: 0; margin-right: 0; opacity: 0; } }
 
 .es-dot {
   width: 20px;

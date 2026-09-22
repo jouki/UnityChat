@@ -1858,8 +1858,10 @@ class UnityChat {
       html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
     }
 
+    const logosBefore = this._acAnimateLogos ? this._acSnapshotLogos(el) : null;
     el.innerHTML = html;
     el.classList.remove('hidden');
+    if (logosBefore) this._acAnimateLogoDiff(el, logosBefore);
 
     // Wire fulltext checkbox — toggles persistent flag and re-runs the
     // current search, so the panel refilters live without retyping.
@@ -1895,6 +1897,35 @@ class UnityChat {
         this.msgInput.focus();
       });
     });
+  }
+
+  /** Před překreslením: jaká loga měl každý řádek (podle jména) — pro animaci změny zdrojů. */
+  _acSnapshotLogos(el) {
+    const map = new Map();
+    for (const item of el.querySelectorAll('.es-item')) map.set(item.querySelector('.es-name-inner')?.textContent || '', [...item.querySelectorAll('.es-logos img')].map((i) => i.alt));
+    return map;
+  }
+
+  /** Po překreslení: nová loga prolnout, odebraná nechat vyblednout na původním místě. */
+  _acAnimateLogoDiff(el, before) {
+    const logoFor = (alt) => alt === 'Židolišta' ? 'icons/commands/zidolista.png' : alt === 'SE' ? 'icons/commands/streamelements.svg' : null;
+    for (const item of el.querySelectorAll('.es-item')) {
+      const name = item.querySelector('.es-name-inner')?.textContent || '';
+      const old = before.get(name);
+      const box = item.querySelector('.es-logos');
+      if (!old || !box) continue;
+      const now = [...box.querySelectorAll('img')];
+      const nowAlts = now.map((i) => i.alt);
+      for (const img of now) if (!old.includes(img.alt)) img.classList.add('es-logo-in');
+      old.forEach((alt, i) => {
+        if (nowAlts.includes(alt) || !logoFor(alt)) return;
+        const ghost = document.createElement('img');
+        ghost.className = 'es-logo es-logo-out' + (alt === 'Židolišta' ? ' es-logo-zidolista' : '');
+        ghost.src = logoFor(alt); ghost.alt = alt;
+        box.insertBefore(ghost, box.children[i] || null);
+        ghost.addEventListener('animationend', () => ghost.remove(), { once: true });
+      });
+    }
   }
 
   _acHide() {
@@ -2762,8 +2793,11 @@ class UnityChat {
         }
         this._ucCommands = out;
         this._ucLog('Cmd', `Židolišta ${channel}: ${out.length} spouštěčů${j.stale ? ' (stará cache)' : ''}`);
-        // Otevřený našeptávač „!" příkazů přepočítat z aktuálního textu.
-        if (this._ac?.matches?.[0]?.startsWith('!')) this.msgInput.dispatchEvent(new Event('input'));
+        // Otevřený našeptávač „!" příkazů přepočítat z aktuálního textu (s animací změny log).
+        if (this._ac?.matches?.[0]?.startsWith('!')) {
+          this._acAnimateLogos = true;
+          try { this.msgInput.dispatchEvent(new Event('input')); } finally { this._acAnimateLogos = false; }
+        }
       } catch (e) {
         this._ucLog('Cmd', `Židolišta fail ${e?.message || e}`);
       }
