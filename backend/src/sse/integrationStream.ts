@@ -95,8 +95,11 @@ export function publishIntegration(m: IngestMessage): ChatEvent | null {
   const ws = workspaceForChannelSync(m.platform, m.channel);
   if (!ws) return null;
   const ev = toChatEvent(m, ws.slug);
-  const id = ++counter;
   const now = Date.now();
+  // Kurzor musí růst i přes restart serveru: klient po reconnectu posílá Last-Event-ID
+  // z minulého běhu; kdyby id začínalo od 1, replay by nic nevrátil (2026-09-22, Kick !test
+  // 14 s před reconnectem Židolišty). Proto id = ms času, při shodě +1.
+  const id = counter = Math.max(counter + 1, now);
   ring.push({ id, at: now, frame: frameOf(id, ev) });
   while (ring.length && (ring.length > RING_MAX || now - ring[0].at > RING_MS)) ring.shift();
   for (const c of clients) write(c, ring[ring.length - 1].frame);
