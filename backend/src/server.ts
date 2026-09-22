@@ -15,7 +15,7 @@ import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
 import rawProfileRoutes from './routes/rawProfiles.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
-import { startWorkspaceRefresh, stopWorkspaceRefresh } from './lib/zidolista.js';
+import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
 import { loadBotLogins } from './lib/botIdentities.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
@@ -65,6 +65,13 @@ const ingest = createIngest({
 app.addHook('onReady', async () => {
   ingest.start();
   // Registr workspaců Židolišty (mapování kanálů pro stream) + loginy botů pro isBot.
+  // Kanály workspaců se přidávají do ingestu automaticky (env CHAT_INGEST_CHANNELS je jen základ).
+  onWorkspaces((list) => {
+    for (const w of list) for (const p of WS_PLATFORMS) {
+      const ch = w.channels[p];
+      if (ch && ingest.ensureChannel({ platform: p, channel: ch })) app.log.info({ workspace: w.slug, platform: p, channel: ch }, 'chat ingest: kanál přidán z registru Židolišty');
+    }
+  });
   startWorkspaceRefresh(app.log);
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });

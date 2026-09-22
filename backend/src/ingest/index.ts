@@ -99,8 +99,11 @@ export function createIngest(opts: CreateOpts) {
     }
   };
 
+  let started = false;
+
   return {
     start() {
+      started = true;
       if (!opts.channels.length) return;
       for (const c of opts.channels) {
         const l = factory(c, onMessage);
@@ -119,6 +122,19 @@ export function createIngest(opts: CreateOpts) {
       if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null; }
       await flush();
     },
+    /**
+     * Přidat kanál za běhu (registr workspaců Židolišty: kanály bota se sledují
+     * automaticky, ne jen ty z env). Vrací true, když vznikl nový listener.
+     */
+    ensureChannel(c: IngestChannel): boolean {
+      const key = `${c.platform}:${c.channel.toLowerCase()}`;
+      if (listeners.has(key)) return false;
+      const l = factory({ platform: c.platform, channel: c.channel.toLowerCase() }, onMessage);
+      listeners.set(key, l);
+      if (started) l.start();
+      return true;
+    },
+    channels(): string[] { return [...listeners.keys()]; },
     /** videoId živého streamu daného kanálu (jen youtube listener), jinak null. */
     videoIdFor(platform: IngestChannel['platform'], channel: string): string | null {
       const l = listeners.get(`${platform}:${channel.toLowerCase()}`);

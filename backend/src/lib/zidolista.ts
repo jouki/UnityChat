@@ -26,6 +26,9 @@ export interface WorkspaceInfo {
 const CACHE_MS = 60_000;
 let cache: { at: number; list: WorkspaceInfo[]; source: 'zidolista' | 'env' } | null = null;
 let inflight: Promise<WorkspaceInfo[]> | null = null;
+// Po každém úspěšném načtení registru (server si podle něj přidává kanály do ingestu).
+let onWorkspacesCb: ((list: WorkspaceInfo[]) => void) | null = null;
+export function onWorkspaces(cb: (list: WorkspaceInfo[]) => void): void { onWorkspacesCb = cb; if (cache) cb(cache.list); }
 
 const normChannel = (v: unknown): string | null => {
   const s = String(v ?? '').trim().toLowerCase().replace(/^@/, '');
@@ -86,7 +89,7 @@ export async function getWorkspaces(opts: { force?: boolean; log?: { warn: (o: o
   if (!config.ZIDOLISTA_API_KEY) return cache?.list ?? (cache = { at: Date.now(), list: workspacesFromEnv(config.ZIDOLISTA_WORKSPACES), source: 'env' }).list;
   if (!inflight) {
     inflight = fetchWorkspaces()
-      .then((list) => { cache = { at: Date.now(), list, source: 'zidolista' }; return list; })
+      .then((list) => { cache = { at: Date.now(), list, source: 'zidolista' }; try { onWorkspacesCb?.(list); } catch { /* hook nesmí shodit fetch */ } return list; })
       .catch((e) => {
         opts.log?.warn({ err: (e as Error).message }, 'zidolista workspaces: fetch failed');
         if (cache) { cache.at = Date.now(); return cache.list; }
