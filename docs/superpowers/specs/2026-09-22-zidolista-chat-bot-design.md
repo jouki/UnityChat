@@ -155,6 +155,11 @@ consent s `youtube.force-ssl` (verifikace u Google běží).
   končily `msg_rejected` „please try again later" — dočasné, po pár minutách
   prošlo. Odznak: app access token; fallback user tokenem s pauzou 1,2 s
   (Twitch počítá i zahozený pokus do limitu 1/s). Rob zatím `mode: sb`.
+- **22:38 — Kick ověřen end-to-end** (`badge: false`, Kick odznak pro boty nemá).
+  Cestou opraveno: ingest si kanály workspaců přidává z registru sám
+  (`ingest.ensureChannel` ← `onWorkspaces`), kurzor streamu je ms času, takže
+  replay přes `Last-Event-ID` přežije restart. YouTube bot čeká na vytvoření
+  YouTube kanálu u Google účtu bota (`#bot_error=no_youtube_channel:youtube`).
 - Test fáze 1 (shoda 2026-09-22 ~17:00): workspace `uctest` v Židolištce
   neexistuje → testuje se na workspace **`jouki`** namapovaném na Twitch kanál
   `uctest` (user vyplní v Nastavení workspace jouki twitch = uctest a přepne
