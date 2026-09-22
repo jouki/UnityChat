@@ -2762,6 +2762,8 @@ class UnityChat {
         }
         this._ucCommands = out;
         this._ucLog('Cmd', `Židolišta ${channel}: ${out.length} spouštěčů${j.stale ? ' (stará cache)' : ''}`);
+        // Otevřený našeptávač „!" příkazů přepočítat z aktuálního textu.
+        if (this._ac?.matches?.[0]?.startsWith('!')) this.msgInput.dispatchEvent(new Event('input'));
       } catch (e) {
         this._ucLog('Cmd', `Židolišta fail ${e?.message || e}`);
       }
