@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { config } from '../config.js';
 import { broadcast } from '../sse/bus.js';
-import { keyMatches, parseWorkspaceMap } from './commands.js';
+import { keyMatches } from './commands.js';
+import { getWorkspaces } from '../lib/zidolista.js';
 
 /**
  * POST /announcements — UnityChat Announcement ze Židolišty (RobJewsALot).
@@ -75,10 +75,11 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
 }
 
 export default async function announcementRoutes(app: FastifyInstance) {
-  const workspaces = parseWorkspaceMap(config.ZIDOLISTA_WORKSPACES);
-
   app.post('/announcements', async (req, reply) => {
     if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
+    // Mapování kanál → workspace z registru Židolišty (lib/zidolista.ts); env je jen fallback.
+    const workspaces = new Map<string, string>();
+    for (const w of await getWorkspaces({ log: app.log })) if (w.channels.twitch) workspaces.set(w.channels.twitch, w.slug);
     const v = validateAnnouncement(req.body, workspaces);
     if (!v.ok) return reply.code(v.error === 'unknown_workspace' ? 404 : 400).send({ ok: false, error: v.error });
     for (const value of v.values) broadcast('announcement', value);

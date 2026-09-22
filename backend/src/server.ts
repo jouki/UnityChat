@@ -12,6 +12,10 @@ import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
 import webAuthRoutes from './routes/webAuth.js';
+import integrationRoutes from './routes/integrations.js';
+import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
+import { startWorkspaceRefresh, stopWorkspaceRefresh } from './lib/zidolista.js';
+import { loadBotLogins } from './lib/botIdentities.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 import { publishChat, chatStreamClientCount, disconnectAllChatStreams } from './sse/chatBus.js';
@@ -51,10 +55,19 @@ const ingest = createIngest({
   retentionDays: config.CHAT_RETENTION_DAYS,
   log: app.log,
   // GET /chat/stream: rozeslat hned po přijetí (před DB dávkou), stejný tvar jako /chat/history.
-  onLive: (m) => { publishChat(m.channel, m.platform, toClientMessage(toRow(m), false)); },
+  onLive: (m) => {
+    publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
+    // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
+    publishIntegration(m);
+  },
 });
-app.addHook('onReady', async () => { ingest.start(); });
-app.addHook('onClose', async () => { await ingest.stop(); });
+app.addHook('onReady', async () => {
+  ingest.start();
+  // Registr workspaců Židolišty (mapování kanálů pro stream) + loginy botů pro isBot.
+  startWorkspaceRefresh(app.log);
+  loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
+});
+app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
@@ -70,6 +83,7 @@ app.get('/health', async () => ({
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
   chatStreamClients: chatStreamClientCount(),
+  integrationStream: integrationStreamStats(),
   // Diagnostika: bez klice vraci /store/status 503 a landing page nezobrazi
   // radek o verzi cekajici na schvaleni. Snazsi zjistit odsud nez z kontejneru.
   cwsConfigured: cwsConfigured(),
@@ -86,6 +100,7 @@ await app.register(chatRoutes);
 await app.register(commandRoutes);
 await app.register(announcementRoutes);
 await app.register(webAuthRoutes, { ingest });
+await app.register(integrationRoutes, { ingest });
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

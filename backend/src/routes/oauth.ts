@@ -10,6 +10,7 @@ import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import { completeWebCallback, webErrorRedirect } from './webAuth.js';
+import { completeBotCallback, botErrorRedirect } from './integrations.js';
 
 const StartParams = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
 
@@ -275,6 +276,7 @@ export default async function oauthRoutes(app: FastifyInstance) {
       if (error) {
         const wp = state ? verifyState(decodeURIComponent(state)) : null;
         if (wp && wp.kind === 'web') return webErrorRedirect(reply, wp.returnTo, `${platform}: ${error_description || error}`);
+        if (wp && wp.kind === 'bot') return botErrorRedirect(reply, wp.returnTo, `${platform}: ${error_description || error}`);
         reply.type('text/html');
         return errorPage(`${platform}: ${error_description || error}`);
       }
@@ -282,18 +284,21 @@ export default async function oauthRoutes(app: FastifyInstance) {
         reply.type('text/html');
         return errorPage('Chybí code nebo state parametr.');
       }
-      // Web verze podepisuje state bez extension prefixu (kind:'web' v payloadu);
-      // streamer flow má "{extensionId}.{signed}".
+      // Web verze i bot Židolišty podepisují state bez extension prefixu (kind:'web' / 'bot'
+      // v payloadu); streamer flow má "{extensionId}.{signed}".
       const webPayload = verifyState(decodeURIComponent(state));
       const isWeb = !!webPayload && webPayload.kind === 'web';
-      const unwrapped = isWeb ? null : unwrapState(state);
-      if (!isWeb && !unwrapped) {
+      const isBot = !!webPayload && webPayload.kind === 'bot';
+      const external = isWeb || isBot;
+      const unwrapped = external ? null : unwrapState(state);
+      if (!external && !unwrapped) {
         reply.type('text/html');
         return errorPage('Neplatný state parametr.');
       }
-      const payload = isWeb ? webPayload : verifyState(unwrapped!.signed);
+      const payload = external ? webPayload : verifyState(unwrapped!.signed);
       if (!payload || payload.platform !== platform) {
         if (isWeb) return webErrorRedirect(reply, webPayload?.returnTo, 'state expiroval, zkus to znovu');
+        if (isBot) return botErrorRedirect(reply, webPayload?.returnTo, 'state expiroval, zkus to znovu');
         reply.type('text/html');
         return errorPage('State je neplatný nebo expiroval. Zkuste přihlášení znovu.');
       }
@@ -353,15 +358,14 @@ export default async function oauthRoutes(app: FastifyInstance) {
           };
         }
 
-        if (isWeb) {
-          return completeWebCallback(req, reply, platform, payload, {
-            platformUserId: identity.userId, login: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl,
-          }, tokens);
-        }
+        const info = { platformUserId: identity.userId, login: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl };
+        if (isWeb) return completeWebCallback(req, reply, platform, payload, info, tokens);
+        if (isBot) return completeBotCallback(req, reply, platform, payload, info, tokens);
         return completeCallback(req, reply, platform, unwrapped!.extensionId, payload.sessionId, identity, tokens);
       } catch (err) {
-        req.log.error({ err: (err as Error).message, platform, web: isWeb }, 'OAuth callback failed');
+        req.log.error({ err: (err as Error).message, platform, web: isWeb, bot: isBot }, 'OAuth callback failed');
         if (isWeb) return webErrorRedirect(reply, payload.returnTo, `${platform}: přihlášení selhalo`);
+        if (isBot) return botErrorRedirect(reply, payload.returnTo, `${platform}: napojení bota selhalo`);
         reply.type('text/html');
         return errorPage(`${platform}: autentizace selhala. Zkuste to znovu.`);
       }

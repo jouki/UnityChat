@@ -116,5 +116,16 @@ při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
 
 `POST /announcements` (`X-Api-Key` = `ZIDOLISTA_API_KEY`) — **UnityChat Announcement** ze Židolišty: command s videem/animací a textem, který vidí jen uživatelé UnityChatu. Tělo `{ id, workspace, command?, text?, media?: { url (https), kind, width?, height?, loop?, stillUrl? } | null, chatReply?: { text, hideInUnityChat } | null, triggeredBy?, at? }`; workspace → kanály přes `ZIDOLISTA_WORKSPACES`, každému kanálu SSE `announcement` (s `channel`) na `/nicknames/stream`. Nic se neukládá. 202 / 400 (`missing_id`, `media_url_must_be_https`, `empty_announcement`) / 404 `unknown_workspace`. Render: `extension/core/announcement.js`.
 
-`POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví).
+`POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví). `reason: "workspaces"` navíc obnoví registr workspaců.
+
+### Chat bot Židolišty (2026-09-22)
+
+Spec: `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`. Mapování workspace ↔ kanály bere registr Židolišty (`lib/zidolista.ts` ← `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s; env `ZIDOLISTA_WORKSPACES` jen fallback). Vše s `X-Api-Key` = `ZIDOLISTA_API_KEY`:
+
+- `GET /integrations/chat/stream` — SSE `event: chat.message` pro kanály namapované na workspace: `{ type, workspace, messageId, platform, user, userId, text, isSub, isMod, isVip, isBroadcaster, isBot, replyTo, timestamp }`; `id:` = kurzor, `Last-Event-ID` replay 5 min, `: ping` 15 s.
+- `POST /bot/send` `{ workspace, platform, text (≤480), replyTo?, idempotencyKey }` → 202 `{ ok, id, channel, login, identity: 'own'|'shared' }`. Kanál se odvozuje jen ze slugu (izolace workspaců). Chyby: 409 `duplicate`, 429 `rate_limited` (+`retryAfterMs`), 404 `unknown_workspace` / `no_channel`, 409 `not_live` (YouTube), 503 `bot_unavailable`.
+- `POST /integrations/bot/link-token` `{ workspace | "_shared", platform, returnTo }` → `{ ok, url, expiresAt }` (jednorázový odkaz, 10 min; `returnTo` jen origin z `ZIDOLISTA_RETURN_ORIGINS`). `GET /bot/link/:token` (bez klíče) → 302 na consent providera → callback `kind:'bot'` uloží identitu → `returnTo#bot_linked=<platform>:<login>` / `#bot_error=…`.
+- `GET /integrations/bot/status?workspace=` → `{ shared: {twitch,kick,youtube: {state: online|expired|missing, login?}}, own: {…} }`; `DELETE /integrations/bot/identity` `{ workspace, platform }`.
+
+Tabulka `bot_identities` (`sql/2026-09-22-bot-identities.sql`, tokeny šifrované jako `web_identities`).
 

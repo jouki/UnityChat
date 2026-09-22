@@ -48,6 +48,8 @@ const EnvSchema = z.object({
   ZIDOLISTA_API_BASE: z.string().url().default('https://api-zidolista.jouki.cz'),
   ZIDOLISTA_API_KEY: z.string().default(''),
   ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
+  // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
+  ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),
 });
 
 export const config = EnvSchema.parse(process.env);

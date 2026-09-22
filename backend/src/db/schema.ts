@@ -265,6 +265,38 @@ export const webIdentities = pgTable(
   }),
 );
 
+// Identity chat bota Židolišty (spec docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md):
+// workspace = slug Židolišty nebo '_shared' (sdílený JoukiBOT). Tokeny šifrované
+// stejně jako web_identities, nikdy ven z API. Tabulka vytvořena ručně SQL
+// (backend/sql/2026-09-22-bot-identities.sql), drizzle-kit push přes tunel padá.
+export const botIdentities = pgTable(
+  'bot_identities',
+  {
+    workspace: text('workspace').notNull(),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    platformUserId: text('platform_user_id').notNull(),
+    login: text('login').notNull(),
+    displayName: text('display_name'),
+    avatarUrl: text('avatar_url'),
+    accessTokenEncrypted: bytea('access_token_encrypted').notNull(),
+    refreshTokenEncrypted: bytea('refresh_token_encrypted'),
+    tokenIv: bytea('token_iv').notNull(),
+    tokenAuthTag: bytea('token_auth_tag').notNull(),
+    refreshIv: bytea('refresh_iv'),
+    refreshAuthTag: bytea('refresh_auth_tag'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    scopes: text('scopes').array(),
+    keyVersion: integer('key_version').notNull().default(1),
+    // 'expired' = refresh selhal, nutno znovu napojit (status endpoint).
+    state: text('state').notNull().default('online'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspace, t.platform], name: 'bot_identities_pk' }),
+  }),
+);
+
 // Session = náhodných 32 B; v DB jen SHA-256 hash, klient drží raw token
 // (localStorage, Authorization: Bearer). 30 dní klouzavě.
 export const webSessions = pgTable(

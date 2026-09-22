@@ -689,6 +689,23 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   by musel publikovat WebBridge — zatím ne (viz memory `project_web_version`). Změna commandu
   v Židolištce → webhook `POST /commands/invalidate` (stejný klíč) → cache pryč + SSE
   `commands-change` na `/nicknames/stream` → web i addon (v3.39.26) seznam obnoví hned.
+  **Od 2026-09-22 mapování kanál ↔ workspace bere registr Židolišty** (`lib/zidolista.ts`,
+  `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s, webhook `reason:"workspaces"`);
+  env `ZIDOLISTA_WORKSPACES` je jen fallback, když Židolišta nikdy neodpověděla.
+- **Chat bot Židolišty (2026-09-22, spec `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`,
+  `routes/integrations.ts`, `lib/botSend.ts`, `lib/botIdentities.ts`, `sse/integrationStream.ts`):**
+  UnityChat = oči a ústa, Židolišta = mozek. `GET /integrations/chat/stream` (X-Api-Key, SSE
+  `chat.message` s `workspace`, rolemi z badge, `isBot`, `id:` kurzor + `Last-Event-ID` replay 5 min,
+  `: ping` 15 s) — jen kanály namapované v registru. `POST /bot/send` `{workspace, platform, text,
+  replyTo?, idempotencyKey}` → 202 `{ok,id,channel,login,identity}`; kanál se odvozuje **jen ze slugu**
+  (izolace workspaců), identita = vlastní bot workspace, jinak sdílený `_shared` (JoukiBOT); 409
+  `duplicate`, 429 `rate_limited`, 404 `unknown_workspace`/`no_channel`, 503 `bot_unavailable`.
+  Napojení účtu bota: `POST /integrations/bot/link-token` `{workspace|'_shared', platform, returnTo}`
+  (returnTo jen origin z `ZIDOLISTA_RETURN_ORIGINS`, výchozí `https://jouki.cz`) → jednorázová
+  `GET /bot/link/:token` (10 min) → OAuth `kind:'bot'` (sdílený callback) → `returnTo#bot_linked=…`.
+  `GET /integrations/bot/status?workspace=`, `DELETE /integrations/bot/identity`. Tabulka
+  `bot_identities` (SQL `backend/sql/2026-09-22-bot-identities.sql`, tokeny šifrované jako
+  `web_identities`, nikdy z API).
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,

@@ -65,9 +65,11 @@ interface StatePayload {
   codeVerifier?: string; // optional — PKCE verifier (Kick OAuth 2.1 requires)
   // Web verze (lib/webAuth.ts): kind 'web' přepne callback na účet návštěvníka,
   // returnTo = kam vrátit (origin z WEB_ORIGINS), webAccountId = napojení další platformy.
-  kind?: 'streamer' | 'web';
+  // 'bot' = napojení účtu chat bota Židolišty (routes/integrations.ts): workspace = slug nebo '_shared'.
+  kind?: 'streamer' | 'web' | 'bot';
   returnTo?: string;
   webAccountId?: number;
+  workspace?: string;
   createdAt: number;
 }
 

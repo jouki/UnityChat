@@ -133,7 +133,7 @@ export interface IdentityInfo {
   avatarUrl?: string;
 }
 
-function encryptedColumns(tokens: TokenSet) {
+export function encryptedColumns(tokens: TokenSet) {
   const accessEnc = encryptToken(tokens.accessToken);
   const refreshEnc = tokens.refreshToken ? encryptToken(tokens.refreshToken) : null;
   return {
