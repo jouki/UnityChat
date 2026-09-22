@@ -3822,8 +3822,9 @@ class UnityChat {
     return ej.token;
   }
 
-  async _triggerPoop(msg) {
+  async _triggerPoop(platform, messageId) {
     if (this._activeReaction && window.UC_CORE.reactionBusy(this._activeReaction)) return;
+    if (!messageId || String(messageId).startsWith('sent-')) { this._sys('Počkej, až se zpráva potvrdí z chatu.'); return; }
     let token = await this._ucSessionToken();
     if (!token) {
       try { token = await this._ucLogin(); }
@@ -3831,10 +3832,10 @@ class UnityChat {
     }
     const r = await fetch(`${UC_API}/reactions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ kind: 'poop', platform: msg.platform, messageId: msg.id, channel: (this.config.channel || '').toLowerCase() }),
+      body: JSON.stringify({ kind: 'poop', platform, messageId, channel: (this.config.channel || '').toLowerCase() }),
     }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: e.message }) }));
     const j = await r.json().catch(() => ({}));
-    this._ucLog('Reaction', `trigger ${msg.platform}:${msg.id} → ${r.status} ${j.error || ''}`);
+    this._ucLog('Reaction', `trigger ${platform}:${messageId} → ${r.status} ${j.error || ''}`);
     if (r.status === 401) { await chrome.storage.local.remove('uc_session'); this._sys('Přihlášení pro reakce vypršelo, klikni znovu.'); return; }
     if (r.status === 403) { this._sys('Reakce může spustit jen mod nebo streamer (backend tě podle zpráv v chatu nepoznal jako moda).'); return; }
     if (r.status === 409) return;   // už běží — tlačítko se schová podle SSE
@@ -6282,17 +6283,20 @@ class UnityChat {
     actions.appendChild(replyBtn);
 
     // Reakce „Peepo poop" — úplně vlevo; jen mod/broadcaster (body.uc-can-poop),
-    // během přehrávání schované (body.uc-poop-busy). U optimistické zprávy ne:
-    // její id se po IRC echu přepíše, takže by reakce necílila na nic.
-    if (!msg._optimistic) {
-      const poopBtn = document.createElement('button');
-      poopBtn.className = 'msg-action-btn';
-      poopBtn.dataset.act = 'poop';
-      poopBtn.title = 'Peepo poop (mod)';
-      poopBtn.textContent = '\u{1F4A9}';
-      poopBtn.addEventListener('click', (e) => { e.stopPropagation(); this._triggerPoop(msg); });
-      actions.insertBefore(poopBtn, actions.firstChild);
-    }
+    // během přehrávání schované (body.uc-poop-busy). Id se bere až při kliknutí
+    // z datasetu: u právě odeslané zprávy se po IRC echu přepíše, ale element
+    // zůstává tentýž (_upgradeOptimistic), takže tlačítko musí být od začátku.
+    const poopBtn = document.createElement('button');
+    poopBtn.className = 'msg-action-btn';
+    poopBtn.dataset.act = 'poop';
+    poopBtn.title = 'Peepo poop (mod)';
+    poopBtn.textContent = '\u{1F4A9}';
+    poopBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = poopBtn.closest('.msg');
+      this._triggerPoop(msg.platform, host?.dataset.msgId || msg.id);
+    });
+    actions.insertBefore(poopBtn, actions.firstChild);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard
