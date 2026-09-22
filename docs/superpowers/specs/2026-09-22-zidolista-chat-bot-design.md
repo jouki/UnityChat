@@ -148,6 +148,13 @@ consent s `youtube.force-ssl` (verifikace u Google běží).
   + odmítnutí cizího returnTo).
 - Doporučený kanál pro workspace `jouki`: **twitch = `jouki728`** (userův vlastní
   kanál); `uctest` je cizí existující Twitch účet, do jeho chatu se psát nemá.
+- **2026-09-22 22:04 — fáze 1 ověřena end-to-end:** `!test` v chatu jouki728 →
+  stream → Židolišta (source unitychat) → `/bot/send` → Twitch 202 `badge: true`,
+  zpráva v chatu s `bot-badge/1` („Chat Bot"). Sdílený JoukiBOT (`user:bot`) +
+  souhlas broadcastera jouki728 (`channel:bot`). První pokusy po založení účtu
+  končily `msg_rejected` „please try again later" — dočasné, po pár minutách
+  prošlo. Odznak: app access token; fallback user tokenem s pauzou 1,2 s
+  (Twitch počítá i zahozený pokus do limitu 1/s). Rob zatím `mode: sb`.
 - Test fáze 1 (shoda 2026-09-22 ~17:00): workspace `uctest` v Židolištce
   neexistuje → testuje se na workspace **`jouki`** namapovaném na Twitch kanál
   `uctest` (user vyplní v Nastavení workspace jouki twitch = uctest a přepne
