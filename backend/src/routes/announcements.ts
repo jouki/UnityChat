@@ -27,6 +27,8 @@ export interface AnnouncementPayload {
   channel: string;
   command?: string;
   text?: string;
+  /** Rich text (Markdown → HTML na serveru Židolišty); klient ho ještě sanitizuje. */
+  textHtml?: string;
   media?: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; stillUrl?: string | null } | null;
   chatReply?: { text: string; hideInUnityChat: boolean } | null;
   triggeredBy?: { user: string; platform?: string } | null;
@@ -44,6 +46,7 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
   const channels = [...workspaces.entries()].filter(([, slug]) => slug === workspace).map(([ch]) => ch);
   if (!workspace || !channels.length) return { ok: false, error: 'unknown_workspace' };
   const text = String(b.text ?? '').slice(0, 500).trim();
+  const textHtml = String(b.textHtml ?? '').slice(0, 4000).trim();
   const m = b.media && typeof b.media === 'object' ? (b.media as Record<string, unknown>) : null;
   let media: AnnouncementPayload['media'] = null;
   if (m) {
@@ -57,13 +60,13 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
       stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
     };
   }
-  if (!media && !text) return { ok: false, error: 'empty_announcement' };
+  if (!media && !text && !textHtml) return { ok: false, error: 'empty_announcement' };
   const by = b.triggeredBy && typeof b.triggeredBy === 'object' ? (b.triggeredBy as Record<string, unknown>) : null;
   const cr = b.chatReply && typeof b.chatReply === 'object' ? (b.chatReply as Record<string, unknown>) : null;
   const chatReply = cr && String(cr.text ?? '').trim() ? { text: String(cr.text).slice(0, 500), hideInUnityChat: !!cr.hideInUnityChat } : null;
   const at = typeof b.at === 'string' && Number.isFinite(Date.parse(b.at)) ? b.at : new Date().toISOString();
   const base = {
-    id, workspace, text, media, at, chatReply,
+    id, workspace, text, textHtml, media, at, chatReply,
     command: String(b.command ?? '').slice(0, 80),
     triggeredBy: by && by.user ? { user: String(by.user).slice(0, 60), platform: String(by.platform ?? '').slice(0, 20) } : null,
   };

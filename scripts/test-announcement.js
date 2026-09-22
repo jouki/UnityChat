@@ -2,7 +2,8 @@
 const assert = require('node:assert/strict');
 
 (async () => {
-  const { normalizeAnnouncement, announcementHtml, sanitizeAnnouncementHtml, ANNC_DEFAULT_WIDTH } = await import('../extension/core/announcement.js');
+  const { normalizeAnnouncement, announcementHtml, sanitizeAnnouncementHtml, richTextToHtml, ANNC_DEFAULT_WIDTH } = await import('../extension/core/announcement.js');
+  const { ytRunFullText } = await import('../extension/core/emotes.js');
   let n = 0;
   const ok = (name) => { n++; console.log('PASS', name); };
 
@@ -54,6 +55,16 @@ const assert = require('node:assert/strict');
   assert.match(withRich, /<div class="ua-text"><h2>T<\/h2><i>k<\/i><\/div>/);
   assert.equal(normalizeAnnouncement({ id: 'x7', channel: 'c', textHtml: '<b>jen html</b>' })?.textHtml, '<b>jen html</b>');
   ok('rich text sanitizer');
+
+  // 5. Markdown fallback + YouTube odkaz z runu
+  assert.equal(richTextToHtml('# Brohemians\nOdebírej **__Brohemians__** kanál [TADY](https://youtu.be/x?si=a&b=1)! *i* <b>ne</b>'),
+    '<h1>Brohemians</h1><br>Odebírej <b><u>Brohemians</u></b> kanál <a href="https://youtu.be/x?si=a&amp;b=1" target="_blank" rel="noopener noreferrer nofollow">TADY</a>! <i>i</i> &lt;b&gt;ne&lt;/b&gt;');
+  assert.equal(normalizeAnnouncement({ id: 'x8', channel: 'c', text: '**b**' }).textHtml, '<b>b</b>', 'bez textHtml se převede text');
+  const run = { text: 'https://youtu.be/cISb60sXpFU?si=5kVik...', navigationEndpoint: { urlEndpoint: { url: 'https://www.youtube.com/redirect?event=live_chat&redir_token=abc&q=https%3A%2F%2Fyoutu.be%2FcISb60sXpFU%3Fsi%3D5kVikD3t4w50MliE' } } };
+  assert.equal(ytRunFullText(run), 'https://youtu.be/cISb60sXpFU?si=5kVikD3t4w50MliE');
+  assert.equal(ytRunFullText({ text: 'ahoj' }), 'ahoj');
+  assert.equal(ytRunFullText({ text: 'x', navigationEndpoint: { urlEndpoint: { url: 'https://www.youtube.com/redirect?q=javascript:alert(1)' } } }), 'x');
+  ok('markdown fallback + youtube plná URL');
 
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

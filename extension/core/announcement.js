@@ -52,6 +52,31 @@ export function sanitizeAnnouncementHtml(html) {
 }
 
 /**
+ * Markdown-podmnožina Židolišty → HTML (stejná pravidla jako jejich server):
+ * **tučný**, *kurzíva*, __podtržený__, [text](https://…), #/##/### na začátku
+ * řádku, Enter = <br>. Fallback, když payload nenese `textHtml` (starší
+ * server, mock). Vstup se nejdřív escapuje, výsledek ještě prochází sanitizerem.
+ */
+export function richTextToHtml(md) {
+  const src = String(md || '');
+  if (!src.trim()) return '';
+  const lines = src.split(/\r?\n/).map((line) => {
+    let l = escapeHtml(line);
+    const h = /^(#{1,3})\s+(.*)$/.exec(l);
+    if (h) return `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
+    return inline(l);
+  });
+  return sanitizeAnnouncementHtml(lines.join('<br>'));
+  function inline(l) {
+    l = l.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, t, u) => `<a href="${u.replace(/&amp;/g, '&')}">${t}</a>`);
+    l = l.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    l = l.replace(/__(.+?)__/g, '<u>$1</u>');
+    l = l.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1<i>$2</i>');
+    return l;
+  }
+}
+
+/**
  * Ověří a ořeže payload z backendu. Vrací null, když chybí to podstatné
  * (id, channel, médium nebo text). Neznámá pole se zahazují.
  */
@@ -60,7 +85,7 @@ export function normalizeAnnouncement(a) {
   const id = String(a.id || '').slice(0, 80);
   const channel = String(a.channel || '').toLowerCase().slice(0, 40);
   const text = String(a.text || '').slice(0, 500).trim();
-  const textHtml = sanitizeAnnouncementHtml(String(a.textHtml || '').slice(0, 4000)).trim();
+  const textHtml = (String(a.textHtml || '').trim() ? sanitizeAnnouncementHtml(String(a.textHtml).slice(0, 4000)) : richTextToHtml(text)).trim();
   const m = a.media && typeof a.media === 'object' ? a.media : null;
   const media = m && isHttps(m.url) ? {
     url: m.url,
@@ -94,7 +119,7 @@ export function normalizeAnnouncement(a) {
  */
 export function announcementHtml(a, o = {}) {
   if (!a) return '';
-  // Přednost: klientem dodané HTML (text s emoty) → rich text ze Židolišty → escapovaný text.
+  // Přednost: klientem dodané HTML → rich text (ze Židolišty, nebo z Markdownu v `text`) → escapovaný text.
   const textHtml = o.textHtml != null ? o.textHtml : (a.textHtml || escapeHtml(a.text));
   let mediaHtml = '';
   if (a.media) {

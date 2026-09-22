@@ -7,6 +7,21 @@ import { isTwitchOgFaceName } from './colors.js';
 import { decodeEntities, stripTags, tagAttrs } from './html.js';
 import { makeLog } from './log.js';
 
+/** Plná URL odkazu z YouTube runu (navigationEndpoint → youtube.com/redirect?q=<url> nebo přímo), jinak původní text. */
+export function ytRunFullText(run) {
+  const raw = run?.navigationEndpoint?.urlEndpoint?.url || run?.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || '';
+  if (!raw || !run.text) return run.text;
+  try {
+    const u = new URL(raw, 'https://www.youtube.com');
+    let full = null;
+    if (u.hostname.endsWith('youtube.com') && u.pathname === '/redirect') { const q = u.searchParams.get('q'); full = q && /^https?:\/\//i.test(q) ? q : null; }
+    else if (/^https?:$/.test(u.protocol)) full = u.toString();
+    if (!full) return run.text;
+    const t = run.text;
+    return (t.endsWith('…') || t.endsWith('...') || full.startsWith(t) || t.startsWith(full.slice(0, 12))) ? full : t;
+  } catch { return run.text; }
+}
+
 export class EmoteManager {
   /**
    * opts.log(tag, text) — logování (addon: UC_LOG), opts.fetch — injekce pro
@@ -617,7 +632,8 @@ export class EmoteManager {
     const segments = [];
     for (const run of runs) {
       if (run.text) {
-        segments.push({ type: 'text', value: run.text });
+        // YouTube zkracuje text odkazu („…"), plná URL je v navigationEndpoint (redirect?q=…).
+        segments.push({ type: 'text', value: ytRunFullText(run) });
       } else if (run.emoji) {
         const url =
           run.emoji.image?.thumbnails?.[0]?.url ||

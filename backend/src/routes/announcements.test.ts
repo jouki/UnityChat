@@ -9,7 +9,7 @@ test('validateAnnouncement: plný payload projde, ořeže se a rozpadne na kaná
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.deepEqual(r.values.map((v) => v.channel), ['robdiesalot', 'robmirror']);
-  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
+  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', textHtml: '', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
 });
 
 test('validateAnnouncement: chyby a okraje', () => {
@@ -24,4 +24,8 @@ test('validateAnnouncement: chyby a okraje', () => {
   assert.equal(r.values[0].media, null);
   assert.equal(r.values[0].chatReply, null, 'prázdná odpověď = null');
   assert.equal(Number.isFinite(Date.parse(r.values[0].at)), true);
+  const rich = validateAnnouncement({ id: '2', workspace: 'rob', text: '**b**', textHtml: '<b>b</b>', format: 'markdown' }, ws);
+  assert.equal(rich.ok && rich.values[0].textHtml, '<b>b</b>');
+  const onlyHtml = validateAnnouncement({ id: '3', workspace: 'rob', textHtml: '<i>x</i>' }, ws);
+  assert.equal(onlyHtml.ok, true, 'jen textHtml stačí');
 });
