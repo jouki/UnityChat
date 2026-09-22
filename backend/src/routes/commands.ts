@@ -29,6 +29,29 @@ export interface PublicCommand {
   roles: string[];
   cooldownSeconds: number;
   source: 'zidolista';
+  /** Surová odpověď do chatu (s %proměnnými%) — pro lokální náhled `/uc command`. */
+  reply?: string;
+  /** Konfigurace UnityChat Announcementu commandu (bez id/at) — pro lokální náhled. */
+  announcement?: { text: string; textHtml: string; media: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; loopDelayMs?: number; stillUrl?: string | null } | null; hideChatReplyInUnityChat: boolean } | null;
+}
+
+const isHttps = (u: unknown): u is string => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
+
+function publicAnnouncement(raw: unknown): PublicCommand['announcement'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as Record<string, unknown>;
+  const m = a.media && typeof a.media === 'object' ? (a.media as Record<string, unknown>) : null;
+  const media = m && isHttps(m.url) ? {
+    url: m.url, kind: m.kind === 'image' ? 'image' as const : 'video' as const,
+    width: Number(m.width) > 0 ? Math.round(Number(m.width)) : undefined,
+    height: Number(m.height) > 0 ? Math.round(Number(m.height)) : undefined,
+    loop: m.loop !== false, loopDelayMs: Math.max(0, Math.min(60_000, Math.round(Number(m.loopDelayMs) || 0))),
+    stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
+  } : null;
+  const text = String(a.text ?? '').slice(0, 500);
+  const textHtml = String(a.textHtml ?? '').slice(0, 4000);
+  if (!media && !text.trim() && !textHtml.trim()) return null;
+  return { text, textHtml, media, hideChatReplyInUnityChat: !!a.hideChatReplyInUnityChat };
 }
 
 const REGEX_META = /[[\](){}|*+?.\\^$]/;
@@ -68,6 +91,8 @@ export function toPublicCommands(rows: unknown): PublicCommand[] {
       roles: Array.isArray(r.allowRoles) ? (r.allowRoles as unknown[]).map(String) : [],
       cooldownSeconds: Number(r.cooldownSeconds) || 0,
       source: 'zidolista',
+      reply: String(r.reply ?? '').slice(0, 500),
+      announcement: publicAnnouncement(r.announcement),
     });
   }
   return out;

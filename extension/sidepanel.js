@@ -1301,7 +1301,7 @@ class UnityChat {
           'announcement', 'ann',
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
-          'redeem', 'highlight', 'annc',
+          'command', 'redeem', 'highlight', 'annc',
           'milestone', 'streak',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
@@ -2793,7 +2793,7 @@ class UnityChat {
         for (const c of j.commands || []) {
           for (const t of c.triggers || [c.trigger]) {
             if (!t || !t.startsWith('!')) continue;
-            out.push({ name: t.slice(1), label: c.name || '', roles: Array.isArray(c.roles) ? c.roles : [], source: 'Židolišta' });
+            out.push({ name: t.slice(1), label: c.name || '', roles: Array.isArray(c.roles) ? c.roles : [], source: 'Židolišta', reply: c.reply || '', announcement: c.announcement || null });
           }
         }
         this._ucCommands = out;
@@ -3319,6 +3319,24 @@ class UnityChat {
       case 'highlight':
         this._addMessage({ ...base, message: text, isHighlight: true });
         break;
+      case 'command':
+      case 'cmd': {
+        // Lokální náhled reakce commandu Židolišty (`/uc command !brohemians`): announcement + odpověď bota, nic se neodesílá.
+        const trig = (parts[1] || '').replace(/^!/, '').toLowerCase();
+        const c = this._ucCommands.find((x) => x.name.toLowerCase() === trig);
+        if (!trig) { this._sys('/uc command <!spouštěč> — náhled reakce commandu Židolišty'); break; }
+        if (!c) { this._sys(`/uc command: command „!${trig}" v Židolištce neznám (nabídka: ${this._ucCommands.map((x) => '!' + x.name).join(', ') || 'nic'})`); break; }
+        const a = c.announcement;
+        const hide = !!(a && a.hideChatReplyInUnityChat);
+        if (a) {
+          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+        } else {
+          this._sys(`!${c.name}: command nemá UnityChat Announcement`);
+        }
+        if (c.reply && !hide) this._addMessage({ ...base, id: `preview-reply-${now}`, username: 'Židolišta', message: c.reply, color: '#9146ff' });
+        else if (c.reply && hide) this._sys(`!${c.name}: běžná odpověď „${c.reply.slice(0, 60)}" se uživatelům UnityChatu skrývá`);
+        break;
+      }
       case 'annc': {
         // Mock UnityChat Announcement s demo animací erbu (médium hostuje web robdiesalot.com/chat/media/).
         const origin = 'https://robdiesalot.com/chat/media/';
@@ -3468,7 +3486,7 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
