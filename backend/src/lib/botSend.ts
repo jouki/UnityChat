@@ -72,7 +72,7 @@ async function refreshBot(ident: BotIdentity): Promise<BotIdentity> {
 }
 
 export interface BotSendInput { workspace: string; platform: Platform; text: string; replyTo?: string | null }
-export interface BotSendResult { id: string | null; channel: string; login: string; identity: 'own' | 'shared'; text: string }
+export interface BotSendResult { id: string | null; channel: string; login: string; identity: 'own' | 'shared'; text: string; badge: boolean }
 
 export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; log?: { warn: (o: object, m: string) => void } } = {}): Promise<BotSendResult> {
   const ws = await workspaceBySlug(input.workspace);
@@ -84,12 +84,30 @@ export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; lo
   let ident = await getBotIdentity(ws.slug, input.platform, ws.bot.mode !== 'shared');
   if (!ident || ident.state === 'expired') throw new BotSendError('no bot identity for platform', 503, 'bot_unavailable');
   const kind: 'own' | 'shared' = ident.workspace === ws.slug ? 'own' : 'shared';
+  let badge = false;
 
   const doSend = async (): Promise<{ id: string | null }> => {
     if (input.platform === 'twitch') {
       const broadcasterId = await twitchUserId(channel, ident!.accessToken);
       if (!broadcasterId) throw new BotSendError('twitch channel not found', 404, 'no_channel');
-      return sendTwitch({ accessToken: ident!.accessToken, senderId: ident!.platformUserId, broadcasterId, text, replyTo: input.replyTo || null });
+      const p = { senderId: ident!.platformUserId, broadcasterId, text, replyTo: input.replyTo || null };
+      // Odznak „Chat Bot": app access token + user:bot u bota + (channel:bot u broadcastera nebo mod).
+      // Když Twitch app token odmítne (chybí scope/souhlas), pošle se user tokenem bota — bez odznaku.
+      if (twitch.twitchConfigured()) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const r = await sendTwitch({ ...p, accessToken: await twitch.getAppAccessToken() });
+            badge = true;
+            return r;
+          } catch (e) {
+            const err = e as SendError;
+            if (err instanceof SendError && err.status === 401 && attempt === 0) { twitch.invalidateAppAccessToken(); continue; }
+            if (err instanceof SendError && (err.status === 401 || err.status === 403)) { deps.log?.warn({ workspace: ws.slug, status: err.status, err: err.message }, 'bot send: app token odmítnut, fallback user token (bez odznaku)'); break; }
+            throw e;
+          }
+        }
+      }
+      return sendTwitch({ ...p, accessToken: ident!.accessToken });
     }
     if (input.platform === 'kick') {
       const broadcasterUserId = await kickUserId(channel);
@@ -108,7 +126,7 @@ export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; lo
     let res: { id: string | null };
     try { res = await doSend(); }
     catch (e) { if (e instanceof SendError && e.retryable) { ident = await refreshBot(ident); res = await doSend(); } else throw e; }
-    return { id: res.id, channel, login: ident.login, identity: kind, text };
+    return { id: res.id, channel, login: ident.login, identity: kind, text, badge };
   } catch (e) {
     if (e instanceof BotSendError) throw e;
     const err = e as SendError;

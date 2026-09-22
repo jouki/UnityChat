@@ -73,6 +73,8 @@ interface StatePayload {
   // bot: očekávaný login účtu bota — když se naváže jiný (uživatel klikl Authorize u svého
   // osobního účtu), identita se neuloží a vrátí se #bot_error=wrong_account:<login>.
   expectLogin?: string;
+  // bot: 'broadcaster' = souhlas streamera s botem v kanálu (channel:bot), ne účet bota.
+  botKind?: 'bot' | 'broadcaster';
   createdAt: number;
 }
 

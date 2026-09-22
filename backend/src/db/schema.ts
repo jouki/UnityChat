@@ -297,6 +297,20 @@ export const botIdentities = pgTable(
   }),
 );
 
+// Souhlas broadcastera s botem v kanálu (Twitch `channel:bot` → odznak „Chat Bot" u zpráv
+// bota posílaných app access tokenem). Bez tokenů, jen záznam pro stav. SQL ručně.
+export const botChannelGrants = pgTable(
+  'bot_channel_grants',
+  {
+    workspace: text('workspace').notNull(),
+    platform: text('platform', { enum: ['twitch', 'youtube', 'kick'] }).notNull(),
+    login: text('login').notNull(),
+    platformUserId: text('platform_user_id').notNull(),
+    grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.workspace, t.platform], name: 'bot_channel_grants_pk' }) }),
+);
+
 // Profily browser source (/chat/raw/?p=<id>): nastavení z /chat/settings/ na serveru,
 // změny živě přes SSE `raw-settings`. Ručně SQL (backend/sql/2026-09-22-raw-profiles.sql).
 export const rawProfiles = pgTable('raw_profiles', {

@@ -3,7 +3,7 @@
 // `isBotAuthor` drží loginy botů v paměti (ingest onLive je synchronní).
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { botIdentities } from '../db/schema.js';
+import { botIdentities, botChannelGrants } from '../db/schema.js';
 import { decryptToken } from './crypto.js';
 import { encryptedColumns, type IdentityInfo, type TokenSet } from './webAuth.js';
 import type { Platform } from './zidolista.js';
@@ -91,14 +91,33 @@ export async function getBotIdentity(workspace: string, platform: Platform, pref
   return readIdentity(SHARED, platform);
 }
 
-export async function botStatus(workspace: string): Promise<{ shared: Record<Platform, { state: BotState; login?: string }>; own: Record<Platform, { state: BotState; login?: string }> }> {
+// ---- souhlas broadcastera s botem v kanálu (Twitch channel:bot → odznak) ----
+export async function upsertChannelGrant(workspace: string, platform: Platform, identity: IdentityInfo): Promise<void> {
+  await db
+    .insert(botChannelGrants)
+    .values({ workspace, platform, login: identity.login.toLowerCase(), platformUserId: identity.platformUserId, grantedAt: new Date() })
+    .onConflictDoUpdate({ target: [botChannelGrants.workspace, botChannelGrants.platform], set: { login: identity.login.toLowerCase(), platformUserId: identity.platformUserId, grantedAt: new Date() } });
+}
+
+export async function deleteChannelGrant(workspace: string, platform: Platform): Promise<boolean> {
+  const rows = await db.delete(botChannelGrants).where(and(eq(botChannelGrants.workspace, workspace), eq(botChannelGrants.platform, platform))).returning({ login: botChannelGrants.login });
+  return rows.length > 0;
+}
+
+export async function botStatus(workspace: string): Promise<{
+  shared: Record<Platform, { state: BotState; login?: string }>;
+  own: Record<Platform, { state: BotState; login?: string }>;
+  channelGrant: Record<Platform, { granted: boolean; login?: string; grantedAt?: string }>;
+}> {
   const rows = await db.select({ workspace: botIdentities.workspace, platform: botIdentities.platform, login: botIdentities.login, state: botIdentities.state }).from(botIdentities);
   const empty = (): Record<Platform, { state: BotState; login?: string }> => ({ twitch: { state: 'missing' }, kick: { state: 'missing' }, youtube: { state: 'missing' } });
-  const out = { shared: empty(), own: empty() };
+  const out = { shared: empty(), own: empty(), channelGrant: { twitch: { granted: false }, kick: { granted: false }, youtube: { granted: false } } as Record<Platform, { granted: boolean; login?: string; grantedAt?: string }> };
   for (const r of rows) {
     const bucket = r.workspace === SHARED ? out.shared : r.workspace === workspace ? out.own : null;
     if (!bucket) continue;
     bucket[r.platform as Platform] = { state: r.state === 'expired' ? 'expired' : 'online', login: r.login };
   }
+  const grants = await db.select().from(botChannelGrants).where(eq(botChannelGrants.workspace, workspace));
+  for (const g of grants) out.channelGrant[g.platform as Platform] = { granted: true, login: g.login, grantedAt: g.grantedAt.toISOString() };
   return out;
 }

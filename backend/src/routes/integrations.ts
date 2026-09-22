@@ -19,7 +19,7 @@ import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import type { IdentityInfo, TokenSet } from '../lib/webAuth.js';
-import { SHARED, upsertBotIdentity, deleteBotIdentity, botStatus } from '../lib/botIdentities.js';
+import { SHARED, upsertBotIdentity, deleteBotIdentity, botStatus, upsertChannelGrant, deleteChannelGrant } from '../lib/botIdentities.js';
 import { workspaceBySlug, workspacesSource, type Platform } from '../lib/zidolista.js';
 import { sendAsBot, BotSendError } from '../lib/botSend.js';
 import { subscribeIntegration, integrationStreamStats } from '../sse/integrationStream.js';
@@ -41,6 +41,9 @@ const LinkTokenBody = z.object({
   // Očekávaný login bota (např. "joukibot"): naváže-li se jiný účet, neuloží se (ochrana proti
   // omylu — uživatel v popupu odklikne Authorize u svého osobního účtu, 2026-09-22).
   expectLogin: z.string().regex(/^@?[A-Za-z0-9_.-]{1,60}$/).optional(),
+  // 'broadcaster' = streamer povoluje bota ve svém kanálu (Twitch channel:bot → odznak „Chat Bot");
+  // účet se musí shodovat s Twitch kanálem workspace, token se neukládá.
+  kind: z.enum(['bot', 'broadcaster']).optional(),
 });
 const IdentityBody = z.object({ workspace: Slug, platform: PlatformEnum });
 
@@ -52,7 +55,7 @@ export function isAllowedBotReturnTo(url: string): boolean {
 }
 
 // ---- jednorázové link tokeny (in-memory; jeden proces) ----
-interface LinkToken { workspace: string; platform: Platform; returnTo: string; expectLogin?: string; exp: number }
+interface LinkToken { workspace: string; platform: Platform; returnTo: string; expectLogin?: string; kind: 'bot' | 'broadcaster'; exp: number }
 const linkTokens = new Map<string, LinkToken>();
 const LINK_TTL_MS = 10 * 60_000;
 function sweepLinkTokens(): void { const now = Date.now(); for (const [k, v] of linkTokens) if (v.exp < now) linkTokens.delete(k); }
@@ -64,10 +67,22 @@ const SENT_TTL_MS = 10 * 60_000;
 function sweepSent(): void { const now = Date.now(); for (const [k, v] of sent) if (now - v.at > SENT_TTL_MS) sent.delete(k); }
 
 /** Po OAuth callbacku (kind:'bot'): uložit identitu bota workspace a vrátit se do Židolišty. */
-export async function completeBotCallback(req: FastifyRequest, reply: FastifyReply, platform: Platform, payload: { returnTo?: string; workspace?: string; expectLogin?: string }, identity: IdentityInfo, tokens: TokenSet) {
+export async function completeBotCallback(req: FastifyRequest, reply: FastifyReply, platform: Platform, payload: { returnTo?: string; workspace?: string; expectLogin?: string; botKind?: 'bot' | 'broadcaster' }, identity: IdentityInfo, tokens: TokenSet) {
   const workspace = String(payload.workspace || '').toLowerCase();
   const returnTo = payload.returnTo && isAllowedBotReturnTo(payload.returnTo) ? payload.returnTo : allowedReturnOrigins()[0];
   if (!workspace) return reply.redirect(`${returnTo}#bot_error=${encodeURIComponent('missing workspace')}`, 302);
+  if (payload.botKind === 'broadcaster') {
+    // Souhlas broadcastera: musí to být účet kanálu workspace; token zahodit (Twitch si souhlas pamatuje).
+    const ws = await workspaceBySlug(workspace);
+    const expected = ws?.channels[platform] || '';
+    if (!expected || expected !== identity.login.toLowerCase()) {
+      req.log.warn({ platform, workspace, expected, got: identity.login }, 'bot channel grant: wrong account, not saved');
+      return reply.redirect(`${returnTo}#bot_error=${encodeURIComponent(`wrong_account:${identity.login}`)}`, 302);
+    }
+    await upsertChannelGrant(workspace, platform, identity);
+    req.log.info({ platform, workspace, login: identity.login }, 'bot channel grant saved');
+    return reply.redirect(`${returnTo}#bot_channel_granted=${platform}:${encodeURIComponent(identity.login)}`, 302);
+  }
   const expect = String(payload.expectLogin || '').replace(/^@/, '').toLowerCase();
   if (expect && expect !== identity.login.toLowerCase()) {
     req.log.warn({ platform, workspace, expect, got: identity.login }, 'bot link: wrong account, not saved');
@@ -123,9 +138,9 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     if (!sendLimiter.allow(slug)) return reply.code(429).send({ ok: false, error: 'rate_limited', retryAfterMs: 1000 });
     try {
       const r = await sendAsBot({ workspace: slug, platform, text, replyTo: replyTo || null }, { ingest: opts.ingest, log: req.log });
-      const out = { ok: true, id: r.id, channel: r.channel, login: r.login, identity: r.identity };
+      const out = { ok: true, id: r.id, channel: r.channel, login: r.login, identity: r.identity, badge: r.badge };
       sent.set(key, { status: 202, body: out, at: Date.now() });
-      req.log.info({ workspace: slug, platform, channel: r.channel, login: r.login, identity: r.identity, id: r.id, len: r.text.length }, 'bot send');
+      req.log.info({ workspace: slug, platform, channel: r.channel, login: r.login, identity: r.identity, badge: r.badge, id: r.id, len: r.text.length }, 'bot send');
       return reply.code(202).send(out);
     } catch (e) {
       const err = e instanceof BotSendError ? e : new BotSendError((e as Error).message, 502, 'send_failed');
@@ -140,12 +155,18 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     const body = LinkTokenBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
     const workspace = body.data.workspace.toLowerCase();
+    const kind = body.data.kind || 'bot';
     if (!isAllowedBotReturnTo(body.data.returnTo)) return reply.code(400).send({ ok: false, error: 'returnTo origin not allowed' });
     if (workspace !== SHARED && !(await workspaceBySlug(workspace))) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+    if (kind === 'broadcaster') {
+      if (workspace === SHARED) return reply.code(400).send({ ok: false, error: 'broadcaster grant needs a workspace' });
+      if (body.data.platform !== 'twitch') return reply.code(400).send({ ok: false, error: 'broadcaster grant is twitch only' });
+      if (!(await workspaceBySlug(workspace))?.channels.twitch) return reply.code(400).send({ ok: false, error: 'workspace has no twitch channel' });
+    }
     sweepLinkTokens();
     const token = randomBytes(24).toString('base64url');
     const exp = Date.now() + LINK_TTL_MS;
-    linkTokens.set(token, { workspace, platform: body.data.platform, returnTo: body.data.returnTo, expectLogin: body.data.expectLogin, exp });
+    linkTokens.set(token, { workspace, platform: body.data.platform, returnTo: body.data.returnTo, expectLogin: body.data.expectLogin, kind, exp });
     return { ok: true, url: `${config.PUBLIC_BASE_URL.replace(/\/$/, '')}/bot/link/${token}`, expiresAt: new Date(exp).toISOString() };
   });
 
@@ -154,10 +175,11 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     const t = linkTokens.get(req.params.token);
     if (t) linkTokens.delete(req.params.token);
     if (!t) { reply.type('text/html'); return '<!doctype html><meta charset="utf-8"><p style="font-family:system-ui;padding:40px">Odkaz pro napojení bota je neplatný nebo vypršel. Vygeneruj v Židolištce nový.</p>'; }
-    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin };
+    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin, botKind: t.kind };
     if (t.platform === 'twitch') {
       if (!twitch.twitchConfigured()) return botErrorRedirect(reply, t.returnTo, 'Twitch OAuth not configured');
-      return reply.redirect(twitch.buildAuthorizeUrl(signState(state), twitch.WEB_SCOPES), 302);
+      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : twitch.BOT_SCOPES;
+      return reply.redirect(twitch.buildAuthorizeUrl(signState(state), scopes), 302);
     }
     if (t.platform === 'youtube') {
       if (!youtube.youtubeConfigured()) return botErrorRedirect(reply, t.returnTo, 'YouTube OAuth not configured');
@@ -179,12 +201,14 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     return { ok: true, workspace: ws.data.toLowerCase(), ...s };
   });
 
-  app.delete<{ Body: z.infer<typeof IdentityBody> }>('/integrations/bot/identity', async (req, reply) => {
+  app.delete<{ Body: z.infer<typeof IdentityBody> & { kind?: string } }>('/integrations/bot/identity', async (req, reply) => {
     if (!auth(req, reply)) return reply;
     const body = IdentityBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
-    const removed = await deleteBotIdentity(body.data.workspace.toLowerCase(), body.data.platform);
-    req.log.info({ workspace: body.data.workspace, platform: body.data.platform, removed }, 'bot identity unlinked');
+    const ws = body.data.workspace.toLowerCase();
+    // kind: 'broadcaster' = zrušit jen záznam souhlasu s botem v kanálu (odvolání práv dělá streamer u Twitche).
+    const removed = req.body?.kind === 'broadcaster' ? await deleteChannelGrant(ws, body.data.platform) : await deleteBotIdentity(ws, body.data.platform);
+    req.log.info({ workspace: ws, platform: body.data.platform, kind: req.body?.kind || 'bot', removed }, 'bot identity unlinked');
     return { ok: true, removed };
   });
 }
