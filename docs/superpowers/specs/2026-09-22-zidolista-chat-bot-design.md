@@ -96,7 +96,9 @@ Odkaz nesmí být hádatelný (kdokoli by jinak navázal svůj účet jako Robů
 
 1. Židolišta (klíč) `POST /integrations/bot/link-token`
    `{ workspace: "<slug>" | "_shared", platform, returnTo }` → `{ ok, url, expiresAt }`
-   (token jednorázový, 10 min; `returnTo` jen na origin Židolišty z env).
+   (token jednorázový, 10 min; `returnTo` jen na origin Židolišty z env —
+   dashboard je `https://jouki.cz`, stránka Nastavení
+   `https://jouki.cz/zidolista/<slug>/settings`).
 2. UI Židolišty otevře `url` (popup) → UnityChat 302 na consent providera →
    callback (sdílený se streamer/web flow, `kind: 'bot'` ve state) → uloží
    identitu jako bota workspace (`_shared` = sdílený JoukiBOT) → 302 na
@@ -130,6 +132,18 @@ Založit účty **JoukiBOT**: Twitch účet, Google účet s YouTube kanálem, K
 účet. Pak je jednou napojit ze Židolišty (sekce Chat bot, `_shared`). Bez
 nich bot nemá čím mluvit. Kick: aplikace musí mít scope `chat:write`; YouTube:
 consent s `youtube.force-ssl` (verifikace u Google běží).
+
+## Stav
+
+- 2026-09-22 ~16:30: Židolišta fáze 1 nasazena (`lib/chatHandler.ts` = jeden
+  mozek pro SB WS i SSE, `lib/unitychatBot.ts` = SSE klient + `/bot/send` +
+  proxy status/link-token/identity, `GET /integrations/workspaces` živě —
+  zatím všude `mode:'sb'` a prázdné kanály, dokud je user nevyplní; sekce
+  „Chat bot" v Nastavení). Její SSE klient se připojuje hned → do nasazení
+  streamu u nás 404 + reconnecty (neškodí).
+- UnityChat strana: čeká na start od usera.
+- Test fáze 1: v Židolištce `uctest` → `replyVia=bot`, zpráva `!brohemians`
+  do chatu uctest → očekává se `POST /bot/send` s `workspace: "uctest"`.
 
 ## Otevřené / poznámky
 
