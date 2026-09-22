@@ -1774,7 +1774,11 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
-    if (name.startsWith('!')) return this._allBangCommands().find((c) => '!' + c.name === name)?.source || 'SE';
+    if (name.startsWith('!')) {
+      const role = this._myChatRole();
+      const all = this._allBangCommands().filter((c) => '!' + c.name === name);
+      return (all.find((c) => !Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role)) || all[0])?.source || 'SE';
+    }
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
