@@ -70,6 +70,9 @@ interface StatePayload {
   returnTo?: string;
   webAccountId?: number;
   workspace?: string;
+  // bot: očekávaný login účtu bota — když se naváže jiný (uživatel klikl Authorize u svého
+  // osobního účtu), identita se neuloží a vrátí se #bot_error=wrong_account:<login>.
+  expectLogin?: string;
   createdAt: number;
 }
 

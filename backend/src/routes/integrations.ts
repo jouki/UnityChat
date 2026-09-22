@@ -34,7 +34,14 @@ const SendBody = z.object({
   replyTo: z.string().max(200).optional().nullable(),
   idempotencyKey: z.string().min(8).max(100),
 });
-const LinkTokenBody = z.object({ workspace: Slug, platform: PlatformEnum, returnTo: z.string().url() });
+const LinkTokenBody = z.object({
+  workspace: Slug,
+  platform: PlatformEnum,
+  returnTo: z.string().url(),
+  // Očekávaný login bota (např. "joukibot"): naváže-li se jiný účet, neuloží se (ochrana proti
+  // omylu — uživatel v popupu odklikne Authorize u svého osobního účtu, 2026-09-22).
+  expectLogin: z.string().regex(/^@?[A-Za-z0-9_.-]{1,60}$/).optional(),
+});
 const IdentityBody = z.object({ workspace: Slug, platform: PlatformEnum });
 
 function allowedReturnOrigins(): string[] {
@@ -45,7 +52,7 @@ export function isAllowedBotReturnTo(url: string): boolean {
 }
 
 // ---- jednorázové link tokeny (in-memory; jeden proces) ----
-interface LinkToken { workspace: string; platform: Platform; returnTo: string; exp: number }
+interface LinkToken { workspace: string; platform: Platform; returnTo: string; expectLogin?: string; exp: number }
 const linkTokens = new Map<string, LinkToken>();
 const LINK_TTL_MS = 10 * 60_000;
 function sweepLinkTokens(): void { const now = Date.now(); for (const [k, v] of linkTokens) if (v.exp < now) linkTokens.delete(k); }
@@ -57,10 +64,15 @@ const SENT_TTL_MS = 10 * 60_000;
 function sweepSent(): void { const now = Date.now(); for (const [k, v] of sent) if (now - v.at > SENT_TTL_MS) sent.delete(k); }
 
 /** Po OAuth callbacku (kind:'bot'): uložit identitu bota workspace a vrátit se do Židolišty. */
-export async function completeBotCallback(req: FastifyRequest, reply: FastifyReply, platform: Platform, payload: { returnTo?: string; workspace?: string }, identity: IdentityInfo, tokens: TokenSet) {
+export async function completeBotCallback(req: FastifyRequest, reply: FastifyReply, platform: Platform, payload: { returnTo?: string; workspace?: string; expectLogin?: string }, identity: IdentityInfo, tokens: TokenSet) {
   const workspace = String(payload.workspace || '').toLowerCase();
   const returnTo = payload.returnTo && isAllowedBotReturnTo(payload.returnTo) ? payload.returnTo : allowedReturnOrigins()[0];
   if (!workspace) return reply.redirect(`${returnTo}#bot_error=${encodeURIComponent('missing workspace')}`, 302);
+  const expect = String(payload.expectLogin || '').replace(/^@/, '').toLowerCase();
+  if (expect && expect !== identity.login.toLowerCase()) {
+    req.log.warn({ platform, workspace, expect, got: identity.login }, 'bot link: wrong account, not saved');
+    return reply.redirect(`${returnTo}#bot_error=${encodeURIComponent(`wrong_account:${identity.login}`)}`, 302);
+  }
   await upsertBotIdentity(workspace, platform, identity, tokens);
   req.log.info({ platform, workspace, login: identity.login }, 'bot identity linked');
   return reply.redirect(`${returnTo}#bot_linked=${platform}:${encodeURIComponent(identity.login)}`, 302);
@@ -133,7 +145,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     sweepLinkTokens();
     const token = randomBytes(24).toString('base64url');
     const exp = Date.now() + LINK_TTL_MS;
-    linkTokens.set(token, { workspace, platform: body.data.platform, returnTo: body.data.returnTo, exp });
+    linkTokens.set(token, { workspace, platform: body.data.platform, returnTo: body.data.returnTo, expectLogin: body.data.expectLogin, exp });
     return { ok: true, url: `${config.PUBLIC_BASE_URL.replace(/\/$/, '')}/bot/link/${token}`, expiresAt: new Date(exp).toISOString() };
   });
 
@@ -142,14 +154,16 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     const t = linkTokens.get(req.params.token);
     if (t) linkTokens.delete(req.params.token);
     if (!t) { reply.type('text/html'); return '<!doctype html><meta charset="utf-8"><p style="font-family:system-ui;padding:40px">Odkaz pro napojení bota je neplatný nebo vypršel. Vygeneruj v Židolištce nový.</p>'; }
-    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo };
+    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin };
     if (t.platform === 'twitch') {
       if (!twitch.twitchConfigured()) return botErrorRedirect(reply, t.returnTo, 'Twitch OAuth not configured');
       return reply.redirect(twitch.buildAuthorizeUrl(signState(state), twitch.WEB_SCOPES), 302);
     }
     if (t.platform === 'youtube') {
       if (!youtube.youtubeConfigured()) return botErrorRedirect(reply, t.returnTo, 'YouTube OAuth not configured');
-      return reply.redirect(youtube.buildAuthorizeUrl(signState(state), youtube.WEB_SCOPES), 302);
+      // Bot = jiný Google účet než ten přihlášený → nechat vybrat účet (select_account).
+      const url = youtube.buildAuthorizeUrl(signState(state), youtube.WEB_SCOPES).replace('prompt=consent', 'prompt=consent%20select_account');
+      return reply.redirect(url, 302);
     }
     if (!kick.kickConfigured()) return botErrorRedirect(reply, t.returnTo, 'Kick OAuth not configured');
     const pkce = kick.generatePkcePair();
