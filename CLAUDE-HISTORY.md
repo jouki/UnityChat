@@ -140,6 +140,29 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-23 (session unitychat-a8)
+
+- **`docs/reactions/README.md` (nový)** — referenční příručka chatových reakcí
+  a **předloha pro další animace**: finální podoba s časovou osou, architektura
+  a datový tok, vzorec pozicování se všemi konstantami, CSS vrstvy, oprávnění
+  a zámek, 9 pastí (rAF ve skrytém tabu, `video.load()`, recyklace elementu
+  v addonu, `font-size: 0` u `.pi`, autoplay se zvukem, cache videa…),
+  krok-za-krokem postup pro novou animaci vč. měření videa ffmpegem, kontrakt
+  SSE události, ladicí smyčka se zadavatelem.
+- **`docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md` (nový)** —
+  dohodnutý kontrakt chat bota Židolišty (stream, `/bot/send`, identity, odznak
+  Chat Bot) + průběžný stav ověřování.
+- **`CLAUDE.md`** — verze 3.39.47 → 3.39.50, milestones v3.39.39–50 (reakce,
+  bot, browser source), poznámka „nové oprávnění = nejdřív dashboard, pak release".
+- **`backend/README.md`** — sekce Reakce (`/reactions`), Profily browser source
+  (`/raw-profiles`), Chat bot Židolišty (stream, send, link-token, status).
+- **`store/listing/permissions-justification.md`** — zdůvodnění oprávnění
+  `identity`, psané obecně (pokryje i chystané přihlášení pro psaní z addonu).
+- **Memory:** nové `project_reaction_poop`, `project_zidolista_bot`,
+  `feedback_no_web_leak`, `feedback_shared_web_account`; přepsané
+  `checkpoint_v3_23_1` a `todo_session_handoff`; doplněné `project_web_version`,
+  `project_store_publishing`, `project_oauth_verification`.
+
 
 Záznamy změn, které nejsou vázané na source code commit (memory restrukturalizace, přesun milestones, oprava stale poznámky, workflow changes).
 
