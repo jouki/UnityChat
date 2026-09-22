@@ -2850,13 +2850,14 @@ class UnityChat {
 
   // ---- Scroll to message ----
 
-  _scrollToMessage(msgId) {
+  _scrollToMessage(msgId, { flash = true } = {}) {
     const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
     if (!target) {
-      this._sys('Původní zpráva už není v cache');
+      if (flash) this._sys('Původní zpráva už není v cache');
       return;
     }
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (!flash) return;
     target.classList.remove('msg-flash');
     void target.offsetWidth; // restart animace
     target.classList.add('msg-flash');
@@ -3785,7 +3786,7 @@ class UnityChat {
     this._updatePoopButtons();
     // Cílovou zprávu do záběru; když ji panel nemá, video jede u spodního okraje.
     const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(ev.target.messageId)}"]`);
-    if (target) this._scrollToMessage(ev.target.messageId);
+    if (target) this._scrollToMessage(ev.target.messageId, { flash: false });
     this._reaction?.stop?.();
     setTimeout(() => {
       this._reaction = core.playPoopReaction({
@@ -6280,14 +6281,15 @@ class UnityChat {
     });
     actions.appendChild(replyBtn);
 
-    // Reakce „Peepo poop" — jen mod/broadcaster; viditelnost řídí body.uc-can-poop / body.uc-poop-busy (CSS).
+    // Reakce „Peepo poop" — úplně vlevo; jen mod/broadcaster (body.uc-can-poop),
+    // během přehrávání schované (body.uc-poop-busy).
     const poopBtn = document.createElement('button');
     poopBtn.className = 'msg-action-btn';
     poopBtn.dataset.act = 'poop';
     poopBtn.title = 'Peepo poop (mod)';
     poopBtn.textContent = '\u{1F4A9}';
     poopBtn.addEventListener('click', (e) => { e.stopPropagation(); this._triggerPoop(msg); });
-    actions.appendChild(poopBtn);
+    actions.insertBefore(poopBtn, actions.firstChild);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

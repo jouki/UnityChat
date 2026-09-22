@@ -16,10 +16,12 @@ export const POOP = Object.freeze({
   brownFlatMs: 15_000,
   brownFadeMs: 15_000,
   aspect: 5,          // šířka : výška videa (1440×288)
-  // „Země" (spodek postavičky) je v 95,5 % výšky videa — změřeno z alfa kanálu.
-  // Podle toho se video posadí tak, aby Peepo stál na spodní hraně cílové zprávy.
-  groundRatio: 0.955,
-  groundPx: 4,        // jemné doladění pod spodní hranu zprávy
+  // Kam ve videu dopadají hromádky (podíl výšky) — změřeno z alfa kanálu:
+  // Peepo chodí v 95,5 %, hromádky se usazují kolem 88 %. Tenhle bod se zarovná
+  // na střed prvního řádku cílové zprávy (u víceřádkové tedy na řádek se jménem),
+  // takže „to" padá na zprávu a Peepo stojí kousek pod ní.
+  poopRatio: 0.88,
+  groundPx: 0,        // jemné doladění (kladné = video níž)
 });
 
 export const POOP_TOTAL_MS = POOP.brownAtMs + POOP.brownFlatMs + POOP.brownFadeMs;
@@ -79,20 +81,25 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     const host = hostEl.getBoundingClientRect();
     const w = host.width;
     const h = w / POOP.aspect;
-    let ground;   // kde má stát Peepo, v px od horního okraje hosta
+    let landing;   // kam mají dopadat hromádky, v px od horního okraje hosta
     if (targetEl && targetEl.isConnected) {
       const r = targetEl.getBoundingClientRect();
-      ground = r.bottom - host.top + POOP.groundPx;
-      spot.style.top = `${r.top - host.top - 6}px`;
-      spot.style.height = `${r.height + 12}px`;
+      // Střed PRVNÍHO řádku zprávy: jméno (.un) tam je vždy; u víceřádkové zprávy
+      // se tak animace drží řádku se jménem, ne spodku celého odstavce.
+      const nameEl = targetEl.querySelector('.un') || targetEl.querySelector('.ts');
+      const first = nameEl ? nameEl.getBoundingClientRect() : null;
+      landing = (first && first.height ? first.top + first.height / 2 : r.top + Math.min(r.height, 24) / 2) - host.top + POOP.groundPx;
+      // Reflektor: měkké světlo kolem cílové zprávy (maska v CSS podle proměnných).
+      spot.style.setProperty('--spot-y', `${r.top + r.height / 2 - host.top}px`);
+      spot.style.setProperty('--spot-h', `${Math.max(r.height + 26, 54)}px`);
       spot.style.display = '';
     } else {
-      ground = host.height - 8;
+      landing = host.height - h * (1 - POOP.poopRatio) - 8;
       spot.style.display = 'none';
     }
     video.style.width = `${w}px`;
     video.style.height = `${h}px`;
-    video.style.top = `${ground - h * POOP.groundRatio}px`;
+    video.style.top = `${landing - h * POOP.poopRatio}px`;
   };
   layout();
   const onScroll = () => layout();
