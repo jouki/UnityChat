@@ -2774,8 +2774,9 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 }
 
 /* Logo zdroje commandu (Židolišta / StreamElements) v seznamu návrhů */
-.es-item img.es-logo { width: 22px; height: 22px; border-radius: 5px; object-fit: contain; }
-.es-item img.es-logo-zidolista { width: 28px; height: 28px; filter: drop-shadow(0px 2px 1px black); }
+/* Stejný box 28 px pro všechna loga, ať jsou zarovnaná na střed; menší logo (SE) má vnitřní okraj. */
+.es-item img.es-logo { width: 28px; height: 28px; padding: 3px; box-sizing: border-box; border-radius: 5px; object-fit: contain; }
+.es-item img.es-logo-zidolista { padding: 0; filter: drop-shadow(0px 2px 1px black); }
 
 .es-dot {
   width: 20px;
