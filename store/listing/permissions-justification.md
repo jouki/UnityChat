@@ -110,12 +110,14 @@ user can attach it to a bug report. Nothing is downloaded without that click.
 ### `identity`   ⚠️ NOVÉ ve v3.39.50 — bez vyplnění dashboard odmítne odeslat verzi ke kontrole
 
 ```
-Moderators can trigger a short shared animation on a chat message, which every UnityChat user then sees at the same time. The backend must know who asked for it, so only a moderator or the broadcaster can start it. The extension uses chrome.identity.launchWebAuthFlow to run the normal Twitch OAuth login in a browser window; the user types the password on Twitch's own page and the extension never sees it. Only the resulting session token for our backend (api.jouki.cz) is stored locally. The flow starts solely when the user clicks the reaction button, and no email address or Google account data is requested.
+The extension lets the user sign in with their own Twitch, YouTube or Kick account so it can act on their behalf: send chat messages from the panel, and use features that the server must authorize, such as moderator-only chat reactions that every UnityChat user sees at once. chrome.identity.launchWebAuthFlow opens the platform's normal OAuth page in a browser window, so the password is typed on the platform's own site and the extension never sees it. Only the resulting session token for our own backend (api.jouki.cz) is stored locally on the user's machine; it is used to prove who the user is and can be removed by signing out. The flow starts only when the user clicks sign in or an action that needs it. We do not request the user's email address or any Google account data.
 ```
 
-**Proč to potřebujeme:** reakci smí spustit jen mod/broadcaster, což musí ověřit
-server — anonymní addon by to nedokázal. `launchWebAuthFlow` jen otevře OAuth
-okno Twitche; `identity.email` ani Google účet nežádáme.
+**Proč obecně:** text schválně nemluví jen o reakcích — `identity` použijeme i na
+přihlášení pro **psaní zpráv z addonu** (port webového loginu). Kdyby zdůvodnění
+mluvilo jen o reakcích, museli bychom ho při rozšíření měnit a znovu čekat na review.
+`launchWebAuthFlow` jen otevře OAuth okno platformy; `identity.email` ani Google účet
+nežádáme.
 
 ### Host permissions
 
