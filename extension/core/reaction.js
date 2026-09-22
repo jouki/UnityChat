@@ -23,6 +23,9 @@ export const POOP = Object.freeze({
   poopRatio: 0.88,
   // Doladění podle usera (dvě kola): animace o 1,7 řádku níž, ať „to" dopadá přesně na zprávu.
   offsetLines: 1.7,
+  // Když je video větší (široké okno), posune se navíc dolů o tenhle podíl přírůstku
+  // výšky — jinak by kotva držela pořád stejně a animace by lezla nahoru přes chat.
+  growOffsetRatio: 0.45,
   // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
   // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
   // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
@@ -116,7 +119,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
       // se tak animace drží řádku se jménem, ne spodku celého odstavce.
       const nameEl = targetEl.querySelector('.un') || targetEl.querySelector('.ts');
       const first = nameEl ? nameEl.getBoundingClientRect() : null;
-      landing = (first && first.height ? first.top + first.height / 2 : r.top + Math.min(r.height, lineH) / 2) - host.top + lineH * POOP.offsetLines;
+      const grow = Math.max(0, h - lineH * POOP.minHeightLines) * POOP.growOffsetRatio;
+      landing = (first && first.height ? first.top + first.height / 2 : r.top + Math.min(r.height, lineH) / 2) - host.top + lineH * POOP.offsetLines + grow;
       // Reflektor: měkké světlo kolem cílové zprávy (maska v CSS podle proměnných).
       spot.style.setProperty('--spot-y', `${r.top + r.height / 2 - host.top}px`);
       spot.style.setProperty('--spot-h', `${Math.max(r.height + 26, 54)}px`);
