@@ -15,8 +15,11 @@ export const POOP = Object.freeze({
   brownAtMs: 7200,
   brownFlatMs: 15_000,
   brownFadeMs: 15_000,
-  aspect: 5,          // šířka : výška videa
-  groundPx: 6,        // spodní hrana videa = spodek cílové zprávy + tolik px
+  aspect: 5,          // šířka : výška videa (1440×288)
+  // „Země" (spodek postavičky) je v 95,5 % výšky videa — změřeno z alfa kanálu.
+  // Podle toho se video posadí tak, aby Peepo stál na spodní hraně cílové zprávy.
+  groundRatio: 0.955,
+  groundPx: 4,        // jemné doladění pod spodní hranu zprávy
 });
 
 export const POOP_TOTAL_MS = POOP.brownAtMs + POOP.brownFlatMs + POOP.brownFadeMs;
@@ -76,20 +79,20 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     const host = hostEl.getBoundingClientRect();
     const w = host.width;
     const h = w / POOP.aspect;
-    let bottom;   // v px od horního okraje hosta
+    let ground;   // kde má stát Peepo, v px od horního okraje hosta
     if (targetEl && targetEl.isConnected) {
       const r = targetEl.getBoundingClientRect();
-      bottom = r.bottom - host.top + POOP.groundPx;
+      ground = r.bottom - host.top + POOP.groundPx;
       spot.style.top = `${r.top - host.top - 6}px`;
       spot.style.height = `${r.height + 12}px`;
       spot.style.display = '';
     } else {
-      bottom = host.height - 8;
+      ground = host.height - 8;
       spot.style.display = 'none';
     }
     video.style.width = `${w}px`;
     video.style.height = `${h}px`;
-    video.style.top = `${bottom - h}px`;
+    video.style.top = `${ground - h * POOP.groundRatio}px`;
   };
   layout();
   const onScroll = () => layout();
@@ -97,11 +100,13 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(layout) : null;
   ro?.observe(hostEl);
 
-  // Zatmění + reflektor (CSS přechod přes třídu), video hned.
-  requestAnimationFrame?.(() => overlay.classList.add('on')) ?? overlay.classList.add('on');
+  // Zatmění + reflektor (CSS přechod přes třídu). Ne přes rAF: ve skrytém tabu
+  // (OBS na pozadí, MCP okno) se rAF nespustí a overlay by zůstal průhledný.
   if (reducedMotion) overlay.classList.add('no-motion');
-  try { video.currentTime = offsetMs / 1000; } catch { /* metadata ještě nejsou */ }
-  video.addEventListener('loadedmetadata', () => { try { if (offsetMs > 300) video.currentTime = offsetMs / 1000; } catch { /* ignore */ } }, { once: true });
+  later(() => overlay.classList.add('on'), 20);
+  // Video z JS vytvořeného elementu se samo nenačte spolehlivě → load() (stejná past jako u announcementu).
+  video.load();
+  video.addEventListener('loadedmetadata', () => { try { if (offsetMs > 300) video.currentTime = offsetMs / 1000; } catch { /* ignore */ } layout(); }, { once: true });
   video.play().catch(() => {});
 
   // Hnědá: jméno + logo platformy jen u cílové zprávy.
