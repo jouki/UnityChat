@@ -6282,14 +6282,17 @@ class UnityChat {
     actions.appendChild(replyBtn);
 
     // Reakce „Peepo poop" — úplně vlevo; jen mod/broadcaster (body.uc-can-poop),
-    // během přehrávání schované (body.uc-poop-busy).
-    const poopBtn = document.createElement('button');
-    poopBtn.className = 'msg-action-btn';
-    poopBtn.dataset.act = 'poop';
-    poopBtn.title = 'Peepo poop (mod)';
-    poopBtn.textContent = '\u{1F4A9}';
-    poopBtn.addEventListener('click', (e) => { e.stopPropagation(); this._triggerPoop(msg); });
-    actions.insertBefore(poopBtn, actions.firstChild);
+    // během přehrávání schované (body.uc-poop-busy). U optimistické zprávy ne:
+    // její id se po IRC echu přepíše, takže by reakce necílila na nic.
+    if (!msg._optimistic) {
+      const poopBtn = document.createElement('button');
+      poopBtn.className = 'msg-action-btn';
+      poopBtn.dataset.act = 'poop';
+      poopBtn.title = 'Peepo poop (mod)';
+      poopBtn.textContent = '\u{1F4A9}';
+      poopBtn.addEventListener('click', (e) => { e.stopPropagation(); this._triggerPoop(msg); });
+      actions.insertBefore(poopBtn, actions.firstChild);
+    }
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

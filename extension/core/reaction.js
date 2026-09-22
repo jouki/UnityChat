@@ -26,7 +26,7 @@ export const POOP = Object.freeze({
   // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
   // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
   // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
-  maxHeightLines: 5.5,
+  maxHeightLines: 8,
 });
 
 /** Výška řádku zprávy (px) — z cílové zprávy, jinak z chatu; fallback 21. */
@@ -116,8 +116,12 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
       spot.style.setProperty('--spot-h', `${Math.max(r.height + 26, 54)}px`);
       spot.style.display = '';
     } else {
+      // Cílová zpráva není v DOM (odscrollovaná pryč z paměti): video u spodního
+      // okraje, ale scéna se zatmí taky — reflektor jen míří na spodek chatu.
       landing = host.height - h * (1 - POOP.poopRatio) - 8;
-      spot.style.display = 'none';
+      spot.style.setProperty('--spot-y', `${Math.max(0, host.height - lineH * 2)}px`);
+      spot.style.setProperty('--spot-h', `${Math.max(lineH * 2, 54)}px`);
+      spot.style.display = '';
     }
     video.style.width = `${w}px`;
     video.style.height = `${h}px`;
