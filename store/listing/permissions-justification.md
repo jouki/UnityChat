@@ -107,6 +107,16 @@ extension writes its in-memory diagnostic log to the Downloads folder so the
 user can attach it to a bug report. Nothing is downloaded without that click.
 ```
 
+### `identity`   ⚠️ NOVÉ ve v3.39.50 — bez vyplnění dashboard odmítne odeslat verzi ke kontrole
+
+```
+Moderators can trigger a short shared animation on a chat message, which every UnityChat user then sees at the same time. The backend must know who asked for it, so only a moderator or the broadcaster can start it. The extension uses chrome.identity.launchWebAuthFlow to run the normal Twitch OAuth login in a browser window; the user types the password on Twitch's own page and the extension never sees it. Only the resulting session token for our backend (api.jouki.cz) is stored locally. The flow starts solely when the user clicks the reaction button, and no email address or Google account data is requested.
+```
+
+**Proč to potřebujeme:** reakci smí spustit jen mod/broadcaster, což musí ověřit
+server — anonymní addon by to nedokázal. `launchWebAuthFlow` jen otevře OAuth
+okno Twitche; `identity.email` ani Google účet nežádáme.
+
 ### Host permissions
 
 ⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze má 977 — původní delší
