@@ -14,6 +14,7 @@ import announcementRoutes from './routes/announcements.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
 import rawProfileRoutes from './routes/rawProfiles.js';
+import reactionRoutes from './routes/reactions.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
 import { loadBotLogins } from './lib/botIdentities.js';
@@ -110,6 +111,7 @@ await app.register(announcementRoutes);
 await app.register(webAuthRoutes, { ingest });
 await app.register(integrationRoutes, { ingest });
 await app.register(rawProfileRoutes);
+await app.register(reactionRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

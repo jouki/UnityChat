@@ -42,6 +42,8 @@ export function isAllowedReturnTo(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.username || u.password) return false;
+    // Addon: chrome.identity.launchWebAuthFlow vrací na https://<id>.chromiumapp.org/ (id = 32× a–p).
+    if (/^https:\/\/[a-p]{32}\.chromiumapp\.org$/.test(u.origin)) return true;
     return allowedOrigins().includes(u.origin);
   } catch {
     return false;

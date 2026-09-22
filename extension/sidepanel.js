@@ -45,6 +45,8 @@ const DEFAULTS = {
 
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
 const UC_API = 'https://api.jouki.cz';
+// Reakce „Peepo poop" — video sdílené s webem (robdiesalot.com/chat/media/).
+const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2.webm';
 
 class NicknameManager {
   constructor() {
@@ -98,6 +100,10 @@ class NicknameManager {
       // UnityChat Announcement ze Židolišty (command s videem) — vykreslí UnityChat._addAnnouncement.
       this._eventSource.addEventListener('announcement', (e) => {
         try { const d = JSON.parse(e.data); if (this.onAnnouncement) this.onAnnouncement(d); } catch {}
+      });
+      // Reakce „Peepo poop" spuštěná modem — přehraje UnityChat._playReaction (core/reaction.js).
+      this._eventSource.addEventListener('reaction', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onReaction) this.onReaction(d); } catch {}
       });
       // Změna chat commandů v Židolištce (webhook → backend → SSE) — UnityChat si obnoví „!" našeptávání.
       this._eventSource.addEventListener('commands-change', (e) => {
@@ -1078,6 +1084,15 @@ class UnityChat {
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
     this.nicknames.onAnnouncement = (a) => { if (a?.channel === (this.config.channel || '').toLowerCase()) this._addAnnouncement(a); };
+    // Reakce „Peepo poop": SSE → přehrát; tlačítko u zpráv řídí body třídy (role + běžící reakce).
+    this._reactionSeen = new Set();
+    this._activeReaction = null;
+    this.nicknames.onReaction = (ev) => this._playReaction(ev);
+    setInterval(() => this._updatePoopButtons(), 5000);
+    fetch(`${UC_API}/reactions/active?channel=${encodeURIComponent((this.config.channel || '').toLowerCase())}`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (j?.active) this._playReaction(j.active); }).catch(() => {});
+    // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
+    { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
@@ -3749,6 +3764,82 @@ class UnityChat {
     return true;
   }
 
+  // ---- Reakce „Peepo poop" (core/reaction.js; backend POST /reactions, SSE `reaction`) ----
+
+  /** Tlačítko 💩 jen pro mody/broadcastera a jen když žádná reakce neběží. */
+  _updatePoopButtons() {
+    const role = this._myChatRole();
+    document.body.classList.toggle('uc-can-poop', role === 'moderator' || role === 'broadcaster');
+    document.body.classList.toggle('uc-poop-busy', !!this._activeReaction && window.UC_CORE.reactionBusy(this._activeReaction));
+  }
+
+  _playReaction(raw) {
+    const core = window.UC_CORE;
+    const ev = core.normalizeReaction(raw);
+    if (!ev || ev.channel !== (this.config.channel || '').toLowerCase()) return;
+    if (this._reactionSeen.has(ev.id)) return;
+    this._reactionSeen.add(ev.id);
+    const offset = core.reactionOffsetMs(ev);
+    if (offset > ev.durationMs) return;
+    this._activeReaction = ev;
+    this._updatePoopButtons();
+    // Cílovou zprávu do záběru; když ji panel nemá, video jede u spodního okraje.
+    const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(ev.target.messageId)}"]`);
+    if (target) this._scrollToMessage(ev.target.messageId);
+    this._reaction?.stop?.();
+    setTimeout(() => {
+      this._reaction = core.playPoopReaction({
+        hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
+        offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        onEnd: () => { this._activeReaction = null; this._updatePoopButtons(); },
+      });
+    }, target ? 350 : 0);
+    this._ucLog('Reaction', `${ev.kind} by ${ev.by?.login || '?'} → ${ev.target.platform}:${ev.target.messageId} target=${!!target} offset=${offset}`);
+  }
+
+  /** Přihlášení k backendu (stejný OAuth jako web) přes chrome.identity — token v chrome.storage.local. */
+  async _ucSessionToken() {
+    const s = await chrome.storage.local.get('uc_session');
+    return s.uc_session || null;
+  }
+
+  async _ucLogin() {
+    const returnTo = chrome.identity.getRedirectURL();
+    const start = await fetch(`${UC_API}/auth/twitch/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnTo }) });
+    const sj = await start.json().catch(() => ({}));
+    if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
+    const final = await chrome.identity.launchWebAuthFlow({ url: sj.url, interactive: true });
+    const p = new URLSearchParams(new URL(final).hash.slice(1));
+    if (p.get('uc_error')) throw new Error(p.get('uc_error'));
+    const code = p.get('uc_code');
+    if (!code) throw new Error('bez kódu');
+    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const ej = await ex.json().catch(() => ({}));
+    if (!ex.ok || !ej.token) throw new Error(ej.error || `exchange ${ex.status}`);
+    await chrome.storage.local.set({ uc_session: ej.token });
+    this._ucLog('Reaction', 'backend login ok');
+    return ej.token;
+  }
+
+  async _triggerPoop(msg) {
+    if (this._activeReaction && window.UC_CORE.reactionBusy(this._activeReaction)) return;
+    let token = await this._ucSessionToken();
+    if (!token) {
+      try { token = await this._ucLogin(); }
+      catch (e) { this._ucLog('Reaction', `login FAIL ${e.message || e}`); this._sys(`Přihlášení pro reakce selhalo: ${e.message || e}`); return; }
+    }
+    const r = await fetch(`${UC_API}/reactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ kind: 'poop', platform: msg.platform, messageId: msg.id, channel: (this.config.channel || '').toLowerCase() }),
+    }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: e.message }) }));
+    const j = await r.json().catch(() => ({}));
+    this._ucLog('Reaction', `trigger ${msg.platform}:${msg.id} → ${r.status} ${j.error || ''}`);
+    if (r.status === 401) { await chrome.storage.local.remove('uc_session'); this._sys('Přihlášení pro reakce vypršelo, klikni znovu.'); return; }
+    if (r.status === 403) { this._sys('Reakce může spustit jen mod nebo streamer (backend tě podle zpráv v chatu nepoznal jako moda).'); return; }
+    if (r.status === 409) return;   // už běží — tlačítko se schová podle SSE
+    if (!r.ok) this._sys(`Reakce se nespustila: ${j.error || r.status}`);
+  }
+
   _sys(text) {
     const el = document.createElement('div');
     el.className = 'sys';
@@ -6188,6 +6279,15 @@ class UnityChat {
       this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);
+
+    // Reakce „Peepo poop" — jen mod/broadcaster; viditelnost řídí body.uc-can-poop / body.uc-poop-busy (CSS).
+    const poopBtn = document.createElement('button');
+    poopBtn.className = 'msg-action-btn';
+    poopBtn.dataset.act = 'poop';
+    poopBtn.title = 'Peepo poop (mod)';
+    poopBtn.textContent = '\u{1F4A9}';
+    poopBtn.addEventListener('click', (e) => { e.stopPropagation(); this._triggerPoop(msg); });
+    actions.appendChild(poopBtn);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

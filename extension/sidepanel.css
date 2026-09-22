@@ -2894,3 +2894,19 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   padding: 3px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+/* ---- Reakce „Peepo poop" (core/reaction.js; mod/broadcaster spustí, vidí všichni) ---- */
+/* Tlačítko jen pro mody (body.uc-can-poop) a jen když žádná reakce neběží (body.uc-poop-busy). */
+.msg-action-btn[data-act="poop"] { display: none; font-size: 13px; }
+body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: flex; }
+.uc-poop-overlay { position: absolute; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; opacity: 0; transition: opacity 1.2s ease; }
+.uc-poop-overlay.on { opacity: 1; }
+.uc-poop-overlay.no-motion { transition: none; }
+/* Reflektor: průhledný pruh na cílové zprávě, okolí zatmí obří box-shadow (měkký okraj). */
+.uc-poop-spot { position: absolute; left: 0; right: 0; border-radius: 10px; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.78), 0 0 48px 24px rgba(0, 0, 0, 0.78); }
+.uc-poop-video { position: absolute; left: 0; display: block; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.6)); }
+/* Hnědé jméno + logo platformy u cílové zprávy: 15 s natvrdo, pak 15 s přechod zpět. */
+.msg.uc-poop-brown .un { color: #6b4423 !important; }
+.msg.uc-poop-brown .pi { filter: grayscale(1) sepia(1) saturate(4) hue-rotate(-12deg) brightness(0.55); }
+.msg.uc-poop-fade .un { transition: color 15s linear; }
+.msg.uc-poop-fade .pi { transition: filter 15s linear; }
