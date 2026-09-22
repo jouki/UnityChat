@@ -141,7 +141,13 @@ consent s `youtube.force-ssl` (verifikace u Google běží).
   zatím všude `mode:'sb'` a prázdné kanály, dokud je user nevyplní; sekce
   „Chat bot" v Nastavení). Její SSE klient se připojuje hned → do nasazení
   streamu u nás 404 + reconnecty (neškodí).
-- UnityChat strana: čeká na start od usera.
+- UnityChat strana **nasazena 2026-09-22 19:43** (commit 897fd59): stream, `/bot/send`,
+  link-token, status, DELETE identity; tabulka `bot_identities` vytvořena; ingest
+  sleduje navíc `twitch:jouki728`. Klient Židolišty se připojil hned. Ověřeno curlem
+  (401 bez klíče, 404 no_channel / unknown_workspace, 503 bot_unavailable, link-token
+  + odmítnutí cizího returnTo).
+- Doporučený kanál pro workspace `jouki`: **twitch = `jouki728`** (userův vlastní
+  kanál); `uctest` je cizí existující Twitch účet, do jeho chatu se psát nemá.
 - Test fáze 1 (shoda 2026-09-22 ~17:00): workspace `uctest` v Židolištce
   neexistuje → testuje se na workspace **`jouki`** namapovaném na Twitch kanál
   `uctest` (user vyplní v Nastavení workspace jouki twitch = uctest a přepne
