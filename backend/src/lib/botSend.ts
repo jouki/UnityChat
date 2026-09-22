@@ -114,6 +114,8 @@ export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; lo
           }
         }
       }
+      // Twitch počítá i zahozený pokus do limitu 1 zpráva/s → před fallbackem počkat, jinak 429.
+      if (appError) await new Promise((r) => setTimeout(r, 1200));
       try {
         return await sendTwitch({ ...p, accessToken: ident!.accessToken });
       } catch (e) {
