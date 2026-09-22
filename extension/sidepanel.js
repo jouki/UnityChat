@@ -3727,6 +3727,8 @@ class UnityChat {
       this.scrollBtn.classList.remove('hidden');
     }
     this.chatEl.appendChild(el);
+    // Video vzniklo v <template> (inertní dokument) — po vložení se samo nenačte, musí se pobídnout.
+    { const v = el.querySelector('video'); if (v) { v.load(); if (!reducedMotion) v.play().catch(() => {}); } }
     if (this.autoScroll) this._unloadTop();
     this._scroll();
     this._ucLog('Annc', `${a.command || '?'}${a.media ? ' + médium' : ''}${a.chatReply?.hideInUnityChat ? ' (odpověď skryta)' : ''}`);
