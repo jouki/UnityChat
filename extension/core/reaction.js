@@ -22,7 +22,24 @@ export const POOP = Object.freeze({
   // takže „to" padá na zprávu a Peepo stojí kousek pod ní.
   poopRatio: 0.88,
   groundPx: 0,        // jemné doladění (kladné = video níž)
+  // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
+  // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
+  // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
+  maxHeightLines: 5.5,
 });
+
+/** Výška řádku zprávy (px) — z cílové zprávy, jinak z chatu; fallback 21. */
+export function lineHeightOf(el) {
+  for (const node of [el, el?.parentElement]) {
+    if (!node?.ownerDocument?.defaultView) continue;
+    const cs = node.ownerDocument.defaultView.getComputedStyle(node);
+    const lh = parseFloat(cs.lineHeight);
+    if (Number.isFinite(lh) && lh > 0) return lh;
+    const fs = parseFloat(cs.fontSize);
+    if (Number.isFinite(fs) && fs > 0) return fs * 1.5;
+  }
+  return 21;
+}
 
 export const POOP_TOTAL_MS = POOP.brownAtMs + POOP.brownFlatMs + POOP.brownFadeMs;
 
@@ -79,7 +96,10 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
 
   const layout = () => {
     const host = hostEl.getBoundingClientRect();
-    const w = host.width;
+    // Výška podle řádku textu (strop), šířka dopočtená z poměru; na širokém chatu
+    // se video vycentruje, na úzkém zabere celou šířku.
+    const maxH = lineHeightOf(targetEl || chatEl) * POOP.maxHeightLines;
+    const w = Math.min(host.width, maxH * POOP.aspect);
     const h = w / POOP.aspect;
     let landing;   // kam mají dopadat hromádky, v px od horního okraje hosta
     if (targetEl && targetEl.isConnected) {
@@ -99,6 +119,7 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     }
     video.style.width = `${w}px`;
     video.style.height = `${h}px`;
+    video.style.left = `${Math.max(0, (host.width - w) / 2)}px`;
     video.style.top = `${landing - h * POOP.poopRatio}px`;
   };
   layout();
