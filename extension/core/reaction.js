@@ -97,7 +97,10 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
   spot.className = 'uc-poop-spot';
   const video = doc.createElement('video');
   video.className = 'uc-poop-video';
-  video.muted = true; video.playsInline = true; video.preload = 'auto';
+  // Video má zvuk. Prohlížeč autoplay se zvukem povolí jen tam, kde s ním uživatel
+  // interagoval (v OBS je povolený vždy) — jinak se přehraje potichu, viz play() níž.
+  video.muted = false; video.volume = 0.85;
+  video.playsInline = true; video.preload = 'auto';
   video.setAttribute('aria-hidden', 'true');
   video.src = videoUrl;
   overlay.append(spot, video);
@@ -135,7 +138,9 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     }
     video.style.width = `${w}px`;
     video.style.height = `${h}px`;
-    video.style.left = `${Math.max(0, (host.width - w) / 2)}px`;
+    // Zarovnat doleva, ne na střed: na širokém okně jsou zprávy (jméno, krátký text)
+    // u levého okraje, takže animace musí mířit tam (pokyn usera 2026-09-23).
+    video.style.left = '0px';
     video.style.top = `${landing - h * POOP.poopRatio}px`;
   };
   layout();
@@ -151,7 +156,9 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
   // Video z JS vytvořeného elementu se samo nenačte spolehlivě → load() (stejná past jako u announcementu).
   video.load();
   video.addEventListener('loadedmetadata', () => { try { if (offsetMs > 300) video.currentTime = offsetMs / 1000; } catch { /* ignore */ } layout(); }, { once: true });
-  video.play().catch(() => {});
+  // Autoplay se zvukem může prohlížeč odmítnout (žádná interakce se stránkou) →
+  // druhý pokus potichu, ať animace nikdy nevypadne úplně.
+  video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
 
   // Hnědá: jméno + logo platformy jen u cílové zprávy.
   const brownOn = () => targetEl?.classList.add('uc-poop-brown');

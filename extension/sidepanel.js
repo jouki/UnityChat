@@ -46,7 +46,7 @@ const DEFAULTS = {
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
 const UC_API = 'https://api.jouki.cz';
 // Reakce „Peepo poop" — video sdílené s webem (robdiesalot.com/chat/media/).
-const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2.webm';
+const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2-wet-sound.webm';
 
 class NicknameManager {
   constructor() {
