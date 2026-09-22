@@ -97,7 +97,7 @@ async function fetchZidolista(slug: string): Promise<PublicCommand[]> {
   return toPublicCommands(j.commands);
 }
 
-function keyMatches(candidate: unknown): boolean {
+export function keyMatches(candidate: unknown): boolean {
   const key = config.ZIDOLISTA_API_KEY;
   const got = String(Array.isArray(candidate) ? candidate[0] : candidate ?? '').trim();
   if (!key || !got) return false;

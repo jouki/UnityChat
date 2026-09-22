@@ -95,6 +95,10 @@ class NicknameManager {
           if (this.onChange) this.onChange({ ...d, nickname: null, color: null });
         } catch {}
       });
+      // UnityChat Announcement ze Židolišty (command s videem) — vykreslí UnityChat._addAnnouncement.
+      this._eventSource.addEventListener('announcement', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onAnnouncement) this.onAnnouncement(d); } catch {}
+      });
       // Změna chat commandů v Židolištce (webhook → backend → SSE) — UnityChat si obnoví „!" našeptávání.
       this._eventSource.addEventListener('commands-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
@@ -1073,6 +1077,7 @@ class UnityChat {
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
+    this.nicknames.onAnnouncement = (a) => { if (a?.channel === (this.config.channel || '').toLowerCase()) this._addAnnouncement(a); };
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
@@ -1296,7 +1301,7 @@ class UnityChat {
           'announcement', 'ann',
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
-          'redeem', 'highlight',
+          'redeem', 'highlight', 'annc',
           'milestone', 'streak',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
@@ -3314,6 +3319,12 @@ class UnityChat {
       case 'highlight':
         this._addMessage({ ...base, message: text, isHighlight: true });
         break;
+      case 'annc': {
+        // Mock UnityChat Announcement s demo animací erbu (médium hostuje web robdiesalot.com/chat/media/).
+        const origin = 'https://robdiesalot.com/chat/media/';
+        this._addAnnouncement({ id: `mock-annc-${now}`, channel: (this.config.channel || '').toLowerCase(), command: 'Brohemians', text: text === 'test message' ? 'Brohemians! Pojď se přidat k bratrstvu.' : text, media: { url: origin + 'shield-orbit-alpha.webm', kind: 'video', width: 200, loop: false, stillUrl: origin + 'shield-still.webp' }, chatReply: { text: 'Brohemians!', hideInUnityChat: true }, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+        break;
+      }
       case 'mod':
       case 'timeout': {
         const secs = parseInt(text, 10) || 600;
@@ -3679,6 +3690,48 @@ class UnityChat {
   }
 
   // ---- Messages ----
+
+  // ---- UnityChat Announcement (command v Židolištce s videem, SSE `announcement`) ----
+  _addAnnouncement(payload) {
+    const core = window.UC_CORE;
+    const a = core.normalizeAnnouncement(payload);
+    if (!a) { this._ucLog('Annc', 'neplatný payload'); return false; }
+    if (!this._anncSeen) this._anncSeen = new Set();
+    if (this._anncSeen.has(a.id)) return false;
+    this._anncSeen.add(a.id);
+    if (!this._pendingReplies) this._pendingReplies = [];
+    if (a.chatReply?.hideInUnityChat) {
+      const now = Date.now();
+      this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
+      this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
+    }
+    const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const d = new Date(a.at);
+    const timeText = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = core.announcementHtml(a, { textHtml: a.text ? this.emotes.renderPlain(a.text) : '', reducedMotion, timeText });
+    const el = tpl.content.firstElementChild;
+    const tx = el.querySelector('.ua-text');
+    if (tx) this._processMentions(tx, 'twitch');
+    el.querySelector('.ua-media')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const v = el.querySelector('video');
+      if (v) { v.currentTime = 0; v.play().catch(() => {}); }
+      else { const img = el.querySelector('.ua-media img'); if (img) { const src = img.src; img.src = ''; img.src = src; } }
+    });
+    if (this._parkedBottom.length) { this._parkedBottom.push(el); return true; }
+    if (!this.autoScroll) {
+      if (this._unreadCount === 0) { const sep = document.createElement('div'); sep.id = 'unread-separator'; sep.className = 'unread-sep'; sep.textContent = 'Nové zprávy'; this.chatEl.appendChild(sep); }
+      this._unreadCount++;
+      this.scrollBtn.textContent = `↓ ${this._formatNewMsgCount(this._unreadCount)}`;
+      this.scrollBtn.classList.remove('hidden');
+    }
+    this.chatEl.appendChild(el);
+    if (this.autoScroll) this._unloadTop();
+    this._scroll();
+    this._ucLog('Annc', `${a.command || '?'}${a.media ? ' + médium' : ''}${a.chatReply?.hideInUnityChat ? ' (odpověď skryta)' : ''}`);
+    return true;
+  }
 
   _sys(text) {
     const el = document.createElement('div');
@@ -5589,6 +5642,11 @@ class UnityChat {
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isMilestone
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
+    // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
+    if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
+      this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
+      return;
+    }
     if (textEmpty && !isSystem) {
       // Log root-cause clues — which source produced an empty message.
       try {

@@ -15,8 +15,9 @@ import { makeLog } from './core/log.js';
 import { TwitchProvider } from './core/twitch-irc.js';
 import { KickProvider } from './core/kick.js';
 import { EmoteManager } from './core/emotes.js';
+import * as announcement from './core/announcement.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

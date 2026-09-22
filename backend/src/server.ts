@@ -10,6 +10,7 @@ import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
+import announcementRoutes from './routes/announcements.js';
 import webAuthRoutes from './routes/webAuth.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
@@ -83,6 +84,7 @@ await app.register(oauthRoutes);
 await app.register(storeRoutes);
 await app.register(chatRoutes);
 await app.register(commandRoutes);
+await app.register(announcementRoutes);
 await app.register(webAuthRoutes, { ingest });
 
 if (config.NODE_ENV === 'development') {

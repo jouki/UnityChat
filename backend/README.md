@@ -114,5 +114,7 @@ commands[{ name, trigger, triggers[], roles[], cooldownSeconds, source }] }`,
 regex spouštěče se převádí na literál (`!topd ?reset` → `!topd reset`), cache 60 s,
 při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
 
+`POST /announcements` (`X-Api-Key` = `ZIDOLISTA_API_KEY`) — **UnityChat Announcement** ze Židolišty: command s videem/animací a textem, který vidí jen uživatelé UnityChatu. Tělo `{ id, workspace, command?, text?, media?: { url (https), kind, width?, height?, loop?, stillUrl? } | null, chatReply?: { text, hideInUnityChat } | null, triggeredBy?, at? }`; workspace → kanály přes `ZIDOLISTA_WORKSPACES`, každému kanálu SSE `announcement` (s `channel`) na `/nicknames/stream`. Nic se neukládá. 202 / 400 (`missing_id`, `media_url_must_be_https`, `empty_announcement`) / 404 `unknown_workspace`. Render: `extension/core/announcement.js`.
+
 `POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví).
 
