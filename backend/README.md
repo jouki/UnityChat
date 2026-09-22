@@ -118,6 +118,10 @@ při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
 
 `POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví). `reason: "workspaces"` navíc obnoví registr workspaců.
 
+### Profily browser source (2026-09-22)
+
+`GET /raw-profiles/:id` → `{ ok, id, settings, updatedAt }` (404 `not_found`), `PUT /raw-profiles/:id` (tělo = nastavení `{ font, scale, width, height, bg, timestamps, reply, platforms }`, zod, strict) → upsert + SSE `raw-settings { id, settings, updatedAt }` na `/nicknames/stream`. Id `[A-Za-z0-9_-]{12,64}` je tajemství (kdo ho zná, čte i píše). Web: `/chat/settings/` ukládá, `/chat/raw/?p=<id>` (OBS) aplikuje živě bez refreshe. Tabulka `raw_profiles` (`sql/2026-09-22-raw-profiles.sql`).
+
 ### Chat bot Židolišty (2026-09-22)
 
 Spec: `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`. Mapování workspace ↔ kanály bere registr Židolišty (`lib/zidolista.ts` ← `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s; env `ZIDOLISTA_WORKSPACES` jen fallback). Vše s `X-Api-Key` = `ZIDOLISTA_API_KEY`:
