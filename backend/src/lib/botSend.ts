@@ -85,6 +85,7 @@ export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; lo
   if (!ident || ident.state === 'expired') throw new BotSendError('no bot identity for platform', 503, 'bot_unavailable');
   const kind: 'own' | 'shared' = ident.workspace === ws.slug ? 'own' : 'shared';
   let badge = false;
+  let appError: string | null = null;
 
   const doSend = async (): Promise<{ id: string | null }> => {
     if (input.platform === 'twitch') {
@@ -102,12 +103,23 @@ export async function sendAsBot(input: BotSendInput, deps: { ingest?: Ingest; lo
           } catch (e) {
             const err = e as SendError;
             if (err instanceof SendError && err.status === 401 && attempt === 0) { twitch.invalidateAppAccessToken(); continue; }
-            if (err instanceof SendError && (err.status === 401 || err.status === 403)) { deps.log?.warn({ workspace: ws.slug, status: err.status, err: err.message }, 'bot send: app token odmítnut, fallback user token (bez odznaku)'); break; }
+            // Jakékoli odmítnutí app-token cesty (401/403 = scope/souhlas, 422 = Twitch zprávu zahodil) →
+            // zkusit user token bota; 429 a 5xx nemá smysl opakovat jinou cestou.
+            if (err instanceof SendError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+              deps.log?.warn({ workspace: ws.slug, path: 'app-token', status: err.status, err: err.message }, 'bot send: app token cesta selhala, fallback user token (bez odznaku)');
+              appError = err.message;
+              break;
+            }
             throw e;
           }
         }
       }
-      return sendTwitch({ ...p, accessToken: ident!.accessToken });
+      try {
+        return await sendTwitch({ ...p, accessToken: ident!.accessToken });
+      } catch (e) {
+        if (e instanceof SendError && appError) e.message = `${e.message} (app-token: ${appError})`;
+        throw e;
+      }
     }
     if (input.platform === 'kick') {
       const broadcasterUserId = await kickUserId(channel);

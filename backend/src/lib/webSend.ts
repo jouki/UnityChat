@@ -45,8 +45,10 @@ export async function sendTwitch(
   const data = await readJson(resp);
   if (resp.status === 401) throw new SendError('twitch: unauthorized', 401, true);
   if (!resp.ok) throw new SendError(`twitch: HTTP ${resp.status} ${(data.message as string) || ''}`.trim(), resp.status);
-  const first = (data.data as Array<{ message_id?: string; is_sent?: boolean; drop_reason?: { message?: string } }> | undefined)?.[0];
-  if (first && first.is_sent === false) throw new SendError(`twitch: ${first.drop_reason?.message || 'dropped'}`, 422);
+  const first = (data.data as Array<{ message_id?: string; is_sent?: boolean; drop_reason?: { code?: string; message?: string } }> | undefined)?.[0];
+  // Twitch vrátí 200 i pro zahozenou zprávu — důvod je v drop_reason (code je klíčový pro diagnostiku:
+  // msg_rejected, msg_requires_verified_phone_number, msg_followersonly, msg_ratelimit, …).
+  if (first && first.is_sent === false) throw new SendError(`twitch: ${first.drop_reason?.message || 'dropped'} [${first.drop_reason?.code || 'no_code'}]`, 422);
   return { id: first?.message_id || null };
 }
 

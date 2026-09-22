@@ -145,7 +145,8 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     } catch (e) {
       const err = e instanceof BotSendError ? e : new BotSendError((e as Error).message, 502, 'send_failed');
       req.log.warn({ workspace: slug, platform, status: err.status, code: err.code, err: err.message }, 'bot send failed');
-      return reply.code(err.status).send({ ok: false, error: err.code, message: err.message });
+      // `detail` = surový důvod platformy (Twitch drop_reason code/message, HTTP tělo), ať Židolišta nemusí chodit do logu.
+      return reply.code(err.status).send({ ok: false, error: err.code, message: err.message, detail: err.message });
     }
   });
 
