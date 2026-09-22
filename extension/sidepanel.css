@@ -2274,7 +2274,7 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 .msg.uc-annc { padding: 0; margin: 8px 4px; background: transparent; border: 0; }
 .msg.uc-annc:hover { background: transparent; }
 .msg.uc-annc .ua-frame {
-  position: relative; display: flex; align-items: center; gap: 14px;
+  position: relative; display: flex; align-items: center; gap: 14px; min-width: 0;
   padding: 12px 14px; border-radius: 10px; overflow: hidden;
   background: #0c0b10;
   border: 1px solid rgba(230, 161, 26, 0.55);
@@ -2288,25 +2288,25 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
   content: ''; position: absolute; left: 20%; right: 20%; bottom: 0; height: 1px;
   background: linear-gradient(90deg, transparent, rgba(230, 161, 26, 0.45), transparent); pointer-events: none;
 }
-.msg.uc-annc .ua-media { position: relative; flex-shrink: 0; max-width: 60%; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+/* Médium: zadaná šířka je strop, na užší desce se zmenší (max 38 % šířky), výška podle poměru stran. */
+.msg.uc-annc .ua-media { position: relative; flex: 0 0 auto; width: min(var(--ua-w, 192px), 38%); aspect-ratio: var(--ua-ar, auto); display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .msg.uc-annc .ua-media .ua-spot {
   position: absolute; inset: -22%; border-radius: 50%; pointer-events: none;
   background: radial-gradient(circle at 50% 55%, rgba(255, 214, 140, 0.16) 0%, rgba(255, 214, 140, 0.06) 40%, transparent 70%);
 }
-.msg.uc-annc .ua-media video, .msg.uc-annc .ua-media img { position: relative; display: block; width: 100%; height: auto; max-height: 100%; object-fit: contain; }
+.msg.uc-annc .ua-media video, .msg.uc-annc .ua-media img { position: relative; display: block; width: 100%; height: auto; max-height: 100%; object-fit: contain; filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 2px rgba(0, 0, 0, 0.5)); }
 .msg.uc-annc .ua-body { flex: 1; min-width: 0; }
 .msg.uc-annc .ua-kicker {
-  display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; font-size: 10px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
   background: linear-gradient(90deg, #ffd27a, #e6a11a 60%, #ffd27a); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .msg.uc-annc .ua-kicker-icon { color: #ffd27a; -webkit-text-fill-color: #ffd27a; }
-.msg.uc-annc .ua-cmd { -webkit-text-fill-color: #f3e2b8; color: #f3e2b8; letter-spacing: 0.6px; text-transform: none; }
+.msg.uc-annc .ua-cmd { -webkit-text-fill-color: #f3e2b8; color: #f3e2b8; letter-spacing: 0.6px; text-transform: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .msg.uc-annc .ua-ts { margin-left: auto; font-weight: 500; letter-spacing: 0; -webkit-text-fill-color: rgba(255, 255, 255, 0.35); color: rgba(255, 255, 255, 0.35); }
 .msg.uc-annc .ua-text { margin-top: 6px; font-size: 1.08em; line-height: 1.45; color: #f5f1e8; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; }
-.msg.uc-annc .ua-by { margin-top: 6px; font-size: 11px; color: rgba(255, 255, 255, 0.5); }
-.msg.uc-annc .ua-by b { color: rgba(255, 255, 255, 0.75); font-weight: 600; }
 body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
-@media (max-width: 380px) { .msg.uc-annc .ua-frame { flex-direction: column; align-items: stretch; } .msg.uc-annc .ua-media { max-width: 100%; margin: 0 auto; } }
+/* Úzký panel: médium nad textem, na střed, max 60 % šířky. */
+@media (max-width: 340px) { .msg.uc-annc .ua-frame { flex-direction: column; align-items: stretch; } .msg.uc-annc .ua-media { width: min(var(--ua-w, 192px), 60%); margin: 0 auto; } }
 
 .unread-sep {
   display: flex;

@@ -24,15 +24,14 @@ const assert = require('node:assert/strict');
   // 2. HTML: video s autoplay, bez smyčky, text escapovaný, klik replay title
   const html = announcementHtml(normalizeAnnouncement({ id: 'x2', channel: 'c', command: 'Brohemians', text: 'Ahoj <b>', media: { url: 'https://cdn/x.webm', width: 200, stillUrl: 'https://cdn/still.webp' }, triggeredBy: { user: 'Jouki728' } }), { timeText: '10:00' });
   assert.match(html, /^<div class="msg uc-annc" data-annc-id="x2" data-platform="unitychat" data-ts="\d+">/);
-  assert.match(html, /<div class="ua-media" style="width:200px"[^>]*><span class="ua-spot"[^>]*><\/span><video class="ua-video" src="https:\/\/cdn\/x.webm" autoplay preload="auto" muted playsinline poster="https:\/\/cdn\/still.webp" aria-hidden="true"><\/video><\/div>/);
+  assert.match(html, /<div class="ua-media" style="--ua-w:200px"[^>]*><span class="ua-spot"[^>]*><\/span><video class="ua-video" src="https:\/\/cdn\/x.webm" autoplay preload="auto" muted playsinline loop poster="https:\/\/cdn\/still.webp" aria-hidden="true"><\/video><\/div>/);
   const rmNoStill = announcementHtml(normalizeAnnouncement({ id: 'x5', channel: 'c', media: { url: 'https://cdn/x.webm', height: 160 } }), { reducedMotion: true });
-  assert.match(rmNoStill, /style="width:192px;height:160px"/);
-  assert.match(rmNoStill, /<video class="ua-video" src="https:\/\/cdn\/x.webm" preload="metadata" muted playsinline aria-hidden="true">/);
+  assert.match(rmNoStill, /style="--ua-w:192px;--ua-ar:192 \/ 160"/);
+  assert.match(rmNoStill, /<video class="ua-video" src="https:\/\/cdn\/x.webm" preload="metadata" muted playsinline loop aria-hidden="true">/);
   assert.doesNotMatch(rmNoStill, /autoplay/);
-  assert.doesNotMatch(html, / loop/);
   assert.match(html, /<div class="ua-text">Ahoj &lt;b&gt;<\/div>/);
   assert.match(html, /<span class="ua-cmd">Brohemians<\/span><span class="ua-ts">10:00<\/span>/);
-  assert.match(html, /<div class="ua-by">spustil <b>Jouki728<\/b><\/div>/);
+  assert.doesNotMatch(html, /ua-by/, 'bez řádku „spustil"');
   ok('html video');
 
   // 3. reduced motion → still obrázek; image kind → img; textHtml má přednost

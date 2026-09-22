@@ -72,7 +72,8 @@ export function announcementHtml(a, o = {}) {
   let mediaHtml = '';
   if (a.media) {
     const m = a.media;
-    const size = `width:${m.width}px${m.height ? `;height:${m.height}px` : ''}`;
+    // Šířka jako strop; CSS ji omezí na část desky (min(--ua-w, 38%)), výška podle poměru stran.
+    const size = `--ua-w:${m.width}px${m.height ? `;--ua-ar:${m.width} / ${m.height}` : ''}`;
     let inner;
     if (o.reducedMotion && m.stillUrl) {
       inner = `<img class="ua-still" src="${escapeAttr(m.stillUrl)}" alt="">`;
@@ -81,17 +82,16 @@ export function announcementHtml(a, o = {}) {
     } else {
       // Bez still varianty při omezeném pohybu: video bez autoplay (první snímek), klik přehraje.
       const play = o.reducedMotion ? ' preload="metadata"' : ' autoplay preload="auto"';
-      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline${m.loop ? ' loop' : ''}${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
+      // Vždy smyčka (rozhodnutí usera 2026-09-22): bez ní po dohrání zůstane u erbu prázdné místo.
+      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline loop${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
     }
     mediaHtml = `<div class="ua-media" style="${size}" title="Klik = přehrát znovu"><span class="ua-spot" aria-hidden="true"></span>${inner}</div>`;
   }
   const cmd = a.command ? `<span class="ua-cmd">${escapeHtml(a.command)}</span>` : '';
-  const by = a.triggeredBy ? `<div class="ua-by">spustil <b>${escapeHtml(a.triggeredBy.user)}</b></div>` : '';
   const ts = o.timeText ? `<span class="ua-ts">${escapeHtml(o.timeText)}</span>` : '';
   return `<div class="msg uc-annc" data-annc-id="${escapeAttr(a.id)}" data-platform="unitychat" data-ts="${a.at}">`
     + `<div class="ua-frame">${mediaHtml}<div class="ua-body">`
     + `<div class="ua-kicker"><span class="ua-kicker-icon" aria-hidden="true">✦</span> UnityChat${cmd ? ' · ' + cmd : ''}${ts}</div>`
     + (textHtml ? `<div class="ua-text">${textHtml}</div>` : '')
-    + by
     + `</div></div></div>`;
 }
