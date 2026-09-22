@@ -142,8 +142,13 @@ consent s `youtube.force-ssl` (verifikace u Google běží).
   „Chat bot" v Nastavení). Její SSE klient se připojuje hned → do nasazení
   streamu u nás 404 + reconnecty (neškodí).
 - UnityChat strana: čeká na start od usera.
-- Test fáze 1: v Židolištce `uctest` → `replyVia=bot`, zpráva `!brohemians`
-  do chatu uctest → očekává se `POST /bot/send` s `workspace: "uctest"`.
+- Test fáze 1 (shoda 2026-09-22 ~17:00): workspace `uctest` v Židolištce
+  neexistuje → testuje se na workspace **`jouki`** namapovaném na Twitch kanál
+  `uctest` (user vyplní v Nastavení workspace jouki twitch = uctest a přepne
+  replyVia = bot). Zpráva `!brohemians` do chatu uctest → očekává se
+  `POST /bot/send` s `workspace: "jouki"`. Env fallback `ZIDOLISTA_WORKSPACES`
+  pro uctest se zruší (jinak dvojí mapování na jeden kanál). Živé workspacy
+  u Židolišty: `jouki`, `rob` (oba `mode:'sb'`, kanály prázdné).
 
 ## Otevřené / poznámky
 
