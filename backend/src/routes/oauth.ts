@@ -365,7 +365,12 @@ export default async function oauthRoutes(app: FastifyInstance) {
       } catch (err) {
         req.log.error({ err: (err as Error).message, platform, web: isWeb, bot: isBot }, 'OAuth callback failed');
         if (isWeb) return webErrorRedirect(reply, payload.returnTo, `${platform}: přihlášení selhalo`);
-        if (isBot) return botErrorRedirect(reply, payload.returnTo, `${platform}: napojení bota selhalo`);
+        if (isBot) {
+          // Konkrétní důvod do #bot_error, ať Židolišta umí poradit (typicky Google účet bez YouTube kanálu).
+          const m = (err as Error).message || '';
+          const why = /no channel/i.test(m) ? 'no_youtube_channel' : /token exchange/i.test(m) ? 'token_exchange_failed' : 'link_failed';
+          return botErrorRedirect(reply, payload.returnTo, `${why}:${platform}`);
+        }
         reply.type('text/html');
         return errorPage(`${platform}: autentizace selhala. Zkuste to znovu.`);
       }
