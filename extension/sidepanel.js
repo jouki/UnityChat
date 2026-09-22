@@ -1774,11 +1774,7 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
-    if (name.startsWith('!')) {
-      const role = this._myChatRole();
-      const all = this._allBangCommands().filter((c) => '!' + c.name === name);
-      return (all.find((c) => !Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role)) || all[0])?.source || 'SE';
-    }
+    if (name.startsWith('!')) return this._bangSources(name).join(' · ') || 'SE';
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
@@ -1831,10 +1827,11 @@ class UnityChat {
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
       if (name.startsWith('!')) {
-        // Chat command: logo zdroje (Židolišta / StreamElements)
-        const src = this._acSource(name);
-        const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
-        html += `<img class="es-logo${src === 'Židolišta' ? ' es-logo-zidolista' : ''}" src="${logo}" alt="${this.emotes._ea(src)}">`;
+        // Chat command: loga všech zdrojů, kde spouštěč je (Židolišta první, pak StreamElements)
+        html += '<span class="es-logos">' + this._bangSources(name).map((src) => {
+          const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
+          return `<img class="es-logo${src === 'Židolišta' ? ' es-logo-zidolista' : ''}" src="${logo}" alt="${this.emotes._ea(src)}">`;
+        }).join('') + '</span>';
       } else if (name.startsWith('/uc ')) {
         // UC command: oranžová tečka
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
@@ -2723,6 +2720,14 @@ class UnityChat {
     return [...this._ucCommands, ...this._seCommands.map((c) => ({ ...c, source: 'SE' }))];
   }
 
+  /** Zdroje, ve kterých spouštěč existuje a je pro moji roli povolený (Židolišta první). */
+  _bangSources(name) {
+    const role = this._myChatRole();
+    return [...new Set(this._allBangCommands()
+      .filter((c) => '!' + c.name === name && (!Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role)))
+      .map((c) => c.source || 'SE'))];
+  }
+
   /** Moje role na Twitchi podle badge z vlastních zpráv — commandy Židolišty jen pro mody se divákům nenabízí. */
   _myChatRole() {
     const me = (this._platformUsernames.twitch || this.config.username || '').toLowerCase();
@@ -2745,7 +2750,7 @@ class UnityChat {
     if (!channel) { this._ucCommands = []; return; }
     const tick = async () => {
       try {
-        const r = await fetch(`${UC_API}/commands?channel=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(8000) });
+        const r = await fetch(`${UC_API}/commands?channel=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         const out = [];

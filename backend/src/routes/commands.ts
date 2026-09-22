@@ -136,7 +136,8 @@ export default async function commandRoutes(app: FastifyInstance) {
     if (!limiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const channel = String(req.query.channel || '').toLowerCase().replace(/^@/, '');
     if (!/^[a-z0-9_]{1,40}$/.test(channel)) return reply.code(400).send({ ok: false, error: 'bad_channel' });
-    reply.header('Cache-Control', 'public, max-age=60');
+    // Bez HTTP cache: po SSE `commands-change` si klient tahá seznam znovu a cache prohlížeče by mu vrátila starý stav.
+    reply.header('Cache-Control', 'no-store');
     const slug = workspaces.get(channel);
     if (!slug || !config.ZIDOLISTA_API_KEY) return { ok: true, channel, sources: [], commands: [] };
 
