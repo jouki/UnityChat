@@ -21,7 +21,8 @@ export const POOP = Object.freeze({
   // na střed prvního řádku cílové zprávy (u víceřádkové tedy na řádek se jménem),
   // takže „to" padá na zprávu a Peepo stojí kousek pod ní.
   poopRatio: 0.88,
-  groundPx: 0,        // jemné doladění (kladné = video níž)
+  // Doladění podle usera: animace o jeden řádek níž, ať „to" dopadá přesně na zprávu.
+  offsetLines: 1,
   // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
   // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
   // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
@@ -98,7 +99,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     const host = hostEl.getBoundingClientRect();
     // Výška podle řádku textu (strop), šířka dopočtená z poměru; na širokém chatu
     // se video vycentruje, na úzkém zabere celou šířku.
-    const maxH = lineHeightOf(targetEl || chatEl) * POOP.maxHeightLines;
+    const lineH = lineHeightOf(targetEl || chatEl);
+    const maxH = lineH * POOP.maxHeightLines;
     const w = Math.min(host.width, maxH * POOP.aspect);
     const h = w / POOP.aspect;
     let landing;   // kam mají dopadat hromádky, v px od horního okraje hosta
@@ -108,7 +110,7 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
       // se tak animace drží řádku se jménem, ne spodku celého odstavce.
       const nameEl = targetEl.querySelector('.un') || targetEl.querySelector('.ts');
       const first = nameEl ? nameEl.getBoundingClientRect() : null;
-      landing = (first && first.height ? first.top + first.height / 2 : r.top + Math.min(r.height, 24) / 2) - host.top + POOP.groundPx;
+      landing = (first && first.height ? first.top + first.height / 2 : r.top + Math.min(r.height, lineH) / 2) - host.top + lineH * POOP.offsetLines;
       // Reflektor: měkké světlo kolem cílové zprávy (maska v CSS podle proměnných).
       spot.style.setProperty('--spot-y', `${r.top + r.height / 2 - host.top}px`);
       spot.style.setProperty('--spot-h', `${Math.max(r.height + 26, 54)}px`);
