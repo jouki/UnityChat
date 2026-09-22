@@ -9,6 +9,8 @@ import { encryptToken, isCryptoReady } from '../lib/crypto.js';
 import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
+import { completeWebCallback, webErrorRedirect } from './webAuth.js';
+import { completeBotCallback, botErrorRedirect } from './integrations.js';
 
 const StartParams = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
 
@@ -272,6 +274,9 @@ export default async function oauthRoutes(app: FastifyInstance) {
     ) => {
       const { code, state, error, error_description } = req.query;
       if (error) {
+        const wp = state ? verifyState(decodeURIComponent(state)) : null;
+        if (wp && wp.kind === 'web') return webErrorRedirect(reply, wp.returnTo, `${platform}: ${error_description || error}`);
+        if (wp && wp.kind === 'bot') return botErrorRedirect(reply, wp.returnTo, `${platform}: ${error_description || error}`);
         reply.type('text/html');
         return errorPage(`${platform}: ${error_description || error}`);
       }
@@ -279,13 +284,21 @@ export default async function oauthRoutes(app: FastifyInstance) {
         reply.type('text/html');
         return errorPage('Chybí code nebo state parametr.');
       }
-      const unwrapped = unwrapState(state);
-      if (!unwrapped) {
+      // Web verze i bot Židolišty podepisují state bez extension prefixu (kind:'web' / 'bot'
+      // v payloadu); streamer flow má "{extensionId}.{signed}".
+      const webPayload = verifyState(decodeURIComponent(state));
+      const isWeb = !!webPayload && webPayload.kind === 'web';
+      const isBot = !!webPayload && webPayload.kind === 'bot';
+      const external = isWeb || isBot;
+      const unwrapped = external ? null : unwrapState(state);
+      if (!external && !unwrapped) {
         reply.type('text/html');
         return errorPage('Neplatný state parametr.');
       }
-      const payload = verifyState(unwrapped.signed);
+      const payload = external ? webPayload : verifyState(unwrapped!.signed);
       if (!payload || payload.platform !== platform) {
+        if (isWeb) return webErrorRedirect(reply, webPayload?.returnTo, 'state expiroval, zkus to znovu');
+        if (isBot) return botErrorRedirect(reply, webPayload?.returnTo, 'state expiroval, zkus to znovu');
         reply.type('text/html');
         return errorPage('State je neplatný nebo expiroval. Zkuste přihlášení znovu.');
       }
@@ -345,9 +358,19 @@ export default async function oauthRoutes(app: FastifyInstance) {
           };
         }
 
-        return completeCallback(req, reply, platform, unwrapped.extensionId, payload.sessionId, identity, tokens);
+        const info = { platformUserId: identity.userId, login: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl };
+        if (isWeb) return completeWebCallback(req, reply, platform, payload, info, tokens);
+        if (isBot) return completeBotCallback(req, reply, platform, payload, info, tokens);
+        return completeCallback(req, reply, platform, unwrapped!.extensionId, payload.sessionId, identity, tokens);
       } catch (err) {
-        req.log.error({ err: (err as Error).message, platform }, 'OAuth callback failed');
+        req.log.error({ err: (err as Error).message, platform, web: isWeb, bot: isBot }, 'OAuth callback failed');
+        if (isWeb) return webErrorRedirect(reply, payload.returnTo, `${platform}: přihlášení selhalo`);
+        if (isBot) {
+          // Konkrétní důvod do #bot_error, ať Židolišta umí poradit (typicky Google účet bez YouTube kanálu).
+          const m = (err as Error).message || '';
+          const why = /no channel/i.test(m) ? 'no_youtube_channel' : /token exchange/i.test(m) ? 'token_exchange_failed' : 'link_failed';
+          return botErrorRedirect(reply, payload.returnTo, `${why}:${platform}`);
+        }
         reply.type('text/html');
         return errorPage(`${platform}: autentizace selhala. Zkuste to znovu.`);
       }

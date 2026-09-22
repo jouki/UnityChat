@@ -37,6 +37,19 @@ const EnvSchema = z.object({
   // Retence zpráv v tabulce messages (dny). 0 = neomezeně (rozhodnutí usera
   // 2026-09-19: zprávy držet po neurčitou dobu, mazání na žádost).
   CHAT_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(0),
+  // Web verze: originy, na které smí OAuth callback vrátit uživatele (#uc_code)
+  // a které dostanou CORS pro /auth/* + /chat/send. Čárkou oddělené.
+  // `www.` je tu záměrně: hosting Roba www nepřesměrovává a Chrome ho v adresním řádku
+  // skrývá — diváci na www dostávali 400 a přihlašovací okno se hned zavřelo (2026-09-22).
+  WEB_ORIGINS: z.string().default('https://robdiesalot.com,https://www.robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
+  // Židolišta (RobJewsALot server): chat commandy streamera pro našeptávání „!".
+  // Klíč = env INTEGRATION_API_KEYS na straně Židolišty; NIKDY v gitu. Prázdný
+  // klíč = GET /commands vrací prázdný seznam. Mapování kanál → workspace slug.
+  ZIDOLISTA_API_BASE: z.string().url().default('https://api-zidolista.jouki.cz'),
+  ZIDOLISTA_API_KEY: z.string().default(''),
+  ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
+  // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
+  ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),
 });
 
 export const config = EnvSchema.parse(process.env);

@@ -9,14 +9,30 @@ import streamerRoutes from './routes/streamers.js';
 import oauthRoutes from './routes/oauth.js';
 import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
+import commandRoutes from './routes/commands.js';
+import announcementRoutes from './routes/announcements.js';
+import webAuthRoutes from './routes/webAuth.js';
+import integrationRoutes from './routes/integrations.js';
+import rawProfileRoutes from './routes/rawProfiles.js';
+import reactionRoutes from './routes/reactions.js';
+import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
+import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
+import { loadBotLogins } from './lib/botIdentities.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
+import { publishChat, chatStreamClientCount, disconnectAllChatStreams } from './sse/chatBus.js';
+import { toClientMessage } from './routes/chat.js';
+import { toRow } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
 
 const startedAt = Date.now();
 
 const app = Fastify({
+  // Za Coolify/Traefik: bez trustProxy je req.ip = IP proxy (10.0.1.2) pro
+  // všechny klienty → per-IP limity (/chat/stream, /chat/history) platily
+  // globálně (2026-09-21: 5 streamů = 429 pro celý web).
+  trustProxy: true,
   logger: {
     level: config.LOG_LEVEL,
     ...(config.NODE_ENV === 'development' && {
@@ -40,23 +56,43 @@ const ingest = createIngest({
   channels: parseIngestChannels(config.CHAT_INGEST_CHANNELS),
   retentionDays: config.CHAT_RETENTION_DAYS,
   log: app.log,
+  // GET /chat/stream: rozeslat hned po přijetí (před DB dávkou), stejný tvar jako /chat/history.
+  onLive: (m) => {
+    publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
+    // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
+    publishIntegration(m);
+  },
 });
-app.addHook('onReady', async () => { ingest.start(); });
-app.addHook('onClose', async () => { await ingest.stop(); });
+app.addHook('onReady', async () => {
+  ingest.start();
+  // Registr workspaců Židolišty (mapování kanálů pro stream) + loginy botů pro isBot.
+  // Kanály workspaců se přidávají do ingestu automaticky (env CHAT_INGEST_CHANNELS je jen základ).
+  onWorkspaces((list) => {
+    for (const w of list) for (const p of WS_PLATFORMS) {
+      const ch = w.channels[p];
+      if (ch && ingest.ensureChannel({ platform: p, channel: ch })) app.log.info({ workspace: w.slug, platform: p, channel: ch }, 'chat ingest: kanál přidán z registru Židolišty');
+    }
+  });
+  startWorkspaceRefresh(app.log);
+  loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
+});
+app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
-  version: '0.3.0',
+  version: '0.5.0',
   docs: '/health',
 }));
 
 app.get('/health', async () => ({
   ok: true,
   service: 'unitychat-backend',
-  version: '0.3.0',
+  version: '0.5.0',
   uptimeMs: Date.now() - startedAt,
   timestamp: new Date().toISOString(),
   sseClients: clientCount(),
+  chatStreamClients: chatStreamClientCount(),
+  integrationStream: integrationStreamStats(),
   // Diagnostika: bez klice vraci /store/status 503 a landing page nezobrazi
   // radek o verzi cekajici na schvaleni. Snazsi zjistit odsud nez z kontejneru.
   cwsConfigured: cwsConfigured(),
@@ -70,6 +106,12 @@ await app.register(streamerRoutes);
 await app.register(oauthRoutes);
 await app.register(storeRoutes);
 await app.register(chatRoutes);
+await app.register(commandRoutes);
+await app.register(announcementRoutes);
+await app.register(webAuthRoutes, { ingest });
+await app.register(integrationRoutes, { ingest });
+await app.register(rawProfileRoutes);
+await app.register(reactionRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
@@ -88,6 +130,7 @@ const shutdown = async (signal: string): Promise<void> => {
   app.log.info(`${signal} received, shutting down gracefully`);
   try {
     disconnectSSE();
+  disconnectAllChatStreams();
     await app.close();
     await closeDb();
     process.exit(0);

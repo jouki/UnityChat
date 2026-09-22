@@ -27,6 +27,7 @@ const DEFAULTS = {
   layout: 'medium',
   showTimestamps: true,
   replyOneLine: false,
+  acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
 };
 
 // =============================================================
@@ -34,877 +35,8 @@ const DEFAULTS = {
 // Segment-based rendering: [{ type:'text'|'emote', value, url? }]
 // =============================================================
 
-class EmoteManager {
-  constructor() {
-    this.global7tv = new Map();   // name -> url
-    this.channel7tv = new Map();  // name -> url
-    this.bttvEmotes = new Map();   // name -> url (BTTV global + channel)
-    this.ffzEmotes = new Map();    // name -> url (FFZ global + channel)
-    this.twitchNative = new Map(); // name -> url (naučené z IRC)
-    this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
-    this.ucEmotes = new Map();     // name -> url (UnityChat custom emotes)
-    this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
-    // Per-user "personal" 7TV emote loadouts so a chatter's own emotes
-    // resolve in foreign channels too. Key: `${platform}:${loginLower}`,
-    // value: Map(emoteName → { url, zw }).
-    this.userEmotes = new Map();
-    // 7TV "added to set" provenance per emote name — actor_id + timestamp
-    // from the emote-set response. Used by the click-to-pin preview to
-    // render "ADDED BY {actor}" + the actual addition date.
-    this._emoteAdditions = new Map();
-    // Cache of resolved 7TV user lookups (id → { displayName, avatarUrl })
-    // so repeat actor resolutions across emotes don't re-hit the API.
-    this._sevenTvUserCache = new Map();
-    this._globalLoaded = false;
-
-    // UnityChat custom emotes (bundled in extension/emotes/)
-    this.ucEmotes.set('CaneBear', chrome.runtime.getURL('emotes/canebear.webp'));
-  }
-
-  // ---- Loading ----
-
-  // Bounded fetch for emote/badge providers. Boot awaits these via
-  // Promise.allSettled, so a single provider that accepts the TCP/TLS
-  // handshake but never sends a byte (FFZ outage 2026-09-05) would hang
-  // _init forever — Chrome's fetch has no idle timeout of its own. Timeout
-  // and any other failure are surfaced via UC_LOG [EmoteFetch] so the
-  // boot dump shows WHICH provider stalled instead of a silent 0-count.
-  async _fetch(url, opts = {}, timeoutMs = 8000) {
-    const t0 = Date.now();
-    try {
-      return await fetch(url, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
-    } catch (err) {
-      const kind = err?.name === 'TimeoutError' ? 'timeout' : (err?.name || 'error');
-      try {
-        chrome.runtime.sendMessage({
-          type: 'UC_LOG', tag: 'EmoteFetch',
-          text: `${kind} after ${Date.now() - t0}ms: ${url}`
-        }).catch(() => {});
-      } catch {}
-      throw err;
-    }
-  }
-
-  async loadGlobal() {
-    if (this._globalLoaded) return;
-    try {
-      const resp = await this._fetch('https://7tv.io/v3/emote-sets/global');
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const emotes = data.emotes || [];
-      for (const emote of emotes) {
-        const url = this._build7tvUrl(emote);
-        if (url) {
-          this.global7tv.set(emote.name, url);
-          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
-        }
-      }
-      this._globalLoaded = true;
-      console.log(`[7TV] ${this.global7tv.size} global emotes loaded`);
-    } catch (err) {
-      console.error('[7TV] Failed to load global emotes:', err);
-    }
-  }
-
-  async loadChannel(platform, userId) {
-    try {
-      const resp = await this._fetch(`https://7tv.io/v3/users/${platform}/${userId}`);
-      if (!resp.ok) {
-        console.warn(`[7TV] Channel emotes ${platform}/${userId}: HTTP ${resp.status}`);
-        return 0;
-      }
-      const data = await resp.json();
-      const emotes = data.emote_set?.emotes || [];
-      let count = 0;
-      for (const emote of emotes) {
-        const url = this._build7tvUrl(emote);
-        if (url) {
-          this.channel7tv.set(emote.name, url);
-          if ((emote.flags ?? 0) & 1) this.zeroWidth.add(emote.name);
-          // Provenance: who added this emote to the channel set + when.
-          // Used by the click-to-pin preview's "ADDED BY" row.
-          if (emote.actor_id || emote.timestamp) {
-            this._emoteAdditions.set(emote.name, {
-              actorId: emote.actor_id || null,
-              addedAt: emote.timestamp ? new Date(emote.timestamp) : null,
-            });
-          }
-          count++;
-        }
-      }
-      console.log(`[7TV] ${count} channel emotes loaded (${platform}/${userId})`);
-      return count;
-    } catch (err) {
-      console.error(`[7TV] Channel emotes error (${platform}/${userId}):`, err);
-      return 0;
-    }
-  }
-
-  async loadBTTV(twitchUserId) {
-    let count = 0;
-    try {
-      // Globální BTTV emotes
-      const gr = await this._fetch('https://api.betterttv.net/3/cached/emotes/global');
-      if (gr.ok) {
-        for (const e of await gr.json()) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-          count++;
-        }
-      }
-    } catch {}
-    try {
-      // Kanálové BTTV emotes
-      const cr = await this._fetch(`https://api.betterttv.net/3/cached/users/twitch/${twitchUserId}`);
-      if (cr.ok) {
-        const data = await cr.json();
-        for (const e of [...(data.channelEmotes || []), ...(data.sharedEmotes || [])]) {
-          this.bttvEmotes.set(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-          count++;
-        }
-      }
-    } catch {}
-    console.log(`[BTTV] ${count} emotes loaded`);
-    return count;
-  }
-
-  loadTwitchGlobals() {
-    // Popular Twitch global emotes (ID → token). Pre-populated for autocomplete.
-    const globals = {
-      '25': 'Kappa', '354': '4Head', '86': 'BibleThump', '1902': 'Keepo',
-      '425618': 'LUL', '41': 'Kreygasm', '305954156': 'PogChamp', '88': 'PogChamp',
-      '52': 'SMOrc', '360': 'FailFish', '245': 'ResidentSleeper',
-      '64138': 'SeemsGood', '65': 'FrankerZ', '148793': 'BlessRNG',
-      '171104': 'TriHard', '28087': 'WutFace', '58765': 'NotLikeThis',
-      '81274': 'VoHiYo', '55339': 'KappaHD', '55338': 'KappaPride',
-      '30259': 'HeyGuys', '90076': 'PJSalt', '4339': 'EleGiggle',
-      '114836': 'Jebaited', '115234': 'OpieOP', '68856': 'MingLee',
-      '74510': 'OMGScoots', '307609315': 'Prayge', '196892': 'TwitchUnity',
-      '160394': 'PunchTrees', '120232': 'MrDestructoid', '69': 'PJSugar',
-      '33': 'DansGame', '9803': 'CoolCat', '34': 'GingerPower',
-      '56': 'BatChest', '57': 'SwiftRage', '58': 'StoneLightning',
-      '59': 'TheRinger', '80': 'OpieOP', '81': 'DBstyle',
-      '112290': 'TheTarFu', '90': 'HassanChop', '305954156': 'PogChamp'
-    };
-    for (const [id, name] of Object.entries(globals)) {
-      if (!this.twitchNative.has(name)) {
-        this.twitchNative.set(name, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
-      }
-    }
-  }
-
-  async loadTwitchChannel(channelLogin) {
-    let count = 0;
-    try {
-      const resp = await this._fetch('https://gql.twitch.tv/gql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko'
-        },
-        body: JSON.stringify({
-          query: `query($login: String!) {
-            user(login: $login) {
-              subscriptionProducts {
-                emotes { id token }
-              }
-            }
-          }`,
-          variables: { login: channelLogin }
-        })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const products = data.data?.user?.subscriptionProducts || [];
-        for (const product of products) {
-          for (const e of (product.emotes || [])) {
-            if (e.token && !this.twitchNative.has(e.token)) {
-              this.twitchNative.set(e.token,
-                `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0`);
-              count++;
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Twitch] Channel emotes error:', err);
-    }
-    console.log(`[Twitch] ${count} channel emotes loaded`);
-    return count;
-  }
-
-  async loadFFZ(twitchUserId) {
-    let count = 0;
-    const parseSet = (sets) => {
-      for (const setId in sets) {
-        for (const e of sets[setId].emoticons || []) {
-          // Prefer 2x for hi-DPI sharpness; fall back to 4x then 1x.
-          const url = e.urls?.['2'] || e.urls?.['4'] || e.urls?.['1'];
-          if (url) {
-            this.ffzEmotes.set(e.name, url.startsWith('//') ? `https:${url}` : url);
-            count++;
-          }
-        }
-      }
-    };
-    try {
-      const gr = await this._fetch('https://api.frankerfacez.com/v1/set/global');
-      if (gr.ok) parseSet((await gr.json()).sets || {});
-    } catch {}
-    try {
-      const cr = await this._fetch(`https://api.frankerfacez.com/v1/room/id/${twitchUserId}`);
-      if (cr.ok) parseSet((await cr.json()).sets || {});
-    } catch {}
-    console.log(`[FFZ] ${count} emotes loaded`);
-    return count;
-  }
-
-  // Register a Twitch user's personal 7TV emote loadout (the emote_set
-  // returned by /v3/users/twitch/{id}). Looked up during render so when
-  // the user types one of their emotes in any channel — even when not
-  // their own — it still resolves to an image instead of plain text.
-  learnUserEmotes(platform, login, emoteSet) {
-    if (!login || !emoteSet?.emotes?.length) return;
-    const map = new Map();
-    for (const e of emoteSet.emotes) {
-      const url = this._build7tvUrl(e?.data || e);
-      if (!e?.name || !url) continue;
-      const flags = (e?.data?.flags ?? e?.flags) || 0;
-      map.set(e.name, { url, zw: !!(flags & 1) });
-      // Same provenance capture as channel emotes — actor + timestamp.
-      if (e.actor_id || e.timestamp) {
-        this._emoteAdditions.set(e.name, {
-          actorId: e.actor_id || null,
-          addedAt: e.timestamp ? new Date(e.timestamp) : null,
-        });
-      }
-    }
-    if (map.size) this.userEmotes.set(`${platform}:${String(login).toLowerCase()}`, map);
-  }
-
-  // Resolve a 7TV user-id to display name + avatar (cached). Used to label
-  // the "ADDED BY" row in the click-to-pin preview without re-hitting the
-  // API every emote.
-  async fetch7tvUser(userId) {
-    if (!userId) return null;
-    if (this._sevenTvUserCache.has(userId)) return this._sevenTvUserCache.get(userId);
-    try {
-      const r = await fetch(`https://7tv.io/v3/users/${userId}`);
-      if (!r.ok) { this._sevenTvUserCache.set(userId, null); return null; }
-      const d = await r.json();
-      const info = {
-        displayName: d.display_name || d.username || null,
-        avatarUrl: d.avatar_url || null,
-      };
-      this._sevenTvUserCache.set(userId, info);
-      return info;
-    } catch {
-      this._sevenTvUserCache.set(userId, null);
-      return null;
-    }
-  }
-
-  // Lookup an emote by name on a specific user's personal loadout.
-  // Returns { url, zw } or null. Used as the highest-priority lookup
-  // during render so foreign-channel personal emotes win over globals.
-  _getUserEmote(platform, login, name) {
-    if (!login) return null;
-    const m = this.userEmotes.get(`${platform}:${String(login).toLowerCase()}`);
-    return m?.get(name) || null;
-  }
-
-  // Identify which provider an emote came from based on its CDN URL.
-  // Returns { source, id, hires } or null. id is fetched from the URL,
-  // hires is a swapped-up resolution variant for the preview card.
-  // Diagnostic: log every short-name emote hit (≤3 chars) once per
-  // (name, source) so we can pin down stray entries like "te" being
-  // matched out of one of the loaded maps.
-  _logShortEmoteHit(name, source, url, platform, author) {
-    if (!this._shortHitsLogged) this._shortHitsLogged = new Set();
-    const key = `${name}|${source}`;
-    if (this._shortHitsLogged.has(key)) return;
-    this._shortHitsLogged.add(key);
-    try {
-      chrome.runtime.sendMessage({
-        type: 'UC_LOG', tag: 'ShortEmote',
-        args: [`name="${name}" source=${source} url=${url} platform=${platform} author=${author}`],
-      });
-    } catch {}
-  }
-
-  _emoteSourceFromUrl(url) {
-    if (!url) return null;
-    let m;
-    if ((m = url.match(/cdn\.7tv\.app\/emote\/([A-Za-z0-9]+)/))) {
-      return { source: '7TV', id: m[1], hires: url.replace(/\/[0-9]x\.(webp|avif|gif|png)/, '/4x.$1') };
-    }
-    if ((m = url.match(/cdn\.betterttv\.net\/emote\/([a-f0-9]+)/i))) {
-      return { source: 'BTTV', id: m[1], hires: url.replace(/\/[0-9]x(?:$|\?)/, '/3x') };
-    }
-    if ((m = url.match(/cdn\.frankerfacez\.com\/emote\/(\d+)\/(\d+)/))) {
-      return { source: 'FFZ', id: m[1], hires: url.replace(/\/(\d+)$/, '/4') };
-    }
-    if ((m = url.match(/static-cdn\.jtvnw\.net\/emoticons\/v2\/([^/]+)/))) {
-      return { source: 'Twitch', id: m[1], hires: url.replace(/\/[0-9.]+$/, '/3.0') };
-    }
-    if ((m = url.match(/files\.kick\.com\/emotes\/(\d+)/))) {
-      return { source: 'Kick', id: m[1], hires: url };
-    }
-    if (url.startsWith('chrome-extension://')) return { source: 'UnityChat', id: null, hires: url };
-    return null;
-  }
-
-  // Lazy-fetch full emote metadata for the click-to-pin preview card.
-  // Returns { owner, ownerAvatar, addedAt, externalUrl } or null. Per-source
-  // public APIs, no auth needed.
-  async fetchEmoteDetails(source, id, name) {
-    if (!id) return null;
-    try {
-      if (source === '7TV') {
-        const r = await fetch(`https://7tv.io/v3/emotes/${id}`);
-        if (!r.ok) return null;
-        const d = await r.json();
-        // "Added to set" provenance was captured during channel/user emote
-        // load — pull it back out by name. Resolve actor's display name
-        // via the cached /users/{id} helper.
-        const addition = name ? this._emoteAdditions.get(name) : null;
-        let addedBy = null;
-        let addedByAvatar = null;
-        if (addition?.actorId) {
-          const actor = await this.fetch7tvUser(addition.actorId);
-          if (actor) {
-            addedBy = actor.displayName;
-            addedByAvatar = actor.avatarUrl;
-          }
-        }
-        // Prefer the per-set addition timestamp over the emote's global
-        // creation date — it's what the 7TV banner shows as "Added On".
-        const addedAt = addition?.addedAt
-          || (d.created_at ? new Date(d.created_at) : null);
-        return {
-          owner: d.owner?.display_name || d.owner?.username || null,
-          ownerAvatar: d.owner?.avatar_url || null,
-          addedBy,
-          addedByAvatar,
-          addedAt,
-          externalUrl: `https://7tv.app/emotes/${id}`,
-        };
-      }
-      if (source === 'BTTV') {
-        const r = await fetch(`https://api.betterttv.net/3/emotes/${id}`);
-        if (!r.ok) return null;
-        const d = await r.json();
-        return {
-          owner: d.user?.displayName || d.user?.name || null,
-          ownerAvatar: d.user?.providerId
-            ? `https://cdn.betterttv.net/provider/twitch/${d.user.providerId}` : null,
-          addedBy: null,
-          addedByAvatar: null,
-          addedAt: null,
-          externalUrl: `https://betterttv.com/emotes/${id}`,
-        };
-      }
-      if (source === 'FFZ') {
-        const r = await fetch(`https://api.frankerfacez.com/v1/emote/${id}`);
-        if (!r.ok) return null;
-        const d = await r.json();
-        const e = d?.emote || {};
-        return {
-          owner: e.owner?.display_name || e.owner?.name || null,
-          ownerAvatar: null,
-          addedBy: null,
-          addedByAvatar: null,
-          addedAt: e.created_at ? new Date(e.created_at) : null,
-          externalUrl: `https://www.frankerfacez.com/emoticon/${id}`,
-        };
-      }
-    } catch {}
-    return null;
-  }
-
-  _build7tvUrl(emote) {
-    const host = emote.data?.host || emote.host;
-    if (!host?.url) return null;
-
-    // Prefer 2x for hi-DPI sharpness — we render at ~28–32px CSS, so 1x
-    // (typically 32px native) gets browser-upscaled and goes blurry on
-    // high-DPI displays. 2x (~64px) downscales cleanly. WebP first
-    // (animations + smaller bytes), then AVIF, then any 2x, then 1x.
-    const file =
-      host.files?.find((f) => f.name === '2x.webp') ||
-      host.files?.find((f) => f.name === '2x.avif') ||
-      host.files?.find((f) => f.name?.startsWith('2x')) ||
-      host.files?.find((f) => f.name === '1x.webp') ||
-      host.files?.find((f) => f.name === '1x.avif') ||
-      host.files?.find((f) => f.name?.startsWith('1x')) ||
-      host.files?.[0];
-
-    if (!file) return null;
-
-    const baseUrl = host.url.startsWith('//')
-      ? `https:${host.url}`
-      : host.url;
-
-    return `${baseUrl}/${file.name}`;
-  }
-
-  _get7tv(word) {
-    return this.channel7tv.get(word) || this.global7tv.get(word)
-      || this.bttvEmotes.get(word) || this.ffzEmotes.get(word)
-      || this.ucEmotes.get(word) || null;
-  }
-
-  /** Vrátí URL emotu z jakéhokoliv zdroje (pro autocomplete preview). */
-  getAnyUrl(name) {
-    return this.channel7tv.get(name) || this.global7tv.get(name)
-      || this.bttvEmotes.get(name) || this.ffzEmotes.get(name)
-      || this.twitchNative.get(name) || this.kickNative.get(name)
-      || this.ucEmotes.get(name) || null;
-  }
-
-  // ---- Učení nativních emotes z příchozích zpráv ----
-
-  learnTwitch(text, emotesTag, offset = 0) {
-    if (!emotesTag) return;
-    for (const part of emotesTag.split('/')) {
-      const ci = part.indexOf(':');
-      if (ci === -1) continue;
-      const id = part.substring(0, ci);
-      const range = part.substring(ci + 1).split(',')[0];
-      const dash = range.indexOf('-');
-      if (dash === -1) continue;
-      const s = parseInt(range.substring(0, dash), 10) - offset;
-      const e = parseInt(range.substring(dash + 1), 10) - offset;
-      if (isNaN(s) || isNaN(e) || s < 0 || e >= text.length) continue;
-      const name = text.substring(s, e + 1);
-      // Sanity check: real Twitch emote names are alphanumeric (with
-      // some punctuation). Skip if the slice would learn a fragment of
-      // a regular word — happens when offset is wrong (we'd teach
-      // "te" as an alias for :D from a misaligned reply prefix).
-      if (!name || !/^[\S]+$/.test(name) || /^[a-z]{1,3}$/.test(name)) continue;
-      if (!this.twitchNative.has(name)) {
-        this.twitchNative.set(name,
-          `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`);
-      }
-    }
-  }
-
-  learnKick(content) {
-    if (!content) return;
-    const re = /\[emote:(\d+):([^\]]+)\]/g;
-    let m;
-    while ((m = re.exec(content)) !== null) {
-      if (!this.kickNative.has(m[2])) {
-        this.kickNative.set(m[2], `https://files.kick.com/emotes/${m[1]}/fullsize`);
-      }
-    }
-  }
-
-  /**
-   * Tab autocomplete - hledá ve všech zdrojích emotes (case insensitive).
-   */
-  findCompletions(prefix, opts) {
-    if (!prefix) return [];
-    const lower = prefix.toLowerCase();
-    const fulltext = !!opts?.fulltext;
-    const results = [];
-    const seen = new Set();
-
-    // Pořadí: 7TV channel → 7TV global → BTTV → FFZ → Twitch → Kick → UC
-    const maps = [this.channel7tv, this.global7tv, this.bttvEmotes, this.ffzEmotes, this.twitchNative, this.kickNative, this.ucEmotes];
-    const matchFn = fulltext
-      ? (n) => n.toLowerCase().includes(lower)
-      : (n) => n.toLowerCase().startsWith(lower);
-
-    for (const map of maps) {
-      for (const name of map.keys()) {
-        if (matchFn(name) && !seen.has(name)) {
-          results.push(name);
-          seen.add(name);
-        }
-      }
-    }
-
-    results.sort((a, b) => {
-      // Prefix matches always rank above contains matches in fulltext mode
-      const aPrefix = a.toLowerCase().startsWith(lower);
-      const bPrefix = b.toLowerCase().startsWith(lower);
-      if (aPrefix !== bPrefix) return aPrefix ? -1 : 1;
-      const aExact = a.startsWith(prefix);
-      const bExact = b.startsWith(prefix);
-      if (aExact !== bExact) return aExact ? -1 : 1;
-      return a.localeCompare(b);
-    });
-
-    return results;
-  }
-
-  // ---- Rendering ----
-
-  /**
-   * Převede pole segmentů na finální HTML.
-   * Textové segmenty projdou 7TV matching, emote segmenty se zachovají.
-   */
-  renderSegments(segments, ctx) {
-    const platform = ctx?.platform || null;
-    const author = ctx?.author || null;
-    const out = [];
-    // Per-message helper: highest priority is the message author's personal
-    // 7TV emote loadout (so KombatWombatt's emotes resolve in foreign chats).
-    const userLookup = (name) => this._getUserEmote(platform, author, name);
-
-    for (const seg of segments) {
-      if (seg.type === 'emote') {
-        // Per-author personal emotes WIN over channel/global. 3rd-party
-        // (7TV/BTTV/FFZ) still overrides platform-native (Twitch native).
-        const personal = userLookup(seg.value);
-        if (personal) {
-          out.push({ type: 'emote', value: seg.value, url: personal.url, zw: personal.zw });
-          continue;
-        }
-        const thirdParty = this.channel7tv.get(seg.value) || this.global7tv.get(seg.value)
-          || this.bttvEmotes.get(seg.value) || this.ffzEmotes.get(seg.value);
-        if (thirdParty) {
-          out.push({ type: 'emote', value: seg.value, url: thirdParty, zw: this.zeroWidth.has(seg.value) });
-        } else {
-          out.push(seg);
-        }
-        continue;
-      }
-      // Text: per-author → 7TV/BTTV/FFZ → platform native → UC custom
-      const parts = seg.value.split(/(\s+)/);
-      for (const part of parts) {
-        // Cheermote: "Cheer{N}" on Twitch is a bits cheer — render the
-        // animated tier emote + colored bits count. Tier + color per
-        // Twitch's standard Cheer prefix (channels can have custom
-        // prefixes with their own emotes, which we can't resolve
-        // without OAuth — those fall through to the regular flow).
-        if (platform === 'twitch') {
-          const cm = /^(?:Cheer)(\d+)$/i.exec(part);
-          if (cm) {
-            const bits = parseInt(cm[1], 10);
-            const tier = bits >= 100000 ? 100000 : bits >= 10000 ? 10000 : bits >= 5000 ? 5000 : bits >= 1000 ? 1000 : bits >= 100 ? 100 : 1;
-            const colors = { 1: '#979797', 100: '#9c3ee8', 1000: '#1db2a5', 5000: '#0099fe', 10000: '#f43021', 100000: '#f43021' };
-            const url = `https://d3aqoihi2n8ty8.cloudfront.net/actions/cheer/dark/animated/${tier}/2.gif`;
-            out.push({ type: 'emote', value: `Cheer${bits}`, url, zw: false });
-            out.push({ type: 'text', value: `${bits}`, style: `color:${colors[tier]};font-weight:700;` });
-            continue;
-          }
-        }
-        const personal = userLookup(part);
-        if (personal) {
-          out.push({ type: 'emote', value: part, url: personal.url, zw: personal.zw });
-          if (part.length <= 3 && part.length > 0 && /\S/.test(part)) {
-            this._logShortEmoteHit?.(part, 'personal', personal.url, platform, author);
-          }
-          continue;
-        }
-        let url = null;
-        let source = null;
-        if ((url = this.channel7tv.get(part))) source = 'channel7tv';
-        else if ((url = this.global7tv.get(part))) source = 'global7tv';
-        else if ((url = this.bttvEmotes.get(part))) source = 'bttv';
-        else if ((url = this.ffzEmotes.get(part))) source = 'ffz';
-        else if ((url = this.ucEmotes.get(part))) source = 'uc';
-        else if ((url = this.twitchNative.get(part))) source = 'twitchNative';
-        else if ((url = this.kickNative.get(part))) source = 'kickNative';
-        if (url) {
-          if (part.length <= 3 && /\S/.test(part)) {
-            this._logShortEmoteHit?.(part, source, url, platform, author);
-          }
-          out.push({ type: 'emote', value: part, url, zw: this.zeroWidth.has(part) });
-        } else {
-          out.push({ type: 'text', value: part });
-        }
-      }
-    }
-    return this._toHtml(out);
-  }
-
-  /**
-   * Twitch zpráva - parsuje IRC emotes tag + 7TV.
-   * `ctx` (optional): { platform, author } — author login enables per-user
-   * 7TV personal emote resolution across channels.
-   */
-  renderTwitch(text, emotesTag, ctx) {
-    const offset = (ctx && ctx.emotesOffset) || 0;
-    const segments = this._splitTwitchEmotes(text, emotesTag, offset);
-    return this.renderSegments(segments, ctx);
-  }
-
-  /**
-   * Kick zpráva - parsuje HTML content (zachovává <img> emotes) + 7TV.
-   */
-  renderKick(htmlContent, ctx) {
-    const segments = this._parseKickHtml(htmlContent);
-    return this.renderSegments(segments, ctx);
-  }
-
-  /**
-   * YouTube zpráva - parsuje runs array + 7TV.
-   */
-  renderYouTube(runs) {
-    const segments = [];
-    for (const run of runs) {
-      if (run.text) {
-        segments.push({ type: 'text', value: run.text });
-      } else if (run.emoji) {
-        const url =
-          run.emoji.image?.thumbnails?.[0]?.url ||
-          run.emoji.image?.thumbnails?.[1]?.url;
-        const name = run.emoji.shortcuts?.[0] || run.emoji.emojiId || '';
-        if (url) {
-          segments.push({ type: 'emote', value: name, url });
-        } else {
-          segments.push({ type: 'text', value: name });
-        }
-      }
-    }
-    return this.renderSegments(segments);
-  }
-
-  /**
-   * Prostý text + 7TV (pro fallback).
-   */
-  renderPlain(text) {
-    return this.renderSegments([{ type: 'text', value: text }]);
-  }
-
-  // ---- Twitch emote parsing ----
-
-  _splitTwitchEmotes(text, tag, offset = 0) {
-    if (!tag) return [{ type: 'text', value: text }];
-
-    const positions = [];
-    for (const part of tag.split('/')) {
-      if (!part) continue;
-      const ci = part.indexOf(':');
-      if (ci === -1) continue;
-      const id = part.substring(0, ci);
-      for (const range of part.substring(ci + 1).split(',')) {
-        const dash = range.indexOf('-');
-        if (dash === -1) continue;
-        const s = parseInt(range.substring(0, dash), 10) - offset;
-        const e = parseInt(range.substring(dash + 1), 10) - offset;
-        // Skip positions that got shifted entirely off the trimmed text
-        // (shouldn't happen for emotes — the stripped prefix is plain
-        // "@name " text — but guard anyway).
-        if (!isNaN(s) && !isNaN(e) && s >= 0 && e >= 0 && e < text.length + 1) {
-          positions.push({ id, start: s, end: e + 1 });
-        }
-      }
-    }
-
-    if (positions.length === 0) return [{ type: 'text', value: text }];
-    positions.sort((a, b) => a.start - b.start);
-
-    const segs = [];
-    let last = 0;
-    for (const p of positions) {
-      if (p.start > last) {
-        segs.push({ type: 'text', value: text.substring(last, p.start) });
-      }
-      const name = text.substring(p.start, p.end);
-      segs.push({
-        type: 'emote',
-        value: name,
-        // OPRAVENÁ URL - správná doména jtvnw.net
-        url: `https://static-cdn.jtvnw.net/emoticons/v2/${p.id}/default/dark/2.0`
-      });
-      last = p.end;
-    }
-    if (last < text.length) {
-      segs.push({ type: 'text', value: text.substring(last) });
-    }
-    return segs;
-  }
-
-  // ---- Kick content parsing ----
-
-  _parseKickHtml(content) {
-    if (!content) return [{ type: 'text', value: '' }];
-
-    // Krok 1: [emote:ID:NAME] → emote segmenty
-    const hasEmoteTags = content.includes('[emote:');
-    const hasHtml = content.includes('<');
-
-    if (!hasEmoteTags && !hasHtml) {
-      return [{ type: 'text', value: content }];
-    }
-
-    // Parsovat [emote:ID:NAME] tagy
-    if (hasEmoteTags) {
-      const segments = [];
-      const re = /\[emote:(\d+):([^\]]+)\]/g;
-      let last = 0;
-      let m;
-      while ((m = re.exec(content)) !== null) {
-        if (m.index > last) {
-          const txt = content.substring(last, m.index);
-          segments.push(...this._parseKickHtmlFragment(txt));
-        }
-        segments.push({
-          type: 'emote',
-          value: m[2],
-          url: `https://files.kick.com/emotes/${m[1]}/fullsize`
-        });
-        last = m.index + m[0].length;
-      }
-      if (last < content.length) {
-        segments.push(...this._parseKickHtmlFragment(content.substring(last)));
-      }
-      return segments.length > 0 ? segments : [{ type: 'text', value: content }];
-    }
-
-    // Jen HTML (bez [emote:] tagů)
-    return this._parseKickHtmlFragment(content);
-  }
-
-  _parseKickHtmlFragment(html) {
-    if (!html) return [];
-    if (!html.includes('<')) return [{ type: 'text', value: html }];
-
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    const segments = [];
-    const walk = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if (node.textContent) segments.push({ type: 'text', value: node.textContent });
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === 'IMG') {
-          const src = node.getAttribute('src') || '';
-          const alt = node.getAttribute('alt') || '';
-          if (src.startsWith('http')) {
-            segments.push({ type: 'emote', value: alt, url: src });
-          } else {
-            segments.push({ type: 'text', value: alt });
-          }
-        } else {
-          for (const child of node.childNodes) walk(child);
-        }
-      }
-    };
-    walk(div);
-    return segments.length > 0 ? segments : [{ type: 'text', value: div.textContent || '' }];
-  }
-
-  // ---- HTML helpers ----
-
-  _toHtml(segments) {
-    const out = [];
-    let stackOpen = false;
-
-    // Check if a ZW emote follows at or after position i (skipping whitespace)
-    const zwAhead = (i) => {
-      for (let j = i; j < segments.length; j++) {
-        const s = segments[j];
-        if (s.type === 'emote' && s.zw) return true;
-        if (s.type === 'emote' && !s.zw) return false; // solid emote = no
-        if (s.type === 'text' && s.value.trim()) return false; // non-whitespace text = no
-        // whitespace text → keep looking
-      }
-      return false;
-    };
-
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
-      if (s.type !== 'emote') {
-        // Whitespace between base and ZW emote — skip (don't close stack)
-        if (stackOpen && !s.value.trim() && zwAhead(i + 1)) continue;
-        if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        if (s.style) {
-          // Styled text segment (cheermote bits count, future spans).
-          // Sanitize the inline style to allow only color/font-weight/
-          // background rules — no URL / expression injection.
-          const safe = String(s.style).replace(/[<>"'`]/g, '');
-          out.push(`<span style="${safe}">${this._eh(s.value)}</span>`);
-        } else {
-          out.push(this._linkify(s.value));
-        }
-        continue;
-      }
-      const alt = this._ea(s.value);
-      // Twitch's original global face emotes (:), :D, :O, ;), B), <3 …)
-      // ship at a much lower native resolution than channel/subscriber
-      // emotes — scaling them up to our standard chat-emote size makes
-      // them blurry and pushes them visually out of proportion with
-      // vanilla Twitch. Detect by NAME (stable across ID-system changes:
-      // <3 went from low ID to 555555584) AND require a Twitch CDN URL
-      // so BTTV/FFZ/7TV emotes that happen to share the same name (e.g.
-      // someone's BTTV ":D") don't get shrunk — they live on different
-      // domains.
-      let cls = 'emote';
-      const isTwitchCdn = /static-cdn\.jtvnw\.net\/emoticons\//.test(s.url || '');
-      if (isTwitchCdn && _isTwitchOgFaceName(s.value)) cls += ' emote-tiny';
-      // No native browser title — our own hover-preview card already shows
-      // the emote name + source, and the browser tooltip would compete
-      // with it (and pop up after the same hover delay).
-      const img = `<img class="${cls}" src="${this._ea(s.url)}" alt="${alt}">`;
-      if (s.zw) {
-        if (!stackOpen) out.push('<span class="emote-stack">');
-        out.push(img);
-        stackOpen = true;
-      } else {
-        if (stackOpen) { out.push('</span>'); stackOpen = false; }
-        out.push(`<span class="emote-stack">${img}`);
-        stackOpen = true;
-      }
-    }
-    if (stackOpen) out.push('</span>');
-    return out.join('');
-  }
-
-  _eh(s) {
-    return s
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
-  _linkify(s) {
-    // Match any of:
-    //   https://… / http://…           — explicit scheme
-    //   www.example.com[/...]          — schemeless www-prefixed
-    //   example.com[/...]              — bare domain with a known TLD
-    // The bare-domain branch is gated on a TLD whitelist so we don't
-    // accidentally turn things like "verca.je" / Czech sentences with
-    // dots into links. Word-boundary lookbehind keeps it from matching
-    // mid-token (like emails).
-    const urlRe = /(?:(?<=^|[\s(\[<])(?:https?:\/\/[^\s<>'")\]]+|www\.[A-Za-z0-9][A-Za-z0-9\-_.]*\.[A-Za-z]{2,}(?:\/[^\s<>'")\]]*)?|[A-Za-z0-9][A-Za-z0-9\-_]*\.(?:cz|sk|com|net|org|io|gg|tv|me|app|dev|ai|eu|de|uk|us|fr|pl|jp|ru|ca|nl|it|info|live|video|stream|games|game|wiki|news|blog|shop|store|fun)(?:\/[^\s<>'")\]]*)?))/gi;
-    let last = 0;
-    let out = '';
-    let m;
-    while ((m = urlRe.exec(s)) !== null) {
-      if (m.index > last) out += this._eh(s.substring(last, m.index));
-      const raw = m[0].replace(/[.,;:!?)]+$/, '');
-      // Build href: prepend https:// if no scheme present
-      const href = /^https?:\/\//i.test(raw) ? raw : 'https://' + raw;
-      urlRe.lastIndex = m.index + raw.length;
-      out += `<a href="${this._ea(href)}" target="_blank" rel="noopener">${this._eh(raw)}</a>`;
-      last = m.index + raw.length;
-    }
-    if (last === 0) return this._eh(s);
-    if (last < s.length) out += this._eh(s.substring(last));
-    return out;
-  }
-
-  _ea(s) {
-    return s
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
-  // Sanitize color for use in HTML style attributes
-  _sc(c) {
-    if (!c || typeof c !== 'string') return '';
-    // Allow: #hex, rgb(), rgba(), named colors (single word)
-    if (/^#[0-9a-fA-F]{3,8}$/.test(c)) return c;
-    if (/^rgba?\(\s*[\d\s,./%]+\)$/.test(c)) return c;
-    if (/^[a-zA-Z]{1,20}$/.test(c)) return c;
-    return '';
-  }
-}
+// EmoteManager žije v extension/core/emotes.js (sdílený s webem),
+// sem ho vystaví core-bridge.js přes window.UC_CORE / window.EmoteManager.
 
 // =============================================================
 // NicknameManager - custom display names backed by api.jouki.cz
@@ -913,6 +45,8 @@ class EmoteManager {
 
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
 const UC_API = 'https://api.jouki.cz';
+// Reakce „Peepo poop" — video sdílené s webem (robdiesalot.com/chat/media/).
+const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2-wet-sound.webm';
 
 class NicknameManager {
   constructor() {
@@ -962,6 +96,18 @@ class NicknameManager {
           this._saveCache();
           if (this.onChange) this.onChange({ ...d, nickname: null, color: null });
         } catch {}
+      });
+      // UnityChat Announcement ze Židolišty (command s videem) — vykreslí UnityChat._addAnnouncement.
+      this._eventSource.addEventListener('announcement', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onAnnouncement) this.onAnnouncement(d); } catch {}
+      });
+      // Reakce „Peepo poop" spuštěná modem — přehraje UnityChat._playReaction (core/reaction.js).
+      this._eventSource.addEventListener('reaction', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onReaction) this.onReaction(d); } catch {}
+      });
+      // Změna chat commandů v Židolištce (webhook → backend → SSE) — UnityChat si obnoví „!" našeptávání.
+      this._eventSource.addEventListener('commands-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
       });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
@@ -1067,698 +213,20 @@ class NicknameManager {
 // Twitch IRC Provider
 // =============================================================
 
-// Twitch's default username-color palette — used by the vanilla web client
-// when a user hasn't picked a custom color. Order + algorithm RE'd from
-// Twitch source (matches what Chatty and tmi.js ship). Without this, every
-// colorless user renders in the same brand purple fallback.
-const TWITCH_DEFAULT_COLORS = [
-  '#FF0000', '#0000FF', '#008000', '#B22222', '#FF7F50',
-  '#9ACD32', '#FF4500', '#2E8B57', '#DAA520', '#D2691E',
-  '#5F9EA0', '#1E90FF', '#FF69B4', '#8A2BE2', '#00FF7F',
-];
-function twitchDefaultColor(username) {
-  if (!username) return '#9146ff';
-  const n = username.toLowerCase();
-  const sum = n.charCodeAt(0) + n.charCodeAt(n.length - 1);
-  return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
-}
+// Barvy jmen žijí v extension/core/colors.js (sdílené s webem), sem je
+// vystaví core-bridge.js přes window.UC_CORE.
+const { TWITCH_DEFAULT_COLORS, twitchDefaultColor, ytNameColor, readableColor } = window.UC_CORE;
+const _isTwitchOgFaceName = window.UC_CORE.isTwitchOgFaceName;
 
-// Twitch's "Global Emotes" panel ships these legacy face emotes at a tiny
-// native resolution — upscaling makes them blurry. We render them smaller
-// to match vanilla chat. Stable across ID renumbering (e.g. <3 = 555555584).
-const _TWITCH_OG_FACE_NAMES = new Set([
-  ':)', ':(', ':D', ':P', ':p', ':o', ':O', ';)', ';P', ';p',
-  'B)', 'b)', ':|', ':/', ':\\', ':7', ':S', ':s', ':z', ':Z',
-  'R)', 'r)', '<3', 'O_o', 'o_O', 'O_O', '8)',
-  ':-)', ':-(', ':-D', ':-P', ':-p', ':-O', ':-o',
-  '#/', ':?',
-]);
-function _isTwitchOgFaceName(name) {
-  return _TWITCH_OG_FACE_NAMES.has(name);
-}
-
-// Twitch's vanilla chat lightens dark user colors on dark backgrounds so they
-// stay legible (DarkRed #8B0000 → a visible red, etc.). We mirror that: lift
-// the HSL Lightness floor to 0.5 and ceiling to 0.85 so both extremes read well.
-const _READABLE_CACHE = new Map();
-// YouTube barvu jména v datech NEPOSÍLÁ (ověřeno na live streamu: renderer
-// nese jen authorName/authorPhoto/authorExternalChannelId). Web klient si ji
-// počítá sám — live_chat_polymer.js: computeAuthorNameColor → hash z textu
-// jména. Tohle je port toho hashe; čitelnost na tmavém pozadí pak dořeší
-// readableColor() při renderu, takže kontrastní část jejich algoritmu
-// neduplikujeme. Hash se počítá z původního jména VČETNĚ '@', jinak by
-// barvy nesouhlasily s tím, co uživatel vidí na YouTube.
-function ytNameColor(name) {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
-  let out = '#';
-  for (let i = 0; i < 3; i++) out += ('00' + ((h >> (i * 8)) & 255).toString(16)).slice(-2);
-  return out;
-}
-
-function readableColor(input) {
-  if (!input) return input;
-  if (_READABLE_CACHE.has(input)) return _READABLE_CACHE.get(input);
-  const hex = /^#[0-9a-fA-F]{6}$/.test(input) ? input : null;
-  if (!hex) { _READABLE_CACHE.set(input, input); return input; }
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  const d = max - min;
-  let h = 0, s = 0;
-  if (d) {
-    s = l < 0.5 ? d / (max + min) : d / (2 - max - min);
-    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
-    else if (max === g) h = ((b - r) / d + 2) / 6;
-    else h = ((r - g) / d + 4) / 6;
-  }
-  // WCAG relative luminance — accounts for hue: pure blue is much harder
-  // to read on dark bg than pure red even at the same HSL Lightness, so
-  // we boost L extra when perceived luminance is very low. Twitch's vanilla
-  // chat does the same — pure #0000FF renders at ~#9999FF (HSL L≈0.8).
-  const wcagL = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  let minL = 0.5;
-  if (wcagL < 0.10) minL = 0.78;       // very dark (pure blue, dark navy)
-  else if (wcagL < 0.20) minL = 0.65;  // dark (e.g. dark red, navy variants)
-  const maxL = 0.88;
-  let nL = l;
-  if (l < minL) nL = minL;
-  else if (l > maxL) nL = maxL;
-  if (nL === l) { _READABLE_CACHE.set(input, hex); return hex; }
-  const hue2rgb = (p, q, t) => {
-    if (t < 0) t += 1; if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  const q = nL < 0.5 ? nL * (1 + s) : nL + s - nL * s;
-  const p = 2 * nL - q;
-  const nr = Math.round(hue2rgb(p, q, h + 1 / 3) * 255);
-  const ng = Math.round(hue2rgb(p, q, h) * 255);
-  const nb = Math.round(hue2rgb(p, q, h - 1 / 3) * 255);
-  const out = '#' + [nr, ng, nb].map(x => x.toString(16).padStart(2, '0')).join('');
-  _READABLE_CACHE.set(input, out);
-  return out;
-}
-
-class TwitchProvider {
-  constructor() {
-    this.ws = null;
-    this.channel = '';
-    this.connected = false;
-    this.roomId = null;
-    this._rt = null;
-    this.onMessage = null;
-    this.onStatus = null;
-    this.onRoomId = null;
-    // Mod actions: timeout/ban (CLEARCHAT) + single-message delete (CLEARMSG)
-    this.onClear = null;
-    this.onClearMsg = null;
-  }
-
-  connect(channel) {
-    this.channel = channel.toLowerCase().trim();
-    this.disconnect(true);
-    this.onStatus?.('connecting');
-
-    try {
-      this.ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
-
-      this.ws.onopen = () => {
-        const n = 'justinfan' + Math.floor(10000 + Math.random() * 90000);
-        this.ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
-        this.ws.send('PASS SCHMOOPIIE');
-        this.ws.send('NICK ' + n);
-        this.ws.send('JOIN #' + this.channel);
-        this.connected = true;
-        this.onStatus?.('connected');
-      };
-
-      this.ws.onmessage = (e) => {
-        for (const line of e.data.split('\r\n')) {
-          if (!line) continue;
-          if (line.startsWith('PING')) {
-            this.ws.send('PONG :tmi.twitch.tv');
-          } else if (line.includes('ROOMSTATE') && !this.roomId) {
-            const m = line.match(/room-id=(\d+)/);
-            if (m) {
-              this.roomId = m[1];
-              this.onRoomId?.(this.roomId);
-            }
-          } else if (line.includes('PRIVMSG')) {
-            this._parse(line);
-          } else if (line.includes('USERNOTICE')) {
-            this._parseNotice(line);
-          } else if (line.includes('CLEARCHAT')) {
-            this._parseClearChat(line);
-          } else if (line.includes('CLEARMSG')) {
-            this._parseClearMsg(line);
-          }
-        }
-      };
-
-      this.ws.onclose = () => {
-        this.connected = false;
-        this.onStatus?.('disconnected');
-        this._reconnect();
-      };
-
-      this.ws.onerror = () => this.onStatus?.('error', 'WebSocket chyba');
-    } catch (err) {
-      this.onStatus?.('error', err.message);
-      this._reconnect();
-    }
-  }
-
-  _parse(raw) {
-    let tags = {};
-    let rest = raw;
-
-    if (raw.startsWith('@')) {
-      const si = raw.indexOf(' ');
-      for (const t of raw.substring(1, si).split(';')) {
-        const eq = t.indexOf('=');
-        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
-      }
-      rest = raw.substring(si + 1);
-    }
-
-    const pi = rest.indexOf('PRIVMSG');
-    if (pi === -1) return;
-    const after = rest.substring(pi + 8);
-    const ci = after.indexOf(':');
-    if (ci === -1) return;
-
-    let message = after.substring(ci + 1);
-    const username = tags['display-name'] || rest.match(/:(\w+)!/)?.[1] || 'Unknown';
-    const ircColor = tags.color;
-    const color = ircColor || twitchDefaultColor(username);
-
-    // Detect /me (CTCP ACTION): \x01ACTION text\x01
-    let isAction = false;
-    if (message.startsWith('\x01ACTION ') && message.endsWith('\x01')) {
-      message = message.substring(8, message.length - 1);
-      isAction = true;
-    }
-
-    // Surový badges string pro image rendering (parsuje se v _addMessage)
-    const badgesRaw = tags.badges || '';
-
-    // Reply context z Twitch IRC tagů
-    let replyTo = null;
-    const replyUser = tags['reply-parent-display-name'];
-    if (replyUser) {
-      let body = (tags['reply-parent-msg-body'] || '')
-        .replace(/\\s/g, ' ')
-        .replace(/\\n/g, ' ')
-        .replace(/\\r/g, '')
-        .replace(/\\:/g, ';')
-        .replace(/\\\\/g, '\\');
-      replyTo = {
-        username: replyUser,
-        message: body,
-        id: tags['reply-parent-msg-id'] || null
-      };
-    }
-
-    // Twitch přidává @username na začátek reply zpráv - odstranit
-    // (reply context už ukazuje komu se odpovídá).
-    // Track how many chars we stripped so emote positions in the emotes tag
-    // (which are computed from the ORIGINAL message including the @username
-    // prefix) can be shifted to match the trimmed body when we render.
-    let cleanMessage = message;
-    let replyPrefixLen = 0;
-    if (replyTo && message.startsWith('@')) {
-      const sp = message.indexOf(' ');
-      if (sp !== -1) {
-        cleanMessage = message.substring(sp + 1);
-        replyPrefixLen = sp + 1;
-      }
-    }
-
-    this.onMessage?.({
-      platform: 'twitch',
-      username,
-      message: cleanMessage,
-      color,
-      // When IRC didn't carry a color= tag we fell back to the hash palette.
-      // Signal that the listener should look up the real Twitch chat color
-      // via GQL so we can retro-apply it (hash may differ from the user's
-      // actual stored color assigned by Twitch).
-      _needsColorLookup: !ircColor,
-      // Twitch numeric user-id — needed to look up 7TV profile (nickname paint).
-      userId: tags['user-id'] || null,
-      timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-      id: tags.id || crypto.randomUUID(),
-      badgesRaw,
-      twitchEmotes: tags.emotes || null,
-      twitchEmotesOffset: replyPrefixLen || 0,
-      replyTo,
-      firstMsg: tags['first-msg'] === '1',
-      isAction,
-      // Channel-point reward redemption (with required message body).
-      // IRC only exposes the reward UUID, not the display name/cost — those
-      // come via PubSub which is OAuth-gated (not available anonymously).
-      isRedeem: !!tags['custom-reward-id'],
-      rewardId: tags['custom-reward-id'] || null,
-      // Highlight My Message channel-point redeem — Twitch exposes this via msg-id.
-      isHighlight: tags['msg-id'] === 'highlighted-message',
-    });
-  }
-
-  _parseNotice(raw) {
-    let tags = {};
-    let rest = raw;
-    if (raw.startsWith('@')) {
-      const si = raw.indexOf(' ');
-      for (const t of raw.substring(1, si).split(';')) {
-        const eq = t.indexOf('=');
-        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
-      }
-      rest = raw.substring(si + 1);
-    }
-    const msgId = tags['msg-id'];
-    if (msgId === 'raid') {
-      const raider = tags['msg-param-displayName'] || tags['display-name'] || '?';
-      const viewers = tags['msg-param-viewerCount'] || '?';
-      this.onMessage?.({
-        platform: 'twitch',
-        username: raider,
-        message: `raiduje s ${viewers} diváky!`,
-        color: '#ff6b6b',
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        isRaid: true,
-        raidViewers: viewers,
-      });
-      return;
-    }
-    if (msgId === 'sub' || msgId === 'resub') {
-      // Optional attached chat message body
-      let body = '';
-      const uni = rest.indexOf('USERNOTICE');
-      if (uni !== -1) {
-        const after = rest.substring(uni + 10);
-        const ci = after.indexOf(':');
-        if (ci !== -1) body = after.substring(ci + 1);
-      }
-      const username = tags['display-name'] || tags.login || '?';
-      const ircColor = tags.color;
-      const color = ircColor || twitchDefaultColor(username);
-      const plan = tags['msg-param-sub-plan'] || '1000';
-      const months = parseInt(tags['msg-param-cumulative-months'] || tags['msg-param-months'] || '0', 10) || null;
-      const streak = (tags['msg-param-should-share-streak'] === '1')
-        ? (parseInt(tags['msg-param-streak-months'] || '0', 10) || null)
-        : null;
-      this.onMessage?.({
-        platform: 'twitch',
-        username,
-        message: body,
-        color,
-        _needsColorLookup: !ircColor,
-        userId: tags['user-id'] || null,
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        badgesRaw: tags.badges || '',
-        twitchEmotes: tags.emotes || null,
-        isSubEvent: true,
-        subPlan: plan,
-        subMonths: months,
-        subStreak: streak,
-      });
-      return;
-    }
-    if (msgId === 'submysterygift') {
-      // Bundle announcement: "gifter is gifting N subs to the community"
-      const gifter = tags['display-name'] || tags.login || '?';
-      const count = parseInt(tags['msg-param-mass-gift-count'] || '0', 10) || 1;
-      const plan = tags['msg-param-sub-plan'] || '1000';
-      const ircColor = tags.color;
-      const color = ircColor || twitchDefaultColor(gifter);
-      this.onMessage?.({
-        platform: 'twitch',
-        username: gifter,
-        message: '',
-        color,
-        _needsColorLookup: !ircColor,
-        userId: tags['user-id'] || null,
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        badgesRaw: tags.badges || '',
-        isGiftBundle: true,
-        giftCount: count,
-        giftPlan: plan,
-      });
-      return;
-    }
-    if (msgId === 'subgift') {
-      // Individual gift line: "gifter gifted a sub to recipient"
-      const gifter = tags['display-name'] || tags.login || '?';
-      const recipient = tags['msg-param-recipient-display-name']
-        || tags['msg-param-recipient-user-name'] || '?';
-      const plan = tags['msg-param-sub-plan'] || '1000';
-      const ircColor = tags.color;
-      const color = ircColor || twitchDefaultColor(gifter);
-      this.onMessage?.({
-        platform: 'twitch',
-        username: gifter,
-        message: '',
-        color,
-        _needsColorLookup: !ircColor,
-        userId: tags['user-id'] || null,
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        badgesRaw: tags.badges || '',
-        isSubGift: true,
-        giftRecipient: recipient,
-        giftPlan: plan,
-      });
-      return;
-    }
-    if (msgId === 'viewermilestone') {
-      // Watch streak / viewer milestone — Twitch awards channel points to
-      // viewers when they hit milestones (e.g. 5-stream watch streak).
-      // Tag names per Twitch IRC docs (https://dev.twitch.tv/docs/irc/tags/):
-      //   msg-param-category    — milestone category (currently "watch-streak")
-      //   msg-param-value       — milestone value (streak count)
-      //   msg-param-copoReward  — channel points awarded
-      let body = '';
-      const uni = rest.indexOf('USERNOTICE');
-      if (uni !== -1) {
-        const after = rest.substring(uni + 10);
-        const ci = after.indexOf(':');
-        if (ci !== -1) body = after.substring(ci + 1);
-      }
-      const username = tags['display-name'] || tags.login || '?';
-      const ircColor = tags.color;
-      const color = ircColor || twitchDefaultColor(username);
-      const category = tags['msg-param-category'] || 'watch-streak';
-      const value = parseInt(tags['msg-param-value'] || '0', 10) || 0;
-      const points = parseInt(tags['msg-param-copoReward'] || '0', 10) || 0;
-      // Diagnostic: verify tag names match docs against real-world data.
-      // Remove this block once a few production samples confirm the parser.
-      try {
-        chrome.runtime.sendMessage({
-          type: 'UC_LOG', tag: 'Milestone',
-          text: `category=${category} value=${value} points=${points} body="${body.slice(0, 80)}" tags=${JSON.stringify(tags).slice(0, 500)}`,
-        }).catch(() => {});
-      } catch {}
-      this.onMessage?.({
-        platform: 'twitch',
-        username,
-        message: body,
-        color,
-        _needsColorLookup: !ircColor,
-        userId: tags['user-id'] || null,
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        badgesRaw: tags.badges || '',
-        twitchEmotes: tags.emotes || null,
-        isMilestone: true,
-        milestoneCategory: category,
-        milestoneValue: value,
-        milestonePoints: points,
-      });
-      return;
-    }
-    if (msgId === 'announcement') {
-      // USERNOTICE #channel :message text — grab the body after the command+channel.
-      const uni = rest.indexOf('USERNOTICE');
-      if (uni === -1) return;
-      const after = rest.substring(uni + 10);
-      const ci = after.indexOf(':');
-      const message = ci !== -1 ? after.substring(ci + 1) : '';
-      if (!message) return;
-      const username = tags['display-name'] || '?';
-      const ircColor = tags.color;
-      const color = ircColor || twitchDefaultColor(username);
-      // PRIMARY | BLUE | GREEN | ORANGE | PURPLE — used by CSS to pick accent color.
-      const ann = (tags['msg-param-color'] || 'PRIMARY').toUpperCase();
-      this.onMessage?.({
-        platform: 'twitch',
-        username,
-        message,
-        color,
-        _needsColorLookup: !ircColor,
-        userId: tags['user-id'] || null,
-        timestamp: Number(tags['tmi-sent-ts']) || Date.now(), // čas z Twitche, ne z klienta (spec 2026-09-19)
-        id: tags.id || crypto.randomUUID(),
-        badgesRaw: tags.badges || '',
-        twitchEmotes: tags.emotes || null,
-        isAnnouncement: true,
-        announcementColor: ann,
-      });
-    }
-  }
-
-  // CLEARCHAT — `:tmi.twitch.tv CLEARCHAT #channel :targetuser`
-  // Tags: ban-duration=N (timeout, N seconds) — absent = permanent ban.
-  // No target after the colon = chat-wide clear (we don't act on those).
-  _parseClearChat(raw) {
-    let tags = {};
-    let rest = raw;
-    if (raw.startsWith('@')) {
-      const si = raw.indexOf(' ');
-      for (const t of raw.substring(1, si).split(';')) {
-        const eq = t.indexOf('=');
-        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
-      }
-      rest = raw.substring(si + 1);
-    }
-    const ci = rest.indexOf('CLEARCHAT');
-    if (ci === -1) return;
-    const after = rest.substring(ci + 9);
-    const colonIdx = after.indexOf(':');
-    if (colonIdx === -1) return; // chat-wide clear, skip
-    const targetUser = after.substring(colonIdx + 1).trim();
-    if (!targetUser) return;
-    const banDuration = tags['ban-duration']
-      ? parseInt(tags['ban-duration'], 10) || null
-      : null;
-    this.onClear?.({ user: targetUser, banDuration });
-  }
-
-  // CLEARMSG — single message deletion. Tags: target-msg-id, login.
-  _parseClearMsg(raw) {
-    let tags = {};
-    if (raw.startsWith('@')) {
-      const si = raw.indexOf(' ');
-      for (const t of raw.substring(1, si).split(';')) {
-        const eq = t.indexOf('=');
-        if (eq !== -1) tags[t.substring(0, eq)] = t.substring(eq + 1);
-      }
-    }
-    const id = tags['target-msg-id'];
-    if (!id) return;
-    this.onClearMsg?.({ id, login: tags.login || null });
-  }
-
-  _reconnect() {
-    if (this._rt) return;
-    this._rt = setTimeout(() => {
-      this._rt = null;
-      if (!this.connected && this.channel) this.connect(this.channel);
-    }, 5000);
-  }
-
-  disconnect(internal) {
-    this.connected = false;
-    this.roomId = null;
-    if (this._rt) { clearTimeout(this._rt); this._rt = null; }
-    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
-    if (!internal) this.onStatus?.('disconnected');
-  }
-}
+// TwitchProvider žije v extension/core/twitch-irc.js (sdílený s webem),
+// sem ho vystaví core-bridge.js přes window.UC_CORE / window.TwitchProvider.
 
 // =============================================================
 // Kick Provider (Pusher WebSocket)
 // =============================================================
 
-class KickProvider {
-  constructor() {
-    this.ws = null;
-    this.channel = '';
-    this.chatroomId = null;
-    this.userId = null;
-    this.connected = false;
-    this._rt = null;
-    this._pt = null;
-    this.onMessage = null;
-    this.onStatus = null;
-    this.onUserId = null;
-    this.onSubBadges = null;
-    this._badgeLogBudget = 5;
-  }
-
-  async connect(channel) {
-    this.channel = channel.toLowerCase().trim();
-    this.disconnect(true);
-    this.onStatus?.('connecting');
-
-    try {
-      const resp = await fetch(`https://kick.com/api/v2/channels/${this.channel}`, {
-        headers: { Accept: 'application/json' }
-      });
-      if (!resp.ok) throw new Error(`Kick API: ${resp.status}`);
-
-      const data = await resp.json();
-      this.chatroomId = data?.chatroom?.id;
-      this.userId = data?.user_id || data?.id;
-      if (!this.chatroomId) throw new Error('Chatroom nenalezen');
-      if (this.userId) this.onUserId?.(this.userId);
-      // Per-channel subscriber badge tiers ({months, badge_image.src}); the
-      // built-in role badges are bundled in icons/kick-badges/.
-      this.onSubBadges?.(Array.isArray(data?.subscriber_badges) ? data.subscriber_badges : []);
-
-      this._connectPusher();
-    } catch (err) {
-      console.error('Kick:', err);
-      this.onStatus?.('error', err.message);
-      this._reconnect();
-    }
-  }
-
-  _connectPusher() {
-    const key = '32cbd69e4b950bf97679';
-    this.ws = new WebSocket(
-      `wss://ws-us2.pusher.com/app/${key}?protocol=7&client=js&version=8.3.0&flash=false`
-    );
-
-    this.ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        switch (msg.event) {
-          case 'pusher:connection_established':
-            this.ws.send(JSON.stringify({
-              event: 'pusher:subscribe',
-              data: { channel: `chatrooms.${this.chatroomId}.v2` }
-            }));
-            break;
-          case 'pusher_internal:subscription_succeeded':
-            this.connected = true;
-            this.onStatus?.('connected');
-            this._startPing();
-            break;
-          case 'pusher:ping':
-            this.ws.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
-            break;
-          case 'App\\Events\\ChatMessageEvent':
-            this._parse(msg.data);
-            break;
-        }
-      } catch {}
-    };
-
-    this.ws.onclose = () => {
-      this.connected = false;
-      this._stopPing();
-      this.onStatus?.('disconnected');
-      this._reconnect();
-    };
-
-    this.ws.onerror = () => this.onStatus?.('error', 'Pusher chyba');
-  }
-
-  _parse(raw) {
-    try {
-      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (data.type !== 'message' && data.type !== 'reply') return;
-
-      const username = data.sender?.username || 'Unknown';
-      const senderId = data.sender?.id || null;
-      const color = data.sender?.identity?.color || '#53fc18';
-      let content = data.content || '';
-
-      // Parse native Kick reply metadata
-      let replyTo = null;
-      if (data.type === 'reply' && data.metadata) {
-        const origMsg = data.metadata.original_message;
-        const origSender = data.metadata.original_sender;
-        if (origMsg && origSender) {
-          replyTo = {
-            id: origMsg.id,
-            username: origSender.username,
-            message: origMsg.content || null,
-            platform: 'kick'
-          };
-          // Strip leading @username prefix if Kick added one
-          const at = `@${origSender.username}`;
-          if (content.startsWith(at + ' ')) content = content.substring(at.length + 1);
-          else if (content.startsWith(at)) content = content.substring(at.length);
-        }
-      }
-
-      // Kick sends roles as sender.identity.badges[] = {type, text, count?}
-      // (e.g. moderator, subscriber+count, founder, vip, og, sub_gifter+count,
-      // verified, broadcaster, bot). Serialised like Twitch's IRC tag so the
-      // rest of the pipeline (cache, user entries) stays string-based.
-      const identityBadges = Array.isArray(data.sender?.identity?.badges) ? data.sender.identity.badges : [];
-      const badgesRaw = identityBadges
-        .filter((b) => b && typeof b.type === 'string')
-        .map((b) => (b.count ? `${b.type}/${b.count}` : b.type))
-        .join(',');
-      if (identityBadges.length && this._badgeLogBudget > 0) {
-        this._badgeLogBudget--;
-        try {
-          chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'KickBadge',
-            text: `${username} identity=${JSON.stringify(data.sender?.identity)} senderKeys=${Object.keys(data.sender || {}).join(',')}` }).catch(() => {});
-        } catch {}
-      }
-
-      this.onMessage?.({
-        platform: 'kick',
-        username,
-        senderId,
-        kickContent: content, // surový HTML obsah pro EmoteManager
-        message: this._textOnly(content), // plain text fallback
-        color,
-        badgesRaw,
-        timestamp: Date.parse(data.created_at) || Date.now(), // čas z Kicku (ISO created_at)
-        id: data.id || crypto.randomUUID(),
-        replyTo
-      });
-    } catch {}
-  }
-
-  _textOnly(html) {
-    if (!html.includes('<')) return html;
-    const d = document.createElement('div');
-    d.innerHTML = html;
-    return d.textContent || '';
-  }
-
-  _startPing() {
-    this._stopPing();
-    this._pt = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN)
-        this.ws.send(JSON.stringify({ event: 'pusher:ping', data: {} }));
-    }, 30000);
-  }
-
-  _stopPing() {
-    if (this._pt) { clearInterval(this._pt); this._pt = null; }
-  }
-
-  _reconnect() {
-    if (this._rt) return;
-    this._rt = setTimeout(() => {
-      this._rt = null;
-      if (!this.connected && this.channel) this.connect(this.channel);
-    }, 5000);
-  }
-
-  disconnect(internal) {
-    this.connected = false;
-    this.userId = null;
-    this._stopPing();
-    if (this._rt) { clearTimeout(this._rt); this._rt = null; }
-    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
-    if (!internal) this.onStatus?.('disconnected');
-  }
-}
+// KickProvider žije v extension/core/kick.js (sdílený s webem),
+// sem ho vystaví core-bridge.js přes window.UC_CORE / window.KickProvider.
 
 // =============================================================
 // YouTube Live Chat Provider
@@ -2473,16 +941,19 @@ async function _7tvFetchUserData(twitchUserId) {
 class UnityChat {
   constructor() {
     this.config = { ...DEFAULTS };
-    this.emotes = new EmoteManager();
+    this.emotes = new EmoteManager({
+      log: (tag, text) => this._ucLog(tag, text),
+      assetUrl: (p) => chrome.runtime.getURL(p),
+    });
     this.nicknames = new NicknameManager();
-    this.twitch = new TwitchProvider();
-    this.kick = new KickProvider();
+    this.twitch = new TwitchProvider({ log: (tag, text) => this._ucLog(tag, text) });
+    this.kick = new KickProvider({ log: (tag, text) => this._ucLog(tag, text) });
     this._kickSubBadges = []; // Kick per-channel subscriber badge tiers
     this.youtube = new YouTubeProvider();
     this.autoScroll = true;
     this.filters = { twitch: true, youtube: true, kick: true };
     this.activePlatform = null;
-    // Jediný držitel dat zpráv (extension/chat-store.js). Historie jde ze
+    // Jediný držitel dat zpráv (extension/core/chat-store.js přes core-bridge). Historie jde ze
     // serveru (/chat/history), lokální cache i scrape zmizely ve v3.39.
     this.store = new ChatStore();
     // DOM okno: v chatu je naživo max ~300 uzlů. Co vypadne nahoře/dole, se
@@ -2503,6 +974,8 @@ class UnityChat {
     this._platformColors = {};    // per-platform user color (from IRC/API)
     this._syncedProfiles = new Set(); // platform:username pairs already synced with API
     this._seCommands = [];        // StreamElements bot commands (for ! autocomplete)
+    this._ucCommands = [];        // chat commandy ze Židolišty (backend GET /commands) — jméno = spouštěč bez '!', roles, source
+    this._ucCommandsTimer = null;
     this._msgHistory = [];         // sent message history (newest last)
     this._msgHistoryIdx = -1;      // -1 = not browsing, 0..N = position from end
     this._msgHistoryDraft = '';    // unsent text before browsing history
@@ -2610,6 +1083,17 @@ class UnityChat {
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
+    this.nicknames.onAnnouncement = (a) => { if (a?.channel === (this.config.channel || '').toLowerCase()) this._addAnnouncement(a); };
+    // Reakce „Peepo poop": SSE → přehrát; tlačítko u zpráv řídí body třídy (role + běžící reakce).
+    this._reactionSeen = new Set();
+    this._activeReaction = null;
+    this.nicknames.onReaction = (ev) => this._playReaction(ev);
+    setInterval(() => this._updatePoopButtons(), 5000);
+    fetch(`${UC_API}/reactions/active?channel=${encodeURIComponent((this.config.channel || '').toLowerCase())}`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (j?.active) this._playReaction(j.active); }).catch(() => {});
+    // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
+    { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
+    this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
         for (const p of ['twitch', 'youtube', 'kick']) {
@@ -2670,6 +1154,7 @@ class UnityChat {
 
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
+    this._loadUcCommands().catch(() => {});
 
     // Spinner up before any heavy work — it covers cache hydration + the
     // first round of provider connects. Cleared on first rendered message,
@@ -2810,10 +1295,12 @@ class UnityChat {
       } else if (partial.startsWith('!') && partial.length >= 2 && ws === 0) {
         // !command autocomplete (only at start of message)
         const prefix = partial.substring(1).toLowerCase();
-        const matches = this._seCommands
+        const role = this._myChatRole();
+        const matches = [...new Set(this._allBangCommands()
           .filter(c => c.name.toLowerCase().startsWith(prefix))
+          .filter(c => !Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role))
           .sort((a, b) => a.name.localeCompare(b.name))
-          .map(c => '!' + c.name);
+          .map(c => '!' + c.name))];
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
           this._acRender();
@@ -2829,7 +1316,7 @@ class UnityChat {
           'announcement', 'ann',
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
-          'redeem', 'highlight',
+          'command', 'redeem', 'highlight', 'annc',
           'milestone', 'streak',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
@@ -3233,7 +1720,7 @@ class UnityChat {
       matches = this._acUserMatches(partial.substring(1).toLowerCase());
     } else {
       // Emote autocomplete — honors the per-session "Fulltext" toggle
-      matches = this.emotes.findCompletions(partial, { fulltext: this._acFulltext });
+      matches = this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true });
     }
     if (!matches.length) { this._acHide(); return; }
 
@@ -3247,7 +1734,7 @@ class UnityChat {
   _acRefilter() {
     const ac = this._ac;
     if (!ac || ac.kind !== 'emote' || !ac.prefix) return;
-    const next = this.emotes.findCompletions(ac.prefix, { fulltext: this._acFulltext });
+    const next = this.emotes.findCompletions(ac.prefix, { fulltext: this.config.acFulltext === true });
     if (!next.length) { this._acHide(); return; }
     ac.matches = next;
     ac.index = 0;
@@ -3307,6 +1794,7 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
+    if (name.startsWith('!')) return this._bangSources(name).join(' · ') || 'SE';
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
@@ -3350,7 +1838,7 @@ class UnityChat {
     // when checked, future findCompletions() calls match by `includes`
     // rather than `startsWith`, so middle-of-name matches show up too.
     if (ac.kind === 'emote') {
-      const checked = this._acFulltext ? ' checked' : '';
+      const checked = this.config.acFulltext === true ? ' checked' : '';
       html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
     }
     for (let i = winStart; i < winEnd; i++) {
@@ -3358,7 +1846,13 @@ class UnityChat {
       const sel = i === idx ? ' selected' : '';
       html += `<div class="es-item${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('/uc ')) {
+      if (name.startsWith('!')) {
+        // Chat command: loga všech zdrojů, kde spouštěč je (Židolišta první, pak StreamElements)
+        html += '<span class="es-logos">' + this._bangSources(name).map((src) => {
+          const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
+          return `<img class="es-logo${src === 'Židolišta' ? ' es-logo-zidolista' : ''}" src="${logo}" alt="${this.emotes._ea(src)}">`;
+        }).join('') + '</span>';
+      } else if (name.startsWith('/uc ')) {
         // UC command: oranžová tečka
         html += `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
@@ -3384,8 +1878,10 @@ class UnityChat {
       html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
     }
 
+    const logosBefore = this._acAnimateLogos ? this._acSnapshotLogos(el) : null;
     el.innerHTML = html;
     el.classList.remove('hidden');
+    if (logosBefore) this._acAnimateLogoDiff(el, logosBefore);
 
     // Wire fulltext checkbox — toggles persistent flag and re-runs the
     // current search, so the panel refilters live without retyping.
@@ -3393,7 +1889,8 @@ class UnityChat {
     if (ftBox) {
       ftBox.addEventListener('change', (e) => {
         e.stopPropagation();
-        this._acFulltext = ftBox.checked;
+        this.config.acFulltext = ftBox.checked;
+        this._saveConfig();
         this._acRefilter();
         this.msgInput.focus();
       });
@@ -3420,6 +1917,35 @@ class UnityChat {
         this.msgInput.focus();
       });
     });
+  }
+
+  /** Před překreslením: jaká loga měl každý řádek (podle jména) — pro animaci změny zdrojů. */
+  _acSnapshotLogos(el) {
+    const map = new Map();
+    for (const item of el.querySelectorAll('.es-item')) map.set(item.querySelector('.es-name-inner')?.textContent || '', [...item.querySelectorAll('.es-logos img')].map((i) => i.alt));
+    return map;
+  }
+
+  /** Po překreslení: nová loga prolnout, odebraná nechat vyblednout na původním místě. */
+  _acAnimateLogoDiff(el, before) {
+    const logoFor = (alt) => alt === 'Židolišta' ? 'icons/commands/zidolista.png' : alt === 'SE' ? 'icons/commands/streamelements.svg' : null;
+    for (const item of el.querySelectorAll('.es-item')) {
+      const name = item.querySelector('.es-name-inner')?.textContent || '';
+      const old = before.get(name);
+      const box = item.querySelector('.es-logos');
+      if (!old || !box) continue;
+      const now = [...box.querySelectorAll('img')];
+      const nowAlts = now.map((i) => i.alt);
+      for (const img of now) if (!old.includes(img.alt)) img.classList.add('es-logo-in');
+      old.forEach((alt, i) => {
+        if (nowAlts.includes(alt) || !logoFor(alt)) return;
+        const ghost = document.createElement('img');
+        ghost.className = 'es-logo es-logo-out' + (alt === 'Židolišta' ? ' es-logo-zidolista' : '');
+        ghost.src = logoFor(alt); ghost.alt = alt;
+        box.insertBefore(ghost, box.children[i] || null);
+        ghost.addEventListener('animationend', () => ghost.remove(), { once: true });
+      });
+    }
   }
 
   _acHide() {
@@ -3898,6 +2424,7 @@ class UnityChat {
     // scrape from re-rendering messages that are still sitting in Twitch's DOM.
     this._resetChat();
     this._isModOnChannel = false; // re-detect from badges on new channel
+    this._loadUcCommands().catch(() => {});
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -4239,6 +2766,66 @@ class UnityChat {
 
   // ---- StreamElements bot commands (for ! autocomplete) ----
 
+  /** „!" commandy pro autocomplete: Židolišta (přes backend, klíč zůstává na serveru) + StreamElements. */
+  _allBangCommands() {
+    return [...this._ucCommands, ...this._seCommands.map((c) => ({ ...c, source: 'SE' }))];
+  }
+
+  /** Zdroje, ve kterých spouštěč existuje a je pro moji roli povolený (Židolišta první). */
+  _bangSources(name) {
+    const role = this._myChatRole();
+    return [...new Set(this._allBangCommands()
+      .filter((c) => '!' + c.name === name && (!Array.isArray(c.roles) || !c.roles.length || c.roles.includes(role)))
+      .map((c) => c.source || 'SE'))];
+  }
+
+  /** Moje role na Twitchi podle badge z vlastních zpráv — commandy Židolišty jen pro mody se divákům nenabízí. */
+  _myChatRole() {
+    const me = (this._platformUsernames.twitch || this.config.username || '').toLowerCase();
+    if (!me) return 'viewer';
+    if (me === (this.config.channel || '').toLowerCase()) return 'broadcaster';
+    const b = this._chatUsers.get(`twitch:${me}`)?.badgesRaw || '';
+    if (/(^|,)broadcaster\//.test(b)) return 'broadcaster';
+    if (/(^|,)moderator\//.test(b) || this._isModOnChannel) return 'moderator';
+    if (/(^|,)vip\//.test(b)) return 'vip';
+    if (/(^|,)(subscriber|founder)\//.test(b)) return 'sub';
+    return 'viewer';
+  }
+
+  // Chat commandy streamera ze Židolišty (RobJewsALot): backend GET /commands?channel=
+  // vrací jen jméno, literál spouštěče a role (regex už převedený na serveru).
+  // Obnova každých 5 minut — commandy se editují na stránce Commandy.
+  async _loadUcCommands() {
+    if (this._ucCommandsTimer) { clearInterval(this._ucCommandsTimer); this._ucCommandsTimer = null; }
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) { this._ucCommands = []; return; }
+    const tick = async () => {
+      try {
+        const r = await fetch(`${UC_API}/commands?channel=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        const out = [];
+        for (const c of j.commands || []) {
+          for (const t of c.triggers || [c.trigger]) {
+            if (!t || !t.startsWith('!')) continue;
+            out.push({ name: t.slice(1), label: c.name || '', roles: Array.isArray(c.roles) ? c.roles : [], source: 'Židolišta', reply: c.reply || '', announcement: c.announcement || null });
+          }
+        }
+        this._ucCommands = out;
+        this._ucLog('Cmd', `Židolišta ${channel}: ${out.length} spouštěčů${j.stale ? ' (stará cache)' : ''}`);
+        // Otevřený našeptávač „!" příkazů přepočítat z aktuálního textu (s animací změny log).
+        if (this._ac?.matches?.[0]?.startsWith('!')) {
+          this._acAnimateLogos = true;
+          try { this.msgInput.dispatchEvent(new Event('input')); } finally { this._acAnimateLogos = false; }
+        }
+      } catch (e) {
+        this._ucLog('Cmd', `Židolišta fail ${e?.message || e}`);
+      }
+    };
+    await tick();
+    this._ucCommandsTimer = setInterval(() => { tick().catch(() => {}); }, 5 * 60 * 1000);
+  }
+
   async _loadSECommands() {
     try {
       // Get SE channel ID from channel name
@@ -4263,13 +2850,14 @@ class UnityChat {
 
   // ---- Scroll to message ----
 
-  _scrollToMessage(msgId) {
+  _scrollToMessage(msgId, { flash = true } = {}) {
     const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
     if (!target) {
-      this._sys('Původní zpráva už není v cache');
+      if (flash) this._sys('Původní zpráva už není v cache');
       return;
     }
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (!flash) return;
     target.classList.remove('msg-flash');
     void target.offsetWidth; // restart animace
     target.classList.add('msg-flash');
@@ -4747,6 +3335,30 @@ class UnityChat {
       case 'highlight':
         this._addMessage({ ...base, message: text, isHighlight: true });
         break;
+      case 'command':
+      case 'cmd': {
+        // Lokální náhled reakce commandu Židolišty (`/uc command !brohemians`): announcement + odpověď bota, nic se neodesílá.
+        const trig = (parts[1] || '').replace(/^!/, '').toLowerCase();
+        const c = this._ucCommands.find((x) => x.name.toLowerCase() === trig);
+        if (!trig) { this._sys('/uc command <!spouštěč> — náhled reakce commandu Židolišty'); break; }
+        if (!c) { this._sys(`/uc command: command „!${trig}" v Židolištce neznám (nabídka: ${this._ucCommands.map((x) => '!' + x.name).join(', ') || 'nic'})`); break; }
+        const a = c.announcement;
+        const hide = !!(a && a.hideChatReplyInUnityChat);
+        if (a) {
+          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+        } else {
+          this._sys(`!${c.name}: command nemá UnityChat Announcement`);
+        }
+        if (c.reply && !hide) this._addMessage({ ...base, id: `preview-reply-${now}`, username: 'Židolišta', message: c.reply, color: '#9146ff' });
+        else if (c.reply && hide) this._sys(`!${c.name}: běžná odpověď „${c.reply.slice(0, 60)}" se uživatelům UnityChatu skrývá`);
+        break;
+      }
+      case 'annc': {
+        // Mock UnityChat Announcement s demo animací erbu (médium hostuje web robdiesalot.com/chat/media/).
+        const origin = 'https://robdiesalot.com/chat/media/';
+        this._addAnnouncement({ id: `mock-annc-${now}`, channel: (this.config.channel || '').toLowerCase(), command: 'Brohemians', text: text === 'test message' ? 'Brohemians! Pojď se přidat k bratrstvu.' : text, media: { url: origin + 'shield-orbit-alpha.webm', kind: 'video', width: 200, loop: true, stillUrl: origin + 'shield-still.webp' }, chatReply: { text: 'Brohemians!', hideInUnityChat: true }, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+        break;
+      }
       case 'mod':
       case 'timeout': {
         const secs = parseInt(text, 10) || 600;
@@ -4890,7 +3502,7 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
@@ -5112,6 +3724,123 @@ class UnityChat {
   }
 
   // ---- Messages ----
+
+  // ---- UnityChat Announcement (command v Židolištce s videem, SSE `announcement`) ----
+  _addAnnouncement(payload) {
+    const core = window.UC_CORE;
+    const a = core.normalizeAnnouncement(payload);
+    if (!a) { this._ucLog('Annc', 'neplatný payload'); return false; }
+    if (!this._anncSeen) this._anncSeen = new Set();
+    if (this._anncSeen.has(a.id)) return false;
+    this._anncSeen.add(a.id);
+    if (!this._pendingReplies) this._pendingReplies = [];
+    if (a.chatReply?.hideInUnityChat) {
+      const now = Date.now();
+      this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
+      this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
+    }
+    const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const d = new Date(a.at);
+    const timeText = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = core.announcementHtml(a, { textHtml: a.textHtml ? a.textHtml : (a.text ? this.emotes.renderPlain(a.text) : ''), reducedMotion, timeText });
+    const el = tpl.content.firstElementChild;
+    const tx = el.querySelector('.ua-text');
+    if (tx) this._processMentions(tx, 'twitch');
+    let replay = null;
+    el.querySelector('.ua-media')?.addEventListener('click', (e) => { e.stopPropagation(); replay?.(); });
+    if (this._parkedBottom.length) { this._parkedBottom.push(el); return true; }
+    if (!this.autoScroll) {
+      if (this._unreadCount === 0) { const sep = document.createElement('div'); sep.id = 'unread-separator'; sep.className = 'unread-sep'; sep.textContent = 'Nové zprávy'; this.chatEl.appendChild(sep); }
+      this._unreadCount++;
+      this.scrollBtn.textContent = `↓ ${this._formatNewMsgCount(this._unreadCount)}`;
+      this.scrollBtn.classList.remove('hidden');
+    }
+    this.chatEl.appendChild(el);
+    // Načíst video (z <template> se samo nenačte) + smyčka s pauzou; klik = replay.
+    replay = core.wireAnnouncementVideo(el, { autoplay: !reducedMotion });
+    if (this.autoScroll) this._unloadTop();
+    this._scroll();
+    this._ucLog('Annc', `${a.command || '?'}${a.media ? ' + médium' : ''}${a.chatReply?.hideInUnityChat ? ' (odpověď skryta)' : ''}`);
+    return true;
+  }
+
+  // ---- Reakce „Peepo poop" (core/reaction.js; backend POST /reactions, SSE `reaction`) ----
+
+  /** Tlačítko 💩 jen pro mody/broadcastera a jen když žádná reakce neběží. */
+  _updatePoopButtons() {
+    const role = this._myChatRole();
+    document.body.classList.toggle('uc-can-poop', role === 'moderator' || role === 'broadcaster');
+    document.body.classList.toggle('uc-poop-busy', !!this._activeReaction && window.UC_CORE.reactionBusy(this._activeReaction));
+  }
+
+  _playReaction(raw) {
+    const core = window.UC_CORE;
+    const ev = core.normalizeReaction(raw);
+    if (!ev || ev.channel !== (this.config.channel || '').toLowerCase()) return;
+    if (this._reactionSeen.has(ev.id)) return;
+    this._reactionSeen.add(ev.id);
+    const offset = core.reactionOffsetMs(ev);
+    if (offset > ev.durationMs) return;
+    this._activeReaction = ev;
+    this._updatePoopButtons();
+    // Cílovou zprávu do záběru; když ji panel nemá, video jede u spodního okraje.
+    const target = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(ev.target.messageId)}"]`);
+    if (target) this._scrollToMessage(ev.target.messageId, { flash: false });
+    this._reaction?.stop?.();
+    setTimeout(() => {
+      this._reaction = core.playPoopReaction({
+        hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
+        offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        onEnd: () => { this._activeReaction = null; this._updatePoopButtons(); },
+      });
+    }, target ? 350 : 0);
+    this._ucLog('Reaction', `${ev.kind} by ${ev.by?.login || '?'} → ${ev.target.platform}:${ev.target.messageId} target=${!!target} offset=${offset}`);
+  }
+
+  /** Přihlášení k backendu (stejný OAuth jako web) přes chrome.identity — token v chrome.storage.local. */
+  async _ucSessionToken() {
+    const s = await chrome.storage.local.get('uc_session');
+    return s.uc_session || null;
+  }
+
+  async _ucLogin() {
+    const returnTo = chrome.identity.getRedirectURL();
+    const start = await fetch(`${UC_API}/auth/twitch/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnTo }) });
+    const sj = await start.json().catch(() => ({}));
+    if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
+    const final = await chrome.identity.launchWebAuthFlow({ url: sj.url, interactive: true });
+    const p = new URLSearchParams(new URL(final).hash.slice(1));
+    if (p.get('uc_error')) throw new Error(p.get('uc_error'));
+    const code = p.get('uc_code');
+    if (!code) throw new Error('bez kódu');
+    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const ej = await ex.json().catch(() => ({}));
+    if (!ex.ok || !ej.token) throw new Error(ej.error || `exchange ${ex.status}`);
+    await chrome.storage.local.set({ uc_session: ej.token });
+    this._ucLog('Reaction', 'backend login ok');
+    return ej.token;
+  }
+
+  async _triggerPoop(platform, messageId) {
+    if (this._activeReaction && window.UC_CORE.reactionBusy(this._activeReaction)) return;
+    if (!messageId || String(messageId).startsWith('sent-')) { this._sys('Počkej, až se zpráva potvrdí z chatu.'); return; }
+    let token = await this._ucSessionToken();
+    if (!token) {
+      try { token = await this._ucLogin(); }
+      catch (e) { this._ucLog('Reaction', `login FAIL ${e.message || e}`); this._sys(`Přihlášení pro reakce selhalo: ${e.message || e}`); return; }
+    }
+    const r = await fetch(`${UC_API}/reactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ kind: 'poop', platform, messageId, channel: (this.config.channel || '').toLowerCase() }),
+    }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: e.message }) }));
+    const j = await r.json().catch(() => ({}));
+    this._ucLog('Reaction', `trigger ${platform}:${messageId} → ${r.status} ${j.error || ''}`);
+    if (r.status === 401) { await chrome.storage.local.remove('uc_session'); this._sys('Přihlášení pro reakce vypršelo, klikni znovu.'); return; }
+    if (r.status === 403) { this._sys('Reakce může spustit jen mod nebo streamer (backend tě podle zpráv v chatu nepoznal jako moda).'); return; }
+    if (r.status === 409) return;   // už běží — tlačítko se schová podle SSE
+    if (!r.ok) this._sys(`Reakce se nespustila: ${j.error || r.status}`);
+  }
 
   _sys(text) {
     const el = document.createElement('div');
@@ -7022,6 +5751,11 @@ class UnityChat {
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isMilestone
       || msg?.isHighlight || msg?._cleared || msg?.isAction;
+    // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
+    if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
+      this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
+      return;
+    }
     if (textEmpty && !isSystem) {
       // Log root-cause clues — which source produced an empty message.
       try {
@@ -7547,6 +6281,22 @@ class UnityChat {
       this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);
+
+    // Reakce „Peepo poop" — úplně vlevo; jen mod/broadcaster (body.uc-can-poop),
+    // během přehrávání schované (body.uc-poop-busy). Id se bere až při kliknutí
+    // z datasetu: u právě odeslané zprávy se po IRC echu přepíše, ale element
+    // zůstává tentýž (_upgradeOptimistic), takže tlačítko musí být od začátku.
+    const poopBtn = document.createElement('button');
+    poopBtn.className = 'msg-action-btn';
+    poopBtn.dataset.act = 'poop';
+    poopBtn.title = 'Peepo poop (mod)';
+    poopBtn.textContent = '\u{1F4A9}';
+    poopBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = poopBtn.closest('.msg');
+      this._triggerPoop(msg.platform, host?.dataset.msgId || msg.id);
+    });
+    actions.insertBefore(poopBtn, actions.firstChild);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

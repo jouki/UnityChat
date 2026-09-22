@@ -13,8 +13,10 @@ const between = (a, b) => {
   if (i === -1 || j === -1 || j < i) throw new Error(`anchor ${a} / ${b} nenalezen`);
   return src.slice(i, j);
 };
-// TwitchProvider → KickProvider → YouTubeProvider jdou za sebou, před class UnityChat.
-const code = between('class TwitchProvider', 'class UnityChat');
+// YouTubeProvider je před class UnityChat. Twitch/Kick providery jsou v core (require(esm)).
+const code = between('class YouTubeProvider', 'class UnityChat');
+const { TwitchProvider } = require('../extension/core/twitch-irc.js');
+const { KickProvider } = require('../extension/core/kick.js');
 
 const sandbox = {
   console,
@@ -28,13 +30,13 @@ const sandbox = {
   performance,
 };
 vm.createContext(sandbox);
-vm.runInContext(code + '\nthis.TwitchProvider = TwitchProvider; this.KickProvider = KickProvider; this.YouTubeProvider = YouTubeProvider;', sandbox);
+vm.runInContext(code + '\nthis.YouTubeProvider = YouTubeProvider;', sandbox);
 
 let fails = 0;
 const check = (name, cond) => { console.log((cond ? 'PASS ' : 'FAIL ') + name); if (!cond) fails++; };
 let got;
 
-const tw = new sandbox.TwitchProvider();
+const tw = new TwitchProvider();
 tw.onMessage = (m) => { got = m; };
 tw._parse('@id=m1;display-name=A;tmi-sent-ts=1789820014396;user-id=1 :a!a@a PRIVMSG #c :hi');
 check('twitch PRIVMSG: timestamp = tmi-sent-ts', got && got.timestamp === 1789820014396);
@@ -44,7 +46,7 @@ got = null;
 tw._parseNotice('@id=r1;msg-id=raid;msg-param-displayName=X;msg-param-viewerCount=5;tmi-sent-ts=1789820014000;user-id=9 :tmi.twitch.tv USERNOTICE #c');
 check('twitch USERNOTICE raid: timestamp = tmi-sent-ts', got && got.timestamp === 1789820014000);
 
-const ki = new sandbox.KickProvider();
+const ki = new KickProvider();
 ki.onMessage = (m) => { got = m; };
 ki._parse({ id: 'k', type: 'message', content: 'x', created_at: '2026-09-19T12:13:34.396Z', sender: { id: 1, username: 'u', identity: { badges: [] } } });
 check('kick: timestamp = created_at', got && got.timestamp === Date.parse('2026-09-19T12:13:34.396Z'));

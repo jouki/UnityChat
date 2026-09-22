@@ -21,4 +21,6 @@ export interface IngestListener {
   stop(): void;
   status(): PlatformStatus;
   lastMessageAt(): Date | null;
+  /** YouTube: videoId živého streamu, jinak null / neimplementováno. */
+  currentVideoId?(): string | null;
 }

@@ -146,7 +146,38 @@ export function normalizeKickMessage(raw: unknown, channel: string): IngestMessa
 
 // --------------------------------------------------------------- YouTube --
 
-interface YtRun { text?: string; emoji?: { emojiId?: string; shortcuts?: string[] } }
+interface YtRun {
+  text?: string;
+  emoji?: { emojiId?: string; shortcuts?: string[] };
+  navigationEndpoint?: { urlEndpoint?: { url?: string }; commandMetadata?: { webCommandMetadata?: { url?: string } } };
+}
+
+/**
+ * Plná URL odkazu v runu. YouTube v `text` odkaz zkracuje („https://youtu.be/…?si=5kVik…"),
+ * celý je v navigationEndpoint jako youtube.com/redirect?…&q=<url> (nebo přímo).
+ */
+export function ytRunUrl(run: YtRun): string | null {
+  const raw = run.navigationEndpoint?.urlEndpoint?.url || run.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || '';
+  if (!raw) return null;
+  try {
+    const u = new URL(raw, 'https://www.youtube.com');
+    if (u.hostname.endsWith('youtube.com') && u.pathname === '/redirect') {
+      const q = u.searchParams.get('q');
+      return q && /^https?:\/\//i.test(q) ? q : null;
+    }
+    return /^https?:$/.test(u.protocol) ? u.toString() : null;
+  } catch { return null; }
+}
+
+/** Text runu pro `content`: u zkráceného odkazu plná URL. */
+export function ytRunText(run: YtRun): string {
+  if (run.text) {
+    const full = ytRunUrl(run);
+    if (full && (run.text.endsWith('…') || run.text.endsWith('...') || full.startsWith(run.text) || run.text.startsWith(full.slice(0, 12)))) return full;
+    return run.text;
+  }
+  return run.emoji?.shortcuts?.[0] || run.emoji?.emojiId || '';
+}
 interface YtRenderer {
   id?: string; timestampUsec?: string;
   authorName?: { simpleText?: string }; authorExternalChannelId?: string;
@@ -164,8 +195,9 @@ export function normalizeYoutubeAction(action: unknown, channel: string): Ingest
   if (!r?.id) return null;
   const rawName = r.authorName?.simpleText || 'Unknown';
   const username = rawName.replace(/^@/, '') || rawName;
-  const runs = r.message?.runs || [];
-  const content = runs.map((x) => x.text || x.emoji?.shortcuts?.[0] || x.emoji?.emojiId || '').join('');
+  // Odkazy: v runs nechat plnou URL i pro renderer (core renderYouTube bere run.text).
+  const runs = (r.message?.runs || []).map((x) => (x.text && ytRunUrl(x) && ytRunText(x) !== x.text) ? { ...x, text: ytRunText(x) } : x);
+  const content = runs.map((x) => ytRunText(x)).join('');
   const usec = Number(r.timestampUsec);
   return {
     platform: 'youtube',

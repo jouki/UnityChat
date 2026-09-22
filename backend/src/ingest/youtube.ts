@@ -108,6 +108,8 @@ export class YouTubeListener implements IngestListener {
 
   status() { return this.st; }
   lastMessageAt() { return this.last; }
+  /** videoId aktuálního živého streamu (web /chat/send → liveChatId). */
+  currentVideoId() { return this.st === 'connected' ? this.videoId : null; }
   start() { this.stopped = false; void this.connect(); }
   stop() { this.stopped = true; if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.st = 'off'; }
 

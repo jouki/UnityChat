@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.38.67
+# UnityChat - Chrome Extension + Backend v3.39.47
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -13,7 +13,16 @@ UnityChat/
 │   ├── background.js           # Service worker s runtime feature-detection
 │   ├── sidepanel.html          # UI
 │   ├── sidepanel.css           # Dark theme styling
-│   ├── sidepanel.js            # ~3000 řádků - UI/messaging logika
+│   ├── sidepanel.js            # ~6500 řádků - UI/messaging logika (klasický skript, defer)
+│   ├── core-bridge.js          # module script: importuje core/ a vystaví window.UC_CORE
+│   ├── core/                   # SDÍLENÝ CORE s webovou verzí — ES moduly bez chrome.*/DOM (v3.39.17–21)
+│   │   ├── chat-store.js       #   ChatStore (data zpráv, řazení, dedup)
+│   │   ├── colors.js           #   twitchDefaultColor, readableColor, ytNameColor, isTwitchOgFaceName
+│   │   ├── html.js             #   escapeHtml/Attr, decodeEntities, stripTags, tagAttrs (Kick HTML bez DOM)
+│   │   ├── log.js              #   makeLog — injektované logování (addon → UC_LOG, web → console/overlay)
+│   │   ├── twitch-irc.js       #   TwitchProvider (anonymní IRC), WebSocket injektovatelný
+│   │   ├── kick.js             #   KickProvider (Pusher), fetch + WebSocket injektovatelné
+│   │   └── emotes.js           #   EmoteManager (7TV/BTTV/FFZ/Twitch/Kick/UC, render segmentů, autocomplete)
 │   ├── audio/
 │   │   └── streamelements-bulgarians.mp3  # Easter egg audio
 │   ├── content/
@@ -194,7 +203,7 @@ UI, messaging, autocomplete, replies, cache, dedup, scroll, pin.
 - Settings UI se refreshne když platform username dorazí asynchronně
 
 **Historie a data zpráv (v3.39+):**
-- `ChatStore` (`extension/chat-store.js`) — jediný držitel zpráv, řazení `timestamp ASC, id`; dedup jen `platform:id`
+- `ChatStore` (`extension/core/chat-store.js`, ES modul přes `core-bridge.js`) — jediný držitel zpráv, řazení `timestamp ASC, id`; dedup jen `platform:id`
 - Boot: `GET /chat/history?channel&limit=100` → každá zpráva přes `_addMessage` (dedup ve store, render, sběr barev/jmen) → scroll dolů
 - Scroll nahoru: nejdřív zaparkované uzly (`_parkedTop`), pak `before=<cursor>` po 100 (`_extendUp`); DOM nad 300 uzlů se ořezává do parku (`_unloadTop/_unloadBottom`), „N nových" = `_jumpToLatest`
 - Timestamp = čas platformy (`tmi-sent-ts`, `created_at`, `timestampUsec`); optimistická zpráva má `Date.now()` do echa (`_optimisticKeys` → `store.upgrade`)
@@ -360,14 +369,21 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.0** (dev)
+- Aktuální: **v3.39.47** (dev; master = 3.39.14)
 
 ## Chrome Web Store (v3.38.58+)
 
 > **✅ PUBLIKOVÁNO 18. 9. 2026** — review prošla za 2 dny. Položka je veřejná
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
 > Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
-> **3.39.3 odeslána ke kontrole 19. 9. 2026** (PR #21, workflow cws-release.yml).
+> **3.39.14 čeká na review od 20. 9. 2026** (PR #22). Původně odeslaná 3.39.3
+> (PR #21) byla zrušena přes `cancelSubmission`, protože store při probíhající
+> review odmítá jakýkoli upload (`NOT_UPDATEABLE`).
+>
+> **Když čeká starší verze na review a chceš poslat novější:**
+> `gh workflow run cws-release.yml --ref master -f cancel_pending=true -f force=true`
+> (ručně: `node scripts/cws.mjs cancel`, pak `release <zip>`). Zrušení je
+> vratné jen novým odesláním, proto nikdy automaticky při pushi.
 > Podklady pro dashboard: `store/listing/README.md`; **kompletní záznam všeho,
 > co je v dashboardu zadané (texty, oprávnění, data-use checkboxy, prohlášení):
 > `store/listing/dashboard-state.md`** — při každé změně v dashboardu aktualizovat.
@@ -474,6 +490,61 @@ Content script `content/twitch.js` injektuje tlačítko do Twitch chat headeru (
 - `MutationObserver` na `document.body` re-injektuje button po Twitch chat remountech (změna kanálu, 7TV rerender)
 - Selektory pro chat header: `.stream-chat-header`, `[data-a-target="stream-chat-header"]`, `.chat-room__header`, `.chat-shell__header`, `.chat-header` + fallback přes parent collapse toggle buttonu
 
+## Web verze (robdiesalot.com) — privátní repo `jouki/UnityChat-web`
+
+> Rozhodnuto 2026-09-21. Web verze UnityChatu **není v tomto repu**. Žije
+> v privátním repu `jouki/UnityChat-web`, které je **mirror kopie tohoto repa
+> + složka `web/`** (Vite + vanilla JS). Upstream = tento repo; GitHub Action
+> tam každých 15 min merguje `dev → main`. Lokální klon: `D:\_BACKUP_2.0\Code Projects\UnityChat-web`.
+
+**Pravidla, která platí tady:**
+- **Sdílený kód se mění jen v tomto repu**: `extension/`, `extension/core/`
+  (ES moduly bez `chrome.*`/DOM, sdílené s webem), `backend/` (včetně
+  endpointů pro web: `/chat/stream` SSE, `/auth/*`, `/chat/send`). V privátním
+  repu se sdílené soubory needitují — merge by konfliktoval.
+- **Pravidlo portování (user 2026-09-21):** obecná funkcionalita implementovaná
+  pro addon nebo web jde do sdíleného core, nebo se **před implementací** user
+  zeptá, zda ji chce i ve druhé variantě (core / jen web / jen addon / oboje).
+  Nikdy tiše nechat jednu variantu pozadu. Přihlášení uživatele + výběr
+  platformy pro psaní se dělá **nejdřív na webu**, port do addonu potom.
+- Spec, plány a vše o webu: `UnityChat-web/docs/superpowers/`. Sem patří jen
+  změny core/backendu a tenhle pointer. Backend zůstává na api.jouki.cz.
+- **Stav 2026-09-22 ráno: web v0.5 = parita s addonem** (pokyn usera „doimplementovat
+  všechny funkce"): autocomplete (emoty/Tab + Fulltext, @jména, `!` StreamElements,
+  `/uc`), historie ↑/↓, systémové události (raid, oznámení, sub/Prime/Tier, dary,
+  odměny, milníky), moderace z IRC (timeout/ban/smazání), banner s piny (Twitch GQL
+  `GetPinnedChat` přímo z prohlížeče — gql.twitch.tv posílá `Access-Control-Allow-Origin: *`)
+  a raidem, user card (GQL), náhled emotu, skutečné barvy jmen (GQL `chatColor`) +
+  7TV paints + osobní emote sety, zmínky bez zavináče, oddělovač nových zpráv,
+  parkování DOM uzlů, tooltipy, easter egg. Neportováno (Twitch tab / chrome.*):
+  credits pill, DOM redeemy, hype train, pin modem, přepínání streamera, pop-out,
+  dev mode. Detaily: `UnityChat-web/web/CLAUDE.md` + plán (Stav v0.5).
+- **Stav 2026-09-22: web v0.4** — v0.3 parita (odpojení platformy, odpovědi,
+  @zmínky, sdílené přezdívky, nastavení ⚙ + profil přezdívka/barva s auto-párováním
+  na všechny propojené účty) + **živé změny přezdívek**: web poslouchá stejné SSE
+  `GET /nicknames/stream` jako addon, `WebChat.applyNickname()` přepíše u
+  vykreslených zpráv jméno, barvu, title i `.mention` spany (revert přes
+  `data-display` / `data-color`), nová @zmínka novou přezdívkou se překládá hned.
+  Kanál `robdiesalot` má prázdnou historii, dokud Rob nestreamuje (ingest od 19. 9.).
+- **Stav 2026-09-21 večer: web v0.2 (přihlášení + posílání) běží na https://robdiesalot.com/chat/**
+  — badge u inputu + šipka = menu Twitch / Kick / YouTube (Přihlásit / přepnout /
+  Odhlásit), zprávy přes `POST /chat/send`, optimistická zpráva + echo.
+  **Ověřeno bez reálného loginu** (flow končí na `auth.twitch.tv` se správnými
+  scopes; user musí projít přihlášení sám). Známé podmínky: Kick dev app musí
+  mít povolený scope `chat:write`; Google consent screen musí mít
+  `youtube.force-ssl` (citlivý → do verifikace jen test users).
+- v0.1 (read-only) běžel od 2026-09-21 odpoledne na https://robdiesalot.com/chat/
+  (kořen domény = WordPress Roba, nesahat). Deploy je **z PC**:
+  `cd UnityChat-web/web && npm run deploy` (build + `scripts/deploy-ftp.mjs`,
+  heslo z `SERVER.md`). Hosting profiwh.com pouští FTP login **jen z českých
+  IP** (GitHub runner timeout, Hetzner VPS „530 Access denied"), proto ne CI.
+  Ladění na cizím streamu: `?debug=1&channel=<login>` (jinak natvrdo Rob).
+- **Jak addon načítá core bez buildu:** `sidepanel.html` má
+  `<script type="module" src="core-bridge.js">` + `<script defer src="sidepanel.js">`;
+  bridge vystaví `window.UC_CORE` (+ globály `ChatStore`, `TwitchProvider`,
+  `KickProvider`, `EmoteManager`). Oba skripty jsou v deferred frontě v pořadí
+  dokumentu, `DOMContentLoaded` listener v sidepanel.js dál funguje.
+
 ## Landing page (jouki.cz/UnityChat)
 
 > ⚠️ **DŮLEŽITÉ — web žije v SAMOSTATNÉM repu.** Landing/web jouki.cz **NENÍ** v tomto
@@ -557,7 +628,7 @@ Interaktivní demo v iframe simulující reálný UnityChat panel:
 | Twitch badges | IVR API `api.ivr.fi/v2/twitch/badges/global` → `image_url_2x` |
 | Chatbot badge | `bot-badge` set v IVR API |
 
-## Backend (v0.3.0)
+## Backend (v0.5.0)
 
 Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazeno přes Coolify na Hetzner VPS, build z `backend/` subdirectory v monorepu.
 
@@ -588,6 +659,53 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   serverového logu (ingest níže). Kurzor `<sent_at_ms>:<id>`, odpověď
   `{ok, messages[nejstarší→nejnovější], nextBefore}`, tvar zprávy = to, co
   posílají živé providery (`historical: true`). `no-store`, 10 req/s/IP.
+- `GET /chat/stream?channel&platforms` — **SSE živých zpráv z ingestu** (v0.4.0,
+  pro web verzi): `event: hello`, `event: message` (tvar jako `/chat/history`,
+  `historical:false`, emitované PŘED dávkovým zápisem do DB), keepalive 15 s,
+  bez replay (klient dorovná přes `/chat/history`), max 5 streamů/IP.
+  Implementace `sse/chatBus.ts` + hook `onLive` v `ingest/index.ts`.
+- **Web přihlášení + posílání (v0.5.0, `routes/webAuth.ts`, `lib/webAuth.ts`, `lib/webSend.ts`):**
+  `POST /auth/:platform/start {returnTo}` (state `kind:'web'`, returnTo jen z
+  `WEB_ORIGINS`; Bearer = napojení další platformy na účet) → OAuth callbacky
+  **sdílené se streamer flow** (`/streamers/oauth/:platform/callback`, větvení
+  podle `kind` ve state, stejné redirect URI u providerů) → 302 na web
+  `#uc_code=…` → `POST /auth/exchange {code}` → Bearer session (SHA-256 hash v
+  `web_sessions`, 30 dní klouzavě). `GET /auth/me`, `POST /auth/logout`,
+  `DELETE /auth/:platform`, `GET /auth/config`. `POST /chat/send {platform,
+  text, replyTo?, channel?}`: Twitch Helix `chat/messages` (`user:write:chat`),
+  Kick public API `/chat` (`chat:write`), YouTube `liveChatMessages.insert`
+  (`youtube.force-ssl`, liveChatId z videoId ingestu → jen když stream běží);
+  refresh tokenů, UC marker (ne na `!`/`/`), rate limit 5 + 1/s per účet.
+  Tokeny v `web_identities` šifrované jako `streamer_tokens` (NIKDY z API).
+  Tabulky vytvořeny ručně SQL 2026-09-21 (drizzle-kit push přes tunel padal na ECONNRESET).
+- `GET /commands?channel=<twitch login>` — **chat commandy ze Židolišty** (RobJewsALot
+  server `GET /integrations/:slug/chat-commands`, hlavička `X-Api-Key`) pro našeptávání
+  „!" v panelu a na webu. Klíč jen na serveru (`ZIDOLISTA_API_KEY` = `INTEGRATION_API_KEYS`
+  Židolišty, oba v Coolify envu, generováno 2026-09-22, nikde v gitu), kanál → workspace
+  přes `ZIDOLISTA_WORKSPACES` (`robdiesalot=rob`), regex spouštěče → literál
+  (`!topd ?reset` → `!topd reset`), role (`allowRoles`) klient filtruje podle vlastního
+  badge, cache 60 s, při výpadku poslední stav (`stale`). Židolišta zná jen commandy ze
+  své stránky Commandy (dnes jen „Reset Top D"); commandy ze Streamer.botu (COMMANDS.md)
+  by musel publikovat WebBridge — zatím ne (viz memory `project_web_version`). Změna commandu
+  v Židolištce → webhook `POST /commands/invalidate` (stejný klíč) → cache pryč + SSE
+  `commands-change` na `/nicknames/stream` → web i addon (v3.39.26) seznam obnoví hned.
+  **Od 2026-09-22 mapování kanál ↔ workspace bere registr Židolišty** (`lib/zidolista.ts`,
+  `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s, webhook `reason:"workspaces"`);
+  env `ZIDOLISTA_WORKSPACES` je jen fallback, když Židolišta nikdy neodpověděla.
+- **Chat bot Židolišty (2026-09-22, spec `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`,
+  `routes/integrations.ts`, `lib/botSend.ts`, `lib/botIdentities.ts`, `sse/integrationStream.ts`):**
+  UnityChat = oči a ústa, Židolišta = mozek. `GET /integrations/chat/stream` (X-Api-Key, SSE
+  `chat.message` s `workspace`, rolemi z badge, `isBot`, `id:` kurzor + `Last-Event-ID` replay 5 min,
+  `: ping` 15 s) — jen kanály namapované v registru. `POST /bot/send` `{workspace, platform, text,
+  replyTo?, idempotencyKey}` → 202 `{ok,id,channel,login,identity}`; kanál se odvozuje **jen ze slugu**
+  (izolace workspaců), identita = vlastní bot workspace, jinak sdílený `_shared` (JoukiBOT); 409
+  `duplicate`, 429 `rate_limited`, 404 `unknown_workspace`/`no_channel`, 503 `bot_unavailable`.
+  Napojení účtu bota: `POST /integrations/bot/link-token` `{workspace|'_shared', platform, returnTo}`
+  (returnTo jen origin z `ZIDOLISTA_RETURN_ORIGINS`, výchozí `https://jouki.cz`) → jednorázová
+  `GET /bot/link/:token` (10 min) → OAuth `kind:'bot'` (sdílený callback) → `returnTo#bot_linked=…`.
+  `GET /integrations/bot/status?workspace=`, `DELETE /integrations/bot/identity`. Tabulka
+  `bot_identities` (SQL `backend/sql/2026-09-22-bot-identities.sql`, tokeny šifrované jako
+  `web_identities`, nikdy z API).
 - `GET /store/status` — stav položky v Chrome Web Store (publikovaná verze,
   verze čekající na review, policy varování). Landing page z toho kreslí řádek
   „verze vX.Y.Z čeká na schválení", který zmizí po schválení. Cache 10 min,
@@ -706,6 +824,27 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.39.40–47** - Reakce „Peepo poop" doladěná podle usera: tlačítko 💩 vlevo v hover akcích a vykreslené **vždy** (addon po IRC echu recykluje element, podmíněné vykreslení znamenalo chybějící tlačítko u vlastních zpráv — id se čte až při kliknutí z `dataset.msgId`); zarovnání na **střed prvního řádku** (kotva `.un`) + `offsetLines 1.7`; velikost podle **výšky řádku** (strop `5.5 → 8` řádků podle šířky chatu, `narrowPx 550`/`widePx 850`), větší video se sází níž (`growOffsetRatio 0.45`); reflektor jako měkká maska místo ostrého `box-shadow`; cíl se nezvýrazňuje (`scrollToMessage(..., { flash: false })`); zatmavení i když cílová zpráva není v DOM. **Podrobná příručka pro další animace: `docs/reactions/README.md`.**
+- **v3.39.39** - **Reakce „Peepo poop"** (`core/reaction.js`, backend `POST /reactions` + `GET /reactions/active` + SSE `reaction`, web i addon): mod/broadcaster klikne 💩 v hover akcích zprávy → všem se chat zatmí (1,2 s), reflektor na zprávu, video 15 s (5:1 na šířku chatu, spodní hrana = spodek zprávy; cílová zpráva se odscrolluje do záběru, bez ní video dole), v 7,2 s jméno + logo platformy u cílové zprávy zhnědnou (15 s natvrdo, 15 s přechod zpět). Tlačítko během reakce zmizí všem (body `uc-poop-busy`; zámek per kanál na serveru → 409). Backend ověřuje moda z badge v serverovém logu zpráv (24 h) nebo login = kanál. Addon se k backendu přihlašuje přes `chrome.identity.launchWebAuthFlow` (nová permission `identity`, returnTo `https://<id>.chromiumapp.org` povolený v `isAllowedReturnTo`), token v `chrome.storage.local.uc_session`. Video `robdiesalot.com/chat/media/peepo-chat-alpha-v2.webm` (1440×288, 15 s, alfa).
+- **v3.39.38** - `/uc command <!spouštěč>` = lokální náhled reakce commandu Židolišty (announcement + odpověď bota jako zpráva „Židolišta", skrytí podle nastavení), nic se neodesílá. Backend `/commands` propouští `reply` a `announcement` (Židolišta je posílá v integračním seznamu).
+- **v3.39.37** - Announcement `media.loopDelayMs` (0–60000): smyčka s pauzou — bez nativního `loop`, core `wireAnnouncementVideo` (ended → čekat → od začátku; zároveň řeší load videa z template a replay klikem).
+- **v3.39.36** - (1) Backend `/announcements` zahazoval `textHtml` (validace propouštěla jen známá pole) → rich text se ukazoval jako surový Markdown; propuštěno + core má Markdown fallback `richTextToHtml` (stejná podmnožina jako Židolišta). (2) YouTube zkracuje text odkazu v `runs` („…"), plná URL je v `navigationEndpoint` (redirect?q=) → `ytRunFullText` v core `renderYouTube` a `ytRunUrl/ytRunText` v ingestu.
+- **v3.39.35** - Announcement: `media.loop` je zase volba z editoru Židolišty (výchozí zapnuto), `false` = jedno přehrání.
+- **v3.39.34** - Announcement rich text: Židolišta posílá `textHtml` (Markdown → HTML), core `sanitizeAnnouncementHtml` (whitelist b/i/u/br/h1–h3/a http(s) + target=_blank) má přednost před `text`; nadpisy a odkazy stylované v desce.
+- **v3.39.33** - Announcement podle usera: médium max 38 % šířky desky (`--ua-w` strop, `--ua-ar` poměr), bez řádku „spustil", responzivní hlavička (wrap + ellipsis), video vždy ve smyčce, drop-shadow na médiu.
+- **v3.39.32** - Announcement: `<video>` z `<template>` se po vložení nenačte samo → `load()` + `play()` (gotcha inertního dokumentu).
+- **v3.39.31** - **UnityChat Announcement**: command v Židolištce (RobJewsALot) může jako odpověď poslat honosnou zprávu s videem/animací (VP9 alfa / WebP) a textem jen pro uživatele UnityChatu. Cesta: Židolišta `POST api.jouki.cz/announcements` (X-Api-Key, kontrakt v `backend/src/routes/announcements.ts`) → SSE `announcement` na `/nicknames/stream` → `core/announcement.js` (`normalizeAnnouncement`, `announcementHtml`, `matchesChatReply`) → addon `_addAnnouncement` / web `chat.addAnnouncement`. `chatReply.hideInUnityChat` = běžnou odpověď commandu (SB ji pošle všem) klient 15 s nevykreslí. Deska bez gradientu pod médiem (průhledné video se nesmí slévat), reflektor za médiem, zlatý rám; `prefers-reduced-motion` → `stillUrl` / bez autoplay; klik na médium = replay. Mock `/uc annc [text]` (demo erb z `robdiesalot.com/chat/media/`). Test `scripts/test-announcement.js`.
+- **v3.39.30** - Animace změny log v otevřeném našeptávači (`.es-logo-in` / `.es-logo-out`: nové si udělá místo a prolne se, odebrané vybledne).
+- **v3.39.29** - Otevřený našeptávač `!` se po změně seznamu (SSE) přepočítá sám.
+- **v3.39.28** - **Commandy o stav pozadu**: `/commands` mělo `Cache-Control: max-age=60`, takže refetch po SSE `commands-change` bral prohlížeč z vlastní cache → klient vždy ukazoval předchozí stav. Fix: backend `no-store` + klient `cache: 'no-store'`. Stejný spouštěč ve více zdrojích = jeden řádek se všemi logy a štítky (Židolišta první, jen zdroje povolené pro moji roli).
+- **v3.39.27** - Zdroj u commandu = záznam nabídnutý pro moji roli (stejný spouštěč v Židolištce i SE).
+- **v3.39.26** - SSE `commands-change` (webhook ze Židolišty) → `_loadUcCommands()` hned.
+- **v3.39.25** - Loga commandů ve stejném boxu 28 px (menší logo s paddingem) → zarovnaná na střed.
+- **v3.39.24** - Logo Židolišty 28 px + drop-shadow (`.es-logo-zidolista`, styl od usera).
+- **v3.39.23** - Logo zdroje u commandů v autocomplete (`icons/commands/zidolista.png`, `streamelements.svg`, třída `.es-logo`) místo oranžové tečky; web totéž přes `logos` option.
+- **v3.39.22** - **Našeptávání commandů Židolišty**: `_loadUcCommands()` bere `GET /commands?channel=` z backendu (jméno, literál spouštěče, role) a slučuje se StreamElements v `!` autocomplete (`_allBangCommands()`), zdroj v seznamu „Židolišta"/„SE"; commandy jen pro mody se divákům nenabízí (`_myChatRole()` z badge vlastních zpráv). Obnova 5 min, znovu při přepnutí streamera. UC_LOG `Cmd`. Port z webu (pokyn usera 2026-09-22).
+- **v3.39.17–21** - **`extension/core/` — sdílený core s webovou verzí** (plán web v0.1, Task 1–5): postupné vytažení `ChatStore`, barev jmen + HTML helperů (+ `log.js`), `TwitchProvider`, `KickProvider` a `EmoteManager` ze `sidepanel.js` (−1 550 řádků) do ES modulů bez `chrome.*`/DOM; log, WebSocket, fetch a assetUrl injektované přes `opts`. Kick HTML fragmenty se parsují bez `document` (`core/html.js`). Addon je konzumuje přes `core-bridge.js` (module) + `sidepanel.js` s `defer`. Testy: `scripts/test-core-helpers.js` (19), `test-twitch-irc.js` (18), `test-kick.js` (12), `test-emotes.js` (12), starší testy převedené na `import()`/`require(esm)`. Chování addonu beze změny (smoke test u usera zatím neproběhl — reload rozšíření!).
+- **v3.39.9–16** - YouTube: panel ↔ vanilla chat (toolbar), `#columns padding-right:0` (jediný zdroj prázdna, ověřeno v DevTools), ikona v mastheadu jen na live (`.ytp-live-badge`), nativní „Otevřít panel" odemčené (Disabled→Mono) → vrací chat; popout ikona ze SVG; Fulltext přepínač persistentní (`config.acFulltext`); badge u inputu zlatý. **Release 3.39.14 (PR #22) → CWS review (3.39.3 zrušena přes `cancelSubmission`).**
 - **v3.39.0** - **Historie ze serveru (Task 13 plánu)**: klient bere historii z `GET /chat/history`, `ChatStore` drží data, DOM okno 300 uzlů s parkováním odpojených uzlů nad/pod oknem (scroll oběma směry bez re-renderu), starší stránky přes kurzor. Smazáno: `_msgCache` + storage cache, `_loadCachedMessages`, `_hydrateOlderMessages`, `_trim`, per-channel dedup LRU, content-key dedup, import z Twitch tabu (`TW_HISTORY`). Audit ingestu na Stérově streamu PASS (Twitch 84/84, p95 733 ms; YT 7/7, p95 4,9 s).
 - **v3.38.81** - **Ruční přepínání streamera**: primární Rob, whitelist Rob + TenSterakdary, start podle aktivního tabu, jinak tlačítko „Přepnout chat na …" nad chatem. Root cause míchání chatů/emotů: re-entry auto-switche z 3s detekce rušila rozdělané přepnutí.
 - **v3.38.78–80** - DIAG `msgCacheIds` pro audit, čas z platformy v providerech, `ChatStore` + testy (`scripts/test-chat-store.js`, `test-provider-timestamps.js`).
@@ -783,6 +922,7 @@ Detaily + příklady (správně vs špatně z v3.38.x): viz `memory/feedback_no_
 4. **`memory/feedback_release_workflow.md`** — commit+push default, branch policy
 5. **`memory/checkpoint_v3_38_26_pin_stable.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s pin bannerem
 6. **`memory/security_streamer_tokens.md`** ⚠️ — POVINNÉ pokud cokoli souvisí s OAuth tokens / streamer auth
+7. **`docs/handoff/2026-09-21-web-version-handoff.md`** ⚠️ — POVINNÉ pokud jde o **webovou verzi UnityChatu** (robdiesalot.com): závazná rozhodnutí (**web žije v privátním repu `jouki/UnityChat-web`**, viz sekce „Web verze" níže; **pravidlo portování addon ↔ web**), ověřená fakta o providerech/backendu; spec je v privátním repu
 
 ### Workflow loop (typická iterace)
 
@@ -1001,6 +1141,7 @@ Memory soubory v `~/.claude/projects/D---BACKUP-2-0-Code-Projects-UnityChat/memo
 - **YouTube invalidation continuation**: nelze pollovat HTTP, je push-only. Skipnout kanály co dávají jen invalidation (vědomě nefixujeme).
 - **Coolify force=1**: cross-repo deploy trigger MUSÍ mít, jinak dedup → silent fail.
 - **Active tab detection**: `chrome.tabs.query({currentWindow: true})` v Opera popup vrací popup tab, ne hlavní. Use `_getActiveBrowserTab()` helper s `chrome.windows.getLastFocused({windowTypes:['normal']})`.
+- **Backend za Traefikem = `trustProxy: true`** (od 0.5.0): bez něj je `req.ip` pro všechny klienty 10.0.1.2 a per-IP limity (`/chat/stream` 10 streamů, `/chat/history` 10 req/s) platí globálně — 2026-09-21 to shodilo YouTube stream na webu (429 pro všechny). SSE klienty uklízet i přes `reply.raw` 'close'/'error' + kontrolu mrtvého socketu při keepalive.
 
 ## Release workflow
 

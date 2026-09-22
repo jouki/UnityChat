@@ -1,10 +1,11 @@
-// ChatStore — jediný držitel dat zpráv v panelu. Bez DOM, bez chrome.*,
-// aby šel testovat v Node (scripts/test-chat-store.js). Renderer si z něj
-// bere okno (slice) a nikdy nedrží zprávy, které store nemá.
+// ChatStore — jediný držitel dat zpráv v panelu i na webu. Bez DOM, bez
+// chrome.*, aby šel testovat v Node (scripts/test-chat-store.js) a sdílet
+// s webovou verzí (extension/core/ = sdílený core, viz CLAUDE.md „Web verze").
+// Renderer si z něj bere okno (slice) a nikdy nedrží zprávy, které store nemá.
 //
 // Řazení: timestamp ASC, tie-break id. Dedup jen podle "platform:id" —
 // content-key dedup zmizel spolu se scrape (zprávy bez id už neexistují).
-class ChatStore {
+export class ChatStore {
   constructor() {
     this._all = [];
     this._ids = new Set();
@@ -87,4 +88,3 @@ class ChatStore {
   }
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = ChatStore;

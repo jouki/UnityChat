@@ -1,7 +1,7 @@
 /**
- * Ověřuje tři věci na SKUTEČNÉM kódu z extension/sidepanel.js:
+ * Ověřuje tři věci na SKUTEČNÉM kódu (extension/core/colors.js + sidepanel.js):
  *  1) ytNameColor — port YouTube hashe jména (computeAuthorNameColor → LUb)
- *     + readableColor, tj. přesně to, co panel zobrazí.
+ *     + readableColor, tj. přesně to, co panel zobrazí (core modul, require(esm)).
  *  2) NicknameManager.resolveNickname — reverzní lookup přezdívka → login.
  *  3) _resolveNicknameMentions — @přezdívka v odchozím textu → @login.
  *
@@ -23,9 +23,8 @@ function slice(startPred, endPred) {
   return lines.slice(a, b).join('\n');
 }
 
-// --- vytáhnout funkce beze změny ze zdroje ---
-const ytColorFn = slice((l) => l.startsWith('function ytNameColor('), (l) => l === '}');
-const readableFn = slice((l) => l.startsWith('function readableColor('), (l) => l === '}');
+// --- barvy jsou od v3.39.18 v core modulu; zbytek se vytahuje beze změny ze zdroje ---
+const colors = require('../extension/core/colors.js');
 const resolveMentions = slice(
   (l) => l.includes('_resolveNicknameMentions(text, platform) {'),
   (l) => l === '  }'
@@ -35,9 +34,8 @@ const resolveNick = slice(
   (l) => l === '  }'
 );
 
-const sandbox = { console, _READABLE_CACHE: new Map() };
+const sandbox = { console, ytNameColor: colors.ytNameColor, readableColor: colors.readableColor };
 vm.createContext(sandbox);
-vm.runInContext(`${ytColorFn}}\n${readableFn}}`, sandbox);
 sandbox.NicknameManager = vm.runInContext(
   `(class NicknameManager { constructor(m){ this._map = m; }\n${resolveNick}}\n})`, sandbox);
 sandbox.Panel = vm.runInContext(

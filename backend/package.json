@@ -1,6 +1,6 @@
 {
   "name": "unitychat-backend",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "UnityChat backend API - user database, message log, cross-platform sync",
   "type": "module",
   "private": true,

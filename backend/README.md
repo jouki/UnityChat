@@ -38,6 +38,9 @@ npm run dev        # starts server on :3000 with hot reload
 - `GET /streamers/lookup`, streamer OAuth routes (`/streamers/oauth/*`)
 - `GET /store/status` — Chrome Web Store item status (cached 10 min)
 - `GET /chat/history` — chat history for the extension (see below)
+- `GET /chat/stream` — live messages from the ingest as SSE (web version; see below)
+- `POST /auth/:platform/start`, `POST /auth/exchange`, `GET /auth/me`, `POST /auth/logout`, `DELETE /auth/:platform`, `GET /auth/config` — web version login (v0.5.0, Bearer sessions; OAuth callbacks shared with `/streamers/oauth/*`)
+- `POST /chat/send` — send a chat message with the logged-in user's token (Twitch Helix / Kick public API / YouTube liveChatMessages)
 
 ### Chat ingest + `GET /chat/history`
 
@@ -83,3 +86,51 @@ npm run db:studio    # visual DB browser
 ## Deployment
 
 Deployed to Coolify as a single Docker application built from this directory's `Dockerfile`. Coolify injects `DATABASE_URL` as an env variable (points to the Coolify-managed `unitychat-db` Postgres instance on the same Docker network).
+
+### `GET /chat/stream` (v0.4.0)
+
+```
+GET /chat/stream?channel=robdiesalot[&platforms=twitch,kick,youtube]
+```
+
+Server-Sent Events. `channel` is the Twitch login; Kick/YouTube names are
+resolved through the `streamers` directory exactly like `/chat/history`.
+`platforms` defaults to all three.
+
+- `event: hello` — `{channels, platforms}` right after connecting
+- `event: message` — same shape as a `/chat/history` item, with `historical: false`;
+  emitted by the ingest **before** the batched DB insert (no flush delay)
+- `: keepalive` comment every 15 s
+- no replay on reconnect — the client reconciles through `/chat/history`
+- max 5 concurrent streams per IP (429 otherwise)
+
+### `GET /commands?channel=<twitch login>` (v0.5.1)
+
+Chat commandy streamera pro našeptávání „!" v panelu i na webu — ze Židolišty
+(RobJewsALot server `GET /integrations/:slug/chat-commands`, hlavička `X-Api-Key`).
+Klíč zůstává na serveru (`ZIDOLISTA_API_KEY`), kanál → workspace přes
+`ZIDOLISTA_WORKSPACES` (`robdiesalot=rob`). Odpověď `{ ok, channel, sources,
+commands[{ name, trigger, triggers[], roles[], cooldownSeconds, source }] }`,
+regex spouštěče se převádí na literál (`!topd ?reset` → `!topd reset`), cache 60 s,
+při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
+
+`POST /announcements` (`X-Api-Key` = `ZIDOLISTA_API_KEY`) — **UnityChat Announcement** ze Židolišty: command s videem/animací a textem, který vidí jen uživatelé UnityChatu. Tělo `{ id, workspace, command?, text?, media?: { url (https), kind, width?, height?, loop?, stillUrl? } | null, chatReply?: { text, hideInUnityChat } | null, triggeredBy?, at? }`; workspace → kanály přes `ZIDOLISTA_WORKSPACES`, každému kanálu SSE `announcement` (s `channel`) na `/nicknames/stream`. Nic se neukládá. 202 / 400 (`missing_id`, `media_url_must_be_https`, `empty_announcement`) / 404 `unknown_workspace`. Render: `extension/core/announcement.js`.
+
+`POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví). `reason: "workspaces"` navíc obnoví registr workspaců.
+
+### Profily browser source (2026-09-22)
+
+`GET /raw-profiles/:id` → `{ ok, id, settings, updatedAt }` (404 `not_found`), `PUT /raw-profiles/:id` (tělo = nastavení `{ font, scale, width, height, bg, timestamps, reply, platforms }`, zod, strict) → upsert + SSE `raw-settings { id, settings, updatedAt }` na `/nicknames/stream`. Id `[A-Za-z0-9_-]{12,64}` je tajemství (kdo ho zná, čte i píše). Web: `/chat/settings/` ukládá, `/chat/raw/?p=<id>` (OBS) aplikuje živě bez refreshe. Tabulka `raw_profiles` (`sql/2026-09-22-raw-profiles.sql`).
+
+### Chat bot Židolišty (2026-09-22)
+
+Spec: `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`. Mapování workspace ↔ kanály bere registr Židolišty (`lib/zidolista.ts` ← `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s; env `ZIDOLISTA_WORKSPACES` jen fallback). Vše s `X-Api-Key` = `ZIDOLISTA_API_KEY`:
+
+- `GET /integrations/chat/stream` — SSE `event: chat.message` pro kanály namapované na workspace: `{ type, workspace, messageId, platform, user, userId, text, isSub, isMod, isVip, isBroadcaster, isBot, replyTo, timestamp }`; `id:` = kurzor, `Last-Event-ID` replay 5 min, `: ping` 15 s.
+- `POST /bot/send` `{ workspace, platform, text (≤480), replyTo?, idempotencyKey }` → 202 `{ ok, id, channel, login, identity: 'own'|'shared' }`. Kanál se odvozuje jen ze slugu (izolace workspaců). Chyby: 409 `duplicate`, 429 `rate_limited` (+`retryAfterMs`), 404 `unknown_workspace` / `no_channel`, 409 `not_live` (YouTube), 503 `bot_unavailable`.
+- `POST /integrations/bot/link-token` `{ workspace | "_shared", platform, returnTo }` → `{ ok, url, expiresAt }` (jednorázový odkaz, 10 min; `returnTo` jen origin z `ZIDOLISTA_RETURN_ORIGINS`). `GET /bot/link/:token` (bez klíče) → 302 na consent providera → callback `kind:'bot'` uloží identitu → `returnTo#bot_linked=<platform>:<login>` / `#bot_error=…`.
+- `GET /integrations/bot/status?workspace=` → `{ shared: {twitch,kick,youtube: {state: online|expired|missing, login?}}, own: {…}, channelGrant: {twitch: {granted, login?, grantedAt?}, …} }`; `DELETE /integrations/bot/identity` `{ workspace, platform, kind?: 'broadcaster' }` (kind broadcaster = smazat jen záznam souhlasu).
+- **Odznak „Chat Bot" na Twitchi:** `/bot/send` zkouší nejdřív Helix s **app access tokenem** (client credentials, cache) — odznak se ukáže, když má účet bota scope `user:bot` (bot flow žádá `BOT_SCOPES`) a broadcaster udělil `channel:bot` **nebo** je bot v kanálu mod. Když Twitch app token odmítne (401/403), pošle se user tokenem bota bez odznaku; odpověď má `badge: true|false`. Souhlas broadcastera: link-token s `kind: 'broadcaster'` (jen twitch, workspace musí mít Twitch kanál, účet se musí shodovat s kanálem, token se neukládá) → `returnTo#bot_channel_granted=twitch:<login>`; záznam v `bot_channel_grants` (`sql/2026-09-22-bot-channel-grants.sql`).
+
+Tabulka `bot_identities` (`sql/2026-09-22-bot-identities.sql`, tokeny šifrované jako `web_identities`).
+
