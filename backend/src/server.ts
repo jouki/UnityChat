@@ -13,6 +13,7 @@ import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
+import rawProfileRoutes from './routes/rawProfiles.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh } from './lib/zidolista.js';
 import { loadBotLogins } from './lib/botIdentities.js';
@@ -101,6 +102,7 @@ await app.register(commandRoutes);
 await app.register(announcementRoutes);
 await app.register(webAuthRoutes, { ingest });
 await app.register(integrationRoutes, { ingest });
+await app.register(rawProfileRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

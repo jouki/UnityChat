@@ -297,6 +297,15 @@ export const botIdentities = pgTable(
   }),
 );
 
+// Profily browser source (/chat/raw/?p=<id>): nastavení z /chat/settings/ na serveru,
+// změny živě přes SSE `raw-settings`. Ručně SQL (backend/sql/2026-09-22-raw-profiles.sql).
+export const rawProfiles = pgTable('raw_profiles', {
+  id: text('id').primaryKey(),
+  settings: jsonb('settings').notNull().$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Session = náhodných 32 B; v DB jen SHA-256 hash, klient drží raw token
 // (localStorage, Authorization: Bearer). 30 dní klouzavě.
 export const webSessions = pgTable(
