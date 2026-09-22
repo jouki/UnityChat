@@ -11,6 +11,8 @@ const assert = require('node:assert/strict');
   assert.equal(a.channel, 'robdiesalot');
   assert.equal(a.media.width, 480);
   assert.equal(a.media.loop, true);
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', media: { url: 'https://a/b.webm', loop: false } }).media.loop, false, 'loop false = jedno přehrání');
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', media: { url: 'https://a/b.webm' } }).media.loop, true, 'bez loop = smyčka');
   assert.equal(a.media.stillUrl, null, 'http still se zahodí');
   assert.equal(a.at, Date.parse('2026-09-22T10:00:00Z'));
   assert.equal('evil' in a, false);
@@ -22,12 +24,13 @@ const assert = require('node:assert/strict');
   ok('normalize odmítá nebezpečné / prázdné');
 
   // 2. HTML: video s autoplay, bez smyčky, text escapovaný, klik replay title
-  const html = announcementHtml(normalizeAnnouncement({ id: 'x2', channel: 'c', command: 'Brohemians', text: 'Ahoj <b>', media: { url: 'https://cdn/x.webm', width: 200, stillUrl: 'https://cdn/still.webp' }, triggeredBy: { user: 'Jouki728' } }), { timeText: '10:00' });
+  const html = announcementHtml(normalizeAnnouncement({ id: 'x2', channel: 'c', command: 'Brohemians', text: 'Ahoj <b>', media: { url: 'https://cdn/x.webm', width: 200, loop: false, stillUrl: 'https://cdn/still.webp' }, triggeredBy: { user: 'Jouki728' } }), { timeText: '10:00' });
   assert.match(html, /^<div class="msg uc-annc" data-annc-id="x2" data-platform="unitychat" data-ts="\d+">/);
-  assert.match(html, /<div class="ua-media" style="--ua-w:200px"[^>]*><span class="ua-spot"[^>]*><\/span><video class="ua-video" src="https:\/\/cdn\/x.webm" autoplay preload="auto" muted playsinline loop poster="https:\/\/cdn\/still.webp" aria-hidden="true"><\/video><\/div>/);
+  assert.match(html, /<div class="ua-media" style="--ua-w:200px"[^>]*><span class="ua-spot"[^>]*><\/span><video class="ua-video" src="https:\/\/cdn\/x.webm" autoplay preload="auto" muted playsinline poster="https:\/\/cdn\/still.webp" aria-hidden="true"><\/video><\/div>/);
+  assert.doesNotMatch(html, / loop/, 'loop:false = bez smyčky');
   const rmNoStill = announcementHtml(normalizeAnnouncement({ id: 'x5', channel: 'c', media: { url: 'https://cdn/x.webm', height: 160 } }), { reducedMotion: true });
   assert.match(rmNoStill, /style="--ua-w:192px;--ua-ar:192 \/ 160"/);
-  assert.match(rmNoStill, /<video class="ua-video" src="https:\/\/cdn\/x.webm" preload="metadata" muted playsinline loop aria-hidden="true">/);
+  assert.match(rmNoStill, /<video class="ua-video" src="https:\/\/cdn\/x.webm" preload="metadata" muted playsinline loop aria-hidden="true">/, 'bez loop v payloadu = smyčka');
   assert.doesNotMatch(rmNoStill, /autoplay/);
   assert.match(html, /<div class="ua-text">Ahoj &lt;b&gt;<\/div>/);
   assert.match(html, /<span class="ua-cmd">Brohemians<\/span><span class="ua-ts">10:00<\/span>/);

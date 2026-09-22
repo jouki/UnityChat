@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.39.34
+# UnityChat - Chrome Extension + Backend v3.39.35
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.34** (dev; master = 3.39.14)
+- Aktuální: **v3.39.35** (dev; master = 3.39.14)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -807,6 +807,7 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.39.35** - Announcement: `media.loop` je zase volba z editoru Židolišty (výchozí zapnuto), `false` = jedno přehrání.
 - **v3.39.34** - Announcement rich text: Židolišta posílá `textHtml` (Markdown → HTML), core `sanitizeAnnouncementHtml` (whitelist b/i/u/br/h1–h3/a http(s) + target=_blank) má přednost před `text`; nadpisy a odkazy stylované v desce.
 - **v3.39.33** - Announcement podle usera: médium max 38 % šířky desky (`--ua-w` strop, `--ua-ar` poměr), bez řádku „spustil", responzivní hlavička (wrap + ellipsis), video vždy ve smyčce, drop-shadow na médiu.
 - **v3.39.32** - Announcement: `<video>` z `<template>` se po vložení nenačte samo → `load()` + `play()` (gotcha inertního dokumentu).

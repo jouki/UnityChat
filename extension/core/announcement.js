@@ -67,7 +67,7 @@ export function normalizeAnnouncement(a) {
     kind: m.kind === 'image' ? 'image' : 'video',
     width: Math.max(ANNC_MIN_WIDTH, Math.min(ANNC_MAX_WIDTH, Number(m.width) || ANNC_DEFAULT_WIDTH)),
     height: Number(m.height) > 0 ? Math.round(Number(m.height)) : null,
-    loop: !!m.loop,
+    loop: m.loop !== false && m.loop !== 0 && m.loop !== 'false',   // volba v editoru Židolišty, výchozí zapnuto
     stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
   } : null;
   if (!id || !channel || (!media && !text && !textHtml)) return null;
@@ -109,8 +109,7 @@ export function announcementHtml(a, o = {}) {
     } else {
       // Bez still varianty při omezeném pohybu: video bez autoplay (první snímek), klik přehraje.
       const play = o.reducedMotion ? ' preload="metadata"' : ' autoplay preload="auto"';
-      // Vždy smyčka (rozhodnutí usera 2026-09-22): bez ní po dohrání zůstane u erbu prázdné místo.
-      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline loop${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
+      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline${m.loop ? ' loop' : ''}${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
     }
     mediaHtml = `<div class="ua-media" style="${size}" title="Klik = přehrát znovu"><span class="ua-spot" aria-hidden="true"></span>${inner}</div>`;
   }

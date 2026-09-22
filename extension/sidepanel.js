@@ -3322,7 +3322,7 @@ class UnityChat {
       case 'annc': {
         // Mock UnityChat Announcement s demo animací erbu (médium hostuje web robdiesalot.com/chat/media/).
         const origin = 'https://robdiesalot.com/chat/media/';
-        this._addAnnouncement({ id: `mock-annc-${now}`, channel: (this.config.channel || '').toLowerCase(), command: 'Brohemians', text: text === 'test message' ? 'Brohemians! Pojď se přidat k bratrstvu.' : text, media: { url: origin + 'shield-orbit-alpha.webm', kind: 'video', width: 200, loop: false, stillUrl: origin + 'shield-still.webp' }, chatReply: { text: 'Brohemians!', hideInUnityChat: true }, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+        this._addAnnouncement({ id: `mock-annc-${now}`, channel: (this.config.channel || '').toLowerCase(), command: 'Brohemians', text: text === 'test message' ? 'Brohemians! Pojď se přidat k bratrstvu.' : text, media: { url: origin + 'shield-orbit-alpha.webm', kind: 'video', width: 200, loop: true, stillUrl: origin + 'shield-still.webp' }, chatReply: { text: 'Brohemians!', hideInUnityChat: true }, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
         break;
       }
       case 'mod':
