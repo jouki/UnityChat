@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 
 (async () => {
-  const { normalizeAnnouncement, announcementHtml, ANNC_DEFAULT_WIDTH } = await import('../extension/core/announcement.js');
+  const { normalizeAnnouncement, announcementHtml, sanitizeAnnouncementHtml, ANNC_DEFAULT_WIDTH } = await import('../extension/core/announcement.js');
   let n = 0;
   const ok = (name) => { n++; console.log('PASS', name); };
 
@@ -43,6 +43,14 @@ const assert = require('node:assert/strict');
   assert.match(im, /<img class="ua-img" src="https:\/\/cdn\/x.webp" alt="">/);
   assert.doesNotMatch(im, /ua-text/);
   ok('reduced motion / image / textHtml');
+
+  // 4. rich text: whitelist tagů, odkazy jen http(s), zbytek escapovaný; XSS ven
+  const rich = sanitizeAnnouncementHtml('<h1>Brohemians</h1><b>Povstaňte!</b> Víc na <a href="https://chromewebstore.google.com/x" target="_blank" rel="noopener">UnityChatu</a><br><script>alert(1)</script><a href="javascript:alert(1)">zle</a><img src=x onerror=alert(1)> 1 &lt; 2 &amp; A&B');
+  assert.equal(rich, '<h1>Brohemians</h1><b>Povstaňte!</b> Víc na <a href="https://chromewebstore.google.com/x" target="_blank" rel="noopener noreferrer nofollow">UnityChatu</a><br>&lt;script&gt;alert(1)&lt;/script&gt;zle</a>&lt;img src=x onerror=alert(1)&gt; 1 &lt; 2 &amp; A&amp;B');
+  const withRich = announcementHtml(normalizeAnnouncement({ id: 'x6', channel: 'c', text: '# T', textHtml: '<h2>T</h2><i>k</i>' }));
+  assert.match(withRich, /<div class="ua-text"><h2>T<\/h2><i>k<\/i><\/div>/);
+  assert.equal(normalizeAnnouncement({ id: 'x7', channel: 'c', textHtml: '<b>jen html</b>' })?.textHtml, '<b>jen html</b>');
+  ok('rich text sanitizer');
 
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

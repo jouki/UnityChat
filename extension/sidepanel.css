@@ -2304,6 +2304,13 @@ body.layout-large  .msg .tx img.emote.emote-tiny { height: 1.55em; }
 .msg.uc-annc .ua-cmd { -webkit-text-fill-color: #f3e2b8; color: #f3e2b8; letter-spacing: 0.6px; text-transform: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .msg.uc-annc .ua-ts { margin-left: auto; font-weight: 500; letter-spacing: 0; -webkit-text-fill-color: rgba(255, 255, 255, 0.35); color: rgba(255, 255, 255, 0.35); }
 .msg.uc-annc .ua-text { margin-top: 6px; font-size: 1.08em; line-height: 1.45; color: #f5f1e8; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; }
+/* Rich text ze Židolišty (Markdown → HTML): nadpisy škálované k desce, odkazy zlaté. */
+.msg.uc-annc .ua-text h1, .msg.uc-annc .ua-text h2, .msg.uc-annc .ua-text h3 { margin: 0 0 4px; line-height: 1.2; font-weight: 800; letter-spacing: 0.2px; background: linear-gradient(90deg, #ffd27a, #e6a11a 60%, #ffd27a); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.msg.uc-annc .ua-text h1 { font-size: 1.35em; } .msg.uc-annc .ua-text h2 { font-size: 1.2em; } .msg.uc-annc .ua-text h3 { font-size: 1.08em; }
+.msg.uc-annc .ua-text h1 + br, .msg.uc-annc .ua-text h2 + br, .msg.uc-annc .ua-text h3 + br { display: none; }
+.msg.uc-annc .ua-text a { color: #ffd27a; text-decoration: underline; text-decoration-color: rgba(255, 210, 122, 0.5); }
+.msg.uc-annc .ua-text a:hover { color: #fff; }
+.msg.uc-annc .ua-text u { text-decoration-color: rgba(255, 210, 122, 0.6); }
 body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 /* Úzký panel: médium nad textem, na střed, max 60 % šířky. */
 @media (max-width: 340px) { .msg.uc-annc .ua-frame { flex-direction: column; align-items: stretch; } .msg.uc-annc .ua-media { width: min(var(--ua-w, 192px), 60%); margin: 0 auto; } }

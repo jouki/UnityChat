@@ -3709,7 +3709,7 @@ class UnityChat {
     const d = new Date(a.at);
     const timeText = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
     const tpl = document.createElement('template');
-    tpl.innerHTML = core.announcementHtml(a, { textHtml: a.text ? this.emotes.renderPlain(a.text) : '', reducedMotion, timeText });
+    tpl.innerHTML = core.announcementHtml(a, { textHtml: a.textHtml ? a.textHtml : (a.text ? this.emotes.renderPlain(a.text) : ''), reducedMotion, timeText });
     const el = tpl.content.firstElementChild;
     const tx = el.querySelector('.ua-text');
     if (tx) this._processMentions(tx, 'twitch');

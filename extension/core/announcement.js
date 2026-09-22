@@ -28,6 +28,30 @@ export function matchesChatReply(pending, messageText, now = Date.now()) {
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
 
 /**
+ * Obrana do hloubky pro `textHtml` ze Židolišty: projde jen <b> <i> <u> <br>
+ * <h1>–<h3> a <a href="http(s)…"> (vždy target=_blank + rel noopener), vše
+ * ostatní se escapuje jako text. Bez DOM (regex nad tagy), testovatelné v Node.
+ */
+export function sanitizeAnnouncementHtml(html) {
+  const src = String(html || '');
+  if (!src) return '';
+  return src.replace(/<\/?([a-zA-Z0-9]+)((?:\s+[^<>]*?)?)\s*\/?>|[&<>"]/g, (m, tag, attrs, offset) => {
+    // Už escapované entity (&amp; &lt; &#39; …) nechat, holé & escapovat.
+    if (!tag) return m === '&' ? (/^&(?:[a-z]+|#\d+|#x[0-9a-f]+);/i.test(src.slice(offset)) ? '&' : '&amp;') : escapeHtml(m);
+    const t = tag.toLowerCase();
+    const closing = m.startsWith('</');
+    if (['b', 'i', 'u', 'br', 'h1', 'h2', 'h3'].includes(t)) return closing ? `</${t}>` : (t === 'br' ? '<br>' : `<${t}>`);
+    if (t === 'a') {
+      if (closing) return '</a>';
+      const href = /href\s*=\s*"([^"]*)"/i.exec(attrs || '')?.[1] || /href\s*=\s*'([^']*)'/i.exec(attrs || '')?.[1] || '';
+      if (!/^https?:\/\/[^\s"'<>]+$/i.test(href)) return '';
+      return `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer nofollow">`;
+    }
+    return escapeHtml(m);
+  });
+}
+
+/**
  * Ověří a ořeže payload z backendu. Vrací null, když chybí to podstatné
  * (id, channel, médium nebo text). Neznámá pole se zahazují.
  */
@@ -36,6 +60,7 @@ export function normalizeAnnouncement(a) {
   const id = String(a.id || '').slice(0, 80);
   const channel = String(a.channel || '').toLowerCase().slice(0, 40);
   const text = String(a.text || '').slice(0, 500).trim();
+  const textHtml = sanitizeAnnouncementHtml(String(a.textHtml || '').slice(0, 4000)).trim();
   const m = a.media && typeof a.media === 'object' ? a.media : null;
   const media = m && isHttps(m.url) ? {
     url: m.url,
@@ -45,11 +70,12 @@ export function normalizeAnnouncement(a) {
     loop: !!m.loop,
     stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
   } : null;
-  if (!id || !channel || (!media && !text)) return null;
+  if (!id || !channel || (!media && !text && !textHtml)) return null;
   const by = a.triggeredBy && typeof a.triggeredBy === 'object' ? a.triggeredBy : null;
   const cr = a.chatReply && typeof a.chatReply === 'object' && String(a.chatReply.text || '').trim() ? a.chatReply : null;
   return {
     id, channel, text,
+    textHtml,   // rich text (Markdown → HTML na serveru Židolišty), už sanitizovaný
     // Běžná odpověď, kterou SB pošle do chatu všem; při hideInUnityChat ji klient skryje (viz matchesChatReply).
     chatReply: cr ? { text: String(cr.text).slice(0, 500), hideInUnityChat: !!cr.hideInUnityChat } : null,
     command: String(a.command || '').slice(0, 80),
@@ -68,7 +94,8 @@ export function normalizeAnnouncement(a) {
  */
 export function announcementHtml(a, o = {}) {
   if (!a) return '';
-  const textHtml = o.textHtml != null ? o.textHtml : escapeHtml(a.text);
+  // Přednost: klientem dodané HTML (text s emoty) → rich text ze Židolišty → escapovaný text.
+  const textHtml = o.textHtml != null ? o.textHtml : (a.textHtml || escapeHtml(a.text));
   let mediaHtml = '';
   if (a.media) {
     const m = a.media;
