@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
+import { broadcast } from '../sse/bus.js';
 
 /**
  * GET /commands?channel=<twitch login>
@@ -95,9 +97,40 @@ async function fetchZidolista(slug: string): Promise<PublicCommand[]> {
   return toPublicCommands(j.commands);
 }
 
+function keyMatches(candidate: unknown): boolean {
+  const key = config.ZIDOLISTA_API_KEY;
+  const got = String(Array.isArray(candidate) ? candidate[0] : candidate ?? '').trim();
+  if (!key || !got) return false;
+  const a = createHash('sha256').update(key).digest();
+  const b = createHash('sha256').update(got).digest();
+  return timingSafeEqual(a, b);
+}
+
 export default async function commandRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 10);
   const workspaces = parseWorkspaceMap(config.ZIDOLISTA_WORKSPACES);
+
+  /**
+   * Webhook ze Židolišty po změně commandu (stejný klíč, opačný směr): zahodit
+   * cache kanálů daného workspace, načíst znovu a klientům poslat SSE
+   * `commands-change` (stejný bus jako /nicknames/stream), ať mají nový
+   * command v našeptávání hned.
+   */
+  app.post<{ Body: { workspace?: string; reason?: string } }>('/commands/invalidate', async (req, reply) => {
+    if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
+    const slug = String(req.body?.workspace || '').toLowerCase();
+    const channels = [...workspaces.entries()].filter(([, s]) => s === slug).map(([ch]) => ch);
+    if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+    for (const channel of channels) {
+      cache.delete(channel);
+      let count = 0;
+      try { const commands = await fetchZidolista(slug); cache.set(channel, { at: Date.now(), commands }); count = commands.length; }
+      catch (e) { app.log.warn({ channel, err: (e as Error).message }, 'commands: refetch after invalidate failed'); }
+      broadcast('commands-change', { channel, reason: String(req.body?.reason || 'update'), count });
+    }
+    app.log.info({ slug, channels, reason: req.body?.reason }, 'commands: invalidated');
+    return { ok: true, channels };
+  });
 
   app.get<{ Querystring: { channel?: string } }>('/commands', async (req, reply) => {
     if (!limiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });

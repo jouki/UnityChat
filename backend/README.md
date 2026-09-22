@@ -114,3 +114,5 @@ commands[{ name, trigger, triggers[], roles[], cooldownSeconds, source }] }`,
 regex spouštěče se převádí na literál (`!topd ?reset` → `!topd reset`), cache 60 s,
 při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
 
+`POST /commands/invalidate` (`X-Api-Key` = `ZIDOLISTA_API_KEY`, tělo `{ workspace, reason }`) — webhook ze Židolišty po změně commandu: cache pryč, nové načtení, SSE `commands-change { channel, reason, count }` na `/nicknames/stream` (web i addon si seznam hned obnoví).
+

@@ -95,6 +95,10 @@ class NicknameManager {
           if (this.onChange) this.onChange({ ...d, nickname: null, color: null });
         } catch {}
       });
+      // Změna chat commandů v Židolištce (webhook → backend → SSE) — UnityChat si obnoví „!" našeptávání.
+      this._eventSource.addEventListener('commands-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
+      });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
           const d = JSON.parse(e.data);
@@ -1069,6 +1073,7 @@ class UnityChat {
     this.nicknames.fetchAll();  // non-blocking, fire-and-forget
     this.nicknames.connectSSE();
     this.nicknames.onChange = (d) => this._onNicknameChange(d);
+    this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
         for (const p of ['twitch', 'youtube', 'kick']) {
