@@ -78,7 +78,7 @@ Další vlastnosti finální podoby:
 | `web/src/nicknames.js` | Odběr SSE události `reaction`. |
 | `web/src/main.js` | Propojení: role → `body.uc-can-poop`, klik → `triggerReaction()`, načtení běžící reakce při startu. |
 | `web/src/auth.js` | `triggerReaction()` (POST /reactions). |
-| `web/public/media/<video>.webm` | Video. Addon si ho bere ze stejné URL (`robdiesalot.com/chat/media/…`). |
+| `web/public/media/<video>.webm` | Video (VP9 + alfa, volitelně Opus zvuk). Addon si ho bere ze stejné URL (`robdiesalot.com/chat/media/…`). |
 
 ---
 
@@ -247,6 +247,14 @@ Klient navíc ignoruje klik, když `reactionBusy()`.
    `style.opacity = 1`; pozici a rozměry lze měřit normálně.
 7. **Cache videa.** `.htaccess` ve `web/public` musí mít `webm` v pravidle pro
    dlouhou cache, jinak se 2 MB video tahá pořád dokola.
+8. **Zvuk a autoplay.** Video se zvukem prohlížeč sám nespustí, pokud uživatel se
+   stránkou neinteragoval. Proto `play()` s `catch` → druhý pokus s `muted = true`
+   (animace nikdy nevypadne celá). V OBS browser source je autoplay povolený, takže
+   tam zvuk hraje vždy. Hlasitost drž kolem `0.85`, hlasitost zdroje si streamer
+   ladí v OBS.
+9. **Zarovnání na šířku.** Video se zarovnává **doleva** (`left: 0`), ne na střed:
+   na širokém okně jsou jméno i krátké zprávy u levého okraje a animace musí mířit
+   na ně. Centrování vypadalo dobře jen na dlouhých zprávách.
 
 ---
 
