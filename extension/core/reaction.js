@@ -26,7 +26,12 @@ export const POOP = Object.freeze({
   // Velikost se řídí VÝŠKOU ŘÁDKU, ne šířkou chatu: na širokém okně by se video
   // roztáhlo přes celou šířku a Peepo by byl obří vůči textu. Strop = tolik řádků
   // na výšku videa; nad ním se video vycentruje a zbytek šířky zůstane volný.
+  // Strop výšky roste se šířkou chatu: úzký panel drží menší animaci (jinak by
+  // zabrala půl panelu), široké okno ji má větší (pokyn usera 2026-09-23).
+  minHeightLines: 5.5,
   maxHeightLines: 8,
+  narrowPx: 550,      // do téhle šířky platí minHeightLines
+  widePx: 850,        // od téhle šířky platí maxHeightLines
 });
 
 /** Výška řádku zprávy (px) — z cílové zprávy, jinak z chatu; fallback 21. */
@@ -100,7 +105,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     // Výška podle řádku textu (strop), šířka dopočtená z poměru; na širokém chatu
     // se video vycentruje, na úzkém zabere celou šířku.
     const lineH = lineHeightOf(targetEl || chatEl);
-    const maxH = lineH * POOP.maxHeightLines;
+    const wide = Math.max(0, Math.min(1, (host.width - POOP.narrowPx) / (POOP.widePx - POOP.narrowPx)));
+    const maxH = lineH * (POOP.minHeightLines + (POOP.maxHeightLines - POOP.minHeightLines) * wide);
     const w = Math.min(host.width, maxH * POOP.aspect);
     const h = w / POOP.aspect;
     let landing;   // kam mají dopadat hromádky, v px od horního okraje hosta
