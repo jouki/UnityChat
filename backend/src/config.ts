@@ -39,7 +39,9 @@ const EnvSchema = z.object({
   CHAT_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(0),
   // Web verze: originy, na které smí OAuth callback vrátit uživatele (#uc_code)
   // a které dostanou CORS pro /auth/* + /chat/send. Čárkou oddělené.
-  WEB_ORIGINS: z.string().default('https://robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
+  // `www.` je tu záměrně: hosting Roba www nepřesměrovává a Chrome ho v adresním řádku
+  // skrývá — diváci na www dostávali 400 a přihlašovací okno se hned zavřelo (2026-09-22).
+  WEB_ORIGINS: z.string().default('https://robdiesalot.com,https://www.robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
   // Židolišta (RobJewsALot server): chat commandy streamera pro našeptávání „!".
   // Klíč = env INTEGRATION_API_KEYS na straně Židolišty; NIKDY v gitu. Prázdný
   // klíč = GET /commands vrací prázdný seznam. Mapování kanál → workspace slug.

@@ -74,7 +74,12 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     if (!isCryptoReady()) { reply.code(503); return { ok: false, error: 'OAuth not configured on server' }; }
     const { platform } = params.data;
     const returnTo = body.data?.returnTo;
-    if (returnTo && !isAllowedReturnTo(returnTo)) { reply.code(400); return { ok: false, error: 'returnTo origin not allowed' }; }
+    if (returnTo && !isAllowedReturnTo(returnTo)) {
+      let origin = '?';
+      try { origin = new URL(returnTo).origin; } catch { /* nevalidní URL */ }
+      req.log.warn({ origin, platform, ip: req.ip }, 'web auth start: returnTo origin not allowed');
+      reply.code(400); return { ok: false, error: 'returnTo origin not allowed' };
+    }
 
     // Přihlášený uživatel napojuje další platformu na svůj účet.
     let webAccountId: number | undefined;
