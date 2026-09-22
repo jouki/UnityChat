@@ -9,7 +9,7 @@ test('validateAnnouncement: plný payload projde, ořeže se a rozpadne na kaná
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.deepEqual(r.values.map((v) => v.channel), ['robdiesalot', 'robmirror']);
-  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', textHtml: '', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
+  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', textHtml: '', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, loopDelayMs: 0, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
 });
 
 test('validateAnnouncement: chyby a okraje', () => {

@@ -93,6 +93,7 @@ export function normalizeAnnouncement(a) {
     width: Math.max(ANNC_MIN_WIDTH, Math.min(ANNC_MAX_WIDTH, Number(m.width) || ANNC_DEFAULT_WIDTH)),
     height: Number(m.height) > 0 ? Math.round(Number(m.height)) : null,
     loop: m.loop !== false && m.loop !== 0 && m.loop !== 'false',   // volba v editoru Židolišty, výchozí zapnuto
+    loopDelayMs: Math.max(0, Math.min(60_000, Math.round(Number(m.loopDelayMs) || 0))),   // pauza mezi přehráními (jen video + loop)
     stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
   } : null;
   if (!id || !channel || (!media && !text && !textHtml)) return null;
@@ -108,6 +109,23 @@ export function normalizeAnnouncement(a) {
     triggeredBy: by && by.user ? { user: String(by.user).slice(0, 60), platform: String(by.platform || '').slice(0, 20) } : null,
     at: Number.isFinite(Date.parse(a.at)) ? Date.parse(a.at) : Date.now(),
   };
+}
+
+/**
+ * Po vložení do stránky: video z <template> se samo nenačte (inertní dokument),
+ * a smyčka s pauzou (`data-loop-delay`) se řídí ručně: ended → čekat → od začátku.
+ * Vrací funkci pro replay (klik na médium).
+ */
+export function wireAnnouncementVideo(el, { autoplay = true } = {}) {
+  const v = el?.querySelector?.('video');
+  if (!v) return () => { const img = el?.querySelector?.('.ua-media img'); if (img) { const src = img.src; img.src = ''; img.src = src; } };
+  const delay = Number(v.dataset.loopDelay) || 0;
+  let timer = null;
+  const replay = () => { clearTimeout(timer); timer = null; v.currentTime = 0; v.play().catch(() => {}); };
+  if (delay > 0) v.addEventListener('ended', () => { clearTimeout(timer); timer = setTimeout(() => { if (v.isConnected) replay(); }, delay); });
+  v.load();
+  if (autoplay) v.play().catch(() => {});
+  return replay;
 }
 
 /**
@@ -134,7 +152,9 @@ export function announcementHtml(a, o = {}) {
     } else {
       // Bez still varianty při omezeném pohybu: video bez autoplay (první snímek), klik přehraje.
       const play = o.reducedMotion ? ' preload="metadata"' : ' autoplay preload="auto"';
-      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline${m.loop ? ' loop' : ''}${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
+      // Smyčka s pauzou: bez nativního `loop`, klient po `ended` počká data-loop-delay ms a pustí znovu (viz wireAnnouncementVideo).
+      const delayed = m.loop && m.loopDelayMs > 0;
+      inner = `<video class="ua-video" src="${escapeAttr(m.url)}"${play} muted playsinline${m.loop && !delayed ? ' loop' : ''}${delayed ? ` data-loop-delay="${m.loopDelayMs}"` : ''}${m.stillUrl ? ` poster="${escapeAttr(m.stillUrl)}"` : ''} aria-hidden="true"></video>`;
     }
     mediaHtml = `<div class="ua-media" style="${size}" title="Klik = přehrát znovu"><span class="ua-spot" aria-hidden="true"></span>${inner}</div>`;
   }

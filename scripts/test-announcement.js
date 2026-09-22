@@ -66,5 +66,13 @@ const assert = require('node:assert/strict');
   assert.equal(ytRunFullText({ text: 'x', navigationEndpoint: { urlEndpoint: { url: 'https://www.youtube.com/redirect?q=javascript:alert(1)' } } }), 'x');
   ok('markdown fallback + youtube plná URL');
 
+  // 6. smyčka s pauzou: bez nativního loop, s data-loop-delay
+  const dl = announcementHtml(normalizeAnnouncement({ id: 'x9', channel: 'c', media: { url: 'https://cdn/x.webm', loop: true, loopDelayMs: 2500 } }));
+  assert.match(dl, /<video class="ua-video" src="https:\/\/cdn\/x.webm" autoplay preload="auto" muted playsinline data-loop-delay="2500" aria-hidden="true">/);
+  assert.doesNotMatch(dl, / loop/);
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', media: { url: 'https://a/b.webm', loopDelayMs: 999999 } }).media.loopDelayMs, 60000, 'strop 60 s');
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', media: { url: 'https://a/b.webm', loop: false, loopDelayMs: 500 } }).media.loop, false);
+  ok('loopDelayMs');
+
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

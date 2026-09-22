@@ -29,7 +29,7 @@ export interface AnnouncementPayload {
   text?: string;
   /** Rich text (Markdown → HTML na serveru Židolišty); klient ho ještě sanitizuje. */
   textHtml?: string;
-  media?: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; stillUrl?: string | null } | null;
+  media?: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; loopDelayMs?: number; stillUrl?: string | null } | null;
   chatReply?: { text: string; hideInUnityChat: boolean } | null;
   triggeredBy?: { user: string; platform?: string } | null;
   at: string;
@@ -57,6 +57,7 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
       width: Number(m.width) > 0 ? Math.round(Number(m.width)) : undefined,
       height: Number(m.height) > 0 ? Math.round(Number(m.height)) : undefined,
       loop: !!m.loop,
+      loopDelayMs: Math.max(0, Math.min(60_000, Math.round(Number(m.loopDelayMs) || 0))),
       stillUrl: isHttps(m.stillUrl) ? m.stillUrl : null,
     };
   }

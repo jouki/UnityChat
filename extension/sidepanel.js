@@ -3713,12 +3713,8 @@ class UnityChat {
     const el = tpl.content.firstElementChild;
     const tx = el.querySelector('.ua-text');
     if (tx) this._processMentions(tx, 'twitch');
-    el.querySelector('.ua-media')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const v = el.querySelector('video');
-      if (v) { v.currentTime = 0; v.play().catch(() => {}); }
-      else { const img = el.querySelector('.ua-media img'); if (img) { const src = img.src; img.src = ''; img.src = src; } }
-    });
+    let replay = null;
+    el.querySelector('.ua-media')?.addEventListener('click', (e) => { e.stopPropagation(); replay?.(); });
     if (this._parkedBottom.length) { this._parkedBottom.push(el); return true; }
     if (!this.autoScroll) {
       if (this._unreadCount === 0) { const sep = document.createElement('div'); sep.id = 'unread-separator'; sep.className = 'unread-sep'; sep.textContent = 'Nové zprávy'; this.chatEl.appendChild(sep); }
@@ -3727,8 +3723,8 @@ class UnityChat {
       this.scrollBtn.classList.remove('hidden');
     }
     this.chatEl.appendChild(el);
-    // Video vzniklo v <template> (inertní dokument) — po vložení se samo nenačte, musí se pobídnout.
-    { const v = el.querySelector('video'); if (v) { v.load(); if (!reducedMotion) v.play().catch(() => {}); } }
+    // Načíst video (z <template> se samo nenačte) + smyčka s pauzou; klik = replay.
+    replay = core.wireAnnouncementVideo(el, { autoplay: !reducedMotion });
     if (this.autoScroll) this._unloadTop();
     this._scroll();
     this._ucLog('Annc', `${a.command || '?'}${a.media ? ' + médium' : ''}${a.chatReply?.hideInUnityChat ? ' (odpověď skryta)' : ''}`);
