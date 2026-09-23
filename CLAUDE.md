@@ -444,6 +444,19 @@ disclosure, listing CS/EN, assety) žijí v `store/listing/` — **tracked**,
 
 Navazující cíle (Firefox / Opera store / mobil) jsou v `store/listing/README.md`.
 
+### Firefox (testovací build, v3.40.8+)
+
+Kód zůstává jeden (`extension/`), pro Firefox se mění jen manifest: `node scripts/build-firefox.mjs`
+→ `store/build/firefox/unpacked/` (about:debugging → „Načíst dočasný doplněk“ → `manifest.json`)
++ `unitychat-firefox-vX.Y.Z.xpi`. Převod (`toFirefoxManifest`, test `scripts/test-firefox-manifest.mjs`):
+`background.scripts` místo service workeru, **postranní lišta `sidebar_action`** (rozhodnutí usera
+2026-09-23) místo `side_panel`, bez `sidePanel` oprávnění, ID `unitychat@jouki.cz`, min. Firefox 128
+(`scripting` world MAIN). `background.js`: `FF_SIDEBAR` → tlačítko v liště = `sidebarAction.toggle()`,
+tlačítko v chatu Twitche = `open()` s fallbackem na záložku (zpráva z content scriptu nemusí nést
+gesto uživatele). Přihlášení: Firefox vrací `https://<40 hex>.extensions.allizom.org/` — povoleno
+v `isAllowedReturnTo`. `web-ext lint`: 0 chyb; na AMO bude potřeba `data_collection_permissions`
+a projít 27 varování `innerHTML`. Publikace na AMO zatím ne (user: nejdřív otestovat).
+
 ## Známé limitace / gotchas
 
 **Twitch:**

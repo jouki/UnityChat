@@ -30,6 +30,10 @@ test('isAllowedReturnTo: jen originy z WEB_ORIGINS, bez credentials v URL', () =
   assert.equal(isAllowedReturnTo('https://evil.example/chat/'), false);
   assert.equal(isAllowedReturnTo('https://user:pw@robdiesalot.com/'), false);
   assert.equal(isAllowedReturnTo('not a url'), false);
+  // Addon: Chrome (chromiumapp.org) a Firefox (extensions.allizom.org).
+  assert.equal(isAllowedReturnTo(`https://${'a'.repeat(32)}.chromiumapp.org/`), true);
+  assert.equal(isAllowedReturnTo(`https://${'0f'.repeat(20)}.extensions.allizom.org/`), true);
+  assert.equal(isAllowedReturnTo('https://evil.extensions.allizom.org/'), false);
 });
 
 test('bearerToken: jen 64 hex', () => {

@@ -15,6 +15,9 @@
 
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
+// Firefox: nativní postranní lišta (manifest `sidebar_action`, build scripts/build-firefox.mjs).
+// sidebarAction.toggle/open musí běžet synchronně v obsluze akce uživatele (žádný await před).
+const FF_SIDEBAR = !HAS_SIDE_PANEL ? (globalThis.browser?.sidebarAction || chrome.sidebarAction || null) : null;
 
 // Track side panel state via persistent port connection (survives SW restarts)
 let _panelPort = null;
@@ -41,6 +44,11 @@ if (HAS_SIDE_PANEL) {
   // Chrome path: clicking the toolbar action opens the native side panel.
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
+} else if (FF_SIDEBAR) {
+  // Firefox: tlačítko v liště otevře/zavře postranní lištu s UnityChatem.
+  chrome.action.onClicked.addListener(() => {
+    FF_SIDEBAR.toggle().catch((e) => ucLog('Sidebar', 'toggle failed:', e.message));
+  });
 } else {
   // Opera path: the toolbar action opens UnityChat as a regular tab next to
   // the stream tab (openerTabId → Opera may auto-group them into a tab
@@ -230,6 +238,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             }
           });
       }
+      return true;
+    }
+    // Firefox: postranní lišta. Zpráva z content scriptu nemusí nést gesto uživatele →
+    // při odmítnutí (open() jen z uživatelské akce) otevřít UnityChat jako záložku.
+    if (FF_SIDEBAR) {
+      const act = wantClose ? FF_SIDEBAR.close() : FF_SIDEBAR.open();
+      act.then(() => sendResponse({ ok: true, action: wantClose ? 'closed' : 'opened' }))
+        .catch((e) => {
+          ucLog('Sidebar', `${wantClose ? 'close' : 'open'} failed: ${e.message} → tab`);
+          if (wantClose) { sendResponse({ ok: false, error: e.message }); return; }
+          openUcTab(sender.tab || null)
+            .then(() => sendResponse({ ok: true, action: 'opened-tab' }))
+            .catch((err) => sendResponse({ ok: false, error: err.message }));
+        });
       return true;
     }
     // Opera (no sidePanel API) → open as a regular tab next to the stream
