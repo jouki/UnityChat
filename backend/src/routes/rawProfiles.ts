@@ -26,6 +26,8 @@ export const RawSettings = z.object({
   // Zvuky (reakce se zvukem): '0' = vypnuté; chybí = zapnuté.
   sound: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
   platforms: z.array(z.enum(['twitch', 'youtube', 'kick'])).max(3).optional(),
+  // Název instance (víc OBS chatů pro různé scény) — jen pro konfigurátor, raw stránka ho nepoužívá.
+  name: z.string().max(40).optional(),
 }).strict();
 export type RawSettingsT = z.infer<typeof RawSettings>;
 
