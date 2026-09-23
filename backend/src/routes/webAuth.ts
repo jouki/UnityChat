@@ -36,6 +36,8 @@ const SendBody = z.object({
   channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
   text: z.string().min(1).max(2000),
   replyTo: z.string().max(200).optional().nullable(),
+  /** Login autora zprávy, na kterou se odpovídá — pro záložní „@login text", když platforma odpověď odmítne. */
+  replyToUser: z.string().max(60).optional().nullable(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';
@@ -171,7 +173,19 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       }
       if (platform === 'kick') {
         if (!dir[0].kickUserId) throw new SendError('channel has no kick id', 404);
-        return sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
+        try {
+          return await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
+        } catch (e) {
+          // Kick public API vrací na odpověď 404 „Not found" (2026-09-23, i se správným
+          // broadcaster_user_id). Zpráva nesmí propadnout → znovu jako obyčejná „@login text"
+          // (jako odpověď napříč platformami). Log rozliší, jestli padá jen odpověď.
+          if (!(e instanceof SendError) || e.status !== 404 || !body.data.replyTo) throw e;
+          const at = body.data.replyToUser ? `@${body.data.replyToUser.replace(/^@/, '')} ` : '';
+          req.log.warn({ accountId, replyTo: body.data.replyTo, err: e.message }, 'kick: odpověď odmítnuta → posílám jako zprávu s @');
+          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: text.startsWith(at) ? text : at + text, replyTo: null });
+          req.log.info({ accountId, id: res.id }, 'kick: záložní zpráva bez reply odeslána');
+          return res;
+        }
       }
       const videoId = opts.ingest?.videoIdFor('youtube', dir[0].youtubeHandle || channel) || null;
       if (!videoId) throw new SendError('youtube: stream not live (no video id)', 409);
