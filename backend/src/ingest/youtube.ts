@@ -2,7 +2,7 @@ import { normalizeYoutubeAction } from './normalize.js';
 import { noopLog, type Logger } from './twitch.js';
 import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
 
-interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; minPollMs?: number }
+interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; onlineCheckMs?: number; minPollMs?: number }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 // SOCS=CAI: bez něj YouTube ze serverové IP přesměruje na consent stránku
@@ -82,6 +82,12 @@ export class YouTubeListener implements IngestListener {
   private last: Date | null = null;
   private stopped = true;
   private timer: NodeJS.Timeout | null = null;
+  /** Kontrola „pořád live / nový stream?" během připojení (vlastní timer vedle pollu). */
+  private liveTimer: NodeJS.Timeout | null = null;
+  private liveMisses = 0;
+  private offlineLogged = false;
+  /** Generace smyčky: connect() ji zvýší, naplánované kroky staré smyčky se pak zahodí. */
+  private gen = 0;
   private videoId: string | null = null;
   private apiKey = '';
   private clientVersion = '2.20250401.00.00';
@@ -93,6 +99,7 @@ export class YouTubeListener implements IngestListener {
   private readonly fetchImpl: typeof fetch;
   private readonly log: Logger;
   private readonly liveCheckMs: number;
+  private readonly onlineCheckMs: number;
   private readonly minPollMs: number;
 
   constructor(
@@ -102,7 +109,10 @@ export class YouTubeListener implements IngestListener {
   ) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.log = opts.log ?? noopLog;
-    this.liveCheckMs = opts.liveCheckMs ?? 60000;
+    // Offline: kontrola každých 10 s (OBS s chatem běží dřív, než Rob pustí stream — pokyn usera
+    // 2026-09-23); online: každých 30 s, jestli stream pořád běží / nezačal nový.
+    this.liveCheckMs = opts.liveCheckMs ?? 10000;
+    this.onlineCheckMs = opts.onlineCheckMs ?? 30000;
     this.minPollMs = opts.minPollMs ?? 1500;
   }
 
@@ -111,11 +121,36 @@ export class YouTubeListener implements IngestListener {
   /** videoId aktuálního živého streamu (web /chat/send → liveChatId). */
   currentVideoId() { return this.st === 'connected' ? this.videoId : null; }
   start() { this.stopped = false; void this.connect(); }
-  stop() { this.stopped = true; if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.st = 'off'; }
+  stop() { this.stopped = true; this.gen++; if (this.timer) { clearTimeout(this.timer); this.timer = null; } this.clearLiveCheck(); this.st = 'off'; }
 
-  private schedule(fn: () => Promise<void>, ms: number) {
-    if (this.stopped) return;
-    this.timer = setTimeout(() => { this.timer = null; void fn(); }, Math.max(ms, this.minPollMs));
+  /** Naplánovat další krok smyčky; `g` = generace, ve které vznikl (starý poll po reconnectu se zahodí). */
+  private schedule(fn: () => Promise<void>, ms: number, g = this.gen) {
+    if (this.stopped || g !== this.gen) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; if (g === this.gen) void fn(); }, Math.max(ms, this.minPollMs));
+  }
+
+  private clearLiveCheck() { if (this.liveTimer) { clearTimeout(this.liveTimer); this.liveTimer = null; } }
+
+  /** Během připojení: pořád live? Jiné videoId = nový stream → přepojit; 2× nic = konec → zpět na hledání po 10 s. */
+  private scheduleLiveCheck(g: number) {
+    this.clearLiveCheck();
+    if (this.stopped || g !== this.gen) return;
+    this.liveTimer = setTimeout(async () => {
+      this.liveTimer = null;
+      if (this.stopped || g !== this.gen) return;
+      const id = await this.findLiveVideoId();
+      if (this.stopped || g !== this.gen) return;
+      if (id && id === this.videoId) { this.liveMisses = 0; this.scheduleLiveCheck(g); return; }
+      if (id) {
+        this.log.info({ handle: this.handle, from: this.videoId, to: id }, 'youtube ingest: nový stream → přepojuji');
+        void this.connect();
+        return;
+      }
+      if (++this.liveMisses < 2) { this.scheduleLiveCheck(g); return; }
+      this.log.info({ handle: this.handle, videoId: this.videoId }, 'youtube ingest: stream už není live → hledám po 10 s');
+      void this.connect();
+    }, Math.max(this.onlineCheckMs, this.minPollMs));
   }
 
   private async get(url: string): Promise<string> {
@@ -143,13 +178,18 @@ export class YouTubeListener implements IngestListener {
 
   private async connect() {
     if (this.stopped) return;
+    const g = ++this.gen;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    this.clearLiveCheck();
+    this.liveMisses = 0;
     this.st = 'connecting';
     this.cont = null; this.allCont = null; this.usePageRefresh = false; this.apiFails = 0;
     try {
       this.videoId = await this.findLiveVideoId();
       if (!this.videoId) {
-        this.log.info({ handle: this.handle }, 'youtube ingest: není live, zkusím za minutu');
-        this.schedule(() => this.connect(), this.liveCheckMs);
+        // Logovat jen přechod do offline — kontrola každých 10 s by jinak zaplavila log.
+        if (!this.offlineLogged) { this.offlineLogged = true; this.log.info({ handle: this.handle, everyMs: this.liveCheckMs }, 'youtube ingest: není live, hlídám'); }
+        this.schedule(() => this.connect(), this.liveCheckMs, g);
         return;
       }
       const html = await this.chatPage();
@@ -167,18 +207,22 @@ export class YouTubeListener implements IngestListener {
       this.usePageRefresh = !this.cont || !this.apiKey;
       this.processActions(l.actions || []);
       this.st = 'connected';
+      this.offlineLogged = false;
       this.log.info({ handle: this.handle, videoId: this.videoId, mode: this.usePageRefresh ? 'page' : 'api', all: !!this.allCont }, 'youtube ingest: connected');
-      this.schedule(() => this.poll(), timed?.timeoutMs || 5000);
+      this.schedule(() => this.poll(), timed?.timeoutMs || 5000, g);
+      this.scheduleLiveCheck(g);
     } catch (err) {
+      if (g !== this.gen) return;
       this.st = 'reconnecting';
       this.log.warn({ err, handle: this.handle }, 'youtube ingest: connect selhal');
-      this.schedule(() => this.connect(), 15000);
+      this.schedule(() => this.connect(), 15000, g);
     }
   }
 
   private async poll() {
     if (this.stopped) return;
     if (this.usePageRefresh) return this.pollPage();
+    const g = this.gen;
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 15000);
@@ -193,10 +237,10 @@ export class YouTubeListener implements IngestListener {
       if (!l) {
         if (++this.apiFails >= 3) {
           this.log.info({ handle: this.handle }, 'youtube ingest: API bez obsahu 3×, stream skončil? → znovu hledám live');
-          this.schedule(() => this.connect(), 5000);
+          this.schedule(() => this.connect(), 5000, g);
           return;
         }
-        this.schedule(() => this.poll(), 5000);
+        this.schedule(() => this.poll(), 5000, g);
         return;
       }
       const timed = pickTimedContinuation(l);
@@ -204,29 +248,30 @@ export class YouTubeListener implements IngestListener {
       const actions = l.actions || [];
       if (actions.length) this.apiFails = 0; else if (++this.apiFails >= 5) this.usePageRefresh = true;
       this.processActions(actions);
-      this.schedule(() => this.poll(), timed?.timeoutMs || 5000);
+      this.schedule(() => this.poll(), timed?.timeoutMs || 5000, g);
     } catch (err) {
       this.log.warn({ err, handle: this.handle }, 'youtube ingest: API poll selhal');
       if (++this.apiFails >= 3) this.usePageRefresh = true;
-      this.schedule(() => this.poll(), 5000);
+      this.schedule(() => this.poll(), 5000, g);
     }
   }
 
   private async pollPage() {
+    const g = this.gen;
     try {
       const l = lcr(extractJson(await this.chatPage(this.allCont), 'ytInitialData'));
       if (!l) {
         this.allCont = null;
-        if (++this.apiFails >= 3) { this.schedule(() => this.connect(), 5000); return; }
-        this.schedule(() => this.pollPage(), 8000);
+        if (++this.apiFails >= 3) { this.schedule(() => this.connect(), 5000, g); return; }
+        this.schedule(() => this.pollPage(), 8000, g);
         return;
       }
       this.apiFails = 0;
       this.processActions(l.actions || []);
-      this.schedule(() => this.pollPage(), 3000);
+      this.schedule(() => this.pollPage(), 3000, g);
     } catch (err) {
       this.log.warn({ err, handle: this.handle }, 'youtube ingest: page poll selhal');
-      this.schedule(() => this.pollPage(), 10000);
+      this.schedule(() => this.pollPage(), 10000, g);
     }
   }
 

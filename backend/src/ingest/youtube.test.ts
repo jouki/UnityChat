@@ -58,3 +58,37 @@ test('YouTubeListener: findLive → chat page (popout) → all-chat switch → A
   assert.deepEqual(got.map((m) => m.platformMessageId).sort(), ['new1', 'old']);
   assert.equal(got.find((m) => m.platformMessageId === 'new1')!.sentAt.getTime(), 1789820014396);
 });
+
+test('YouTubeListener: offline → live, nový stream → přepojení, konec streamu → zpět hledat', async () => {
+  let live: string | null = null;   // aktuální videoId na /live (null = offline)
+  const chatFor: string[] = [];
+  const page = (vid: string) => `<script>var ytInitialData = ${JSON.stringify({ contents: { liveChatRenderer: { continuations: [{ timedContinuationData: { continuation: 'T-' + vid, timeoutMs: 10 } }], actions: [] } } })};</script>"INNERTUBE_API_KEY":"KEY"`;
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith('/live')) return new Response(live ? `"isLive":true "videoId":"${live}"` : 'offline', { status: 200 });
+    const v = url.match(/live_chat\?v=([^&]+)/)?.[1];
+    if (v) { chatFor.push(v); return new Response(page(v), { status: 200 }); }
+    if (url.includes('get_live_chat')) return new Response(JSON.stringify({ continuationContents: { liveChatContinuation: { continuations: [{ timedContinuationData: { continuation: 'T', timeoutMs: 10 } }], actions: [] } } }), { status: 200 });
+    return new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+  const infos: string[] = [];
+  const l = new YouTubeListener('robdiesalot', () => {}, { fetchImpl, log: { info: (_o, m) => infos.push(m), warn() {}, error() {} }, minPollMs: 10, liveCheckMs: 30, onlineCheckMs: 40 });
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  l.start();
+  await wait(100);
+  assert.equal(l.status(), 'connecting', 'offline: hledá dál');
+  assert.equal(infos.filter((m) => m.includes('není live')).length, 1, 'offline se loguje jen jednou');
+  live = 'VIDEO1AAAAA';
+  await wait(120);
+  assert.equal(l.status(), 'connected');
+  assert.equal(l.currentVideoId(), 'VIDEO1AAAAA');
+  live = 'VIDEO2BBBBB';   // Rob stream restartoval
+  await wait(150);
+  assert.equal(l.currentVideoId(), 'VIDEO2BBBBB', 'online kontrola přepojila na nový stream');
+  assert.ok(infos.includes('youtube ingest: nový stream → přepojuji'));
+  live = null;   // stream skončil
+  await wait(250);
+  assert.notEqual(l.status(), 'connected', 'po 2× „není live" se vrací k hledání');
+  assert.ok(infos.includes('youtube ingest: stream už není live → hledám po 10 s'));
+  l.stop();
+  assert.deepEqual([...new Set(chatFor)], ['VIDEO1AAAAA', 'VIDEO2BBBBB']);
+});
