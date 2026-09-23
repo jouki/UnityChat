@@ -6,6 +6,7 @@
 import { isTwitchOgFaceName } from './colors.js';
 import { decodeEntities, stripTags, tagAttrs } from './html.js';
 import { makeLog } from './log.js';
+import { compileBlacklist, censorText } from './censor.js';
 
 /** Plná URL odkazu z YouTube runu (navigationEndpoint → youtube.com/redirect?q=<url> nebo přímo), jinak původní text. */
 export function ytRunFullText(run) {
@@ -40,6 +41,7 @@ export class EmoteManager {
     this.kickNative = new Map();   // name -> url (naučené z [emote:ID:NAME])
     this.ucEmotes = new Map();     // name -> url (UnityChat custom emotes)
     this.zeroWidth = new Set();    // names of zero-width 7TV emotes (overlay on previous)
+    this._blacklist = null;        // zkompilovaný blacklist slov (core/censor.js) — cenzura textu v _toHtml
     // Per-user "personal" 7TV emote loadouts so a chatter's own emotes
     // resolve in foreign channels too. Key: `${platform}:${loginLower}`,
     // value: Map(emoteName → { url, zw }).
@@ -784,7 +786,47 @@ export class EmoteManager {
 
   // ---- HTML helpers ----
 
+  /** Blacklist slov ze Židolišty (GET /blacklist): text zpráv se cenzuruje při vykreslení. Vrací počet položek. */
+  setBlacklist(terms) {
+    this._blacklist = compileBlacklist(terms);
+    return this._blacklist.size;
+  }
+
+  /** Cenzura libovolného textu (zobrazované jméno apod.); bez blacklistu beze změny. */
+  censor(text) {
+    return censorText(text, this._blacklist);
+  }
+
+  /**
+   * Textové segmenty jsou rozsekané po slovech (renderSegments), takže se sousední
+   * nestylované texty pro hledání spojí (fráze přes víc segmentů) a výsledek se rozdělí
+   * zpátky na původní délky — cenzura délku zachovává, segmentace pro ZW stack zůstane.
+   */
+  _censorSegments(segments) {
+    const out = segments.slice();
+    for (let i = 0; i < out.length;) {
+      if (out[i].type !== 'text' || out[i].style) { i++; continue; }
+      let j = i;
+      while (j < out.length && out[j].type === 'text' && !out[j].style) j++;
+      const run = out.slice(i, j);
+      const joined = run.map((x) => x.value).join('');
+      const censored = censorText(joined, this._blacklist);
+      if (censored !== joined) {
+        const cps = Array.from(censored);
+        let pos = 0;
+        for (let k = i; k < j; k++) {
+          const len = Array.from(out[k].value).length;
+          out[k] = { ...out[k], value: cps.slice(pos, pos + len).join('') };
+          pos += len;
+        }
+      }
+      i = j;
+    }
+    return out;
+  }
+
   _toHtml(segments) {
+    if (this._blacklist?.size) segments = this._censorSegments(segments);
     const out = [];
     let stackOpen = false;
 

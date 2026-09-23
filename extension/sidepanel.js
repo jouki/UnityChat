@@ -111,6 +111,10 @@ class NicknameManager {
       this._eventSource.addEventListener('commands-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
       });
+      // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
+      this._eventSource.addEventListener('blacklist-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
+      });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
           const d = JSON.parse(e.data);
@@ -1116,6 +1120,7 @@ class UnityChat {
     // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
     { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
+    this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
         for (const p of ['twitch', 'youtube', 'kick']) {
@@ -1177,6 +1182,8 @@ class UnityChat {
     // Load SE bot commands in background (for ! autocomplete)
     this._loadSECommands().catch(() => {});
     this._loadUcCommands().catch(() => {});
+    // Blacklist slov ještě před historií, ať se nic neukáže necenzurované (fetch má timeout 8 s).
+    await this._loadBlacklist().catch(() => {});
 
     // Spinner up before any heavy work — it covers cache hydration + the
     // first round of provider connects. Cleared on first rendered message,
@@ -1485,8 +1492,8 @@ class UnityChat {
           this.chatEl.querySelectorAll('.un').forEach((un) => {
             if (un.dataset.platform === p && un.dataset.username === uname.toLowerCase()) {
               un.style.color = readableColor(resolvedColor);
-              if (newNick) { un.textContent = newNick; un.title = uname; }
-              else { un.textContent = uname; un.title = ''; }
+              if (newNick) { un.textContent = this._censorName(newNick); un.title = uname; }
+              else { un.textContent = this._censorName(uname); un.title = ''; }
             }
           });
           if (p === this.activePlatform) activeColor = resolvedColor;
@@ -2466,6 +2473,7 @@ class UnityChat {
     this._resetChat();
     this._isModOnChannel = false; // re-detect from badges on new channel
     this._loadUcCommands().catch(() => {});
+    this._loadBlacklist().catch(() => {});
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -2836,6 +2844,40 @@ class UnityChat {
   // Chat commandy streamera ze Židolišty (RobJewsALot): backend GET /commands?channel=
   // vrací jen jméno, literál spouštěče a role (regex už převedený na serveru).
   // Obnova každých 5 minut — commandy se editují na stránce Commandy.
+  /** Zobrazované jméno přes blacklist slov (stejný seznam jako text zpráv, core/censor.js). */
+  _censorName(name) {
+    return this.emotes?.censor ? this.emotes.censor(name) : name;
+  }
+
+  /**
+   * Blacklist slov ze Židolišty (backend GET /blacklist) → EmoteManager cenzuruje text zpráv,
+   * _censorName jména. Při startu, přepnutí streamera, každých 10 min a hned po SSE `blacklist-change`.
+   * Už vykreslené zprávy se přerenderují (reRender), ať se změna projeví i zpětně.
+   */
+  async _loadBlacklist() {
+    if (this._blacklistTimer) { clearInterval(this._blacklistTimer); this._blacklistTimer = null; }
+    const channel = (this.config.channel || '').toLowerCase();
+    const tick = async () => {
+      try {
+        const r = await fetch(`${UC_API}/blacklist?channel=${encodeURIComponent(channel)}`, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        const key = JSON.stringify(j.terms || []);
+        if (key === this._blacklistKey) return;
+        const first = this._blacklistKey === undefined;
+        this._blacklistKey = key;
+        const n = this.emotes.setBlacklist(j.terms || []);
+        this._ucLog('Blacklist', `${channel}: ${n} položek${j.stale ? ' (stará cache)' : ''}`);
+        if (!first || n) this._reRenderAllMessages?.();
+      } catch (e) {
+        this._ucLog('Blacklist', `načtení selhalo: ${e.message || e}`);
+      }
+    };
+    if (!channel) return;
+    await tick();
+    this._blacklistTimer = setInterval(tick, 10 * 60 * 1000);
+  }
+
   async _loadUcCommands() {
     if (this._ucCommandsTimer) { clearInterval(this._ucCommandsTimer); this._ucCommandsTimer = null; }
     const channel = (this.config.channel || '').toLowerCase();
@@ -3068,7 +3110,7 @@ class UnityChat {
   _onNicknameChange({ platform, username, nickname, color }) {
     this.chatEl.querySelectorAll('.un').forEach((un) => {
       if (un.dataset.platform === platform && un.dataset.username === username.toLowerCase()) {
-        un.textContent = nickname;
+        un.textContent = this._censorName(nickname);
         un.title = username;
         if (color) un.style.color = readableColor(color);
       }
@@ -5245,7 +5287,7 @@ class UnityChat {
 
     const un = document.createElement('span');
     un.className = 'un';
-    un.textContent = msg.username;
+    un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
@@ -5306,7 +5348,7 @@ class UnityChat {
 
     const un = document.createElement('span');
     un.className = 'un';
-    un.textContent = msg.username;
+    un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
@@ -5376,7 +5418,7 @@ class UnityChat {
     header.className = 'milestone-header';
     const un = document.createElement('span');
     un.className = 'un';
-    un.textContent = msg.username;
+    un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
@@ -5446,7 +5488,7 @@ class UnityChat {
 
     const un = document.createElement('span');
     un.className = 'un';
-    un.textContent = msg.username;
+    un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
     un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
@@ -5741,6 +5783,36 @@ class UnityChat {
   // 7TV emote set after their messages have already been rendered, so the
   // freshly-known emotes light up retroactively instead of only on future
   // messages.
+  /** Tělo zprávy → HTML (emoty, odkazy, cenzura z blacklistu). Sdílí render i přerenderování. */
+  _renderMsgBody(msg) {
+    const renderCtx = { platform: msg.platform, author: msg.username };
+    if (msg.platform === 'twitch') {
+      // Reply messages strip the "@username " prefix from the body, but the
+      // emotes tag positions are computed from the ORIGINAL message — shift
+      // by twitchEmotesOffset so subscriber/native emotes resolve in replies.
+      renderCtx.emotesOffset = msg.twitchEmotesOffset || 0;
+      return this.emotes.renderTwitch(msg.message, msg.twitchEmotes, renderCtx);
+    }
+    if (msg.platform === 'kick') return this.emotes.renderKick(msg.kickContent || msg.message, renderCtx);
+    if (msg.platform === 'youtube' && msg.ytRuns?.length) return this.emotes.renderYouTube(msg.ytRuns);
+    return this.emotes.renderPlain(msg.message);
+  }
+
+  /** Po změně blacklistu: přerenderovat text i jméno všech zpráv (i zaparkovaných mimo DOM). */
+  _reRenderAllMessages() {
+    let n = 0;
+    for (const msgEl of [...this.chatEl.querySelectorAll('.msg[data-msg-id]'), ...(this._parkedTop || []), ...(this._parkedBottom || [])]) {
+      const cached = msgEl.dataset?.msgId ? this.store.get(msgEl.dataset.msgId) : null;
+      if (!cached) continue;
+      const tx = msgEl.querySelector('.tx');
+      if (tx) { tx.innerHTML = this._renderMsgBody(cached); this._processMentions(tx, cached.platform); }
+      const un = msgEl.querySelector('.un');
+      if (un) un.textContent = this._censorName(this.nicknames.get(cached.platform, cached.username)?.nickname || cached.username);
+      n++;
+    }
+    this._ucLog('Blacklist', `přerenderováno ${n} zpráv`);
+  }
+
   _reRenderMessagesForUser(platform, username) {
     const u = String(username).toLowerCase();
     const sel = `.un[data-platform="${CSS.escape(platform)}"][data-username="${CSS.escape(u)}"]`;
@@ -6220,7 +6292,7 @@ class UnityChat {
       const css = _7tvPaintToCss(chatUserEntry._paint);
       if (css) _7tvApplyPaintStyles(un, css);
     }
-    un.textContent = ucProfile?.nickname || msg.username;
+    un.textContent = this._censorName(ucProfile?.nickname || msg.username);
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
@@ -6237,20 +6309,7 @@ class UnityChat {
       tx.style.color = un.style.color;
     }
 
-    const renderCtx = { platform: msg.platform, author: msg.username };
-    if (msg.platform === 'twitch') {
-      // Reply messages strip the "@username " prefix from the body, but the
-      // emotes tag positions are computed from the ORIGINAL message — shift
-      // by twitchEmotesOffset so subscriber/native emotes resolve in replies.
-      renderCtx.emotesOffset = msg.twitchEmotesOffset || 0;
-      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, renderCtx);
-    } else if (msg.platform === 'kick') {
-      tx.innerHTML = this.emotes.renderKick(msg.kickContent || msg.message, renderCtx);
-    } else if (msg.platform === 'youtube' && msg.ytRuns?.length) {
-      tx.innerHTML = this.emotes.renderYouTube(msg.ytRuns);
-    } else {
-      tx.innerHTML = this.emotes.renderPlain(msg.message);
-    }
+    tx.innerHTML = this._renderMsgBody(msg);
 
     // @mentions — bold + colored with the mentioned user's chat color.
     // Runs AFTER emote/URL render so we only walk remaining text nodes (no
