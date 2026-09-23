@@ -18,8 +18,9 @@ import { EmoteManager } from './core/emotes.js';
 import * as announcement from './core/announcement.js';
 import * as reaction from './core/reaction.js';
 import * as emotePicker from './core/emote-picker.js';
+import * as mentions from './core/mentions.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

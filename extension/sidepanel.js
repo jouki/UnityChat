@@ -3179,16 +3179,11 @@ class UnityChat {
   // nenajde, text zůstává beze změny.
   _resolveNicknameMentions(text, platform) {
     if (!text.includes('@') || !this.nicknames) return text;
-    return text.replace(/(^|[^A-Za-z0-9_@])@([^\s@]{2,30})/g, (m, pre, raw) => {
-      const trail = raw.match(/[.,!?;:]+$/)?.[0] || '';
-      const name = trail ? raw.slice(0, -trail.length) : raw;
-      const login = this.nicknames.resolveNickname(name, platform);
-      if (!login) return m;
-      // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
-      // loginu tak, jak dorazil z chatu, když ho známe.
-      const cased = (this._chatUsers?.get(login)?.name || login).replace(/^@/, '');
-      return `${pre}@${cased}${trail}`;
-    });
+    // Sdílené s webem (core/mentions.js): i víceslovné přezdívky („@Naprostej Kokot").
+    // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
+    // loginu tak, jak dorazil z chatu, když ho známe.
+    const core = window.UC_CORE;
+    return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform), (login) => this._chatUsers?.get(login)?.name || login);
   }
 
   async _sendMessage() {
