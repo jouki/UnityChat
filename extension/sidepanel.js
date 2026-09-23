@@ -1061,7 +1061,7 @@ class UnityChat {
     // Escape hatch: when the panel UI locks up, devtools console still runs.
     // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
     // force a log dump without needing the 💾 button to respond.
-    try { window.ucDump = () => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }); } catch {}
+    try { window.ucDump = () => this._dumpLogs(); } catch {}
 
     this._init();
   }
@@ -1473,7 +1473,7 @@ class UnityChat {
           await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
         } catch {}
       }
-      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).then((r) => { if (r && r.ok === false) this._sys(`Uložení logu selhalo: ${r.error || '?'}`); }).catch(() => {});
+      this._dumpLogs();
     });
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
@@ -3367,6 +3367,34 @@ class UnityChat {
     } catch (err) {
       this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
+    }
+  }
+
+  /**
+   * 💾 dump logu. Chrome: background (service worker, data: URL). Firefox: background je uspávaná
+   * stránka a blob: URL s ní zaniká uprostřed stahování (soubor se smazal a nový nedopsal,
+   * 2026-09-23) → blob vytvoří a stažení spustí panel, který běží. Navíc kopie do schránky.
+   */
+  async _dumpLogs() {
+    if (!IS_FIREFOX) {
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).then((r) => { if (r && r.ok === false) this._sys(`Uložení logu selhalo: ${r.error || '?'}`); }).catch(() => {});
+      return;
+    }
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'GET_LOGS' });
+      const text = r?.text || '(log prázdný)';
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+      let saved = false;
+      try {
+        await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'uniquify', saveAs: false });
+        saved = true;
+      } catch (e) { this._sys(`Uložení logu selhalo: ${e.message}`); }
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+      let copied = false;
+      try { await navigator.clipboard.writeText(text); copied = true; } catch {}
+      this._sys(`Log${saved ? ' uložen do Stažených (unitychat-debug.log)' : ''}${saved && copied ? ' a' : ''}${copied ? ' zkopírován do schránky' : ''}${!saved && !copied ? ' se nepodařilo uložit ani zkopírovat' : ''}.`);
+    } catch (e) {
+      this._sys(`Dump selhal: ${e.message}`);
     }
   }
 

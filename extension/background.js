@@ -181,6 +181,11 @@ async function dumpLogs() {
 // ---- Message handlers ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump
+  // Text logu pro panel (Firefox si ukládá sám — blob: URL uspané background stránky zaniká).
+  if (msg.type === 'GET_LOGS') {
+    _hydrateLogs().then(() => sendResponse({ ok: true, text: _logs.join('\n') }));
+    return true;
+  }
   if (msg.type === 'DUMP_LOGS') {
     dumpLogs().then((r) => sendResponse(r || { ok: true }));
     return true;

@@ -395,6 +395,30 @@
     if (btn) btn.click();
   }
 
+  // Log do UC_LOG (sdílený dump s panelem) — odeslání na YouTube.
+  function _sendLog(text) {
+    try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'YtSend', args: [text] }).catch?.(() => {}); } catch {}
+  }
+
+  /**
+   * Po kliknutí na Odeslat ověřit, že YouTube zprávu převzal (pole se vyprázdní). Dřív se
+   * výsledek neověřoval → panel hlásil úspěch, i když nic neodešlo (Firefox, 2026-09-23).
+   */
+  async function sentViaDom(doc, input, text, label) {
+    const inserted = (input.textContent || '').trim();
+    const btn = findSendBtn(doc);
+    _sendLog(`${label}: vloženo="${inserted.slice(0, 40)}" shoda=${inserted === text.trim()} btn=${!!btn} disabled=${btn ? !!(btn.disabled || btn.getAttribute('aria-disabled') === 'true') : '-'}`);
+    if (!inserted || !btn) return false;
+    btn.click();
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      if (!(input.textContent || '').trim()) { _sendLog(`${label}: odesláno (pole prázdné po ${(i + 1) * 100} ms)`); return true; }
+    }
+    _sendLog(`${label}: pole se nevyprázdnilo → API`);
+    input.textContent = '';
+    return false;
+  }
+
   // Zkusí iframe DOM, pak API přes background
   async function sendSmart(text) {
     // Quick path: if iframe already has content (from previous send/UC button),
@@ -410,9 +434,7 @@
             input.textContent = '';
             frame.contentWindow.document.execCommand('insertText', false, text);
             await new Promise((r) => setTimeout(r, 30));
-            const btn = findSendBtn(doc);
-            if (btn) btn.click();
-            return;
+            if (await sentViaDom(doc, input, text, 'iframe')) return;
           }
         }
       } catch {}
@@ -451,9 +473,8 @@
                 input.textContent = '';
                 loadedFrame.contentWindow.document.execCommand('insertText', false, text);
                 await new Promise((r) => setTimeout(r, 30));
-                const btn = findSendBtn(doc);
-                if (btn) btn.click();
-                return;
+                if (await sentViaDom(doc, input, text, 'iframe-po-otevření')) return;
+                break;
               }
               await new Promise((r) => setTimeout(r, 200));
             }
@@ -465,12 +486,14 @@
     // Fallback: API přes background (may use wrong channel on multi-channel)
     const videoId = getVideoId();
     if (!videoId) throw new Error('Video ID nenalezeno');
+    _sendLog(`API: YT_SEND videoId=${videoId}`);
 
     const result = await chrome.runtime.sendMessage({
       type: 'YT_SEND',
       videoId,
       text
     });
+    _sendLog(`API: výsledek ok=${!!result?.ok}${result?.error ? ' chyba=' + result.error : ''}`);
 
     if (!result?.ok) {
       throw new Error(result?.error || 'YouTube odeslání selhalo');
