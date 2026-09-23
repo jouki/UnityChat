@@ -23,8 +23,8 @@ test('toPublicCommands: jen commandy s literálem, role a prodleva, bez reply a 
     { name: 'Reset Top D', trigger: '!topd reset', triggers: ['!topd reset', '!topdreset'], roles: ['moderator', 'broadcaster'], cooldownSeconds: 0, source: 'zidolista', reply: 'tajné', announcement: null },
     { name: 'Top D', trigger: '!topd', triggers: ['!topd'], roles: ['viewer', 'sub', 'vip', 'moderator', 'broadcaster'], cooldownSeconds: 30, source: 'zidolista', reply: '', announcement: null },
   ]);
-  const withAnnc = toPublicCommands([{ name: 'B', triggers: [{ kind: 'prefix', value: '!b' }], announcement: { text: '**x**', textHtml: '<b>x</b>', media: { url: 'https://cdn/a.webm', kind: 'video', width: 200, loopDelayMs: 500 }, hideChatReplyInUnityChat: true } }]);
-  assert.deepEqual(withAnnc[0].announcement, { text: '**x**', textHtml: '<b>x</b>', media: { url: 'https://cdn/a.webm', kind: 'video', width: 200, height: undefined, loop: true, loopDelayMs: 500, stillUrl: null }, hideChatReplyInUnityChat: true });
+  const withAnnc = toPublicCommands([{ name: 'B', triggers: [{ kind: 'prefix', value: '!b' }], announcement: { text: '**x**', textHtml: '<b>x</b>', media: { url: 'https://cdn/a.webm', kind: 'video', width: 200, loopDelayMs: 500 }, hideChatReplyInUnityChat: true, hideBotReplies: ['StreamElements', 'bad login!', 'streamelements'] } }]);
+  assert.deepEqual(withAnnc[0].announcement, { text: '**x**', textHtml: '<b>x</b>', media: { url: 'https://cdn/a.webm', kind: 'video', width: 200, height: undefined, loop: true, loopDelayMs: 500, stillUrl: null }, hideChatReplyInUnityChat: true, hideBotReplies: ['streamelements'], hideInBrowserSource: false });
   assert.equal(toPublicCommands([{ name: 'C', triggers: [{ kind: 'prefix', value: '!c' }], announcement: { media: { url: 'http://x' } } }])[0].announcement, null, 'http médium = bez announcementu');
   assert.deepEqual(toPublicCommands(null), []);
 });

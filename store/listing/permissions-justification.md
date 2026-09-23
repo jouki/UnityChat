@@ -107,6 +107,18 @@ extension writes its in-memory diagnostic log to the Downloads folder so the
 user can attach it to a bug report. Nothing is downloaded without that click.
 ```
 
+### `identity`   ⚠️ NOVÉ ve v3.39.50 — bez vyplnění dashboard odmítne odeslat verzi ke kontrole
+
+```
+The extension lets the user sign in with their own Twitch, YouTube or Kick account so it can act on their behalf: send chat messages from the panel, and use features that the server must authorize, such as moderator-only chat reactions that every UnityChat user sees at once. chrome.identity.launchWebAuthFlow opens the platform's normal OAuth page in a browser window, so the password is typed on the platform's own site and the extension never sees it. Only the resulting session token for our own backend (api.jouki.cz) is stored locally on the user's machine; it is used to prove who the user is and can be removed by signing out. The flow starts only when the user clicks sign in or an action that needs it. We do not request the user's email address or any Google account data.
+```
+
+**Proč obecně:** text schválně nemluví jen o reakcích — `identity` použijeme i na
+přihlášení pro **psaní zpráv z addonu** (port webového loginu). Kdyby zdůvodnění
+mluvilo jen o reakcích, museli bychom ho při rozšíření měnit a znovu čekat na review.
+`launchWebAuthFlow` jen otevře OAuth okno platformy; `identity.email` ani Google účet
+nežádáme.
+
 ### Host permissions
 
 ⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze má 977 — původní delší

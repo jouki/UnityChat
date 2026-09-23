@@ -122,6 +122,14 @@ při výpadku Židolišty poslední známý stav (`stale: true`). 10 req/s/IP.
 
 `GET /raw-profiles/:id` → `{ ok, id, settings, updatedAt }` (404 `not_found`), `PUT /raw-profiles/:id` (tělo = nastavení `{ font, scale, width, height, bg, timestamps, reply, platforms }`, zod, strict) → upsert + SSE `raw-settings { id, settings, updatedAt }` na `/nicknames/stream`. Id `[A-Za-z0-9_-]{12,64}` je tajemství (kdo ho zná, čte i píše). Web: `/chat/settings/` ukládá, `/chat/raw/?p=<id>` (OBS) aplikuje živě bez refreshe. Tabulka `raw_profiles` (`sql/2026-09-22-raw-profiles.sql`).
 
+### Reakce v chatu (2026-09-22)
+
+Mod/broadcaster spustí na zprávě animaci, kterou přehrají všichni klienti. Detaily a předloha pro další animace: `docs/reactions/README.md`.
+
+- `POST /reactions` `{ kind: 'poop', platform, messageId, channel? }` (Bearer web session) → 202 `{ ok, reaction }`. Oprávnění: některá identita účtu je broadcaster kanálu (login = kanál) nebo má v logu zpráv za 24 h badge `moderator`/`broadcaster` (`rolesFromBadges`). Jinak 403 `not_mod`. Zámek per kanál (`durationMs + 1,5 s`) → 409 `busy`; rate limit per účet.
+- `GET /reactions/active?channel=` → běžící reakce nebo `null` (klient po načtení stránky doskočí do rozehrané animace podle `startedAt`).
+- SSE `reaction` na `/nicknames/stream`: `{ id, kind, channel, target{platform,messageId,username}, by{platform,login}, startedAt, durationMs }`.
+
 ### Chat bot Židolišty (2026-09-22)
 
 Spec: `docs/superpowers/specs/2026-09-22-zidolista-chat-bot-design.md`. Mapování workspace ↔ kanály bere registr Židolišty (`lib/zidolista.ts` ← `GET <ZIDOLISTA_API_BASE>/integrations/workspaces`, cache 60 s; env `ZIDOLISTA_WORKSPACES` jen fallback). Vše s `X-Api-Key` = `ZIDOLISTA_API_KEY`:

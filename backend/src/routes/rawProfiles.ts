@@ -23,7 +23,11 @@ export const RawSettings = z.object({
   bg: z.string().regex(/^(|transparent|#[0-9a-fA-F]{3,8}|[a-z]{3,20})$/).optional(),
   timestamps: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
   reply: z.union([z.literal(''), z.literal('oneline'), z.boolean()]).optional(),
+  // Zvuky (reakce se zvukem): '0' = vypnuté; chybí = zapnuté.
+  sound: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
   platforms: z.array(z.enum(['twitch', 'youtube', 'kick'])).max(3).optional(),
+  // Název instance (víc OBS chatů pro různé scény) — jen pro konfigurátor, raw stránka ho nepoužívá.
+  name: z.string().max(40).optional(),
 }).strict();
 export type RawSettingsT = z.infer<typeof RawSettings>;
 

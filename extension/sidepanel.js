@@ -27,6 +27,8 @@ const DEFAULTS = {
   layout: 'medium',
   showTimestamps: true,
   replyOneLine: false,
+  sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
+  reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
 };
 
@@ -996,6 +998,7 @@ class UnityChat {
     this.msgInput = document.getElementById('msg-input');
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
+    this._initEmotePicker();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
     // pushed to background (persisted to chrome.storage.session) so the log
@@ -1029,6 +1032,25 @@ class UnityChat {
     try {
       chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Boot', text: line }).catch(() => {});
     } catch {}
+  }
+
+  /** Tlačítko emotů v poli pro psaní → sdílený picker z core (emote-picker.js), stejný jako na webu. */
+  _initEmotePicker() {
+    const core = window.UC_CORE;
+    const btn = document.getElementById('btn-emotes');
+    if (!btn || !core?.createEmotePicker) return;
+    btn.innerHTML = core.EMOTE_BUTTON_SVG;
+    this._emotePicker = core.createEmotePicker({
+      host: document.getElementById('input-area'),
+      button: btn,
+      textarea: this.msgInput,
+      emotes: this.emotes,
+      recent: {
+        load: () => JSON.parse(localStorage.getItem('uc_recent_emotes') || '[]'),
+        save: (list) => localStorage.setItem('uc_recent_emotes', JSON.stringify(list)),
+      },
+      log: (tag, text) => this._ucLog(tag, text),
+    });
   }
 
   async _init() {
@@ -1271,6 +1293,25 @@ class UnityChat {
         this.config.replyOneLine = rolBox.checked;
         this._saveConfig();
         this._applyReplyOneLine();
+      });
+    }
+    // Po animaci reakce zpět na konec chatu
+    const rsbBox = $('chk-reaction-scrollback');
+    if (rsbBox) {
+      rsbBox.checked = this.config.reactionScrollBack !== false;
+      rsbBox.addEventListener('change', () => {
+        this.config.reactionScrollBack = rsbBox.checked;
+        this._saveConfig();
+      });
+    }
+    // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
+    const sndBox = $('chk-sound');
+    if (sndBox) {
+      sndBox.checked = this.config.sound !== false;
+      sndBox.addEventListener('change', () => {
+        this.config.sound = sndBox.checked;
+        this._saveConfig();
+        this._reaction?.setMuted?.(!sndBox.checked);
       });
     }
     // Auto-resize textarea + auto @username suggest
@@ -3345,7 +3386,7 @@ class UnityChat {
         const a = c.announcement;
         const hide = !!(a && a.hideChatReplyInUnityChat);
         if (a) {
-          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, hideBotReplies: a.hideBotReplies || [], triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
         } else {
           this._sys(`!${c.name}: command nemá UnityChat Announcement`);
         }
@@ -3739,6 +3780,13 @@ class UnityChat {
       this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
       this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
     }
+    // Odpověď cizího bota (StreamElements…): už vykreslenou skrýt, jinak počkat na ni.
+    if (a.hideBotReplies.length) {
+      const now = Date.now();
+      this._pendingBotReplies = (this._pendingBotReplies || []).filter((p) => p.until > now);
+      for (const login of core.hideRecentBotReplies(this.chatEl, a.hideBotReplies, now)) this._pendingBotReplies.push({ login, until: now + core.ANNC_BOT_AHEAD_MS });
+      this._ucLog('Annc', `boti ${a.hideBotReplies.join(',')} → čeká ${this._pendingBotReplies.map((p) => p.login).join(',') || 'nic (už skryto)'}`);
+    }
     const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const d = new Date(a.at);
     const timeText = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
@@ -3792,7 +3840,12 @@ class UnityChat {
       this._reaction = core.playPoopReaction({
         hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
         offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
-        onEnd: () => { this._activeReaction = null; this._updatePoopButtons(); },
+        muted: this.config.sound === false,
+        onEnd: () => {
+          this._activeReaction = null; this._updatePoopButtons();
+          // Nastavení „Po animaci se vrátit na konec chatu" (výchozí zapnuto).
+          if (this.config.reactionScrollBack !== false) { this._jumpToLatest(); this._ucLog('Reaction', 'konec → zpět na konec chatu'); }
+        },
       });
     }, target ? 350 : 0);
     this._ucLog('Reaction', `${ev.kind} by ${ev.by?.login || '?'} → ${ev.target.platform}:${ev.target.messageId} target=${!!target} offset=${offset}`);
@@ -5754,6 +5807,10 @@ class UnityChat {
     // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
     if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
       this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
+      return;
+    }
+    if (!msg._optimistic && !this._bootLoading && !msg.historical && this._pendingBotReplies?.length && window.UC_CORE.takeBotReply(this._pendingBotReplies, msg.username)) {
+      this._ucLog('Annc', `skryta odpověď bota ${msg.username}: „${String(msg.message || '').slice(0, 40)}"`);
       return;
     }
     if (textEmpty && !isSystem) {

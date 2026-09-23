@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { broadcast } from '../sse/bus.js';
-import { keyMatches } from './commands.js';
+import { keyMatches, botLogins } from './commands.js';
 import { getWorkspaces } from '../lib/zidolista.js';
 
 /**
@@ -31,6 +31,10 @@ export interface AnnouncementPayload {
   textHtml?: string;
   media?: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; loopDelayMs?: number; stillUrl?: string | null } | null;
   chatReply?: { text: string; hideInUnityChat: boolean } | null;
+  /** Loginy botů (StreamElements…), jejichž odpověď na command klient uživatelům UnityChatu skryje. */
+  hideBotReplies: string[];
+  /** true = browser source pro OBS (/chat/raw/) announcement nevykreslí. */
+  hideInBrowserSource: boolean;
   triggeredBy?: { user: string; platform?: string } | null;
   at: string;
 }
@@ -67,7 +71,7 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
   const chatReply = cr && String(cr.text ?? '').trim() ? { text: String(cr.text).slice(0, 500), hideInUnityChat: !!cr.hideInUnityChat } : null;
   const at = typeof b.at === 'string' && Number.isFinite(Date.parse(b.at)) ? b.at : new Date().toISOString();
   const base = {
-    id, workspace, text, textHtml, media, at, chatReply,
+    id, workspace, text, textHtml, media, at, chatReply, hideBotReplies: botLogins(b.hideBotReplies), hideInBrowserSource: !!b.hideInBrowserSource,
     command: String(b.command ?? '').slice(0, 80),
     triggeredBy: by && by.user ? { user: String(by.user).slice(0, 60), platform: String(by.platform ?? '').slice(0, 20) } : null,
   };
@@ -83,7 +87,7 @@ export default async function announcementRoutes(app: FastifyInstance) {
     const v = validateAnnouncement(req.body, workspaces);
     if (!v.ok) return reply.code(v.error === 'unknown_workspace' ? 404 : 400).send({ ok: false, error: v.error });
     for (const value of v.values) broadcast('announcement', value);
-    app.log.info({ id: v.values[0].id, channels: v.values.map((x) => x.channel), command: v.values[0].command, media: !!v.values[0].media, hideReply: !!v.values[0].chatReply?.hideInUnityChat }, 'announcement: broadcast');
+    app.log.info({ id: v.values[0].id, channels: v.values.map((x) => x.channel), command: v.values[0].command, media: !!v.values[0].media, hideReply: !!v.values[0].chatReply?.hideInUnityChat, hideBots: v.values[0].hideBotReplies, hideObs: v.values[0].hideInBrowserSource }, 'announcement: broadcast');
     return reply.code(202).send({ ok: true, channels: v.values.map((x) => x.channel) });
   });
 }

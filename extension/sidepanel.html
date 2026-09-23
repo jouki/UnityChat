@@ -79,6 +79,18 @@
         Odpovědi zobrazit na jeden řádek
       </label>
     </div>
+    <div class="setting-row">
+      <label class="platform-check" for="chk-sound">
+        <input type="checkbox" id="chk-sound" checked>
+        Přehrávat zvuky
+      </label>
+    </div>
+    <div class="setting-row">
+      <label class="platform-check" for="chk-reaction-scrollback">
+        <input type="checkbox" id="chk-reaction-scrollback" checked>
+        Po animaci se vrátit na konec chatu
+      </label>
+    </div>
     <div class="setting-row dev-mode-row">
       <label class="platform-check">
         <input type="checkbox" id="chk-devmode">
@@ -164,7 +176,10 @@
   <!-- Input pro odesílání zpráv -->
   <div id="input-area">
     <span id="active-badge" class="badge">--</span>
-    <textarea id="msg-input" rows="1" placeholder="Otevři stream pro odesílání..." autocomplete="off" spellcheck="false" disabled></textarea>
+    <div class="msg-input-wrap">
+      <textarea id="msg-input" rows="1" placeholder="Otevři stream pro odesílání..." autocomplete="off" spellcheck="false" disabled></textarea>
+      <button id="btn-emotes" type="button" class="emote-btn" title="Emoty"></button>
+    </div>
     <button id="btn-send" disabled>&#10148;</button>
   </div>
 

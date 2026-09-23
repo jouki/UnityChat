@@ -85,7 +85,7 @@ export function reactionBusy(ev, now = Date.now()) {
  * seznam, targetEl = element cílové zprávy (nebo null → video u spodního okraje).
  * Vrací { stop, endsAt }. Volající před tím zprávu odscrolluje do záběru.
  */
-export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs = 0, reducedMotion = false, onEnd }) {
+export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs = 0, reducedMotion = false, muted = false, onEnd }) {
   const doc = hostEl.ownerDocument;
   const timers = [];
   const later = (fn, ms) => { const t = setTimeout(fn, Math.max(0, ms)); timers.push(t); return t; };
@@ -99,7 +99,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
   video.className = 'uc-poop-video';
   // Video má zvuk. Prohlížeč autoplay se zvukem povolí jen tam, kde s ním uživatel
   // interagoval (v OBS je povolený vždy) — jinak se přehraje potichu, viz play() níž.
-  video.muted = false; video.volume = 0.85;
+  // `muted` = uživatel má zvuky vypnuté (nastavení addonu / webu / OBS profilu).
+  video.muted = !!muted; video.volume = 0.85;
   video.playsInline = true; video.preload = 'auto';
   video.setAttribute('aria-hidden', 'true');
   video.src = videoUrl;
@@ -184,6 +185,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
 
   return {
     endsAt: start + POOP_TOTAL_MS,
+    /** Přepnutí zvuků v nastavení během běžící reakce. */
+    setMuted(m) { video.muted = !!m; },
     stop() { finished = true; for (const t of timers) clearTimeout(t); overlay.remove(); chatEl?.removeEventListener('scroll', onScroll); ro?.disconnect(); brownEnd(); },
   };
 }

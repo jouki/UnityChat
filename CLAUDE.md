@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.39.47
+# UnityChat - Chrome Extension + Backend v3.40.0
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,16 +369,22 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.39.47** (dev; master = 3.39.14)
+- Aktuální: **v3.40.0** (dev i master; release 2026-09-23)
 
 ## Chrome Web Store (v3.38.58+)
 
 > **✅ PUBLIKOVÁNO 18. 9. 2026** — review prošla za 2 dny. Položka je veřejná
 > a vyhledatelná: https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp
 > Item ID `picaeipbmkgcippknkpkbnbgjlkblbnp`, jazyk CS. Publikovaná 3.38.62;
-> **3.39.14 čeká na review od 20. 9. 2026** (PR #22). Původně odeslaná 3.39.3
-> (PR #21) byla zrušena přes `cancelSubmission`, protože store při probíhající
-> review odmítá jakýkoli upload (`NOT_UPDATEABLE`).
+> **3.39.50 odeslána ke kontrole 2026-09-23** (PR #23).
+>
+> ⚠️ **Nové oprávnění = dashboard napřed.** Automatický `cws-release.yml` nahrál
+> 3.39.50 v pořádku, ale `:publish` skončil `HTTP 400 INVALID_ITEM_METADATA`,
+> protože verze přidala permission `identity` bez vyplněného zdůvodnění
+> v Developer Dashboardu (Privacy practices). Po doplnění textu z
+> `store/listing/permissions-justification.md` (sekce `identity`) a ručním
+> spuštění `gh workflow run cws-release.yml --ref master -f force=true`
+> odeslání prošlo. **Při každém dalším novém oprávnění stejný postup.**
 >
 > **Když čeká starší verze na review a chceš poslat novější:**
 > `gh workflow run cws-release.yml --ref master -f cancel_pending=true -f force=true`
@@ -824,6 +830,9 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.40.0** - **Release** (2026-09-23): shrnuje 3.39.51–57 — nastavení „Přehrávat zvuky" a „Po animaci se vrátit na konec chatu", announcement skryje odpověď StreamElements (`hideBotReplies`) + volba „neukazovat v OBS" (`hideInBrowserSource`), tlačítko emotů v poli pro psaní se sdíleným výběrem a hledáním (`core/emote-picker.js`).
+- **v3.39.51** - Nastavení **„Přehrávat zvuky"** (addon ⚙ `config.sound`, web ⚙, OBS profil `sound` v `/raw-profiles`): core `playPoopReaction({ muted })` + `setMuted()` pro přepnutí během reakce. Web: posuvník šířky v konfigurátoru OBS už neujíždí (sloupec náhledu `minmax(0, 1fr)`, formulář pevných 380 px).
+- **v3.39.48–50** - Reakce: hnědne i **text zprávy** (světlejší `#b5835a` než jméno, ať zůstane čitelný); v raw režimu logo platformy dostalo velikost přes `--uc-pi` (má `font-size: 0`, takže `em` padalo na nulu a ikona mizela); **video se zvukem** (`peepo-chat-alpha-v2-wet-sound.webm`, VP9+Opus, `volume 0.85`, při odmítnutém autoplay fallback potichu); zarovnání videa **doleva** místo na střed. **Release do master (PR #23) + odesláno do CWS.**
 - **v3.39.40–47** - Reakce „Peepo poop" doladěná podle usera: tlačítko 💩 vlevo v hover akcích a vykreslené **vždy** (addon po IRC echu recykluje element, podmíněné vykreslení znamenalo chybějící tlačítko u vlastních zpráv — id se čte až při kliknutí z `dataset.msgId`); zarovnání na **střed prvního řádku** (kotva `.un`) + `offsetLines 1.7`; velikost podle **výšky řádku** (strop `5.5 → 8` řádků podle šířky chatu, `narrowPx 550`/`widePx 850`), větší video se sází níž (`growOffsetRatio 0.45`); reflektor jako měkká maska místo ostrého `box-shadow`; cíl se nezvýrazňuje (`scrollToMessage(..., { flash: false })`); zatmavení i když cílová zpráva není v DOM. **Podrobná příručka pro další animace: `docs/reactions/README.md`.**
 - **v3.39.39** - **Reakce „Peepo poop"** (`core/reaction.js`, backend `POST /reactions` + `GET /reactions/active` + SSE `reaction`, web i addon): mod/broadcaster klikne 💩 v hover akcích zprávy → všem se chat zatmí (1,2 s), reflektor na zprávu, video 15 s (5:1 na šířku chatu, spodní hrana = spodek zprávy; cílová zpráva se odscrolluje do záběru, bez ní video dole), v 7,2 s jméno + logo platformy u cílové zprávy zhnědnou (15 s natvrdo, 15 s přechod zpět). Tlačítko během reakce zmizí všem (body `uc-poop-busy`; zámek per kanál na serveru → 409). Backend ověřuje moda z badge v serverovém logu zpráv (24 h) nebo login = kanál. Addon se k backendu přihlašuje přes `chrome.identity.launchWebAuthFlow` (nová permission `identity`, returnTo `https://<id>.chromiumapp.org` povolený v `isAllowedReturnTo`), token v `chrome.storage.local.uc_session`. Video `robdiesalot.com/chat/media/peepo-chat-alpha-v2.webm` (1440×288, 15 s, alfa).
 - **v3.39.38** - `/uc command <!spouštěč>` = lokální náhled reakce commandu Židolišty (announcement + odpověď bota jako zpráva „Židolišta", skrytí podle nastavení), nic se neodesílá. Backend `/commands` propouští `reply` a `announcement` (Židolišta je posílá v integračním seznamu).
