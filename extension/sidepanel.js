@@ -5711,9 +5711,11 @@ class UnityChat {
   }
 
   async _showEmotePreview(img, pinned) {
-    const url = img.src;
-    const name = img.alt || img.title || '';
-    const meta = this.emotes._emoteSourceFromUrl(url);
+    // Obsah karty ze sdíleného core (emote-preview.js, stejné jako web): u zero-width
+    // stacku všechny vrstvy přes sebe + seznam všech emotů; detaily = emote pod myší.
+    const core = window.UC_CORE;
+    const layers = core.previewLayers(img, this.emotes);
+    const active = layers.find((l) => l.active) || layers[0];
     let card = document.getElementById('emote-preview');
     if (!card) {
       card = document.createElement('div');
@@ -5724,69 +5726,23 @@ class UnityChat {
     card.classList.remove('hidden');
     this._emotePreviewPinned = !!pinned;
     card.classList.toggle('pinned', !!pinned);
-
-    const sourceLabel = meta?.source || 'Emote';
-    const sourceClass = sourceLabel.toLowerCase().replace(/[^a-z]/g, '');
-    const hires = meta?.hires || url;
-    const ehName = this.emotes._eh(name);
-    const eaHires = this.emotes._ea(hires);
-
-    card.innerHTML = `
-      <div class="ep-img-wrap">
-        <img class="ep-img" src="${eaHires}" alt="">
-      </div>
-      <div class="ep-name">
-        <span class="ep-name-text">${ehName}</span>
-        <span class="ep-source ep-src-${sourceClass}">${sourceLabel}</span>
-      </div>
-      <div class="ep-detail">${pinned
-        ? '<span class="ep-loading">Načítám detaily…</span>'
-        : '<span class="ep-hint">Klikni pro detaily</span>'}</div>
-    `;
+    card.innerHTML = core.previewCardHtml(layers, { pinned });
 
     // Position above the emote (keeps card inside the side panel even
     // when emote is at the very bottom). Falls back below if no room above.
     this._positionEmotePreview(card, img);
 
-    // Pinned mode: lazy-fetch source details and re-render the .ep-detail
-    // block with owner + date + external link.
-    if (pinned && meta?.id) {
+    // Pinned mode: lazy-fetch source details and re-render the .ep-detail block.
+    if (pinned && active.meta?.id) {
       try {
-        const d = await this.emotes.fetchEmoteDetails(meta.source, meta.id, name);
+        const d = await this.emotes.fetchEmoteDetails(active.meta.source, active.meta.id, active.name);
         // Card may have been dismissed while we awaited
         if (!this._emotePreviewPinned || card.classList.contains('hidden')) return;
         const detail = card.querySelector('.ep-detail');
-        if (!d || !detail) {
-          if (detail) detail.innerHTML = '<span class="ep-hint">Žádné další detaily</span>';
-          return;
-        }
-        const ehAvatar = (url) =>
-          url
-            ? `<img class="ep-avatar" src="${this.emotes._ea(url)}" alt="">`
-            : '<span class="ep-avatar ep-avatar-blank"></span>';
-        const rows = [];
-        if (d.owner) {
-          rows.push(`<div class="ep-row"><span class="ep-label">Made by</span>${ehAvatar(d.ownerAvatar)}<span class="ep-owner">${this.emotes._eh(d.owner)}</span></div>`);
-        }
-        if (d.addedBy) {
-          rows.push(`<div class="ep-row"><span class="ep-label">Added by</span>${ehAvatar(d.addedByAvatar)}<span class="ep-owner">${this.emotes._eh(d.addedBy)}</span></div>`);
-        }
-        if (d.addedAt instanceof Date && !isNaN(d.addedAt)) {
-          const fmt = d.addedAt.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
-          rows.push(`<div class="ep-row"><span class="ep-label">Added on</span><span>${fmt}</span></div>`);
-        }
-        if (d.externalUrl) {
-          rows.push(`<a class="ep-extlink" href="${this.emotes._ea(d.externalUrl)}" target="_blank" rel="noopener">Otevřít na ${sourceLabel} ↗</a>`);
-        }
-        detail.innerHTML = rows.length ? rows.join('') : '<span class="ep-hint">Žádné další detaily</span>';
+        if (detail) detail.innerHTML = core.previewDetailHtml(d, active.source);
         // Layout may have grown — reposition.
         this._positionEmotePreview(card, img);
       } catch {}
-    }
-
-    // Also include the source link in the name row when known
-    if (!pinned) {
-      // Name row already rendered, leave compact in hover mode
     }
   }
 
