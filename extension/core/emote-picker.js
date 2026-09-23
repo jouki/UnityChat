@@ -90,8 +90,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log 
     if (q) {
       const hits = searchEmotes(emotes, q);
       body.innerHTML = hits.length
-        ? section(`Výsledky pro „${q}"`, hits, (n) => emotes.getAnyUrl(n))
-        : `<div class="uc-ep-empty">Žádný emote neodpovídá „${esc(q)}".</div>`;
+        ? section(`Výsledky pro „${q}“`, hits, (n) => emotes.getAnyUrl(n))
+        : `<div class="uc-ep-empty">Žádný emote neodpovídá „${esc(q)}“.</div>`;
       return;
     }
     const recentNames = recentList.filter((n) => emotes.getAnyUrl(n));
