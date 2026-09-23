@@ -15,6 +15,8 @@ import {
   needsRefresh, type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
+import { ucSends, markUc } from '../lib/ucSends.js';
+import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
 
@@ -187,6 +189,11 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
         if (e instanceof SendError && e.retryable) { await refresh(); res = await doSend(); } else throw e;
       }
       req.log.info({ accountId, platform, channel, id: res.id, len: text.length }, 'web chat send');
+      // Command (bez markeru): ingest ho podle hlášení označí jako UnityChat (zlaté logo, lib/ucSends.ts).
+      if (text.startsWith('!')) {
+        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text });
+        if (hit) markUc(hit, req.log, { late: true });
+      }
       return { ok: true, id: res.id, text };
     } catch (e) {
       const err = e as SendError;

@@ -111,6 +111,10 @@ class NicknameManager {
       this._eventSource.addEventListener('commands-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
       });
+      // Zpráva z UnityChatu bez markeru (command) — server ji poznal (backend lib/ucSends.ts).
+      this._eventSource.addEventListener('uc-mark', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1120,6 +1124,7 @@ class UnityChat {
     // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
     { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
+    this.nicknames.onUcMark = (d) => this._applyUcMark(d);   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
@@ -3308,11 +3313,44 @@ class UnityChat {
         const reason = resp?.error || 'nepodařilo se odeslat';
         this._markSendFailed(optId, reason);
         this._sys(`Chyba: ${reason}`);
+      } else if (text.startsWith('!')) {
+        // Command jde bez markeru (rozbil by boty) → serveru nahlásit, že je z UnityChatu;
+        // ingest zprávu označí a všem pošle SSE `uc-mark` (zlaté logo), backend lib/ucSends.ts.
+        this._reportUcSent(platform, username, markedText);
       }
     } catch (err) {
       this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
     }
+  }
+
+  /** POST /chat/uc-sent — command odeslaný z UnityChatu (bez markeru) dostane u všech zlaté logo. */
+  _reportUcSent(platform, username, text) {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel || !username || username === 'me') return;
+    fetch(`${UC_API}/chat/uc-sent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, channel, username, text }),
+      signal: AbortSignal.timeout(8000),
+    }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+  }
+
+  /** SSE `uc-mark`: server poznal zprávu z UnityChatu bez markeru → zlaté logo (i u vykreslené). */
+  _applyUcMark({ platform, id }) {
+    if (!id) return;
+    // Zapamatovat (zpráva z IRC může dorazit až po uc-mark); strop, ať množina neroste.
+    if (!this._ucMarkedIds) this._ucMarkedIds = new Set();
+    this._ucMarkedIds.add(String(id));
+    if (this._ucMarkedIds.size > 500) this._ucMarkedIds.delete(this._ucMarkedIds.values().next().value);
+    const cached = this.store.get(id);
+    if (cached) cached._uc = true;
+    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
+    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    for (const el of els) {
+      const pi = el.querySelector('.pi');
+      if (pi && (!platform || el.dataset.platform === platform || !el.dataset.platform)) { pi.classList.add('uc'); pi.setAttribute('data-tooltip', 'UnityChat User'); }
+    }
+    this._ucLog('UcSent', `uc-mark ${platform}:${id} → ${els.length} el`);
   }
 
   // ---- Providers ----
@@ -6055,7 +6093,8 @@ class UnityChat {
 
     // Detekce UnityChat markeru → oranžový platform badge
     // Flag _uc se cachuje aby přežil reload
-    let isUC = !!msg._uc;
+    // _uc = marker (lokálně) nebo příznak serveru `uc` (command z UnityChatu bez markeru, /chat/history).
+    let isUC = !!msg._uc || !!msg.uc || !!this._ucMarkedIds?.has(msg.id);
     if (!isUC && msg.message?.includes(UC_MARKER)) {
       isUC = true;
       msg.message = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
@@ -6693,6 +6732,8 @@ class UnityChat {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
+    // uc-mark mohl přijít dřív než echo (server byl rychlejší) → teď, když má element skutečné id.
+    if (el && this._ucMarkedIds?.has(realMsg.id)) this._applyUcMark({ platform: realMsg.platform, id: realMsg.id });
 
     // Update username color — prefer UnityChat custom color over IRC color
     if (el) {
