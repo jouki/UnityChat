@@ -2639,16 +2639,16 @@ class UnityChat {
   }
 
   async _injectContentScript(tab) {
+    // Soubory z manifestu (content_scripts), stejně jako background při instalaci —
+    // „*://*.twitch.tv/*" → host „twitch.tv" v URL záložky.
     const url = tab.url || '';
-    let file, allFrames = false;
-    if (url.includes('twitch.tv')) file = 'content/twitch.js';
-    else if (url.includes('youtube.com')) { file = 'content/youtube.js'; allFrames = true; }
-    else if (url.includes('kick.com')) file = 'content/kick.js';
-    if (!file) return;
+    const cs = (chrome.runtime.getManifest().content_scripts || []).find((c) =>
+      (c.matches || []).some((m) => url.includes(m.replace(/^\*:\/\/\*\./, '').replace(/\/\*$/, ''))));
+    if (!cs) return;
     try {
       await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames },
-        files: [file]
+        target: { tabId: tab.id, allFrames: !!cs.all_frames },
+        files: cs.js
       });
     } catch {}
   }

@@ -21,39 +21,12 @@
 
   const UC_BTN_ID = 'uc-open-panel-btn';
 
+  // Tlačítko ze sdíleného content/uc-header-button.js (stejné jako na Kicku); Twitch navíc
+  // po otevření UnityChatu schová vlastní chat (DOM zůstává živý pro mirror funkcí).
   function buildUcButton() {
-    const btn = document.createElement('button');
-    btn.id = UC_BTN_ID;
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Otevřít UnityChat');
-    btn.title = 'Otevřít UnityChat';
-    Object.assign(btn.style, {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: '30px',
-      height: '30px',
-      minWidth: '30px',
-      padding: '0',
-      margin: '0 2px',
-      background: 'transparent',
-      border: 'none',
-      borderRadius: '4px',
-      cursor: 'pointer',
-      flexShrink: '0',
-      transition: 'background 0.15s ease'
-    });
-    const img = document.createElement('img');
-    img.src = chrome.runtime.getURL('icons/icon48.png');
-    img.alt = 'UC';
-    Object.assign(img.style, { width: '20px', height: '20px', display: 'block', pointerEvents: 'none' });
-    btn.appendChild(img);
-    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(255,140,0,0.15)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      chrome.runtime.sendMessage({ type: 'TOGGLE_SIDE_PANEL' }, (resp) => {
+    return window.__ucHeaderButton({
+      id: UC_BTN_ID,
+      onResult: (resp) => {
         if (!resp) return;
         if (resp.action === 'opened') {
           // Opening UC → hide vanilla chat visually but keep it mounted.
@@ -65,9 +38,8 @@
         } else if (resp.action === 'closed') {
           hideTwitchChatVisually(false);
         }
-      });
+      },
     });
-    return btn;
   }
 
   // Hide the Twitch right-column chat visually without collapsing — we

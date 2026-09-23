@@ -107,20 +107,16 @@ function isPlatformTab(tab) {
 
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
+// Seznam souborů bere z manifestu (content_scripts) — jediný zdroj pravdy, včetně sdíleného
+// content/uc-header-button.js, který musí jít před skript platformy.
 chrome.runtime.onInstalled.addListener(async () => {
-  const targets = [
-    { matches: '*://*.twitch.tv/*', file: 'content/twitch.js' },
-    { matches: '*://*.youtube.com/*', file: 'content/youtube.js', allFrames: true },
-    { matches: '*://*.kick.com/*', file: 'content/kick.js' }
-  ];
-
-  for (const t of targets) {
+  for (const cs of chrome.runtime.getManifest().content_scripts || []) {
     try {
-      const tabs = await chrome.tabs.query({ url: t.matches });
+      const tabs = await chrome.tabs.query({ url: cs.matches });
       for (const tab of tabs) {
         chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: !!t.allFrames },
-          files: [t.file]
+          target: { tabId: tab.id, allFrames: !!cs.all_frames },
+          files: cs.js
         }).catch(() => {});
       }
     } catch {}
@@ -408,12 +404,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const cid = ch?.chatroom?.id;
           if (!cid) return { ok: false, error: 'Chatroom nenalezen' };
           const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||'');
+          // Odpověď: původní zprávu vzít přímo ze seznamu Kicku (přesný obsah vč. UC markeru
+          // + autor). Z panelu přišel text bez markeru → Kick vracel ORIGINAL_MESSAGE_NOT_FOUND
+          // (2026-09-23; Kick tu zprávu v /messages vedl i s markerem).
+          let orig = null;
+          if (replyMeta) {
+            try {
+              const lr = await fetch('/api/v2/channels/' + ch.id + '/messages');
+              const lj = await lr.json();
+              const list = lj?.data?.messages || [];
+              orig = list.find((m) => m.id === replyMeta.messageId) || null;
+            } catch {}
+          }
           const body = replyMeta
             ? {
                 content: text,
                 type: 'reply',
                 metadata: {
-                  original_message: { id: replyMeta.messageId, content: replyMeta.message || '' }
+                  original_message: { id: replyMeta.messageId, content: orig ? orig.content : (replyMeta.message || '') },
+                  ...(orig?.sender ? { original_sender: { id: orig.sender.id, username: orig.sender.username } } : {}),
                 }
               }
             : { content: text, type: 'message' };
@@ -422,10 +431,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf, ...(token ? { Authorization: 'Bearer ' + token } : {}) },
             body: JSON.stringify(body)
           });
-          if (r.ok) return { ok: true };
+          if (r.ok) return { ok: true, replyOrig: replyMeta ? (orig ? 'nalezen' : 'nenalezen v /messages') : undefined };
           if (r.status === 403) return { ok: false, error: 'Nejsi přihlášen na Kick' };
           const bodyText = await r.text().catch(() => '');
-          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}` };
+          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}${replyMeta ? ` (originál ${orig ? 'nalezen' : 'nenalezen v /messages'})` : ''}` };
         } catch (e) { return { ok: false, error: e.message }; }
       },
       args: [msg.slug, msg.text, msg.replyMeta || null, token]

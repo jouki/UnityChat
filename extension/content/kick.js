@@ -62,6 +62,20 @@
     }
   });
 
+  // Tlačítko UnityChatu v záhlaví chatu Kicku (jako na Twitchi): hned za tlačítko sbalení
+  // chatu (ikona CollapseRight) v #channel-chatroom. Kick při navigaci záhlaví přemountuje →
+  // kontrola každé 2 s. Struktura ověřená na uloženém zdroji kick.com (2026-09-23).
+  const UC_BTN_ID = 'uc-open-panel-btn';
+  function injectHeaderButton() {
+    if (document.getElementById(UC_BTN_ID) || !window.__ucHeaderButton) return;
+    const collapse = document.querySelector('#channel-chatroom svg[data-ds-icon="CollapseRight"]')?.closest('button');
+    const wrapper = collapse?.parentElement;
+    if (!wrapper?.parentElement) return;
+    wrapper.after(window.__ucHeaderButton({ id: UC_BTN_ID }));
+  }
+  setInterval(injectHeaderButton, 2000);
+  injectHeaderButton();
+
   function findInput() {
     const sels = [
       '#message-input',
