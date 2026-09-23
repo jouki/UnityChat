@@ -3386,6 +3386,8 @@ class UnityChat {
       const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
       try {
         await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
+        // Firefox soubor přepíše potichu (bez lišty stahování) → potvrdit v panelu.
+        this._sys('Log uložen do Stažených jako unitychat-debug.log.');
       } catch (e) { this._sys(`Uložení logu selhalo: ${e.message}`); }
       setTimeout(() => URL.revokeObjectURL(url), 120_000);
     } catch (e) {
