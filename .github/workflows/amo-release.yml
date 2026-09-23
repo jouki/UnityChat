@@ -1,0 +1,111 @@
+# Automatický release na addons.mozilla.org (Firefox) — obdoba cws-release.yml.
+#
+# Po pushi do master, který změní verzi v extension/manifest.json, sestaví Firefox
+# balíček (scripts/build-firefox.mjs — jeden kód s Chrome, jiný manifest) a přes
+# `web-ext sign --channel=listed` ho nahraje na AMO a odešle ke kontrole. Mozilla
+# pošle e-mail, až verzi zveřejní.
+#
+# Secrets (Settings → Secrets and variables → Actions), z AMO → Nástroje → Správa
+# klíčů API (https://addons.mozilla.org/developers/addon/api/key/):
+#   AMO_JWT_ISSUER   „JWT issuer" (user:…)
+#   AMO_JWT_SECRET   „JWT secret"
+# Bez nich se workflow jen přeskočí (nic nepadá).
+#
+# Repo je veřejné → jen push do master a ruční spuštění (bez pull_request triggeru).
+
+name: Firefox Add-ons release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'extension/**'
+      - 'scripts/build-firefox.mjs'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Odeslat i když se verze nezměnila (AMO stejně odmítne verzi, kterou už má)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # porovnání verze s předchozím commitem
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Zjistit verzi a jestli se změnila
+        id: version
+        shell: bash
+        env:
+          HAS_KEYS: ${{ secrets.AMO_JWT_ISSUER != '' && secrets.AMO_JWT_SECRET != '' }}
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Verze v manifestu: $VERSION"
+
+          if [ "$HAS_KEYS" != "true" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Chybí secrets AMO_JWT_ISSUER / AMO_JWT_SECRET — nahrání na AMO se přeskakuje."
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Ruční spuštění s force — pokračuju."
+            exit 0
+          fi
+
+          PREV=$(git show HEAD~1:extension/manifest.json 2>/dev/null | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version}catch(e){''}" || echo "")
+          echo "Předchozí verze: ${PREV:-—}"
+          if [ "$VERSION" = "$PREV" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Verze se nezměnila — upload se přeskakuje."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sestavit Firefox balíček
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          node scripts/build-firefox.mjs
+          node scripts/test-firefox-manifest.mjs
+
+      # --channel=listed = nová verze existujícího veřejného doplňku (unitychat@jouki.cz).
+      # --approval-timeout 0 = neodkládat workflow čekáním na kontrolu Mozilly.
+      - name: Nahrát na AMO a odeslat ke kontrole
+        if: steps.version.outputs.changed == 'true'
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx --yes web-ext@8 sign \
+            --source-dir store/build/firefox/unpacked \
+            --artifacts-dir store/build/firefox/signed \
+            --channel listed \
+            --approval-timeout 0
+
+      - name: Shrnutí
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Firefox Add-ons (AMO)"
+            echo ""
+            if [ "${{ steps.version.outputs.changed }}" = "true" ]; then
+              echo "Verze **${{ steps.version.outputs.version }}** nahrána na AMO a odeslána ke kontrole."
+              echo ""
+              echo "Stav: https://addons.mozilla.org/developers/addon/unitychat/versions"
+            else
+              echo "Nahrání přeskočeno (verze **${{ steps.version.outputs.version }}** se nezměnila, nebo chybí klíče AMO)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
