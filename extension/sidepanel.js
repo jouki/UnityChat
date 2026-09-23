@@ -27,6 +27,7 @@ const DEFAULTS = {
   layout: 'medium',
   showTimestamps: true,
   replyOneLine: false,
+  sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
 };
 
@@ -1271,6 +1272,16 @@ class UnityChat {
         this.config.replyOneLine = rolBox.checked;
         this._saveConfig();
         this._applyReplyOneLine();
+      });
+    }
+    // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
+    const sndBox = $('chk-sound');
+    if (sndBox) {
+      sndBox.checked = this.config.sound !== false;
+      sndBox.addEventListener('change', () => {
+        this.config.sound = sndBox.checked;
+        this._saveConfig();
+        this._reaction?.setMuted?.(!sndBox.checked);
       });
     }
     // Auto-resize textarea + auto @username suggest
@@ -3792,6 +3803,7 @@ class UnityChat {
       this._reaction = core.playPoopReaction({
         hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
         offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        muted: this.config.sound === false,
         onEnd: () => { this._activeReaction = null; this._updatePoopButtons(); },
       });
     }, target ? 350 : 0);
