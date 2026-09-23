@@ -39,8 +39,10 @@ export function toFirefoxManifest(m) {
 
 function main() {
   const manifest = JSON.parse(fs.readFileSync(path.join(src, 'manifest.json'), 'utf8'));
-  fs.rmSync(outDir, { recursive: true, force: true });
+  // Mazat jen vlastní výstupy, ne celou složku (tu může držet otevřenou web-ext / terminál).
   fs.mkdirSync(outDir, { recursive: true });
+  fs.rmSync(unpacked, { recursive: true, force: true });
+  for (const f of fs.readdirSync(outDir)) if (/\.(xpi|zip)$/.test(f)) fs.rmSync(path.join(outDir, f), { force: true });
   fs.cpSync(src, unpacked, { recursive: true });
   const ff = toFirefoxManifest(manifest);
   fs.writeFileSync(path.join(unpacked, 'manifest.json'), JSON.stringify(ff, null, 2) + '\n');
