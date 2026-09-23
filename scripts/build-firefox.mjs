@@ -65,11 +65,23 @@ function main() {
   for (const f of scripts) execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });
 
   // Zip (.xpi) přes PowerShell Compress-Archive (Windows), jinde přes `zip`.
+  // Na Windows NE Compress-Archive: PowerShell 5.1 píše cesty se zpětnými lomítky
+  // (audio\x.mp3) → AMO: „Invalid file name in archive" (2026-09-23). .NET ZipArchive
+  // s názvy položek přes „/"; jinde `zip`.
   const xpi = path.join(outDir, `unitychat-firefox-v${manifest.version}.xpi`);
-  const zipTmp = xpi.replace(/\.xpi$/, '.zip');
   if (process.platform === 'win32') {
-    execFileSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path '${unpacked}\\*' -DestinationPath '${zipTmp}' -Force`], { stdio: 'pipe' });
-    fs.renameSync(zipTmp, xpi);
+    const q = (p) => p.replace(/'/g, "''");
+    const ps = [
+      'Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem',
+      `$src = '${q(unpacked)}'`,
+      `$zip = [System.IO.Compression.ZipFile]::Open('${q(xpi)}', 'Create')`,
+      'Get-ChildItem -LiteralPath $src -Recurse -File | ForEach-Object {',
+      '  $name = $_.FullName.Substring($src.Length + 1).Replace([char]92, [char]47)',
+      '  [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal)',
+      '}',
+      '$zip.Dispose()',
+    ].join('\n');
+    execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'pipe' });
   } else {
     execFileSync('zip', ['-qr', xpi, '.'], { cwd: unpacked, stdio: 'pipe' });
   }
