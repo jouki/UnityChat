@@ -162,17 +162,27 @@ function ucLog(tag, ...args) {
 async function dumpLogs() {
   await _hydrateLogs();
   const text = _logs.length ? _logs.join('\n') : '(log empty — service worker may have just been restarted; reproduce the issue then re-dump)';
-  const url = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
+  // Firefox (background stránka) odmítá stahovat data: URL („Access denied for URL data:…",
+  // ověřeno 2026-09-23) → blob: URL. Chrome service worker URL.createObjectURL nemá → data:.
+  const url = typeof URL.createObjectURL === 'function'
+    ? URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+    : 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
   try {
     await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
-  } catch (e) { console.error('Log dump failed:', e); }
+    return { ok: true };
+  } catch (e) {
+    console.error('Log dump failed:', e);
+    return { ok: false, error: e.message };
+  } finally {
+    if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 }
 
 // ---- Message handlers ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump
   if (msg.type === 'DUMP_LOGS') {
-    dumpLogs().then(() => sendResponse({ ok: true }));
+    dumpLogs().then((r) => sendResponse(r || { ok: true }));
     return true;
   }
   // Log relay (z side panelu)
@@ -297,6 +307,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'PIN_MESSAGE') {
     pinMessage(msg.messageId, msg.broadcasterId, msg.durationSecs)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // Firefox: zpráva na Twitch přes GQL (vložení do Slate editoru přes simulovaný paste tam
+  // neprojde — content script je od stránky izolovaný). Posílá panel, tabId = tab streamu.
+  if (msg.type === 'TW_GQL_SEND' && msg.tabId) {
+    twReply(msg.tabId, null, msg.text, null, msg.broadcasterId || null)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -977,27 +996,33 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
+        // dropReason: Twitch může zprávu přijmout, ale nedoručit (spam, slow mode, ban…) —
+        // bez něj se to tvářilo jako úspěch. Pole ověřena proti schématu 2026-09-23.
         query: `mutation SendChatMessage($input: SendChatMessageInput!) {
-          sendChatMessage(input: $input) { __typename }
+          sendChatMessage(input: $input) { dropReason message { id } }
         }`,
         variables: {
           input: {
             channelID: channelId,
             message: text,
             nonce: crypto.randomUUID(),
-            replyParentMessageID: parentMsgId
+            ...(parentMsgId ? { replyParentMessageID: parentMsgId } : {})
           }
         }
       })
     });
 
-    if (!resp.ok) return { ok: false, error: 'Twitch GQL: ' + resp.status };
+    if (!resp.ok) { ucLog('TwGql', 'HTTP', resp.status); return { ok: false, error: 'Twitch GQL: ' + resp.status }; }
 
     const data = await resp.json();
     if (data.errors?.length) {
+      ucLog('TwGql', 'error', data.errors[0].message);
       return { ok: false, error: data.errors[0].message };
     }
-    return { ok: true };
+    const drop = data.data?.sendChatMessage?.dropReason;
+    if (drop) { ucLog('TwGql', 'dropReason', drop); return { ok: false, error: 'Twitch zprávu nedoručil: ' + drop }; }
+    ucLog('TwGql', 'sent', data.data?.sendChatMessage?.message?.id || '?', parentMsgId ? 'reply' : 'msg');
+    return { ok: true, id: data.data?.sendChatMessage?.message?.id || null };
   } catch (e) {
     return { ok: false, error: e.message };
   }

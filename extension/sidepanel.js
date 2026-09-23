@@ -14,6 +14,9 @@ const UC_MARKER = '\u2800';
 const PRIMARY_STREAMER = 'robdiesalot';
 const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary', 'arcadebulls']);
 
+// Firefox (build scripts/build-firefox.mjs): browser.runtime.getBrowserInfo existuje jen tam.
+const IS_FIREFOX = typeof browser !== 'undefined' && typeof browser.runtime?.getBrowserInfo === 'function';
+
 const DEFAULTS = {
   channel: 'robdiesalot',
   kickChannel: 'robdiesalot',
@@ -1430,7 +1433,7 @@ class UnityChat {
           await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
         } catch {}
       }
-      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' });
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).then((r) => { if (r && r.ok === false) this._sys(`Uložení logu selhalo: ${r.error || '?'}`); }).catch(() => {});
     });
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
@@ -3306,7 +3309,10 @@ class UnityChat {
           const at = `@${name}`;
           if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
         }
-        resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
+        // Firefox: vložení do Twitch Slate editoru z content scriptu neprojde (izolace) → GQL.
+        resp = (platform === 'twitch' && IS_FIREFOX)
+          ? await chrome.runtime.sendMessage({ type: 'TW_GQL_SEND', tabId: tab.id, text: sendText, broadcasterId: this.config._roomId || null })
+          : await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
       }
 
       if (!resp?.ok) {
