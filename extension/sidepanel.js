@@ -998,6 +998,7 @@ class UnityChat {
     this.msgInput = document.getElementById('msg-input');
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
+    this._initEmotePicker();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
     // pushed to background (persisted to chrome.storage.session) so the log
@@ -1031,6 +1032,25 @@ class UnityChat {
     try {
       chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Boot', text: line }).catch(() => {});
     } catch {}
+  }
+
+  /** Tlačítko emotů v poli pro psaní → sdílený picker z core (emote-picker.js), stejný jako na webu. */
+  _initEmotePicker() {
+    const core = window.UC_CORE;
+    const btn = document.getElementById('btn-emotes');
+    if (!btn || !core?.createEmotePicker) return;
+    btn.innerHTML = core.EMOTE_BUTTON_SVG;
+    this._emotePicker = core.createEmotePicker({
+      host: document.getElementById('input-area'),
+      button: btn,
+      textarea: this.msgInput,
+      emotes: this.emotes,
+      recent: {
+        load: () => JSON.parse(localStorage.getItem('uc_recent_emotes') || '[]'),
+        save: (list) => localStorage.setItem('uc_recent_emotes', JSON.stringify(list)),
+      },
+      log: (tag, text) => this._ucLog(tag, text),
+    });
   }
 
   async _init() {
