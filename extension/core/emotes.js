@@ -261,8 +261,11 @@ export class EmoteManager {
     for (const e of emoteSet.emotes) {
       const url = this._build7tvUrl(e?.data || e);
       if (!e?.name || !url) continue;
-      const flags = (e?.data?.flags ?? e?.flags) || 0;
-      map.set(e.name, { url, zw: !!(flags & 1) });
+      // Zero-width: v setu je to bit 1 příznaků položky (e.flags, stejně jako u kanálu/globálních),
+      // ve vlastnostech emotu bit 1<<8 (e.data.flags = 256). Dřív se četlo data.flags & 1 → vždy
+      // false, a protože osobní emoty mají při renderu přednost, rozbilo to vrstvení (RAVE apod.).
+      const zw = !!(((e?.flags ?? 0) & 1) || ((e?.data?.flags ?? 0) & 256));
+      map.set(e.name, { url, zw });
       // Same provenance capture as channel emotes — actor + timestamp.
       if (e.actor_id || e.timestamp) {
         this._emoteAdditions.set(e.name, {
