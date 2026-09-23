@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
 import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { invalidateBlacklist } from './blacklist.js';
 
 /**
  * GET /commands?channel=<twitch login>
@@ -149,6 +150,12 @@ export default async function commandRoutes(app: FastifyInstance) {
     if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
     const slug = String(req.body?.workspace || '').toLowerCase();
     const reason = String(req.body?.reason || 'update');
+    // Změna blacklistu slov (stejný webhook) → jen cache blacklistu + SSE `blacklist-change`.
+    if (reason === 'blacklist') {
+      const channels = await invalidateBlacklist(slug, app.log);
+      if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+      return { ok: true, channels };
+    }
     if (reason === 'workspaces') { invalidateWorkspaces(); await getWorkspaces({ force: true, log: app.log }); }
     const channels = await twitchChannelsOf(slug);
     if (!channels.length) {
