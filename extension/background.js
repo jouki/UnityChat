@@ -377,27 +377,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Přihlášený uživatel Kicku — GET /api/v1/user ve stránce Kicku (její cookies). Nahrazuje
   // hádání z avatarů, které vracelo první doporučený kanál v levém panelu („Sweezy", 2026-09-23).
   if (msg.type === 'KICK_WHOAMI' && sender.tab?.id) {
-    chrome.scripting.executeScript({
+    kickSessionToken().then(({ token, names }) => chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: async () => {
+      func: async (token) => {
         try {
-          const r = await fetch('/api/v1/user', { headers: { Accept: 'application/json' }, credentials: 'include' });
+          const headers = { Accept: 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+          const r = await fetch('/api/v1/user', { headers, credentials: 'include' });
           if (!r.ok) return { username: null, status: r.status };
           const j = await r.json();
-          return { username: j?.username || null };
+          return { username: j?.username || null, status: r.status };
         } catch (e) { return { username: null, error: e.message }; }
-      }
-    }).then((res) => sendResponse(res?.[0]?.result || { username: null }))
-      .catch((e) => sendResponse({ username: null, error: e.message }));
+      },
+      args: [token]
+    }).then((res) => {
+      const out = res?.[0]?.result || { username: null };
+      ucLog('KickAuth', `whoami ${out.username || '-'} status=${out.status ?? '-'} token=${!!token} cookies=[${names}]`);
+      sendResponse(out);
+    })).catch((e) => sendResponse({ username: null, error: e.message }));
     return true;
   }
 
   if (msg.type === 'KICK_SEND' && sender.tab?.id) {
-    chrome.scripting.executeScript({
+    kickSessionToken().then(({ token, names }) => { ucLog('KickAuth', `send token=${!!token} cookies=[${names}]`); return chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: async (slug, text, replyMeta) => {
+      func: async (slug, text, replyMeta, token) => {
         try {
           const ch = await (await fetch('/api/v2/channels/' + encodeURIComponent(slug))).json();
           const cid = ch?.chatroom?.id;
@@ -414,7 +419,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             : { content: text, type: 'message' };
           const r = await fetch('/api/v2/messages/send/' + cid, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
+            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf, ...(token ? { Authorization: 'Bearer ' + token } : {}) },
             body: JSON.stringify(body)
           });
           if (r.ok) return { ok: true };
@@ -423,9 +428,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}` };
         } catch (e) { return { ok: false, error: e.message }; }
       },
-      args: [msg.slug, msg.text, msg.replyMeta || null]
-    }).then(results => {
-      sendResponse(results?.[0]?.result || { ok: false, error: 'executeScript failed' });
+      args: [msg.slug, msg.text, msg.replyMeta || null, token]
+    }); }).then(results => {
+      const res = results?.[0]?.result || { ok: false, error: 'executeScript failed' };
+      ucLog('KickAuth', `send výsledek ok=${!!res.ok}${res.error ? ' chyba=' + res.error : ''}`);
+      sendResponse(res);
     }).catch(e => sendResponse({ ok: false, error: e.message }));
     return true;
   }
@@ -974,6 +981,22 @@ async function pinMessage(messageId, broadcasterId, durationSecs) {
     return { ok: true, pinId };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * Přihlášení na Kick: API ověřuje hlavičkou `Authorization: Bearer <session_token>` (cookie),
+ * ne samotnou cookie — bez ní /api/v1/user vrací {} a odeslání 403, i když je uživatel
+ * přihlášený (Firefox log 2026-09-23). Token se čte přes chrome.cookies (HttpOnly nevadí).
+ * Do logu jen NÁZVY cookies, nikdy hodnoty.
+ */
+async function kickSessionToken() {
+  try {
+    const all = await chrome.cookies.getAll({ domain: 'kick.com' });
+    const tok = all.find((c) => c.name === 'session_token');
+    return { token: tok ? decodeURIComponent(tok.value) : null, names: all.map((c) => c.name).sort().join(',') };
+  } catch (e) {
+    return { token: null, names: 'chyba: ' + e.message };
   }
 }
 

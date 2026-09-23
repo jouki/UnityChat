@@ -4,6 +4,7 @@
 (function () {
   if (window._ucKick) return;
   window._ucKick = true;
+  let _whoami = null;   // { username, at } — cache KICK_WHOAMI (viz PING)
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
       // Viewer's own Kick username. Kick is a Next.js app — the logged-in
@@ -26,9 +27,17 @@
       if (username) { sendResponse({ platform: 'kick', username }); return; }
       // Strategy 2: zeptat se Kicku (GET /api/v1/user ve stránce přes background). Dřívější
       // hádání z `alt` avatarů vracelo první doporučený kanál v levém panelu (ověřeno na DOM).
+      // Panel se ptá každé ~3 s → výsledek na 60 s podržet (neúspěch jen 15 s), logovat jen změnu.
+      const now = Date.now();
+      if (_whoami && now - _whoami.at < (_whoami.username ? 60_000 : 15_000)) {
+        sendResponse({ platform: 'kick', username: _whoami.username });
+        return;
+      }
       chrome.runtime.sendMessage({ type: 'KICK_WHOAMI' }, (resp) => {
-        _sendLog(`whoami: ${resp?.username || '-'}${resp?.status ? ' status=' + resp.status : ''}${resp?.error ? ' chyba=' + resp.error : ''}`);
-        sendResponse({ platform: 'kick', username: resp?.username || null });
+        const u = resp?.username || null;
+        if (!_whoami || _whoami.username !== u) _sendLog(`whoami: ${u || '-'}${resp?.status ? ' status=' + resp.status : ''}${resp?.error ? ' chyba=' + resp.error : ''}`);
+        _whoami = { username: u, at: Date.now() };
+        sendResponse({ platform: 'kick', username: u });
       });
       return true;
     }
