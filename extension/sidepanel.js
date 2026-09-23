@@ -28,6 +28,7 @@ const DEFAULTS = {
   showTimestamps: true,
   replyOneLine: false,
   sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
+  reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
 };
 
@@ -1272,6 +1273,15 @@ class UnityChat {
         this.config.replyOneLine = rolBox.checked;
         this._saveConfig();
         this._applyReplyOneLine();
+      });
+    }
+    // Po animaci reakce zpět na konec chatu
+    const rsbBox = $('chk-reaction-scrollback');
+    if (rsbBox) {
+      rsbBox.checked = this.config.reactionScrollBack !== false;
+      rsbBox.addEventListener('change', () => {
+        this.config.reactionScrollBack = rsbBox.checked;
+        this._saveConfig();
       });
     }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
@@ -3811,7 +3821,11 @@ class UnityChat {
         hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
         offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
         muted: this.config.sound === false,
-        onEnd: () => { this._activeReaction = null; this._updatePoopButtons(); },
+        onEnd: () => {
+          this._activeReaction = null; this._updatePoopButtons();
+          // Nastavení „Po animaci se vrátit na konec chatu" (výchozí zapnuto).
+          if (this.config.reactionScrollBack !== false) { this._jumpToLatest(); this._ucLog('Reaction', 'konec → zpět na konec chatu'); }
+        },
       });
     }, target ? 350 : 0);
     this._ucLog('Reaction', `${ev.kind} by ${ev.by?.login || '?'} → ${ev.target.platform}:${ev.target.messageId} target=${!!target} offset=${offset}`);
