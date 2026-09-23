@@ -374,6 +374,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Přihlášený uživatel Kicku — GET /api/v1/user ve stránce Kicku (její cookies). Nahrazuje
+  // hádání z avatarů, které vracelo první doporučený kanál v levém panelu („Sweezy", 2026-09-23).
+  if (msg.type === 'KICK_WHOAMI' && sender.tab?.id) {
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: async () => {
+        try {
+          const r = await fetch('/api/v1/user', { headers: { Accept: 'application/json' }, credentials: 'include' });
+          if (!r.ok) return { username: null, status: r.status };
+          const j = await r.json();
+          return { username: j?.username || null };
+        } catch (e) { return { username: null, error: e.message }; }
+      }
+    }).then((res) => sendResponse(res?.[0]?.result || { username: null }))
+      .catch((e) => sendResponse({ username: null, error: e.message }));
+    return true;
+  }
+
   if (msg.type === 'KICK_SEND' && sender.tab?.id) {
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
