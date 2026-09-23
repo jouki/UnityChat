@@ -264,6 +264,12 @@ class YouTubeProvider {
     this.onMessage = null;
     this.onStatus = null;
     this.onDebug = null;      // callback pro debug zprávy
+    // Záloha přes backend (GET /chat/stream, jako web): když YouTube pošle požadavky addonu na
+    // stránku se souhlasem s cookies (consent.youtube.com — Firefox bez souhlasu v profilu,
+    // ověřeno logem 2026-09-23). backendChannel = Twitch login kanálu (backend z něj zná YT handle).
+    this.backendChannel = '';
+    this._consentBlocked = false;
+    this._es = null;
   }
 
   _log(text) {
@@ -275,6 +281,7 @@ class YouTubeProvider {
   async connect(channel) {
     this.channel = channel.trim();
     this.disconnect(true);
+    this._consentBlocked = false;
     const cid = ++this._connectId;
     this._log(`connect() ch=${this.channel} cid=${cid}`);
     this.onStatus?.('connecting');
@@ -284,7 +291,8 @@ class YouTubeProvider {
       this._log(`[${cid}] findLiveVideoId start`);
       const vidStart = Date.now();
       this._videoId = await this._findLiveVideoId();
-      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart}`);
+      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart} consent=${this._consentBlocked}`);
+      if (!this._videoId && this._consentBlocked && this.backendChannel) return this._connectBackend(cid);
       if (!this._videoId) throw new Error('Streamer není live na YouTube');
       this.onDebug?.(`YouTube videoId: ${this._videoId}`);
 
@@ -508,6 +516,36 @@ class YouTubeProvider {
     return resp.text();
   }
 
+  /**
+   * YouTube přes backend SSE (/chat/stream?platforms=youtube) — stejný zdroj a tvar zpráv jako
+   * web a /chat/history. EventSource se po redeployi backendu (502) trvale zavře → nový pokus.
+   */
+  _connectBackend(cid, retry = 0) {
+    if (cid !== this._connectId) return;
+    const u = `${UC_API}/chat/stream?channel=${encodeURIComponent(this.backendChannel)}&platforms=youtube`;
+    this._log(`[${cid}] consent.youtube.com → YouTube přes backend ${u}`);
+    const es = new EventSource(u);
+    this._es = es;
+    es.addEventListener('hello', () => { if (cid === this._connectId) this.onStatus?.('connected'); });
+    es.addEventListener('message', (e) => {
+      if (cid !== this._connectId) return;
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (!m?.id || this._seen.has(m.id)) return;
+      this._seen.add(m.id);
+      if (this._seen.size > 5000) this._seen = new Set([...this._seen].slice(-2500));
+      this.onMessage?.({ ...m, historical: false });
+    });
+    es.onerror = () => {
+      if (cid !== this._connectId || es.readyState !== EventSource.CLOSED) return;
+      es.close();
+      if (this._es === es) this._es = null;
+      this.onStatus?.('connecting');
+      const delay = Math.min(30000, 3000 * (retry + 1));
+      this._log(`[${cid}] backend stream zavřen, nový pokus za ${delay} ms`);
+      setTimeout(() => this._connectBackend(cid, retry + 1), delay);
+    };
+  }
+
   async _findLiveVideoId() {
     const urls = [
       `https://www.youtube.com/${this.channel}/live`,
@@ -517,6 +555,7 @@ class YouTubeProvider {
       try {
         const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
         if (!r.ok) { this._log(`findLive ${url} status=${r.status}`); continue; }
+        if (/^https:\/\/consent\.youtube\.com\//.test(r.url)) this._consentBlocked = true;
         const html = await r.text();
         const isLive =
           html.includes('"isLive":true') ||
@@ -782,6 +821,7 @@ class YouTubeProvider {
     }
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
+    if (this._es) { this._es.close(); this._es = null; }
     this._cont = null;
     this._allCont = null;
     this._colorSrc = null;
@@ -3665,7 +3705,7 @@ class UnityChat {
     // so we must NOT fall back to twitch channel as a cross-platform guess.
     if (this.config.twitch && this.config.channel) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
     if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
-    if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
+    if (this.config.youtube && this.config.ytChannel) { this.youtube.backendChannel = (this.config.channel || '').toLowerCase(); this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
   }
