@@ -56,7 +56,7 @@
 
     if (msg.type === 'SEND_CHAT') {
       sendChat(msg.text, msg.replyMeta || null)
-        .then(() => sendResponse({ ok: true }))
+        .then((r) => sendResponse({ ok: true, ...(r || {}) }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }
@@ -94,7 +94,20 @@
 
   async function sendChat(text, replyMeta) {
     // Native Kick replies vždy přes API (DOM send neumí reply metadata).
-    if (replyMeta) return sendViaAPI(text, replyMeta);
+    if (replyMeta) {
+      try {
+        await sendViaAPI(text, replyMeta);
+        return null;
+      } catch (e) {
+        // Kick nedovolí odpovědět na starou zprávu (ORIGINAL_MESSAGE_NOT_FOUND — i přímo v chatu
+        // Kicku, 2026-09-23) → poslat jako „@login text" a panelu říct, ať zahodí optimistickou odpověď.
+        if (!/ORIGINAL_MESSAGE_NOT_FOUND/.test(e.message || '') || !replyMeta.username) throw e;
+        const at = '@' + String(replyMeta.username).replace(/^@/, '') + ' ';
+        _sendLog('API: odpověď odmítnuta (stará zpráva) → posílám jako @zmínku');
+        await sendViaAPI(text.startsWith(at) ? text : at + text, null);
+        return { fallback: 'mention' };
+      }
+    }
     const input = findInput();
     if (input) {
       return sendViaDOM(input, text);

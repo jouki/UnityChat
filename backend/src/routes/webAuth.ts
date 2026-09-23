@@ -166,7 +166,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       ident = { ...ident!, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
     };
 
-    const doSend = async (): Promise<{ id: string | null }> => {
+    const doSend = async (): Promise<{ id: string | null; sentText?: string; fallback?: 'mention' }> => {
       if (platform === 'twitch') {
         if (!dir[0].twitchUserId) throw new SendError('channel has no twitch id', 404);
         return sendTwitch({ accessToken: ident!.accessToken, senderId: ident!.platformUserId, broadcasterId: dir[0].twitchUserId, text, replyTo: body.data.replyTo });
@@ -182,9 +182,11 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
           if (!(e instanceof SendError) || e.status !== 404 || !body.data.replyTo) throw e;
           const at = body.data.replyToUser ? `@${body.data.replyToUser.replace(/^@/, '')} ` : '';
           req.log.warn({ accountId, replyTo: body.data.replyTo, err: e.message }, 'kick: odpověď odmítnuta → posílám jako zprávu s @');
-          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: text.startsWith(at) ? text : at + text, replyTo: null });
+          const sentText = text.startsWith(at) ? text : at + text;
+          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: sentText, replyTo: null });
           req.log.info({ accountId, id: res.id }, 'kick: záložní zpráva bez reply odeslána');
-          return res;
+          // Klient podle toho zahodí optimistickou „odpověď" (echo přijde jako „@login text").
+          return { ...res, sentText, fallback: 'mention' as const };
         }
       }
       const videoId = opts.ingest?.videoIdFor('youtube', dir[0].youtubeHandle || channel) || null;
@@ -196,7 +198,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
 
     try {
       if (needsRefresh(ident.expiresAt)) await refresh();
-      let res: { id: string | null };
+      let res: { id: string | null; sentText?: string; fallback?: 'mention' };
       try {
         res = await doSend();
       } catch (e) {
@@ -208,7 +210,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
         const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text });
         if (hit) markUc(hit, req.log, { late: true });
       }
-      return { ok: true, id: res.id, text };
+      return { ok: true, id: res.id, text: res.sentText ?? text, ...(res.fallback ? { fallback: res.fallback } : {}) };
     } catch (e) {
       const err = e as SendError;
       const status = err instanceof SendError ? err.status : 502;

@@ -3339,7 +3339,8 @@ class UnityChat {
           text: markedText,
           replyMeta: {
             messageId: reply.messageId,
-            message: reply.message || ''
+            message: reply.message || '',
+            username: reply.username
           }
         });
       } else {
@@ -3355,6 +3356,12 @@ class UnityChat {
           : await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
       }
 
+      if (resp?.ok && resp.fallback === 'mention') {
+        // Kick odpověď odmítl (odpověď na starou zprávu) a odešla „@login text" → optimistická
+        // „odpověď" by se s echem nespárovala (jiný text) a zůstala viset; skutečná přijde z chatu.
+        this._dropOptimistic(optId);
+        this._ucLog('KickSend', 'odpověď odmítnuta → odesláno jako @zmínka, optimistická zpráva odebrána');
+      }
       if (!resp?.ok) {
         const reason = resp?.error || 'nepodařilo se odeslat';
         this._markSendFailed(optId, reason);
@@ -6731,6 +6738,15 @@ class UnityChat {
   // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
   // Dosud zůstala v DOM i v cache s _optimistic:true a po reloadu se vykreslila
   // znovu — z pohledu uživatele "poslal jsem to", přitom nikam nešla.
+  /** Odebrat optimistickou zprávu (DOM, store, párovací klíč) — skutečná přijde z chatu. */
+  _dropOptimistic(optId) {
+    this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)?.remove();
+    this.store.remove(optId);
+    for (const [key, id] of this._optimisticKeys) {
+      if (id === optId) { this._optimisticKeys.delete(key); break; }
+    }
+  }
+
   _markSendFailed(optId, reason) {
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el) {
