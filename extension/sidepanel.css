@@ -646,10 +646,12 @@ body.layout-large #settings details summary { font-size: 15px; }
   overflow-anchor: none;
 }
 
-#chat::-webkit-scrollbar { width: 5px; }
-#chat::-webkit-scrollbar-track { background: transparent; }
-#chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-#chat::-webkit-scrollbar-thumb:hover { background: #555; }
+/* Tenký scrollbar bez šipek — chat i menu emotů (core/emote-picker.js) stejně. */
+#chat::-webkit-scrollbar, .uc-ep-body::-webkit-scrollbar { width: 5px; }
+#chat::-webkit-scrollbar-track, .uc-ep-body::-webkit-scrollbar-track { background: transparent; }
+#chat::-webkit-scrollbar-thumb, .uc-ep-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+#chat::-webkit-scrollbar-thumb:hover, .uc-ep-body::-webkit-scrollbar-thumb:hover { background: #555; }
+#chat::-webkit-scrollbar-button, .uc-ep-body::-webkit-scrollbar-button { display: none; }
 
 /* ---- Cleared messages (timeout / ban / single delete) ----
    Mirrors vanilla Twitch: the message stays visible but greyed + line-
