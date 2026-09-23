@@ -119,12 +119,15 @@ async function resolveKick(slug: string): Promise<ResolvedIdentity | null> {
   if (!resp.ok) return null;
   const data = (await resp.json()) as {
     id?: number;
+    user_id?: number;
     slug?: string;
     user?: { username?: string; profile_pic?: string };
   };
-  if (!data?.id || !data.slug) return null;
+  // user_id (ID uživatele), NE id (ID kanálu): Kick public API (broadcaster_user_id) i 7TV
+  // (/users/kick/{id}) chtějí uživatele; s id kanálu vracel /public/v1/chat 404 (2026-09-23).
+  if (!data?.user_id || !data.slug) return null;
   return {
-    userId: String(data.id),
+    userId: String(data.user_id),
     handleCanonical: data.slug.toLowerCase(),
     displayName: data.user?.username,
     avatarUrl: data.user?.profile_pic,
