@@ -2949,6 +2949,8 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
   margin-bottom: 6px; overflow: hidden;
 }
 .uc-ep.hidden { display: none; }
+/* Úzká obrazovka (telefon, úzký panel): přes celou šířku. */
+@media (max-width: 480px) { .uc-ep { left: 8px; right: 8px; width: auto; } }
 .uc-ep-search { padding: 8px; border-bottom: 1px solid var(--border); }
 .uc-ep-search input {
   width: 100%; box-sizing: border-box; padding: 6px 9px;

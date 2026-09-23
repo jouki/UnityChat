@@ -109,8 +109,9 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log 
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
-    search.focus();
-    search.select();
+    // Na dotykovém zařízení hledání neaktivovat: vyskočila by klávesnice a zakryla emoty.
+    const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    if (!touch) { search.focus(); search.select(); }
   }
   function close() {
     if (panel.classList.contains('hidden')) return;
