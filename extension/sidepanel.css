@@ -2920,3 +2920,6 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .msg.uc-poop-fade .tx,
 .msg.uc-poop-fade .tx a { transition: color 15s linear; }
 .msg.uc-poop-fade .pi { transition: filter 15s linear; }
+
+/* Odpověď bota (StreamElements…) skrytá kvůli UnityChat Announcementu (core/announcement.js hideRecentBotReplies). */
+.msg.uc-annc-hidden { display: none !important; }

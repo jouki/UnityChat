@@ -3356,7 +3356,7 @@ class UnityChat {
         const a = c.announcement;
         const hide = !!(a && a.hideChatReplyInUnityChat);
         if (a) {
-          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
+          this._addAnnouncement({ id: `preview-${now}`, channel: (this.config.channel || '').toLowerCase(), command: c.label || c.name, text: a.text || '', textHtml: a.textHtml || '', media: a.media || null, chatReply: c.reply ? { text: c.reply, hideInUnityChat: hide } : null, hideBotReplies: a.hideBotReplies || [], triggeredBy: { user: this.config.username || 'MockUser', platform }, at: new Date().toISOString() });
         } else {
           this._sys(`!${c.name}: command nemá UnityChat Announcement`);
         }
@@ -3749,6 +3749,13 @@ class UnityChat {
       const now = Date.now();
       this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
       this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
+    }
+    // Odpověď cizího bota (StreamElements…): už vykreslenou skrýt, jinak počkat na ni.
+    if (a.hideBotReplies.length) {
+      const now = Date.now();
+      this._pendingBotReplies = (this._pendingBotReplies || []).filter((p) => p.until > now);
+      for (const login of core.hideRecentBotReplies(this.chatEl, a.hideBotReplies, now)) this._pendingBotReplies.push({ login, until: now + core.ANNC_BOT_AHEAD_MS });
+      this._ucLog('Annc', `boti ${a.hideBotReplies.join(',')} → čeká ${this._pendingBotReplies.map((p) => p.login).join(',') || 'nic (už skryto)'}`);
     }
     const reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const d = new Date(a.at);
@@ -5766,6 +5773,10 @@ class UnityChat {
     // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
     if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
       this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
+      return;
+    }
+    if (!msg._optimistic && !this._bootLoading && !msg.historical && this._pendingBotReplies?.length && window.UC_CORE.takeBotReply(this._pendingBotReplies, msg.username)) {
+      this._ucLog('Annc', `skryta odpověď bota ${msg.username}: „${String(msg.message || '').slice(0, 40)}"`);
       return;
     }
     if (textEmpty && !isSystem) {

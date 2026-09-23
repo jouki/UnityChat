@@ -74,5 +74,28 @@ const assert = require('node:assert/strict');
   assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', media: { url: 'https://a/b.webm', loop: false, loopDelayMs: 500 } }).media.loop, false);
   ok('loopDelayMs');
 
+  // Odpověď cizího bota (StreamElements) — skrytí podle odesílatele
+  const { normBotLogins, takeBotReply, hideRecentBotReplies, ANNC_BOT_BEHIND_MS } = await import('../extension/core/announcement.js');
+  assert.deepEqual(normBotLogins(['StreamElements', 'streamelements', 'x', 'bad login', 'Nightbot']), ['streamelements', 'nightbot']);
+  assert.deepEqual(normBotLogins('streamelements'), []);
+  assert.deepEqual(normalizeAnnouncement({ id: 'x', channel: 'c', text: 't', hideBotReplies: ['StreamElements'] }).hideBotReplies, ['streamelements']);
+  assert.deepEqual(normalizeAnnouncement({ id: 'x', channel: 'c', text: 't' }).hideBotReplies, []);
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', text: 't', hideInBrowserSource: 1 }).hideInBrowserSource, true);
+  assert.equal(normalizeAnnouncement({ id: 'x', channel: 'c', text: 't' }).hideInBrowserSource, false, 'výchozí = v OBS se ukazuje');
+  const pend = [{ login: 'streamelements', until: 2000 }];
+  assert.equal(takeBotReply(pend, 'Jouki', 1000), false, 'jiný odesílatel');
+  assert.equal(takeBotReply(pend, 'StreamElements', 1000), true, 'bot v okně (case-insensitive)');
+  assert.equal(takeBotReply(pend, 'StreamElements', 1000), false, 'skryje se jen jedna zpráva');
+  assert.equal(takeBotReply([{ login: 'streamelements', until: 500 }], 'streamelements', 1000), false, 'po okně už ne');
+  const fakeMsg = (user, ts) => { const cls = new Set(); return { dataset: { ts: String(ts) }, classList: { contains: (c) => cls.has(c), add: (c) => cls.add(c) }, querySelector: () => ({ dataset: { username: user } }), cls }; };
+  const now = 100000;
+  const old = fakeMsg('streamelements', now - ANNC_BOT_BEHIND_MS - 1), fresh = fakeMsg('streamelements', now - 800), other = fakeMsg('jouki', now - 100);
+  assert.deepEqual(hideRecentBotReplies({ querySelectorAll: () => [old, fresh, other] }, ['streamelements', 'nightbot'], now), ['nightbot'], 'SE už přišla → nečeká; nightbot čeká');
+  assert.equal(fresh.cls.has('uc-annc-hidden'), true, 'čerstvá SE zpráva skrytá');
+  assert.equal(old.cls.has('uc-annc-hidden'), false, 'starší než okno zůstane');
+  assert.equal(other.cls.has('uc-annc-hidden'), false);
+  assert.deepEqual(hideRecentBotReplies({ querySelectorAll: () => [old] }, ['streamelements'], now), ['streamelements'], 'jen stará zpráva → čekat na novou');
+  ok('hideBotReplies + hideInBrowserSource');
+
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

@@ -25,6 +25,48 @@ export function matchesChatReply(pending, messageText, now = Date.now()) {
   return pending.some((p) => p.until > now && normText(p.text) === t);
 }
 
+/**
+ * Odpověď cizího bota (StreamElements…) na command s announcementem: uživatel UnityChatu
+ * místo ní vidí announcement. Skryje se první zpráva toho bota do AHEAD ms po announcementu,
+ * nebo (bot byl rychlejší) poslední jeho zpráva nejvýš BEHIND ms před ním. Podle odesílatele,
+ * ne textu — odpověď bota může obsahovat proměnné.
+ */
+export const ANNC_BOT_AHEAD_MS = 10_000;
+export const ANNC_BOT_BEHIND_MS = 5_000;
+
+/** Loginy botů z payloadu: lowercase, jen platný login, max 5, bez duplicit. */
+export function normBotLogins(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map((x) => String(x || '').trim().toLowerCase()).filter((x) => /^[a-z0-9_]{2,25}$/.test(x)))].slice(0, 5);
+}
+
+/** Je zpráva od bota, jehož odpověď se čeká ke skrytí? `pending` = [{ login, until }]; shodu spotřebuje (skryje jen jednu zprávu). */
+export function takeBotReply(pending, username, now = Date.now()) {
+  const u = String(username || '').toLowerCase();
+  const i = pending.findIndex((p) => p.until > now && p.login === u);
+  if (i < 0) return false;
+  pending.splice(i, 1);
+  return true;
+}
+
+/**
+ * Po příchodu announcementu: odpovědi botů, které už v chatu jsou (přišly dřív), skrýt třídou
+ * `uc-annc-hidden`; vrací loginy, jejichž odpověď ještě nepřišla (ty čekají v `pending`).
+ * chatEl = kontejner zpráv (`.msg[data-ts]` + `.un[data-username]`).
+ */
+export function hideRecentBotReplies(chatEl, logins, now = Date.now()) {
+  const waiting = [];
+  for (const login of logins) {
+    const hit = [...chatEl.querySelectorAll('.msg[data-ts]')].reverse().find((el) => {
+      if (el.classList.contains('uc-annc-hidden') || now - Number(el.dataset.ts) > ANNC_BOT_BEHIND_MS) return false;
+      return el.querySelector('.un')?.dataset.username === login;
+    });
+    if (hit) hit.classList.add('uc-annc-hidden');
+    else waiting.push(login);
+  }
+  return waiting;
+}
+
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
 
 /**
@@ -104,6 +146,10 @@ export function normalizeAnnouncement(a) {
     textHtml,   // rich text (Markdown → HTML na serveru Židolišty), už sanitizovaný
     // Běžná odpověď, kterou SB pošle do chatu všem; při hideInUnityChat ji klient skryje (viz matchesChatReply).
     chatReply: cr ? { text: String(cr.text).slice(0, 500), hideInUnityChat: !!cr.hideInUnityChat } : null,
+    // Odpovědi cizích botů (StreamElements…) na tentýž command — klient je skryje (takeBotReply / hideRecentBotReplies).
+    hideBotReplies: normBotLogins(a.hideBotReplies),
+    // true = v browser source pro OBS (/chat/raw/) se announcement nevykreslí (a nic se kvůli němu neskrývá).
+    hideInBrowserSource: !!a.hideInBrowserSource,
     command: String(a.command || '').slice(0, 80),
     media,
     triggeredBy: by && by.user ? { user: String(by.user).slice(0, 60), platform: String(by.platform || '').slice(0, 20) } : null,

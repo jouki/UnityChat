@@ -9,7 +9,7 @@ test('validateAnnouncement: plný payload projde, ořeže se a rozpadne na kaná
   assert.equal(r.ok, true);
   if (!r.ok) return;
   assert.deepEqual(r.values.map((v) => v.channel), ['robdiesalot', 'robmirror']);
-  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', textHtml: '', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, loopDelayMs: 0, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
+  assert.deepEqual(r.values[0], { id: 'a1', workspace: 'rob', channel: 'robdiesalot', text: 'hi', textHtml: '', media: { url: 'https://cdn/x.webm', kind: 'video', width: 200, height: undefined, loop: true, loopDelayMs: 0, stillUrl: 'https://cdn/s.webp' }, at: '2026-09-22T10:00:00.000Z', chatReply: { text: 'Top D resetováno', hideInUnityChat: true }, hideBotReplies: [], hideInBrowserSource: false, command: 'Brohemians', triggeredBy: { user: 'Jouki728', platform: 'twitch' } });
 });
 
 test('validateAnnouncement: chyby a okraje', () => {
@@ -28,4 +28,12 @@ test('validateAnnouncement: chyby a okraje', () => {
   assert.equal(rich.ok && rich.values[0].textHtml, '<b>b</b>');
   const onlyHtml = validateAnnouncement({ id: '3', workspace: 'rob', textHtml: '<i>x</i>' }, ws);
   assert.equal(onlyHtml.ok, true, 'jen textHtml stačí');
+});
+
+test('validateAnnouncement: hideBotReplies — lowercase, jen platné loginy, bez duplicit', () => {
+  const r = validateAnnouncement({ id: 'b1', workspace: 'rob', text: 'x', hideBotReplies: ['StreamElements', 'streamelements', 'x', 'bad login', 42, 'Nightbot'] }, ws);
+  assert.equal(r.ok, true);
+  if (r.ok) assert.deepEqual(r.values[0].hideBotReplies, ['streamelements', '42', 'nightbot']);
+  const n = validateAnnouncement({ id: 'b2', workspace: 'rob', text: 'x', hideBotReplies: 'streamelements' }, ws);
+  if (n.ok) assert.deepEqual(n.values[0].hideBotReplies, []);
 });

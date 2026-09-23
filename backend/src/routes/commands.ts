@@ -33,10 +33,13 @@ export interface PublicCommand {
   /** Surová odpověď do chatu (s %proměnnými%) — pro lokální náhled `/uc command`. */
   reply?: string;
   /** Konfigurace UnityChat Announcementu commandu (bez id/at) — pro lokální náhled. */
-  announcement?: { text: string; textHtml: string; media: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; loopDelayMs?: number; stillUrl?: string | null } | null; hideChatReplyInUnityChat: boolean } | null;
+  announcement?: { text: string; textHtml: string; media: { url: string; kind: 'video' | 'image'; width?: number; height?: number; loop?: boolean; loopDelayMs?: number; stillUrl?: string | null } | null; hideChatReplyInUnityChat: boolean; hideBotReplies: string[]; hideInBrowserSource: boolean } | null;
 }
 
 const isHttps = (u: unknown): u is string => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
+
+/** Loginy botů: lowercase, platný login, max 5 (stejně jako core normBotLogins; sdílí announcements.ts). */
+export const botLogins = (v: unknown): string[] => Array.isArray(v) ? [...new Set(v.map((x) => String(x ?? '').trim().toLowerCase()).filter((x) => /^[a-z0-9_]{2,25}$/.test(x)))].slice(0, 5) : [];
 
 function publicAnnouncement(raw: unknown): PublicCommand['announcement'] {
   if (!raw || typeof raw !== 'object') return null;
@@ -52,7 +55,7 @@ function publicAnnouncement(raw: unknown): PublicCommand['announcement'] {
   const text = String(a.text ?? '').slice(0, 500);
   const textHtml = String(a.textHtml ?? '').slice(0, 4000);
   if (!media && !text.trim() && !textHtml.trim()) return null;
-  return { text, textHtml, media, hideChatReplyInUnityChat: !!a.hideChatReplyInUnityChat };
+  return { text, textHtml, media, hideChatReplyInUnityChat: !!a.hideChatReplyInUnityChat, hideBotReplies: botLogins(a.hideBotReplies), hideInBrowserSource: !!a.hideInBrowserSource };
 }
 
 const REGEX_META = /[[\](){}|*+?.\\^$]/;
