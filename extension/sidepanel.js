@@ -3373,7 +3373,7 @@ class UnityChat {
   /**
    * 💾 dump logu. Chrome: background (service worker, data: URL). Firefox: background je uspávaná
    * stránka a blob: URL s ní zaniká uprostřed stahování (soubor se smazal a nový nedopsal,
-   * 2026-09-23) → blob vytvoří a stažení spustí panel, který běží. Navíc kopie do schránky.
+   * 2026-09-23) → blob vytvoří a stažení spustí panel, který běží.
    */
   async _dumpLogs() {
     if (!IS_FIREFOX) {
@@ -3384,15 +3384,10 @@ class UnityChat {
       const r = await chrome.runtime.sendMessage({ type: 'GET_LOGS' });
       const text = r?.text || '(log prázdný)';
       const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
-      let saved = false;
       try {
-        await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'uniquify', saveAs: false });
-        saved = true;
+        await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
       } catch (e) { this._sys(`Uložení logu selhalo: ${e.message}`); }
       setTimeout(() => URL.revokeObjectURL(url), 120_000);
-      let copied = false;
-      try { await navigator.clipboard.writeText(text); copied = true; } catch {}
-      this._sys(`Log${saved ? ' uložen do Stažených (unitychat-debug.log)' : ''}${saved && copied ? ' a' : ''}${copied ? ' zkopírován do schránky' : ''}${!saved && !copied ? ' se nepodařilo uložit ani zkopírovat' : ''}.`);
     } catch (e) {
       this._sys(`Dump selhal: ${e.message}`);
     }
