@@ -1,12 +1,11 @@
 // Cenzura podle blacklistu slov (sdílený seznam ze Židolišty, GET /blacklist na backendu).
 // Addon i web: text zpráv (EmoteManager._toHtml → textové segmenty) a zobrazovaná jména.
 //
-// Hledá se PŘESNĚ jako QR Dono (Streamer.bot, IsBlacklistedText: text.ToLowerInvariant()
-// .Contains(term)) — pokyn usera 2026-09-23: položka = podřetězec kdekoli v textu, bez ohledu
-// na velikost písmen, diakritika se rozlišuje (seznam má varianty s ní i bez ní), fráze
-// s mezerou jako celek. Seznam je psaný jako kmeny, takže chytí všechny tvary.
-// Nahrazuje se CELÉ slovo, ve kterém nález leží (písmena a číslice → *); interpunkce
-// a délka textu zůstanou (pozice Twitch emotů v IRC tagu dál sedí).
+// Přesné slovo (pokyn usera 2026-09-23, po zkoušce podřetězců jako QR Dono, které chytaly
+// i nevinná slova typu „runegrove"): položka musí být CELÉ slovo, fráze s mezerou celá
+// fráze; bez ohledu na velikost písmen, diakritika přesně podle položky (seznam má varianty
+// s ní i bez ní). Nalezená písmena a číslice → *; interpunkce a délka textu zůstanou
+// (pozice Twitch emotů v IRC tagu dál sedí).
 
 const WORD = /[\p{L}\p{N}]/u;
 
@@ -31,7 +30,7 @@ export function compileBlacklist(terms) {
 }
 
 /**
- * Nahradit slova obsahující položku blacklistu hvězdičkami. Vrací TENTÝŽ řetězec, když
+ * Nahradit slova (a fráze) z blacklistu hvězdičkami. Vrací TENTÝŽ řetězec, když
  * není co cenzurovat. Prázdný / chybějící seznam = text beze změny.
  */
 export function censorText(text, bl) {
@@ -49,11 +48,10 @@ export function censorText(text, bl) {
       let k = 1;
       while (k < m && lower[i + k] === term[k]) k++;
       if (k < m) continue;
+      // Jen celé slovo: před a za nálezem nesmí pokračovat písmeno ani číslice.
+      if ((i > 0 && WORD.test(chars[i - 1])) || (i + m < n && WORD.test(chars[i + m]))) continue;
       hit = true;
-      // Rozšířit na celé slovo (u fráze od začátku prvního po konec posledního slova).
-      let a = i; while (a > 0 && WORD.test(chars[a - 1])) a--;
-      let b = i + m - 1; while (b < n - 1 && WORD.test(chars[b + 1])) b++;
-      for (let j = a; j <= b; j++) hide[j] = true;
+      for (let j = i; j < i + m; j++) hide[j] = true;
     }
   }
   if (!hit) return text;
