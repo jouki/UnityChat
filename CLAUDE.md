@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.40.0
+# UnityChat - Chrome Extension + Backend v3.40.4
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.40.0** (dev i master; release 2026-09-23)
+- Aktuální: **v3.40.4** (dev i master; release 2026-09-23)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -830,6 +830,7 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.40.1–4** - **Release** (2026-09-23): cenzura zpráv i jmen podle sdíleného blacklistu slov ze Židolišty (`core/censor.js`, backend `GET /blacklist`, SSE `blacklist-change`; přesné slovo bez ohledu na velikost písmen), @zmínka víceslovnou přezdívkou se přeloží na login (`core/mentions.js`), menu emotů na dotyku bez automatické klávesnice a na úzké obrazovce přes celou šířku.
 - **v3.40.0** - **Release** (2026-09-23): shrnuje 3.39.51–57 — nastavení „Přehrávat zvuky" a „Po animaci se vrátit na konec chatu", announcement skryje odpověď StreamElements (`hideBotReplies`) + volba „neukazovat v OBS" (`hideInBrowserSource`), tlačítko emotů v poli pro psaní se sdíleným výběrem a hledáním (`core/emote-picker.js`).
 - **v3.39.51** - Nastavení **„Přehrávat zvuky"** (addon ⚙ `config.sound`, web ⚙, OBS profil `sound` v `/raw-profiles`): core `playPoopReaction({ muted })` + `setMuted()` pro přepnutí během reakce. Web: posuvník šířky v konfigurátoru OBS už neujíždí (sloupec náhledu `minmax(0, 1fr)`, formulář pevných 380 px).
 - **v3.39.48–50** - Reakce: hnědne i **text zprávy** (světlejší `#b5835a` než jméno, ať zůstane čitelný); v raw režimu logo platformy dostalo velikost přes `--uc-pi` (má `font-size: 0`, takže `em` padalo na nulu a ikona mizela); **video se zvukem** (`peepo-chat-alpha-v2-wet-sound.webm`, VP9+Opus, `volume 0.85`, při odmítnutém autoplay fallback potichu); zarovnání videa **doleva** místo na střed. **Release do master (PR #23) + odesláno do CWS.**
