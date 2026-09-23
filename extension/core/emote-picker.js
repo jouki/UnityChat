@@ -4,16 +4,16 @@
 
 const RECENT_MAX = 24;
 
-/** Sekce v pořadí, v jakém je chat uživatel nejspíš hledá (kanálové napřed). */
+/** Sekce: UnityChat úplně nahoře (pokyn usera 2026-09-23), pak kanálové, pak globální. */
 export function pickerSections(em) {
   return [
+    { key: 'uc', label: 'UnityChat', map: em.ucEmotes },
     { key: 'channel7tv', label: '7TV kanál', map: em.channel7tv },
     { key: 'bttv', label: 'BTTV', map: em.bttvEmotes },
     { key: 'ffz', label: 'FFZ', map: em.ffzEmotes },
     { key: 'global7tv', label: '7TV globální', map: em.global7tv },
     { key: 'twitch', label: 'Twitch', map: em.twitchNative },
     { key: 'kick', label: 'Kick', map: em.kickNative },
-    { key: 'uc', label: 'UnityChat', map: em.ucEmotes },
   ].filter((s) => s.map && s.map.size);
 }
 
@@ -95,9 +95,12 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log 
       return;
     }
     const recentNames = recentList.filter((n) => emotes.getAnyUrl(n));
+    const [first, ...rest] = pickerSections(emotes);
     const parts = [];
+    // UnityChat první, hned pod ním naposledy použité, pak ostatní zdroje.
+    if (first?.key === 'uc') parts.push(section(first.label, byName(first.map), (n) => first.map.get(n)));
     if (recentNames.length) parts.push(section('Naposledy použité', recentNames, (n) => emotes.getAnyUrl(n)));
-    for (const s of pickerSections(emotes)) parts.push(section(s.label, byName(s.map), (n) => s.map.get(n)));
+    for (const s of first?.key === 'uc' ? rest : [first, ...rest].filter(Boolean)) parts.push(section(s.label, byName(s.map), (n) => s.map.get(n)));
     body.innerHTML = parts.join('') || '<div class="uc-ep-empty">Emoty se ještě načítají…</div>';
   }
 
