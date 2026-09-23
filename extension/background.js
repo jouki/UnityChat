@@ -15,6 +15,9 @@
 
 const HAS_SIDE_PANEL = typeof chrome.sidePanel !== 'undefined'
   && typeof chrome.sidePanel.setPanelBehavior === 'function';
+// Firefox: nativní postranní lišta (manifest `sidebar_action`, build scripts/build-firefox.mjs).
+// sidebarAction.toggle/open musí běžet synchronně v obsluze akce uživatele (žádný await před).
+const FF_SIDEBAR = !HAS_SIDE_PANEL ? (globalThis.browser?.sidebarAction || chrome.sidebarAction || null) : null;
 
 // Track side panel state via persistent port connection (survives SW restarts)
 let _panelPort = null;
@@ -41,6 +44,11 @@ if (HAS_SIDE_PANEL) {
   // Chrome path: clicking the toolbar action opens the native side panel.
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.warn('sidePanel.setPanelBehavior failed:', e));
+} else if (FF_SIDEBAR) {
+  // Firefox: tlačítko v liště otevře/zavře postranní lištu s UnityChatem.
+  chrome.action.onClicked.addListener(() => {
+    FF_SIDEBAR.toggle().catch((e) => ucLog('Sidebar', 'toggle failed:', e.message));
+  });
 } else {
   // Opera path: the toolbar action opens UnityChat as a regular tab next to
   // the stream tab (openerTabId → Opera may auto-group them into a tab
@@ -99,20 +107,16 @@ function isPlatformTab(tab) {
 
 
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
+// Seznam souborů bere z manifestu (content_scripts) — jediný zdroj pravdy, včetně sdíleného
+// content/uc-header-button.js, který musí jít před skript platformy.
 chrome.runtime.onInstalled.addListener(async () => {
-  const targets = [
-    { matches: '*://*.twitch.tv/*', file: 'content/twitch.js' },
-    { matches: '*://*.youtube.com/*', file: 'content/youtube.js', allFrames: true },
-    { matches: '*://*.kick.com/*', file: 'content/kick.js' }
-  ];
-
-  for (const t of targets) {
+  for (const cs of chrome.runtime.getManifest().content_scripts || []) {
     try {
-      const tabs = await chrome.tabs.query({ url: t.matches });
+      const tabs = await chrome.tabs.query({ url: cs.matches });
       for (const tab of tabs) {
         chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: !!t.allFrames },
-          files: [t.file]
+          target: { tabId: tab.id, allFrames: !!cs.all_frames },
+          files: cs.js
         }).catch(() => {});
       }
     } catch {}
@@ -154,17 +158,32 @@ function ucLog(tag, ...args) {
 async function dumpLogs() {
   await _hydrateLogs();
   const text = _logs.length ? _logs.join('\n') : '(log empty — service worker may have just been restarted; reproduce the issue then re-dump)';
-  const url = 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
+  // Firefox (background stránka) odmítá stahovat data: URL („Access denied for URL data:…",
+  // ověřeno 2026-09-23) → blob: URL. Chrome service worker URL.createObjectURL nemá → data:.
+  const url = typeof URL.createObjectURL === 'function'
+    ? URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }))
+    : 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text)));
   try {
     await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: false });
-  } catch (e) { console.error('Log dump failed:', e); }
+    return { ok: true };
+  } catch (e) {
+    console.error('Log dump failed:', e);
+    return { ok: false, error: e.message };
+  } finally {
+    if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 }
 
 // ---- Message handlers ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump
+  // Text logu pro panel (Firefox si ukládá sám — blob: URL uspané background stránky zaniká).
+  if (msg.type === 'GET_LOGS') {
+    _hydrateLogs().then(() => sendResponse({ ok: true, text: _logs.join('\n') }));
+    return true;
+  }
   if (msg.type === 'DUMP_LOGS') {
-    dumpLogs().then(() => sendResponse({ ok: true }));
+    dumpLogs().then((r) => sendResponse(r || { ok: true }));
     return true;
   }
   // Log relay (z side panelu)
@@ -232,6 +251,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       return true;
     }
+    // Firefox: postranní lišta. Zpráva z content scriptu nemusí nést gesto uživatele →
+    // při odmítnutí (open() jen z uživatelské akce) otevřít UnityChat jako záložku.
+    if (FF_SIDEBAR) {
+      const act = wantClose ? FF_SIDEBAR.close() : FF_SIDEBAR.open();
+      act.then(() => sendResponse({ ok: true, action: wantClose ? 'closed' : 'opened' }))
+        .catch((e) => {
+          ucLog('Sidebar', `${wantClose ? 'close' : 'open'} failed: ${e.message} → tab`);
+          if (wantClose) { sendResponse({ ok: false, error: e.message }); return; }
+          openUcTab(sender.tab || null)
+            .then(() => sendResponse({ ok: true, action: 'opened-tab' }))
+            .catch((err) => sendResponse({ ok: false, error: err.message }));
+        });
+      return true;
+    }
     // Opera (no sidePanel API) → open as a regular tab next to the stream
     // tab (sender.tab = Twitch tab when clicked from the chat header button)
     openUcTab(sender.tab || null)
@@ -275,6 +308,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'PIN_MESSAGE') {
     pinMessage(msg.messageId, msg.broadcasterId, msg.durationSecs)
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // Firefox: zpráva na Twitch přes GQL (vložení do Slate editoru přes simulovaný paste tam
+  // neprojde — content script je od stránky izolovaný). Posílá panel, tabId = tab streamu.
+  if (msg.type === 'TW_GQL_SEND' && msg.tabId) {
+    twReply(msg.tabId, null, msg.text, null, msg.broadcasterId || null)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
@@ -328,39 +370,78 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === 'KICK_SEND' && sender.tab?.id) {
-    chrome.scripting.executeScript({
+  // Přihlášený uživatel Kicku — GET /api/v1/user ve stránce Kicku (její cookies). Nahrazuje
+  // hádání z avatarů, které vracelo první doporučený kanál v levém panelu („Sweezy", 2026-09-23).
+  if (msg.type === 'KICK_WHOAMI' && sender.tab?.id) {
+    kickSessionToken().then(({ token, names }) => chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: async (slug, text, replyMeta) => {
+      func: async (token) => {
+        try {
+          const headers = { Accept: 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+          const r = await fetch('/api/v1/user', { headers, credentials: 'include' });
+          if (!r.ok) return { username: null, status: r.status };
+          const j = await r.json();
+          return { username: j?.username || null, status: r.status };
+        } catch (e) { return { username: null, error: e.message }; }
+      },
+      args: [token]
+    }).then((res) => {
+      const out = res?.[0]?.result || { username: null };
+      ucLog('KickAuth', `whoami ${out.username || '-'} status=${out.status ?? '-'} token=${!!token} cookies=[${names}]`);
+      sendResponse(out);
+    })).catch((e) => sendResponse({ username: null, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'KICK_SEND' && sender.tab?.id) {
+    kickSessionToken().then(({ token, names }) => { ucLog('KickAuth', `send token=${!!token} cookies=[${names}]`); return chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id },
+      world: 'MAIN',
+      func: async (slug, text, replyMeta, token) => {
         try {
           const ch = await (await fetch('/api/v2/channels/' + encodeURIComponent(slug))).json();
           const cid = ch?.chatroom?.id;
           if (!cid) return { ok: false, error: 'Chatroom nenalezen' };
           const xsrf = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]*)/)||[])[1]||'');
+          // Odpověď: původní zprávu vzít přímo ze seznamu Kicku (přesný obsah vč. UC markeru
+          // + autor). Z panelu přišel text bez markeru → Kick vracel ORIGINAL_MESSAGE_NOT_FOUND
+          // (2026-09-23; Kick tu zprávu v /messages vedl i s markerem).
+          let orig = null;
+          if (replyMeta) {
+            try {
+              const lr = await fetch('/api/v2/channels/' + ch.id + '/messages');
+              const lj = await lr.json();
+              const list = lj?.data?.messages || [];
+              orig = list.find((m) => m.id === replyMeta.messageId) || null;
+            } catch {}
+          }
           const body = replyMeta
             ? {
                 content: text,
                 type: 'reply',
                 metadata: {
-                  original_message: { id: replyMeta.messageId, content: replyMeta.message || '' }
+                  original_message: { id: replyMeta.messageId, content: orig ? orig.content : (replyMeta.message || '') },
+                  ...(orig?.sender ? { original_sender: { id: orig.sender.id, username: orig.sender.username } } : {}),
                 }
               }
             : { content: text, type: 'message' };
           const r = await fetch('/api/v2/messages/send/' + cid, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
+            headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf, ...(token ? { Authorization: 'Bearer ' + token } : {}) },
             body: JSON.stringify(body)
           });
-          if (r.ok) return { ok: true };
+          if (r.ok) return { ok: true, replyOrig: replyMeta ? (orig ? 'nalezen' : 'nenalezen v /messages') : undefined };
           if (r.status === 403) return { ok: false, error: 'Nejsi přihlášen na Kick' };
           const bodyText = await r.text().catch(() => '');
-          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}` };
+          return { ok: false, error: `HTTP ${r.status}${bodyText ? ': ' + bodyText.substring(0, 200) : ''}${replyMeta ? ` (originál ${orig ? 'nalezen' : 'nenalezen v /messages'})` : ''}` };
         } catch (e) { return { ok: false, error: e.message }; }
       },
-      args: [msg.slug, msg.text, msg.replyMeta || null]
-    }).then(results => {
-      sendResponse(results?.[0]?.result || { ok: false, error: 'executeScript failed' });
+      args: [msg.slug, msg.text, msg.replyMeta || null, token]
+    }); }).then(results => {
+      const res = results?.[0]?.result || { ok: false, error: 'executeScript failed' };
+      ucLog('KickAuth', `send výsledek ok=${!!res.ok}${res.error ? ' chyba=' + res.error : ''}`);
+      sendResponse(res);
     }).catch(e => sendResponse({ ok: false, error: e.message }));
     return true;
   }
@@ -912,6 +993,22 @@ async function pinMessage(messageId, broadcasterId, durationSecs) {
   }
 }
 
+/**
+ * Přihlášení na Kick: API ověřuje hlavičkou `Authorization: Bearer <session_token>` (cookie),
+ * ne samotnou cookie — bez ní /api/v1/user vrací {} a odeslání 403, i když je uživatel
+ * přihlášený (Firefox log 2026-09-23). Token se čte přes chrome.cookies (HttpOnly nevadí).
+ * Do logu jen NÁZVY cookies, nikdy hodnoty.
+ */
+async function kickSessionToken() {
+  try {
+    const all = await chrome.cookies.getAll({ domain: 'kick.com' });
+    const tok = all.find((c) => c.name === 'session_token');
+    return { token: tok ? decodeURIComponent(tok.value) : null, names: all.map((c) => c.name).sort().join(',') };
+  } catch (e) {
+    return { token: null, names: 'chyba: ' + e.message };
+  }
+}
+
 async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
   const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 
@@ -955,27 +1052,33 @@ async function twReply(tabId, parentMsgId, text, username, broadcasterId) {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
+        // dropReason: Twitch může zprávu přijmout, ale nedoručit (spam, slow mode, ban…) —
+        // bez něj se to tvářilo jako úspěch. Pole ověřena proti schématu 2026-09-23.
         query: `mutation SendChatMessage($input: SendChatMessageInput!) {
-          sendChatMessage(input: $input) { __typename }
+          sendChatMessage(input: $input) { dropReason message { id } }
         }`,
         variables: {
           input: {
             channelID: channelId,
             message: text,
             nonce: crypto.randomUUID(),
-            replyParentMessageID: parentMsgId
+            ...(parentMsgId ? { replyParentMessageID: parentMsgId } : {})
           }
         }
       })
     });
 
-    if (!resp.ok) return { ok: false, error: 'Twitch GQL: ' + resp.status };
+    if (!resp.ok) { ucLog('TwGql', 'HTTP', resp.status); return { ok: false, error: 'Twitch GQL: ' + resp.status }; }
 
     const data = await resp.json();
     if (data.errors?.length) {
+      ucLog('TwGql', 'error', data.errors[0].message);
       return { ok: false, error: data.errors[0].message };
     }
-    return { ok: true };
+    const drop = data.data?.sendChatMessage?.dropReason;
+    if (drop) { ucLog('TwGql', 'dropReason', drop); return { ok: false, error: 'Twitch zprávu nedoručil: ' + drop }; }
+    ucLog('TwGql', 'sent', data.data?.sendChatMessage?.message?.id || '?', parentMsgId ? 'reply' : 'msg');
+    return { ok: true, id: data.data?.sendChatMessage?.message?.id || null };
   } catch (e) {
     return { ok: false, error: e.message };
   }

@@ -4,6 +4,7 @@ import { db } from '../db/index.js';
 import { messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
+import { ucSends, markUc } from '../lib/ucSends.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -30,6 +31,8 @@ export interface ClientMessage {
   superChat?: boolean;
   /** true = z /chat/history (DB), false = živě z /chat/stream (ingest, před zápisem). */
   historical: boolean;
+  /** Odesláno z UnityChatu bez markeru (command) — server to ví z hlášení odeslání (lib/ucSends.ts). */
+  uc?: boolean;
 }
 
 /** Pole, která mapování potřebuje — DB řádek (Message) i čerstvý řádek z ingestu (toRow) je mají. */
@@ -37,6 +40,7 @@ export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platfo
   contentRaw?: unknown;
   isReply?: boolean | null;
   replyToMessageId?: string | null;
+  isUnitychatUser?: boolean | null;
 };
 
 /** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
@@ -50,6 +54,7 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
     message: row.content,
     timestamp: row.sentAt.getTime(),
     historical,
+    ...(row.isUnitychatUser ? { uc: true } : {}),
   };
   if (row.platform === 'twitch') {
     return {
@@ -124,8 +129,36 @@ export async function resolveChannels(channel: string): Promise<string[]> {
   return [...new Set([channel, dir[0]?.yt?.toLowerCase(), dir[0]?.kick?.toLowerCase()].filter((c): c is string => !!c))];
 }
 
+/** Kanál zprávy v ingestu pro danou platformu (YouTube handle / Kick slug podle streamers directory). */
+export async function platformChannel(platform: string, channel: string): Promise<string> {
+  if (platform === 'twitch') return channel;
+  const dir = await db.select({ yt: streamers.youtubeHandle, kick: streamers.kickSlug }).from(streamers).where(eq(streamers.twitchLogin, channel)).limit(1);
+  return ((platform === 'youtube' ? dir[0]?.yt : dir[0]?.kick) || channel).toLowerCase();
+}
+
 export default async function chatRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 10);
+  const ucLimiter = new RateLimiter(5, 1);
+
+  /**
+   * POST /chat/uc-sent {platform, channel, username, text} — addon po odeslání commandu
+   * (`!…`, bez markeru) nahlásí, že ho poslal z UnityChatu; ingest pak zprávu označí
+   * (lib/ucSends.ts) a klienti dostanou SSE `uc-mark` → zlaté logo. Jen commandy.
+   */
+  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string } }>('/chat/uc-sent', async (req, reply) => {
+    if (!ucLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const platform = String(req.body?.platform || '');
+    const channel = String(req.body?.channel || '').toLowerCase().replace(/^@/, '');
+    const username = String(req.body?.username || '').slice(0, 60);
+    const text = String(req.body?.text || '').slice(0, 500);
+    if (!(PLATFORMS as readonly string[]).includes(platform) || !CHANNEL_RE.test(channel) || !username || !text.trim().startsWith('!')) {
+      return reply.code(400).send({ ok: false, error: 'bad_request' });
+    }
+    const ch = await platformChannel(platform, channel);
+    const hit = ucSends.report({ platform, channel: ch, username, text });
+    if (hit) markUc(hit, app.log, { late: true });
+    return { ok: true, matched: !!hit };
+  });
 
   // Živé zprávy z ingestu (spec web verze §3.3): SSE, event `message` = stejný
   // tvar jako /chat/history s historical:false; `hello` po připojení;

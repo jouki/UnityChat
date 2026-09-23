@@ -14,6 +14,9 @@ const UC_MARKER = '\u2800';
 const PRIMARY_STREAMER = 'robdiesalot';
 const SUPPORTED_STREAMERS = new Set(['robdiesalot', 'tensterakdary', 'arcadebulls']);
 
+// Firefox (build scripts/build-firefox.mjs): browser.runtime.getBrowserInfo existuje jen tam.
+const IS_FIREFOX = typeof browser !== 'undefined' && typeof browser.runtime?.getBrowserInfo === 'function';
+
 const DEFAULTS = {
   channel: 'robdiesalot',
   kickChannel: 'robdiesalot',
@@ -110,6 +113,10 @@ class NicknameManager {
       // Změna chat commandů v Židolištce (webhook → backend → SSE) — UnityChat si obnoví „!" našeptávání.
       this._eventSource.addEventListener('commands-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onCommandsChange) this.onCommandsChange(d); } catch {}
+      });
+      // Zpráva z UnityChatu bez markeru (command) — server ji poznal (backend lib/ucSends.ts).
+      this._eventSource.addEventListener('uc-mark', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
@@ -257,6 +264,12 @@ class YouTubeProvider {
     this.onMessage = null;
     this.onStatus = null;
     this.onDebug = null;      // callback pro debug zprávy
+    // Záloha přes backend (GET /chat/stream, jako web): když YouTube pošle požadavky addonu na
+    // stránku se souhlasem s cookies (consent.youtube.com — Firefox bez souhlasu v profilu,
+    // ověřeno logem 2026-09-23). backendChannel = Twitch login kanálu (backend z něj zná YT handle).
+    this.backendChannel = '';
+    this._consentBlocked = false;
+    this._es = null;
   }
 
   _log(text) {
@@ -268,6 +281,7 @@ class YouTubeProvider {
   async connect(channel) {
     this.channel = channel.trim();
     this.disconnect(true);
+    this._consentBlocked = false;
     const cid = ++this._connectId;
     this._log(`connect() ch=${this.channel} cid=${cid}`);
     this.onStatus?.('connecting');
@@ -277,7 +291,8 @@ class YouTubeProvider {
       this._log(`[${cid}] findLiveVideoId start`);
       const vidStart = Date.now();
       this._videoId = await this._findLiveVideoId();
-      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart}`);
+      this._log(`[${cid}] findLiveVideoId done videoId=${this._videoId || 'null'} ms=${Date.now()-vidStart} consent=${this._consentBlocked}`);
+      if (!this._videoId && this._consentBlocked && this.backendChannel) return this._connectBackend(cid);
       if (!this._videoId) throw new Error('Streamer není live na YouTube');
       this.onDebug?.(`YouTube videoId: ${this._videoId}`);
 
@@ -501,6 +516,36 @@ class YouTubeProvider {
     return resp.text();
   }
 
+  /**
+   * YouTube přes backend SSE (/chat/stream?platforms=youtube) — stejný zdroj a tvar zpráv jako
+   * web a /chat/history. EventSource se po redeployi backendu (502) trvale zavře → nový pokus.
+   */
+  _connectBackend(cid, retry = 0) {
+    if (cid !== this._connectId) return;
+    const u = `${UC_API}/chat/stream?channel=${encodeURIComponent(this.backendChannel)}&platforms=youtube`;
+    this._log(`[${cid}] consent.youtube.com → YouTube přes backend ${u}`);
+    const es = new EventSource(u);
+    this._es = es;
+    es.addEventListener('hello', () => { if (cid === this._connectId) this.onStatus?.('connected'); });
+    es.addEventListener('message', (e) => {
+      if (cid !== this._connectId) return;
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (!m?.id || this._seen.has(m.id)) return;
+      this._seen.add(m.id);
+      if (this._seen.size > 5000) this._seen = new Set([...this._seen].slice(-2500));
+      this.onMessage?.({ ...m, historical: false });
+    });
+    es.onerror = () => {
+      if (cid !== this._connectId || es.readyState !== EventSource.CLOSED) return;
+      es.close();
+      if (this._es === es) this._es = null;
+      this.onStatus?.('connecting');
+      const delay = Math.min(30000, 3000 * (retry + 1));
+      this._log(`[${cid}] backend stream zavřen, nový pokus za ${delay} ms`);
+      setTimeout(() => this._connectBackend(cid, retry + 1), delay);
+    };
+  }
+
   async _findLiveVideoId() {
     const urls = [
       `https://www.youtube.com/${this.channel}/live`,
@@ -510,6 +555,7 @@ class YouTubeProvider {
       try {
         const r = await fetch(url, { credentials: 'include', redirect: 'follow' });
         if (!r.ok) { this._log(`findLive ${url} status=${r.status}`); continue; }
+        if (/^https:\/\/consent\.youtube\.com\//.test(r.url)) this._consentBlocked = true;
         const html = await r.text();
         const isLive =
           html.includes('"isLive":true') ||
@@ -775,6 +821,7 @@ class YouTubeProvider {
     }
     this.polling = false;
     if (this._pt) { clearTimeout(this._pt); this._pt = null; }
+    if (this._es) { this._es.close(); this._es = null; }
     this._cont = null;
     this._allCont = null;
     this._colorSrc = null;
@@ -1014,7 +1061,7 @@ class UnityChat {
     // Escape hatch: when the panel UI locks up, devtools console still runs.
     // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
     // force a log dump without needing the 💾 button to respond.
-    try { window.ucDump = () => chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }); } catch {}
+    try { window.ucDump = () => this._dumpLogs(); } catch {}
 
     this._init();
   }
@@ -1120,6 +1167,7 @@ class UnityChat {
     // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
     { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
+    this.nicknames.onUcMark = (d) => this._applyUcMark(d);   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
@@ -1425,7 +1473,7 @@ class UnityChat {
           await chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'DIAG', text: 'diag failed: ' + e.message });
         } catch {}
       }
-      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' });
+      this._dumpLogs();
     });
     $('btn-settings').addEventListener('click', () =>
       $('settings').classList.toggle('hidden')
@@ -2591,16 +2639,16 @@ class UnityChat {
   }
 
   async _injectContentScript(tab) {
+    // Soubory z manifestu (content_scripts), stejně jako background při instalaci —
+    // „*://*.twitch.tv/*" → host „twitch.tv" v URL záložky.
     const url = tab.url || '';
-    let file, allFrames = false;
-    if (url.includes('twitch.tv')) file = 'content/twitch.js';
-    else if (url.includes('youtube.com')) { file = 'content/youtube.js'; allFrames = true; }
-    else if (url.includes('kick.com')) file = 'content/kick.js';
-    if (!file) return;
+    const cs = (chrome.runtime.getManifest().content_scripts || []).find((c) =>
+      (c.matches || []).some((m) => url.includes(m.replace(/^\*:\/\/\*\./, '').replace(/\/\*$/, ''))));
+    if (!cs) return;
     try {
       await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames },
-        files: [file]
+        target: { tabId: tab.id, allFrames: !!cs.all_frames },
+        files: cs.js
       });
     } catch {}
   }
@@ -3291,7 +3339,8 @@ class UnityChat {
           text: markedText,
           replyMeta: {
             messageId: reply.messageId,
-            message: reply.message || ''
+            message: reply.message || '',
+            username: reply.username
           }
         });
       } else {
@@ -3301,18 +3350,89 @@ class UnityChat {
           const at = `@${name}`;
           if (!sendText.startsWith(at)) sendText = `${at} ${sendText}`;
         }
-        resp = await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
+        // Firefox: vložení do Twitch Slate editoru z content scriptu neprojde (izolace) → GQL.
+        resp = (platform === 'twitch' && IS_FIREFOX)
+          ? await chrome.runtime.sendMessage({ type: 'TW_GQL_SEND', tabId: tab.id, text: sendText, broadcasterId: this.config._roomId || null })
+          : await chrome.tabs.sendMessage(tab.id, { type: 'SEND_CHAT', text: sendText });
       }
 
+      if (resp?.ok && resp.fallback === 'mention') {
+        // Kick odpověď odmítl (odpověď na starou zprávu) a odešla „@login text" → optimistická
+        // „odpověď" by se s echem nespárovala (jiný text) a zůstala viset; skutečná přijde z chatu.
+        this._dropOptimistic(optId);
+        this._ucLog('KickSend', 'odpověď odmítnuta → odesláno jako @zmínka, optimistická zpráva odebrána');
+      }
       if (!resp?.ok) {
         const reason = resp?.error || 'nepodařilo se odeslat';
         this._markSendFailed(optId, reason);
         this._sys(`Chyba: ${reason}`);
+      } else if (text.startsWith('!')) {
+        // Command jde bez markeru (rozbil by boty) → serveru nahlásit, že je z UnityChatu;
+        // ingest zprávu označí a všem pošle SSE `uc-mark` (zlaté logo), backend lib/ucSends.ts.
+        this._reportUcSent(platform, username, markedText);
       }
     } catch (err) {
       this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
     }
+  }
+
+  /**
+   * 💾 dump logu. Chrome: background (service worker, data: URL). Firefox: background je uspávaná
+   * stránka a blob: URL s ní zaniká uprostřed stahování (soubor se smazal a nový nedopsal,
+   * 2026-09-23) → blob vytvoří a stažení spustí panel, který běží.
+   */
+  async _dumpLogs() {
+    if (!IS_FIREFOX) {
+      chrome.runtime.sendMessage({ type: 'DUMP_LOGS' }).then((r) => { if (r && r.ok === false) this._sys(`Uložení logu selhalo: ${r.error || '?'}`); }).catch(() => {});
+      return;
+    }
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'GET_LOGS' });
+      const text = r?.text || '(log prázdný)';
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+      try {
+        // Dialog „Uložit jako" (pokyn usera 2026-09-23) — předvyplněné unitychat-debug.log.
+        await chrome.downloads.download({ url, filename: 'unitychat-debug.log', conflictAction: 'overwrite', saveAs: true });
+        this._sys('Log uložen.');
+      } catch (e) {
+        // Zavření dialogu bez uložení není chyba.
+        if (/cancel/i.test(e.message || '')) this._sys('Uložení logu zrušeno.');
+        else this._sys(`Uložení logu selhalo: ${e.message}`);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    } catch (e) {
+      this._sys(`Dump selhal: ${e.message}`);
+    }
+  }
+
+  /** POST /chat/uc-sent — command odeslaný z UnityChatu (bez markeru) dostane u všech zlaté logo. */
+  _reportUcSent(platform, username, text) {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel || !username || username === 'me') return;
+    fetch(`${UC_API}/chat/uc-sent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, channel, username, text }),
+      signal: AbortSignal.timeout(8000),
+    }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+  }
+
+  /** SSE `uc-mark`: server poznal zprávu z UnityChatu bez markeru → zlaté logo (i u vykreslené). */
+  _applyUcMark({ platform, id }) {
+    if (!id) return;
+    // Zapamatovat (zpráva z IRC může dorazit až po uc-mark); strop, ať množina neroste.
+    if (!this._ucMarkedIds) this._ucMarkedIds = new Set();
+    this._ucMarkedIds.add(String(id));
+    if (this._ucMarkedIds.size > 500) this._ucMarkedIds.delete(this._ucMarkedIds.values().next().value);
+    const cached = this.store.get(id);
+    if (cached) cached._uc = true;
+    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
+    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    for (const el of els) {
+      const pi = el.querySelector('.pi');
+      if (pi && (!platform || el.dataset.platform === platform || !el.dataset.platform)) { pi.classList.add('uc'); pi.setAttribute('data-tooltip', 'UnityChat User'); }
+    }
+    this._ucLog('UcSent', `uc-mark ${platform}:${id} → ${els.length} el`);
   }
 
   // ---- Providers ----
@@ -3621,7 +3741,7 @@ class UnityChat {
     // so we must NOT fall back to twitch channel as a cross-platform guess.
     if (this.config.twitch && this.config.channel) { this.twitch.connect(this.config.channel); connecting.push('Twitch'); }
     if (this.config.kick && this.config.kickChannel) { this.kick.connect(this.config.kickChannel); connecting.push('Kick'); }
-    if (this.config.youtube && this.config.ytChannel) { this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
+    if (this.config.youtube && this.config.ytChannel) { this.youtube.backendChannel = (this.config.channel || '').toLowerCase(); this.youtube.connect(this.config.ytChannel); connecting.push('YouTube'); }
     if (connecting.length) this._sys(`Připojování: ${connecting.join(', ')}...`);
 
   }
@@ -5673,9 +5793,11 @@ class UnityChat {
   }
 
   async _showEmotePreview(img, pinned) {
-    const url = img.src;
-    const name = img.alt || img.title || '';
-    const meta = this.emotes._emoteSourceFromUrl(url);
+    // Obsah karty ze sdíleného core (emote-preview.js, stejné jako web): u zero-width
+    // stacku všechny vrstvy přes sebe + seznam všech emotů; detaily = emote pod myší.
+    const core = window.UC_CORE;
+    const layers = core.previewLayers(img, this.emotes);
+    const active = layers.find((l) => l.active) || layers[0];
     let card = document.getElementById('emote-preview');
     if (!card) {
       card = document.createElement('div');
@@ -5686,69 +5808,23 @@ class UnityChat {
     card.classList.remove('hidden');
     this._emotePreviewPinned = !!pinned;
     card.classList.toggle('pinned', !!pinned);
-
-    const sourceLabel = meta?.source || 'Emote';
-    const sourceClass = sourceLabel.toLowerCase().replace(/[^a-z]/g, '');
-    const hires = meta?.hires || url;
-    const ehName = this.emotes._eh(name);
-    const eaHires = this.emotes._ea(hires);
-
-    card.innerHTML = `
-      <div class="ep-img-wrap">
-        <img class="ep-img" src="${eaHires}" alt="">
-      </div>
-      <div class="ep-name">
-        <span class="ep-name-text">${ehName}</span>
-        <span class="ep-source ep-src-${sourceClass}">${sourceLabel}</span>
-      </div>
-      <div class="ep-detail">${pinned
-        ? '<span class="ep-loading">Načítám detaily…</span>'
-        : '<span class="ep-hint">Klikni pro detaily</span>'}</div>
-    `;
+    card.innerHTML = core.previewCardHtml(layers, { pinned });
 
     // Position above the emote (keeps card inside the side panel even
     // when emote is at the very bottom). Falls back below if no room above.
     this._positionEmotePreview(card, img);
 
-    // Pinned mode: lazy-fetch source details and re-render the .ep-detail
-    // block with owner + date + external link.
-    if (pinned && meta?.id) {
+    // Pinned mode: lazy-fetch source details and re-render the .ep-detail block.
+    if (pinned && active.meta?.id) {
       try {
-        const d = await this.emotes.fetchEmoteDetails(meta.source, meta.id, name);
+        const d = await this.emotes.fetchEmoteDetails(active.meta.source, active.meta.id, active.name);
         // Card may have been dismissed while we awaited
         if (!this._emotePreviewPinned || card.classList.contains('hidden')) return;
         const detail = card.querySelector('.ep-detail');
-        if (!d || !detail) {
-          if (detail) detail.innerHTML = '<span class="ep-hint">Žádné další detaily</span>';
-          return;
-        }
-        const ehAvatar = (url) =>
-          url
-            ? `<img class="ep-avatar" src="${this.emotes._ea(url)}" alt="">`
-            : '<span class="ep-avatar ep-avatar-blank"></span>';
-        const rows = [];
-        if (d.owner) {
-          rows.push(`<div class="ep-row"><span class="ep-label">Made by</span>${ehAvatar(d.ownerAvatar)}<span class="ep-owner">${this.emotes._eh(d.owner)}</span></div>`);
-        }
-        if (d.addedBy) {
-          rows.push(`<div class="ep-row"><span class="ep-label">Added by</span>${ehAvatar(d.addedByAvatar)}<span class="ep-owner">${this.emotes._eh(d.addedBy)}</span></div>`);
-        }
-        if (d.addedAt instanceof Date && !isNaN(d.addedAt)) {
-          const fmt = d.addedAt.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' });
-          rows.push(`<div class="ep-row"><span class="ep-label">Added on</span><span>${fmt}</span></div>`);
-        }
-        if (d.externalUrl) {
-          rows.push(`<a class="ep-extlink" href="${this.emotes._ea(d.externalUrl)}" target="_blank" rel="noopener">Otevřít na ${sourceLabel} ↗</a>`);
-        }
-        detail.innerHTML = rows.length ? rows.join('') : '<span class="ep-hint">Žádné další detaily</span>';
+        if (detail) detail.innerHTML = core.previewDetailHtml(d, active.source);
         // Layout may have grown — reposition.
         this._positionEmotePreview(card, img);
       } catch {}
-    }
-
-    // Also include the source link in the name row when known
-    if (!pinned) {
-      // Name row already rendered, leave compact in hover mode
     }
   }
 
@@ -6055,7 +6131,8 @@ class UnityChat {
 
     // Detekce UnityChat markeru → oranžový platform badge
     // Flag _uc se cachuje aby přežil reload
-    let isUC = !!msg._uc;
+    // _uc = marker (lokálně) nebo příznak serveru `uc` (command z UnityChatu bez markeru, /chat/history).
+    let isUC = !!msg._uc || !!msg.uc || !!this._ucMarkedIds?.has(msg.id);
     if (!isUC && msg.message?.includes(UC_MARKER)) {
       isUC = true;
       msg.message = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
@@ -6661,6 +6738,15 @@ class UnityChat {
   // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
   // Dosud zůstala v DOM i v cache s _optimistic:true a po reloadu se vykreslila
   // znovu — z pohledu uživatele "poslal jsem to", přitom nikam nešla.
+  /** Odebrat optimistickou zprávu (DOM, store, párovací klíč) — skutečná přijde z chatu. */
+  _dropOptimistic(optId) {
+    this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)?.remove();
+    this.store.remove(optId);
+    for (const [key, id] of this._optimisticKeys) {
+      if (id === optId) { this._optimisticKeys.delete(key); break; }
+    }
+  }
+
   _markSendFailed(optId, reason) {
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el) {
@@ -6693,6 +6779,8 @@ class UnityChat {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
+    // uc-mark mohl přijít dřív než echo (server byl rychlejší) → teď, když má element skutečné id.
+    if (el && this._ucMarkedIds?.has(realMsg.id)) this._applyUcMark({ platform: realMsg.platform, id: realMsg.id });
 
     // Update username color — prefer UnityChat custom color over IRC color
     if (el) {

@@ -2981,3 +2981,11 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
   color: var(--text-primary); font-size: 12px; min-height: 16px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* Náhled zero-width stacku (core/emote-preview.js): vrstvy přes sebe, seznam všech emotů. */
+.emote-preview .ep-img-wrap.stack { display: grid; place-items: center; }
+.emote-preview .ep-img-wrap.stack .ep-img { grid-area: 1 / 1; }
+.emote-preview .ep-names { display: flex; flex-direction: column; align-items: center; gap: 3px; max-width: 100%; }
+.emote-preview .ep-names .ep-name { opacity: 0.75; }
+.emote-preview .ep-names .ep-name.active, .emote-preview .ep-names .ep-name:only-child { opacity: 1; }
+.emote-preview .ep-plus { color: var(--text-secondary, #9a9aa6); font-weight: 400; }

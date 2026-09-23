@@ -15,6 +15,8 @@ import {
   needsRefresh, type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
+import { ucSends, markUc } from '../lib/ucSends.js';
+import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
 
@@ -34,6 +36,8 @@ const SendBody = z.object({
   channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
   text: z.string().min(1).max(2000),
   replyTo: z.string().max(200).optional().nullable(),
+  /** Login autora zprávy, na kterou se odpovídá — pro záložní „@login text", když platforma odpověď odmítne. */
+  replyToUser: z.string().max(60).optional().nullable(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';
@@ -162,14 +166,28 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       ident = { ...ident!, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
     };
 
-    const doSend = async (): Promise<{ id: string | null }> => {
+    const doSend = async (): Promise<{ id: string | null; sentText?: string; fallback?: 'mention' }> => {
       if (platform === 'twitch') {
         if (!dir[0].twitchUserId) throw new SendError('channel has no twitch id', 404);
         return sendTwitch({ accessToken: ident!.accessToken, senderId: ident!.platformUserId, broadcasterId: dir[0].twitchUserId, text, replyTo: body.data.replyTo });
       }
       if (platform === 'kick') {
         if (!dir[0].kickUserId) throw new SendError('channel has no kick id', 404);
-        return sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
+        try {
+          return await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
+        } catch (e) {
+          // Kick public API vrací na odpověď 404 „Not found" (2026-09-23, i se správným
+          // broadcaster_user_id). Zpráva nesmí propadnout → znovu jako obyčejná „@login text"
+          // (jako odpověď napříč platformami). Log rozliší, jestli padá jen odpověď.
+          if (!(e instanceof SendError) || e.status !== 404 || !body.data.replyTo) throw e;
+          const at = body.data.replyToUser ? `@${body.data.replyToUser.replace(/^@/, '')} ` : '';
+          req.log.warn({ accountId, replyTo: body.data.replyTo, err: e.message }, 'kick: odpověď odmítnuta → posílám jako zprávu s @');
+          const sentText = text.startsWith(at) ? text : at + text;
+          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: sentText, replyTo: null });
+          req.log.info({ accountId, id: res.id }, 'kick: záložní zpráva bez reply odeslána');
+          // Klient podle toho zahodí optimistickou „odpověď" (echo přijde jako „@login text").
+          return { ...res, sentText, fallback: 'mention' as const };
+        }
       }
       const videoId = opts.ingest?.videoIdFor('youtube', dir[0].youtubeHandle || channel) || null;
       if (!videoId) throw new SendError('youtube: stream not live (no video id)', 409);
@@ -180,14 +198,19 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
 
     try {
       if (needsRefresh(ident.expiresAt)) await refresh();
-      let res: { id: string | null };
+      let res: { id: string | null; sentText?: string; fallback?: 'mention' };
       try {
         res = await doSend();
       } catch (e) {
         if (e instanceof SendError && e.retryable) { await refresh(); res = await doSend(); } else throw e;
       }
       req.log.info({ accountId, platform, channel, id: res.id, len: text.length }, 'web chat send');
-      return { ok: true, id: res.id, text };
+      // Command (bez markeru): ingest ho podle hlášení označí jako UnityChat (zlaté logo, lib/ucSends.ts).
+      if (text.startsWith('!')) {
+        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text });
+        if (hit) markUc(hit, req.log, { late: true });
+      }
+      return { ok: true, id: res.id, text: res.sentText ?? text, ...(res.fallback ? { fallback: res.fallback } : {}) };
     } catch (e) {
       const err = e as SendError;
       const status = err instanceof SendError ? err.status : 502;

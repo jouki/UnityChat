@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.40.4",
+  "version": "3.40.18",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",
@@ -58,6 +58,7 @@
         "*://*.twitch.tv/*"
       ],
       "js": [
+        "content/uc-header-button.js",
         "content/twitch.js"
       ],
       "run_at": "document_idle"
@@ -77,6 +78,7 @@
         "*://*.kick.com/*"
       ],
       "js": [
+        "content/uc-header-button.js",
         "content/kick.js"
       ],
       "run_at": "document_idle"
@@ -91,7 +93,8 @@
       ],
       "matches": [
         "*://*.twitch.tv/*",
-        "*://*.youtube.com/*"
+        "*://*.youtube.com/*",
+        "*://*.kick.com/*"
       ]
     }
   ]

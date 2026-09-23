@@ -44,6 +44,8 @@ export function isAllowedReturnTo(url: string): boolean {
     if (u.username || u.password) return false;
     // Addon: chrome.identity.launchWebAuthFlow vrací na https://<id>.chromiumapp.org/ (id = 32× a–p).
     if (/^https:\/\/[a-p]{32}\.chromiumapp\.org$/.test(u.origin)) return true;
+    // Firefox: identity.getRedirectURL() = https://<sha1 hash ID doplňku, 40 hex>.extensions.allizom.org/.
+    if (/^https:\/\/[0-9a-f]{40}\.extensions\.allizom\.org$/.test(u.origin)) return true;
     return allowedOrigins().includes(u.origin);
   } catch {
     return false;

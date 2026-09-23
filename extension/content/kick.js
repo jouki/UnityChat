@@ -4,6 +4,7 @@
 (function () {
   if (window._ucKick) return;
   window._ucKick = true;
+  let _whoami = null;   // { username, at } — cache KICK_WHOAMI (viz PING)
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'PING') {
       // Viewer's own Kick username. Kick is a Next.js app — the logged-in
@@ -22,22 +23,23 @@
           const m = txt.match(/"session"[^{}]{0,100}"user"\s*:\s*\{[^}]*?"username"\s*:\s*"([^"]+)"/);
           if (m) { username = m[1]; break; }
         }
-        // Strategy 2: avatar image alt attribute in header/navbar.
-        if (!username) {
-          const avatars = document.querySelectorAll(
-            'header img[alt], nav img[alt], [class*="navbar"] img[alt], [class*="avatar"] img[alt]'
-          );
-          for (const img of avatars) {
-            const alt = img.getAttribute('alt')?.trim();
-            if (alt && /^[a-z0-9_-]+$/i.test(alt) && alt.toLowerCase() !== 'kick') {
-              username = alt;
-              break;
-            }
-          }
-        }
       } catch {}
-      sendResponse({ platform: 'kick', username });
-      return;
+      if (username) { sendResponse({ platform: 'kick', username }); return; }
+      // Strategy 2: zeptat se Kicku (GET /api/v1/user ve stránce přes background). Dřívější
+      // hádání z `alt` avatarů vracelo první doporučený kanál v levém panelu (ověřeno na DOM).
+      // Panel se ptá každé ~3 s → výsledek na 60 s podržet (neúspěch jen 15 s), logovat jen změnu.
+      const now = Date.now();
+      if (_whoami && now - _whoami.at < (_whoami.username ? 60_000 : 15_000)) {
+        sendResponse({ platform: 'kick', username: _whoami.username });
+        return;
+      }
+      chrome.runtime.sendMessage({ type: 'KICK_WHOAMI' }, (resp) => {
+        const u = resp?.username || null;
+        if (!_whoami || _whoami.username !== u) _sendLog(`whoami: ${u || '-'}${resp?.status ? ' status=' + resp.status : ''}${resp?.error ? ' chyba=' + resp.error : ''}`);
+        _whoami = { username: u, at: Date.now() };
+        sendResponse({ platform: 'kick', username: u });
+      });
+      return true;
     }
 
     if (msg.type === 'OPEN_USER_CARD') {
@@ -54,11 +56,25 @@
 
     if (msg.type === 'SEND_CHAT') {
       sendChat(msg.text, msg.replyMeta || null)
-        .then(() => sendResponse({ ok: true }))
+        .then((r) => sendResponse({ ok: true, ...(r || {}) }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }
   });
+
+  // Tlačítko UnityChatu v záhlaví chatu Kicku (jako na Twitchi): hned za tlačítko sbalení
+  // chatu (ikona CollapseRight) v #channel-chatroom. Kick při navigaci záhlaví přemountuje →
+  // kontrola každé 2 s. Struktura ověřená na uloženém zdroji kick.com (2026-09-23).
+  const UC_BTN_ID = 'uc-open-panel-btn';
+  function injectHeaderButton() {
+    if (document.getElementById(UC_BTN_ID) || !window.__ucHeaderButton) return;
+    const collapse = document.querySelector('#channel-chatroom svg[data-ds-icon="CollapseRight"]')?.closest('button');
+    const wrapper = collapse?.parentElement;
+    if (!wrapper?.parentElement) return;
+    wrapper.after(window.__ucHeaderButton({ id: UC_BTN_ID }));
+  }
+  setInterval(injectHeaderButton, 2000);
+  injectHeaderButton();
 
   function findInput() {
     const sels = [
@@ -78,7 +94,20 @@
 
   async function sendChat(text, replyMeta) {
     // Native Kick replies vždy přes API (DOM send neumí reply metadata).
-    if (replyMeta) return sendViaAPI(text, replyMeta);
+    if (replyMeta) {
+      try {
+        await sendViaAPI(text, replyMeta);
+        return null;
+      } catch (e) {
+        // Kick nedovolí odpovědět na starou zprávu (ORIGINAL_MESSAGE_NOT_FOUND — i přímo v chatu
+        // Kicku, 2026-09-23) → poslat jako „@login text" a panelu říct, ať zahodí optimistickou odpověď.
+        if (!/ORIGINAL_MESSAGE_NOT_FOUND/.test(e.message || '') || !replyMeta.username) throw e;
+        const at = '@' + String(replyMeta.username).replace(/^@/, '') + ' ';
+        _sendLog('API: odpověď odmítnuta (stará zpráva) → posílám jako @zmínku');
+        await sendViaAPI(text.startsWith(at) ? text : at + text, null);
+        return { fallback: 'mention' };
+      }
+    }
     const input = findInput();
     if (input) {
       return sendViaDOM(input, text);
@@ -86,6 +115,12 @@
     // Chat zavřený → odeslat přes Kick API (bez otevírání panelu)
     return sendViaAPI(text, null);
   }
+
+  function _sendLog(text) {
+    try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'KickSend', args: [text] }).catch?.(() => {}); } catch {}
+  }
+
+  const inputText = (el) => (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' ? el.value : el.textContent) || '';
 
   async function sendViaDOM(input, text) {
     input.focus();
@@ -104,21 +139,36 @@
 
     await new Promise((r) => setTimeout(r, 100));
 
+    const inserted = inputText(input).trim();
     const sendBtn = document.querySelector(
       'button[data-testid="send-message-button"], button.base-button, button[aria-label*="Send"]'
     );
-    if (sendBtn) sendBtn.click();
-    else input.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-    }));
+    _sendLog(`DOM: vloženo="${inserted.slice(0, 40)}" shoda=${inserted === text.trim()} tag=${input.tagName} btn=${!!sendBtn}`);
+    if (inserted) {
+      if (sendBtn) sendBtn.click();
+      else input.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+      }));
+      // Ověřit, že Kick zprávu převzal (pole se vyprázdní). Dřív se výsledek neověřoval →
+      // panel hlásil úspěch, i když nic neodešlo (Firefox, 2026-09-23).
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        if (!inputText(input).trim()) { _sendLog(`DOM: odesláno (pole prázdné po ${(i + 1) * 100} ms)`); return; }
+      }
+      _sendLog('DOM: pole se nevyprázdnilo → API');
+      if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') input.value = ''; else input.textContent = '';
+    }
+    return sendViaAPI(text, null);
   }
 
   async function sendViaAPI(text, replyMeta) {
     const slug = window.location.pathname.replace(/^\//, '').split(/[/?#]/)[0];
     if (!slug) throw new Error('Kick kanál nenalezen v URL');
 
+    _sendLog(`API: KICK_SEND slug=${slug}`);
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ type: 'KICK_SEND', slug, text, replyMeta }, (resp) => {
+        _sendLog(`API: výsledek ok=${!!resp?.ok}${resp?.error ? ' chyba=' + resp.error : ''}`);
         if (resp?.ok) resolve();
         else reject(new Error(resp?.error || 'Odeslání selhalo'));
       });
