@@ -138,12 +138,27 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     g.title = on ? 'Měnu změníš po návratu tlačítkem Zpět (nový QR kód).' : '';
     for (const btn of g.querySelectorAll('button')) btn.disabled = on;
   }
-  /** Přechod mezi obrazovkami panelu (formulář ↔ QR ↔ ověření): vjezd z boku + prolnutí. */
-  function animateIn(el, dir) {
+  /**
+   * Přechod mezi obrazovkami panelu (formulář ↔ QR ↔ ověření): nová obrazovka vjede z boku
+   * s prolnutím a výška panelu se plynule dotáhne z `h0` (výška před přepnutím) na novou.
+   * Volat až po vložení obsahu nové obrazovky, ať se měří skutečná výška.
+   */
+  let navTimer = null;
+  function animateIn(el, dir, h0) {
     if (!el) return;
     el.classList.remove('uc-qd-in-fwd', 'uc-qd-in-back');
     void el.offsetWidth;
     el.classList.add(dir === 'back' ? 'uc-qd-in-back' : 'uc-qd-in-fwd');
+    if (h0 == null || win.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    win.clearTimeout(navTimer);
+    panel.style.transition = ''; panel.style.height = '';
+    const h1 = panel.offsetHeight;
+    if (Math.abs(h1 - h0) < 2) return;
+    panel.style.height = `${h0}px`;
+    void panel.offsetHeight;
+    panel.style.transition = 'height 320ms cubic-bezier(0.22, 0.8, 0.24, 1)';
+    panel.style.height = `${h1}px`;
+    navTimer = win.setTimeout(() => { panel.style.transition = ''; panel.style.height = ''; }, 340);
   }
   const detectTestmode = makeTestmodeDetector();
 
@@ -358,16 +373,17 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   function askCode(values) {
     const email = values.email.trim();
+    const h0 = panel.offsetHeight;
     form.hidden = true; verifyEl.hidden = false;
-    animateIn(verifyEl, 'fwd');
     verifier?.destroy();
     verifier = startEmailVerification({
       container: verifyEl, api, email, log,
       onVerified: (em) => { profile = { ...(profile || {}), email: em, verified: true }; renderMail(); closeVerify(); createIntent(values); },
       // Kód teď poslat nejde (limit / výpadek služeb): QR dono nezablokovat, e-mail se pošle neověřený.
       onCannotSend: () => { closeVerify(); setError('E-mail teď nejde ověřit, tip pošleme bez ověření.'); createIntent(values); },
-      onBack: () => { closeVerify(); animateIn(form, 'back'); },
+      onBack: () => { const hb = panel.offsetHeight; closeVerify(); animateIn(form, 'back', hb); },
     });
+    animateIn(verifyEl, 'fwd', h0);
   }
   function closeVerify() { verifier?.destroy(); verifier = null; verifyEl.hidden = true; form.hidden = false; clearConfigNotice(); }
 
@@ -390,8 +406,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   }
 
   function showResult(res) {
+    const h0 = panel.offsetHeight;
     form.hidden = true; $('.uc-qd-res').hidden = false;
-    animateIn($('.uc-qd-res'), 'fwd');
     lockCurrency(true);
     // SVG kreslí náš server (knihovna qrcode), vkládá se jako obsah z důvěryhodného zdroje.
     // Zobrazení: černé pozadí + moduly v gradientu UnityChatu; stažení bere původní černobílé (qrRaw).
@@ -400,6 +416,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     qrVs = res.vs || '';
     const c = res.currency === 'CZK' ? 'Kč' : res.currency;
     $('.uc-qd-amount').textContent = `${formatAmount(res.amount, res.currency)} ${c}${res.czkPreview ? ` (≈ ${res.czkPreview} Kč)` : ''}`;
+    animateIn($('.uc-qd-res'), 'fwd', h0);
     const st = $('.uc-qd-status'); st.classList.remove('ok'); $('.uc-qd-st').textContent = 'Čekám na platbu…';
     publicId = res.publicId;
     paidShown = false;
@@ -432,11 +449,12 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   function back() {
     win.clearTimeout(pollTimer); stopRing(); publicId = null;
     if (paidShown) { f.message.value = ''; $('.uc-qd-count').textContent = `0 / ${MSG_MAX}`; paidShown = false; }
+    const h0 = panel.offsetHeight;
     $('.uc-qd-res').hidden = true; form.hidden = false;
-    animateIn(form, 'back');
     lockCurrency(false);
     clearConfigNotice();
     renderWho(); renderMail();
+    animateIn(form, 'back', h0);
   }
   function downloadQr() {
     if (!qrRaw) return;
