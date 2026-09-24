@@ -1233,7 +1233,8 @@ class UnityChat {
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
     this.nicknames.onSoundboard = (type, d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
-      if (type === 'soundboard-change') this._loadSoundboard();
+      // Změnu dostanou všichni diváci naráz → refetch rozprostřít do 0–3 s (backend volá Židolištu z jedné IP).
+      if (type === 'soundboard-change') { clearTimeout(this._sfxRefetchTimer); this._sfxRefetchTimer = setTimeout(() => this._loadSoundboard(), Math.random() * 3000); }
       else this._sfx?.onSse(type, d);
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);   // id zprávy je jednoznačné, kanál netřeba
