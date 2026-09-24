@@ -125,10 +125,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   let profile = null, verifier = null;
   let qrRaw = null, qrVs = '';
   const gradId = `ucqd-g-${Math.random().toString(36).slice(2, 8)}`;
-  /** Serverové SVG (bílé pozadí, černé moduly) → černé pozadí a moduly v gradientu UnityChatu. */
+  /** Serverové SVG (bílé pozadí, černé moduly) → bez pozadí, moduly v gradientu UnityChatu. */
   function brandQrSvg(svg) {
     return svg
-      .replace(/<path fill="#ffffff"/i, '<path fill="#000000"')
+      .replace(/<path fill="#ffffff"[^>]*\/>/i, '')   // bez pozadí — glow jde jen na políčka (CSS drop-shadow)
       .replace(/stroke="#000000"/i, `stroke="url(#${gradId})"`)
       .replace(/(<svg[^>]*>)/i, `$1<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="0.45" stop-color="#ffc800"/><stop offset="1" stop-color="#ff8c00"/></linearGradient></defs>`);
   }
@@ -204,8 +204,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       <button type="button" class="uc-qd-back" data-act="back">← Zpět</button>
       <p class="uc-qd-sub">Naskenuj QR kód mobilní aplikací banky</p>
       <div class="uc-qd-qr"></div>
-      <div class="uc-qd-amount"></div>
       <button type="button" class="uc-qd-dl" data-act="download">Stáhnout QR kód</button>
+      <div class="uc-qd-amount"></div>
       <div class="uc-qd-notice uc-qd-notice2" hidden></div>
       <div class="uc-qd-status"><span class="uc-qd-st">Čekám na platbu…</span><span class="uc-qd-ring" hidden><i></i><em></em></span></div>
     </div>`;
