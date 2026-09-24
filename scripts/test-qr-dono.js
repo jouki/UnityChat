@@ -32,6 +32,11 @@ const assert = require('node:assert/strict');
   assert.deepEqual(qd.validateDono({ ...ok, email: '', needEmail: false }, cfg, 'CZK'), [], 'ověřený účet e-mail nepotřebuje');
   assert.deepEqual(qd.validateDono({ ...ok, voice: 'X' }, cfg, 'CZK').map((p) => p.field), ['voice']);
 
+  // otisk configu: změna minima bez bumpu version se pozná
+  const s1 = qd.configSignature(cfg);
+  assert.notEqual(qd.configSignature({ ...cfg, currencies: { ...cfg.currencies, CZK: { minAmount: 15 } } }), s1);
+  assert.equal(qd.configSignature({ ...cfg, rate: { eurToCzk: 99 } }), s1, 'kurz formulář „nezměnil“');
+
   // chyby serveru
   assert.equal(qd.donoErrorText({ error: 'below_minimum', minAmount: 30 }, 'CZK'), 'Minimum je 30 Kč.');
   assert.equal(qd.donoErrorText({ error: 'invalid_test_token' }, 'EUR'), 'Neplatný testovací token.');

@@ -27,6 +27,12 @@ export function currencyConfig(cfg, cur) {
   return cur === 'EUR' && cfg.enabled ? { minAmount: cfg.minAmount, iban: cfg.iban } : null;
 }
 
+/** Otisk configu, který mění formulář (verze, minima, IBAN dostupnost, hlasy). */
+export function configSignature(c) {
+  const cur = c?.currencies || {};
+  return JSON.stringify([c?.version || '', ['CZK', 'EUR'].map((k) => cur[k] ? cur[k].minAmount : null), (c?.voices || []).map((v) => v.id)]);
+}
+
 /** Částka z pole: čárka i tečka, NaN = prázdná. */
 export function parseAmount(v) {
   const n = parseFloat(String(v ?? '').trim().replace(',', '.'));
@@ -100,7 +106,7 @@ export const QR_DONO_BUTTON_SVG = QR_SVG_ICON;
  * @param {HTMLElement} o.host
  * @param {HTMLElement} o.button
  * @param {{ config(): Promise<object>, testToken(t: string): Promise<{valid:boolean}>,
- *           createIntent(body: object): Promise<object>, intentStatus(id: string): Promise<object> }} o.api
+ *           createIntent(body: object): Promise<object>, intentStatus(id: string): Promise<object>,
  *           profile(): Promise<object>, emailStart(email: string): Promise<object>, emailVerify(code: string): Promise<object> }} o.api
  *        Chyby hází s `.error` / `.minAmount` z odpovědi serveru.
  * @param {() => ({ platform: string, name: string } | null)} o.identity  kdo tipuje (null = nepřihlášen)
@@ -112,7 +118,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   const doc = host.ownerDocument;
   const win = doc.defaultView;
   const L = (t) => log?.('QrDono', t);
-  let cfg = null, cfgVersion = null, cur = 'CZK';
+  let cfg = null, cfgSig = null, cur = 'CZK';
   try { const c = currency?.load?.(); if (c === 'CZK' || c === 'EUR') cur = c; } catch { /* ignore */ }
   let testMode = false, testValid = false, tokenTimer = null, tokenSeq = 0;
   let publicId = null, pollTimer = null, versionTimer = null, sampleAudio = null, paidShown = false;
@@ -268,8 +274,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   async function loadConfig() {
     try {
       const c = await api.config();
-      const changed = cfgVersion !== null && c.version && c.version !== cfgVersion;
-      cfg = c; cfgVersion = c.version || '';
+      // Změnu poznat i bez bumpu `version` (Židolišta ho u minima nezvedala): podpis minim + hlasů.
+      const sig = configSignature(c);
+      const changed = cfgSig !== null && sig !== cfgSig;
+      cfg = c; cfgSig = sig;
       renderVoices(); renderCurrency();
       // Změna nastavení (dashboard / !mindono) během otevřeného formuláře: data zůstanou,
       // jen se přepočítá minimum a hlasy (web tu ukazuje overlay s reloadem, tady netřeba).
@@ -526,6 +534,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   return {
     open, close, isOpen,
     toggle: () => (isOpen() ? close() : open()),
+    /** SSE donate-config-change (webhook Židolišty) → config hned, ne až za 10 s. Zavřený panel nic nedělá. */
+    reloadConfig: () => { if (isOpen() && !form.hidden) loadConfig(); },
     /** Změna přihlášení / platformy u hostitele → překreslit „Tipuješ jako…“ a načíst profil. */
     refreshIdentity: () => { renderWho(); if (isOpen()) loadProfile(); },
     destroy() {
