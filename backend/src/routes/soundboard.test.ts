@@ -19,7 +19,7 @@ test('normalizeCatalog: jen validní zvuky, řazení tier → jméno, doplnění
   assert.equal(c.sounds[1].durationMs, 1840);
   assert.equal(c.sounds[2].durationMs, null);
   assert.equal(c.sounds[1].emoji, '🙏');
-  assert.deepEqual(c.tiers, [{ tier: 1, name: 'Základní' }, { tier: 3, name: null }]);
+  assert.deepEqual(c.tiers, [{ tier: 1, name: 'Základní', position: 1 }, { tier: 3, name: null, position: 3 }]);
   assert.deepEqual(normalizeCatalog(null), { tiers: [], sounds: [] });
 });
 
@@ -62,4 +62,12 @@ test('normalizeState v1.1: zmrazený tier propustí paused, remainingMs, totalMs
   assert.deepEqual(s.tiers[0], { tier: 1, startedAt: '2026-09-24T10:00:00Z', expiresAt: null, paused: true, remainingMs: 272000, available: false, totalMs: 420000 });
   assert.equal(s.tiers[1].available, true);
   assert.equal(s.tiers[2].available, false, 'server řekl, že nejde přehrát');
+});
+
+test('normalizeCatalog v1.2: pořadí tierů podle position, ne podle id', () => {
+  const c = normalizeCatalog({ tiers: [{ tier: 1, position: 2 }, { tier: 4, name: 'VIP zvuky', position: 1 }], sounds: [
+    { id: 1, name: 'a', tier: 1, url: 'https://z/1.mp3' }, { id: 2, name: 'b', tier: 4, url: 'https://z/2.mp3' },
+  ] });
+  assert.deepEqual(c.tiers.map((t) => t.tier), [4, 1]);
+  assert.deepEqual(c.sounds.map((s) => s.id), [2, 1]);
 });

@@ -112,7 +112,7 @@ export function soundboardIconState(state, now) {
   if (!state.me) return { mode: 'link', title: 'Soundboard', lines: [`Připoj účet ${PLATFORM_NAMES[state.platform] || state.platform} k UnityChatu.`] };
   const unlocked = unlockedTiers(state, now);
   if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
-  const rows = [...unlocked.entries()].sort((a, b) => a[0] - b[0]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
+  const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
   // Všechno zmrazené: ikona neaktivní jako u zamčené odměny, tooltip ukáže zastavený čas.
   if (!playableTiers(state, now).size) return { mode: 'paused', title: 'Odměna je pozastavená', lines: ['Streamer časovač zastavil, sound efekty teď nejdou pustit.'], rows, cooldownMs: 0, remainingMs: null, progress: null };
   const timed = rows.filter((r) => r.remainingMs !== null);
@@ -130,11 +130,23 @@ export function soundboardIconState(state, now) {
 }
 
 
+/** Pořadí tieru (v1.2 position z dashboardu; bez něj číslo tieru). */
+export function tierPosition(state, tier) {
+  const t = state?.tiers?.find((x) => x.tier === tier);
+  return Number.isInteger(t?.position) && t.position > 0 ? t.position : tier;
+}
+
+/** Tiery v pořadí z dashboardu (sekce soundboardu, řádky tooltipu). */
+export function sortTiers(state, tiers) {
+  return [...tiers].sort((a, b) => tierPosition(state, a) - tierPosition(state, b) || a - b);
+}
+
 export function tierLabel(state, tier) {
   const t = state?.tiers?.find((x) => x.tier === tier);
+  const n = tierPosition(state, tier);
   const name = String(t?.name || '').trim();
   // Název, který jen opakuje číslo („Tier 1“), nezdvojovat.
-  return name && name.toLowerCase() !== `tier ${tier}` ? `Tier ${tier} · ${name}` : `Tier ${tier}`;
+  return name && name.toLowerCase() !== `tier ${n}` ? `Tier ${n} · ${name}` : `Tier ${n}`;
 }
 
 /** Popisek zvuku v tlačítku: srozumitelný název, když ho mod v Židolišti nastavil, jinak jméno pro !se. */
@@ -319,7 +331,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
         section('fav', 'Oblíbené', state.favorites.map((id) => byId.get(id)).filter(Boolean), ctx),
         section('recent', 'Často používané', state.recent.map((id) => byId.get(id)).filter(Boolean), ctx),
       ];
-      const tiers = [...new Set(state.sounds.map((s) => s.tier))].sort((a, b) => a - b);
+      const tiers = sortTiers(state, [...new Set(state.sounds.map((s) => s.tier))]);
       for (const tier of tiers) {
         parts.push(section(`t${tier}`, esc(tierLabel(state, tier)), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
       }

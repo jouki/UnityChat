@@ -104,6 +104,13 @@ const assert = require('node:assert/strict');
   assert.deepEqual([...sb.playableTiers(mix, T0)], [1]);
   assert.equal(sb.tierTime(mix.me.tiers[1], T0).paused, true);
 
+  // v1.2: pořadí a popisek tieru podle position
+  const pst = { tiers: [{ tier: 1, name: null, position: 2 }, { tier: 4, name: 'VIP zvuky', position: 1 }] };
+  assert.deepEqual(sb.sortTiers(pst, [1, 4]), [4, 1]);
+  assert.equal(sb.tierLabel(pst, 4), 'Tier 1 · VIP zvuky');
+  assert.equal(sb.tierLabel(pst, 1), 'Tier 2');
+  assert.equal(sb.tierLabel({ tiers: [{ tier: 5, name: null }] }, 5), 'Tier 5', 'bez position = číslo');
+
   // formát času
   assert.equal(sb.formatRemaining(12_300), '13 s');
   assert.equal(sb.formatRemaining(272_000), '4:32');
