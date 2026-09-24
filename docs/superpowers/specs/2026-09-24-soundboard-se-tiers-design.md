@@ -60,6 +60,9 @@ do chatu.
   Efektivní odemčení = odměny „Všichni“ ∪ odměny nejvyšší role. Dřívější „Diváci“ se
   migrují na „Všichni“.
 - **Zvuk má volitelný srozumitelný název** (displayName) a ikonu (emoji nebo 7TV emote).
+- **SE × TTS se překrývají — záměrně** (rozhodnutí usera 2026-09-24). TTS z donací se řadí
+  mezi sebou (SB fronta „Alerts“), přehrávač SE řadí jen SE mezi sebou (fronta max 10);
+  vzájemně se nehlídají, stejně jako dřív !se ve Streamer.botu. Není to chyba.
 - Echo ochrana v Židolišti: úvodní „!“/„/“ dosazené proměnnou se ořízne; vlastní odpověď
   přijatá zpět se jako command nevyhodnotí.
 
