@@ -203,6 +203,9 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   // ---- stav formuláře ----
   function setError(msg) { const e = $('.uc-qd-err'); e.textContent = msg || ''; e.hidden = !msg; }
+  const CFG_CHANGED = 'Nastavení donací se změnilo — zkontroluj částku a hlas.';
+  /** Upozornění na změnu nastavení platí jen pro rozpracovaný formulář — po otevření / návratu pryč. */
+  function clearConfigNotice() { if ($('.uc-qd-err').textContent === CFG_CHANGED) setError(''); }
   function setNotice(c) {
     const n = currencyConfig(c, cur)?.bankNotice?.text || '';
     for (const el of panel.querySelectorAll('.uc-qd-notice')) { el.textContent = n ? `⚠ ${n}` : ''; el.hidden = !n; }
@@ -280,7 +283,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       renderVoices(); renderCurrency();
       // Změna nastavení (dashboard / !mindono) během otevřeného formuláře: data zůstanou,
       // jen se přepočítá minimum a hlasy (web tu ukazuje overlay s reloadem, tady netřeba).
-      if (changed) { L('config změněn'); setError('Nastavení donací se změnilo — zkontroluj částku a hlas.'); }
+      if (changed) { L('config změněn'); setError(CFG_CHANGED); }
     } catch (e) {
       L(`config fail ${e?.error || e?.message || e}`);
       setError('Server donací je nedostupný, zkouším znovu…');
@@ -344,7 +347,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       onBack: () => closeVerify(),
     });
   }
-  function closeVerify() { verifier?.destroy(); verifier = null; verifyEl.hidden = true; form.hidden = false; }
+  function closeVerify() { verifier?.destroy(); verifier = null; verifyEl.hidden = true; form.hidden = false; clearConfigNotice(); }
 
   async function createIntent(values) {
     submitBtn.disabled = true;
@@ -405,6 +408,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     win.clearTimeout(pollTimer); stopRing(); publicId = null;
     if (paidShown) { f.message.value = ''; $('.uc-qd-count').textContent = `0 / ${MSG_MAX}`; paidShown = false; }
     $('.uc-qd-res').hidden = true; form.hidden = false;
+    clearConfigNotice();
     renderWho(); renderMail();
   }
   function downloadQr() {
@@ -460,7 +464,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
+    clearConfigNotice();
     renderCurrency();
+    // Změna při zavřeném panelu se jen tiše načte — upozornění patří jen k rozpracovanému formuláři.
+    cfgSig = null;
     loadConfig();
     loadProfile();
     // Verze nastavení každých 10 s (jako web), dokud je panel otevřený.
