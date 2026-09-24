@@ -20,6 +20,7 @@ const unpacked = path.join(outDir, 'unpacked');
 
 export const GECKO_ID = 'unitychat@jouki.cz';
 export const MIN_FIREFOX = '128.0';
+export const DATA_COLLECTION = ['personallyIdentifyingInfo', 'authenticationInfo', 'browsingActivity', 'websiteContent', 'personalCommunications'];
 
 /** Chrome manifest → Firefox manifest (čistá funkce, testovatelná). */
 export function toFirefoxManifest(m) {
@@ -33,7 +34,18 @@ export function toFirefoxManifest(m) {
     default_icon: m.action?.default_icon || m.icons,
     open_at_install: false,
   };
-  out.browser_specific_settings = { gecko: { id: GECKO_ID, strict_min_version: MIN_FIREFOX } };
+  out.browser_specific_settings = {
+    gecko: {
+      id: GECKO_ID,
+      strict_min_version: MIN_FIREFOX,
+      // Prohlášení o sběru dat pro AMO (povinné u nových doplňků) — stejné kategorie jako
+      // disclosure v Chrome Web Store (store/listing/privacy-disclosure.md):
+      // jméno uživatele na platformě (/users/seen, /nicknames), přihlašovací cookie Twitch/Kick
+      // (jen k API těch platforem), sledovaný kanál (/streamers/seen, /streamers/lookup),
+      // obsah chatu platforem, text odeslaného commandu (/chat/uc-sent) a archiv chatu.
+      data_collection_permissions: { required: DATA_COLLECTION },
+    },
+  };
   return out;
 }
 
@@ -53,11 +65,23 @@ function main() {
   for (const f of scripts) execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });
 
   // Zip (.xpi) přes PowerShell Compress-Archive (Windows), jinde přes `zip`.
+  // Na Windows NE Compress-Archive: PowerShell 5.1 píše cesty se zpětnými lomítky
+  // (audio\x.mp3) → AMO: „Invalid file name in archive" (2026-09-23). .NET ZipArchive
+  // s názvy položek přes „/"; jinde `zip`.
   const xpi = path.join(outDir, `unitychat-firefox-v${manifest.version}.xpi`);
-  const zipTmp = xpi.replace(/\.xpi$/, '.zip');
   if (process.platform === 'win32') {
-    execFileSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path '${unpacked}\\*' -DestinationPath '${zipTmp}' -Force`], { stdio: 'pipe' });
-    fs.renameSync(zipTmp, xpi);
+    const q = (p) => p.replace(/'/g, "''");
+    const ps = [
+      'Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem',
+      `$src = '${q(unpacked)}'`,
+      `$zip = [System.IO.Compression.ZipFile]::Open('${q(xpi)}', 'Create')`,
+      'Get-ChildItem -LiteralPath $src -Recurse -File | ForEach-Object {',
+      '  $name = $_.FullName.Substring($src.Length + 1).Replace([char]92, [char]47)',
+      '  [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal)',
+      '}',
+      '$zip.Dispose()',
+    ].join('\n');
+    execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'pipe' });
   } else {
     execFileSync('zip', ['-qr', xpi, '.'], { cwd: unpacked, stdio: 'pipe' });
   }

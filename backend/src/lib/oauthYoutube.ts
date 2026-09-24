@@ -8,14 +8,13 @@ const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const CHANNELS_URL = 'https://www.googleapis.com/youtube/v3/channels';
 
-// Minimal — just enough to read the user's own channel id + handle.
-// youtube.readonly gives access to channels.list?mine=true.
-const SCOPES = [
-  'https://www.googleapis.com/auth/youtube.readonly',
-] as const;
 // Web verze: liveChatMessages.insert vyžaduje youtube.force-ssl (citlivý scope
 // → Google verifikace; do schválení jen test users v consent screenu).
 export const WEB_SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl'] as const;
+// Streamer flow (channels.list?mine=true) bere stejný scope: aplikace žádá jen
+// o force-ssl, youtube.readonly je z consent screenu odebraný (Google verifikace
+// 2026-09-24 — konfigurované scopes musí odpovídat tomu, o co aplikace žádá).
+const SCOPES = WEB_SCOPES;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/youtube/callback`;

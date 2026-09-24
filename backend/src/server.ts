@@ -16,6 +16,7 @@ import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
 import rawProfileRoutes from './routes/rawProfiles.js';
+import soundboardRoutes from './routes/soundboard.js';
 import reactionRoutes from './routes/reactions.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
@@ -117,6 +118,7 @@ await app.register(webAuthRoutes, { ingest });
 await app.register(integrationRoutes, { ingest });
 await app.register(rawProfileRoutes);
 await app.register(reactionRoutes);
+await app.register(soundboardRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

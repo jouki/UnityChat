@@ -18,6 +18,8 @@ volání na vlastní backend:
 | `GET /nicknames`, `GET /nicknames/stream` | — | čtení sdílených přezdívek |
 | `PUT /nicknames` | `{platform, username, nickname, color}` | když uživatel někomu nastaví přezdívku |
 | `DELETE /nicknames` | `{platform, username}` | smazání přezdívky |
+| `POST /chat/uc-sent` | `{platform, channel, username, text}` | od v3.40.5: po odeslání **commandu** (`!…`, jde bez UC markeru) — server podle toho zprávu v chatu označí jako odeslanou z UnityChatu (zlaté logo). Jen text commandu, který uživatel sám poslal do veřejného chatu. Spadá pod *Personal communications* (už zaškrtnuto). |
+| `GET /blacklist`, `GET /commands` | query `channel` | čtení sdíleného blacklistu slov a commandů Židolišty (žádná data o uživateli) |
 
 **Rozšíření samo chat zprávy na backend neposílá.** Od v3.39 (2026-09-19) ale
 backend veřejný chat podporovaných streamerů (robdiesalot, tensterakdary,

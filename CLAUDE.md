@@ -455,7 +455,7 @@ Kód zůstává jeden (`extension/`), pro Firefox se mění jen manifest: `node 
 tlačítko v chatu Twitche = `open()` s fallbackem na záložku (zpráva z content scriptu nemusí nést
 gesto uživatele). Přihlášení: Firefox vrací `https://<40 hex>.extensions.allizom.org/` — povoleno
 v `isAllowedReturnTo`. `web-ext lint`: 0 chyb; na AMO bude potřeba `data_collection_permissions`
-a projít 27 varování `innerHTML`. Publikace na AMO zatím ne (user: nejdřív otestovat).
+a projít 27 varování `innerHTML`. **v3.40.18 odeslána na AMO 2026-09-23** (veřejně, jen desktop; podklady `store/listing/amo.md`, zásady `amo-privacy-en.txt`).
 
 ## Známé limitace / gotchas
 
