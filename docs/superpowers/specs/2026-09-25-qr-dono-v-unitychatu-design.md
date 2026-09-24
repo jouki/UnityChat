@@ -62,6 +62,12 @@ Uživatel e-mail zadá sám a dobrovolně ho **ověří kódem** → spárován�
   kód platí 10 min, max 5 pokusů. Obě služby nedostupné → hláška + pokračovat bez ověření.
 - Obsah: plain text + jednoduché HTML, bez obrázků a zkracovačů, předmět „Tvůj ověřovací kód: 123456“.
 
+## Vzhled obrazovky s QR (rozhodnutí usera 2026-09-25)
+- **Invertovaný barevný QR** (světlé moduly s gradientem UC na tmavém pozadí, glow) — user ho
+  otestoval v bankovních aplikacích: „úplně v pohodě“. Stažený PNG zůstává klasický černobílý.
+- **Bez VS / IBAN a bez věty „Platíš přímo na účet streamera…“** na obrazovce — vědomé rozhodnutí
+  usera (právní analýza tu větu doporučovala jako checklist bod 9; user ji nechce).
+
 ## Závislosti na Židolišti
 - Rate limit veřejného API je per IP (10 záměrů / 10 min, 20 ověření tokenu / 10 min);
   přes proxy by všichni sdíleli IP backendu → pro požadavky s X-Api-Key UnityChatu počítat
