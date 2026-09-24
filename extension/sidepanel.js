@@ -2882,6 +2882,11 @@ class UnityChat {
   // Kick badge key "type" or "type/count" → {url, title}. Subscriber tiers
   // come from the channel API (highest tier ≤ months), everything else is a
   // bundled SVG. Unknown types render nothing rather than a broken image.
+  /** Obrázek badge podle platformy zprávy (Kick vlastní sada, jinak Twitch). */
+  _badgeEntry(platform, key) {
+    return platform === 'kick' ? this._kickBadgeEntry(key) : this._twitchBadges[key];
+  }
+
   _kickBadgeEntry(key) {
     const [type, countStr] = key.split('/');
     const count = parseInt(countStr, 10) || 0;
@@ -6678,7 +6683,7 @@ class UnityChat {
       const badgeCount = Object.keys(this._twitchBadges).length;
       for (const badge of msg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const entry = msg.platform === 'kick' ? this._kickBadgeEntry(badge) : this._twitchBadges[badge];
+        const entry = this._badgeEntry(msg.platform, badge);
         const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (!url && msg.platform !== 'kick' && badgeCount > 0) {
           console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
@@ -7149,7 +7154,8 @@ class UnityChat {
       bdg.className = 'bdg';
       for (const badge of realMsg.badgesRaw.split(',')) {
         if (!badge) continue;
-        const entry = this._twitchBadges[badge];
+        // Kick má vlastní badge (moderátor apod.) — dřív se hledal jen v Twitch mapě a po echu zmizel.
+        const entry = this._badgeEntry(realMsg.platform, badge);
         const url = entry && typeof entry === 'object' ? entry.url : entry;
         if (url) {
           const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
