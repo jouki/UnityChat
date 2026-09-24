@@ -3004,3 +3004,8 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 
 /* Odpověď napříč platformami: malé logo platformy citované zprávy v ↩ řádku (core/uc-reply.js). */
 .reply-ctx .rctx-pi { width: 12px; height: 12px; vertical-align: -2px; margin-right: 1px; }
+
+/* Autor citované zprávy je uživatel UnityChatu → zlaté logo (jako .pi.uc). */
+.reply-ctx .rctx-pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
+.reply-ctx .rctx-pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
+.reply-ctx .rctx-pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }

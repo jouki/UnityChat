@@ -78,7 +78,7 @@ export class UcSendRegistry<T = undefined> {
 export const ucSends = new UcSendRegistry();
 
 /** Odpověď napříč platformami: na kterou zprávu se odpovídá (extension/core/uc-reply.js). */
-export interface UcReply { platform: string; id: string; username: string; message: string }
+export interface UcReply { platform: string; id: string; username: string; message: string; authorUc?: boolean }
 export const ucReplies = new UcSendRegistry<UcReply>(Date.now, { recentMarked: true });
 
 /** Validace odpovědi z klienta (/chat/send ucReplyTo, /chat/uc-sent replyTo). */
@@ -92,6 +92,7 @@ export function parseUcReply(v: unknown): UcReply | null {
     platform, id,
     username: String(o.username || '').replace(/^@/, '').slice(0, 60),
     message: String(o.message || '').slice(0, 300),
+    ...(o.authorUc === true ? { authorUc: true } : {}),
   };
 }
 

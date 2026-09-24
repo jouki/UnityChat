@@ -39,7 +39,7 @@ const SendBody = z.object({
   /** Login autora zprávy, na kterou se odpovídá — pro záložní „@login text", když platforma odpověď odmítne. */
   replyToUser: z.string().max(60).optional().nullable(),
   /** Odpověď napříč platformami (UnityChat): na kterou zprávu se odpovídá — server ji spáruje s echem. */
-  ucReplyTo: z.object({ platform: z.string(), id: z.string(), username: z.string().optional(), message: z.string().optional() }).optional().nullable(),
+  ucReplyTo: z.object({ platform: z.string(), id: z.string(), username: z.string().optional(), message: z.string().optional(), authorUc: z.boolean().optional() }).optional().nullable(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';

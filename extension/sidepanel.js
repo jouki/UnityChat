@@ -3291,9 +3291,22 @@ class UnityChat {
   // ---- Odpovědi na zprávy ----
 
   _setReply(platform, username, messageId, message, senderId) {
-    this._reply = { platform, username, messageId, message, senderId };
-    // Odpověď jde nativně jen na platformu zprávy — přepnout na ni, když na ní mám účet (jako web).
-    if (!this._legacySend() && platform !== this.activePlatform && this._identity(platform)) this._selectSendPlatform(platform, { quiet: true });
+    // Autor je uživatel UnityChatu (zlaté logo) → odpověď uvidí z libovolné platformy (↩ napříč platformami).
+    const authorUc = !!(messageId && this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(String(messageId))}"] .pi.uc`));
+    this._reply = { platform, username, messageId, message, senderId, authorUc };
+    // Uživatel mimo UnityChat vidí jen svou platformu → dočasně přepnout na ni (když na ní mám účet).
+    // Vrátí se po odeslání nebo zrušení odpovědi; ruční přepnutí během odpovídání návrat ruší.
+    // Původní platforma = ta před první automatickou změnou (další odpověď ji nepřepíše).
+    if (!this._legacySend()) {
+      const needSwitch = !authorUc && platform !== this.activePlatform && this._identity(platform);
+      if (needSwitch) {
+        if (!this._replyPrevPlatform) this._replyPrevPlatform = this.activePlatform;
+        this._selectSendPlatform(platform, { quiet: true, auto: true });
+      } else if (this._replyPrevPlatform && (authorUc || platform === this._replyPrevPlatform)) {
+        this._restoreReplyPlatform();
+      }
+      this._ucLog('Reply', `na ${platform}:${username} uc=${authorUc} switch=${!!needSwitch} prev=${this._replyPrevPlatform || '-'}`);
+    }
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -3319,6 +3332,16 @@ class UnityChat {
     this._reply = null;
     const el = document.getElementById('reply-indicator');
     if (el) el.classList.add('hidden');
+    // Odesláno nebo zrušeno → zpátky na platformu před automatickým přepnutím.
+    this._restoreReplyPlatform();
+  }
+
+  _restoreReplyPlatform() {
+    const prev = this._replyPrevPlatform;
+    if (!prev) return;
+    this._replyPrevPlatform = null;
+    if (prev !== this.activePlatform && this._identity(prev)) this._selectSendPlatform(prev, { quiet: true, auto: true });
+    this._ucLog('Reply', `platforma zpět na ${prev}`);
   }
 
   // @přezdívka → @login pro odchozí text. Záměrně širší než mention regex v
@@ -3418,7 +3441,7 @@ class UnityChat {
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
-      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null, ...(hasNativeReply ? {} : { platform: reply.platform, uc: true }) } } : {}),
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null, ...(hasNativeReply ? {} : { platform: reply.platform, uc: true, authorUc: !!reply.authorUc }) } } : {}),
     });
     // Echo z platformy nese „@jméno text" — upgrade (_upgradeOptimistic) ho musí zase skrýt.
     if (reply && !hasNativeReply) {
@@ -3625,8 +3648,10 @@ class UnityChat {
       replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
     }
     // Odpověď na zprávu z jiné platformy: malé logo té platformy.
+    // Zlaté logo, když autor citované zprávy je uživatel UnityChatu (jako .pi.uc u jeho zprávy).
+    const authorUc = !!rt.authorUc || !!(rt.id && this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(String(rt.id))}"] .pi.uc`));
     const pBadge = rt.platform && rt.platform !== msg.platform
-      ? `<span class="badge ${({ twitch: 'tw', kick: 'ki', youtube: 'yt' })[rt.platform] || ''} rctx-pi">${this.emotes._eh(rt.platform)}</span> ` : '';
+      ? `<span class="badge ${({ twitch: 'tw', kick: 'ki', youtube: 'yt' })[rt.platform] || ''} rctx-pi${authorUc ? ' uc' : ''}">${this.emotes._eh(rt.platform)}</span> ` : '';
     ctx.innerHTML = `&#8617; ${pBadge}<span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` + replyBodyHtml;
     if (rt.id) {
       ctx.addEventListener('click', (e) => {
@@ -4320,7 +4345,7 @@ class UnityChat {
     // Moje jméno na platformě = identita z účtu (zvýraznění zmínek, vlastní zprávy, optimistická zpráva).
     for (const p of linked) this._platformUsernames[p] = this._accountName(p);
     // Vybraná platforma bez přihlášení → první přihlášená (jako web setMe).
-    if (!this._legacySend() && linked.length && !linked.includes(this._sendPlatform)) this._selectSendPlatform(linked[0], { quiet: true });
+    if (!this._legacySend() && linked.length && !linked.includes(this._sendPlatform)) this._selectSendPlatform(linked[0], { quiet: true, auto: true });
     this._ucLog('Account', `stav: ${linked.length ? linked.map((p) => `${p}=${acc.platforms[p].login}`).join(' ') : 'nepřihlášen'}`);
     this._renderComposer();
     this._loadSoundboard();
@@ -4348,7 +4373,9 @@ class UnityChat {
     return this.config?.legacyTabSend === true;
   }
 
-  _selectSendPlatform(platform, { quiet = false } = {}) {
+  _selectSendPlatform(platform, { quiet = false, auto = false } = {}) {
+    // Ruční volba během odpovídání = platforma zůstane, návrat po odpovědi se nekoná.
+    if (!auto) this._replyPrevPlatform = null;
     this._sendPlatform = platform;
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
     if (!this._legacySend()) this._setActivePlatform(platform);

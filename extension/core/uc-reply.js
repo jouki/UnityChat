@@ -43,5 +43,7 @@ export function ucReplyPayload(reply) {
     id: String(reply.messageId || reply.id),
     username: String(reply.username || '').replace(/^@/, '').slice(0, 60),
     message: String(reply.message || '').slice(0, 300),
+    // Autor citované zprávy je uživatel UnityChatu → v ↩ zlaté logo jeho platformy.
+    ...(reply.authorUc ? { authorUc: true } : {}),
   };
 }

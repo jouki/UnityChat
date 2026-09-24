@@ -26,7 +26,7 @@ export interface ClientMessage {
   firstMsg?: boolean;
   isAction?: boolean;
   /** platform + uc: odpověď napříč platformami nahlášená UnityChatem (content_raw.ucReply). */
-  replyTo?: { username: string; message: string; id: string; platform?: string; uc?: boolean } | null;
+  replyTo?: { username: string; message: string; id: string; platform?: string; uc?: boolean; authorUc?: boolean } | null;
   kickContent?: string;
   ytRuns?: unknown[];
   superChat?: boolean;
@@ -50,7 +50,7 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
   // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
   const ur = ((row.contentRaw || {}) as Record<string, unknown>).ucReply as Record<string, unknown> | undefined;
   if (ur && ur.id && !out.replyTo) {
-    out.replyTo = { username: String(ur.username || ''), message: String(ur.message || ''), id: String(ur.id), platform: String(ur.platform || ''), uc: true };
+    out.replyTo = { username: String(ur.username || ''), message: String(ur.message || ''), id: String(ur.id), platform: String(ur.platform || ''), uc: true, ...(ur.authorUc ? { authorUc: true } : {}) };
   }
   return out;
 }
