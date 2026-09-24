@@ -97,6 +97,27 @@ async function getCatalog(slug: string, log: FastifyInstance['log']): Promise<Ca
   }
 }
 
+// sfx-state per divák: Židolišta má limit na IP a všechna volání jdou odsud. Po SSE
+// soundboard-change se ptají všichni klienti naráz → souběžné dotazy na stejný klíč se
+// sloučí a výsledek drží 2 s. Webhook změny (sfx-unlocks/-played) cache maže.
+const STATE_CACHE_MS = 2000;
+const states = new Map<string, { at: number; p: Promise<Record<string, unknown> | null> }>();
+
+function cachedState(slug: string, platform: Platform, userId: string, role: string) {
+  const key = `${slug}|${platform}|${userId}|${role}`;
+  const hit = states.get(key);
+  if (hit && Date.now() - hit.at < STATE_CACHE_MS) return hit.p;
+  const p = fetchState(slug, platform, userId, role);
+  states.set(key, { at: Date.now(), p });
+  p.catch(() => states.delete(key));
+  if (states.size > 5000) for (const [k, v] of states) if (Date.now() - v.at >= STATE_CACHE_MS) states.delete(k);
+  return p;
+}
+
+function dropStates(slug: string): void {
+  for (const k of states.keys()) if (k.startsWith(`${slug}|`)) states.delete(k);
+}
+
 async function fetchState(slug: string, platform: Platform, userId: string, role: string) {
   const q = new URLSearchParams({ platform, userId, role });
   const r = await fetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, {
@@ -116,6 +137,7 @@ export async function handleSfxWebhook(slug: string, reason: string, data: unkno
   const channels = await twitchChannelsOf(slug);
   if (!channels.length) return channels;
   const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+  if (reason === 'sfx-unlocks' || reason === 'sfx-played') dropStates(slug);
   if (reason === 'sfx' || reason === 'sfx-unlocks') {
     if (reason === 'sfx') catalogs.delete(slug);
     for (const channel of channels) broadcast('soundboard-change', { channel, reason });
@@ -186,7 +208,7 @@ export default async function soundboardRoutes(app: FastifyInstance) {
     if (!ident) return res;
     const role = await chatRole(platform, ident.login, ch.data);
     try {
-      const st = await fetchState(slug, platform, ident.platformUserId, role);
+      const st = await cachedState(slug, platform, ident.platformUserId, role);
       if (!st) return res;
       return { ...res, serverNow: iso(st.serverNow) ?? res.serverNow, me: { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState(st), role } };
     } catch (e) {
