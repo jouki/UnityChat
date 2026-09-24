@@ -232,13 +232,16 @@ export default async function soundboardRoutes(app: FastifyInstance) {
     const ident = idents.find((i) => i.platform === platform);
     if (!ident) return res;
     const role = await chatRole(platform, ident.login, ch.data);
+    // Přihlášený divák bez stavu od Židolišty (nic odemčeno / výpadek) = me s prázdnými tiery,
+    // ne null: null klient bere jako „nepřipojený účet" a nabízel přihlášení (2026-09-24).
+    const noState = { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState({}), role };
     try {
       const st = await cachedState(slug, platform, ident.platformUserId, role);
-      if (!st) return res;
+      if (!st) return { ...res, me: noState };
       return { ...res, serverNow: iso(st.serverNow) ?? res.serverNow, me: { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState(st), role } };
     } catch (e) {
       app.log.warn({ slug, platform, err: (e as Error).message }, 'soundboard: sfx-state failed');
-      return { ...res, stale: true };
+      return { ...res, stale: true, me: noState };
     }
   });
 

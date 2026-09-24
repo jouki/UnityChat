@@ -109,7 +109,8 @@ export function formatRemaining(msLeft) {
 export function soundboardIconState(state, now) {
   if (!state || !state.sounds.length) return { mode: 'hidden' };
   if (!state.loggedIn) return { mode: 'login', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
-  if (!state.me) return { mode: 'link', title: 'Soundboard', lines: [`Připoj účet ${PLATFORM_NAMES[state.platform] || state.platform} k UnityChatu.`] };
+  // Sound efekty fungují stejně ze všech platforem — výzva je obecná, ne „připoj Twitch" (pokyn usera 2026-09-24).
+  if (!state.me) return { mode: 'link', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
   const unlocked = unlockedTiers(state, now);
   if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
   const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
@@ -412,7 +413,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     const s = soundboardIconState(state, now());
-    if (s.mode === 'login' || s.mode === 'link') { hideTip(); onLogin?.(s.mode === 'link' ? state.platform : undefined); return; }
+    if (s.mode === 'login' || s.mode === 'link') { hideTip(); onLogin?.(); return; }
     if (s.mode !== 'active') return;   // odměna není aktivní: ikona je deaktivovaná, vysvětlí to tooltip
     toggle();
   });

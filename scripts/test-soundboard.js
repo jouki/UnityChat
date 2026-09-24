@@ -27,7 +27,7 @@ const assert = require('node:assert/strict');
   assert.equal(sb.soundboardIconState(sb.normalizeSoundboard(raw(null, { loggedIn: false })), T0).mode, 'login');
   const link = sb.soundboardIconState(sb.normalizeSoundboard(raw(null, { platform: 'kick' })), T0);
   assert.equal(link.mode, 'link');
-  assert.match(link.lines[0], /Kick/);
+  assert.doesNotMatch(link.lines[0], /Kick|Twitch|YouTube/, 'výzva je obecná, ne pro konkrétní platformu');
   assert.equal(sb.soundboardIconState(sb.normalizeSoundboard(raw(meWith([]))), T0).mode, 'locked');
 
   // odemčení: tier 1 na 10 min (od T0−4 min), tier 2 vypršel

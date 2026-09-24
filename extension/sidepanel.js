@@ -4450,10 +4450,12 @@ class UnityChat {
         },
       });
     }
-    const NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
     const linked = this._linkedPlatforms();
+    const missing = ['twitch', 'kick', 'youtube'].filter((p) => !linked.includes(p));
+    // Všechny platformy připojené → není co nabídnout (dřív se otevřelo prázdné okno).
+    if (this._account && !missing.length) { this._ucLog('Account', 'přihlašovací okno: všechny platformy připojené'); return; }
     this._loginModal.open(this._account
-      ? { title: `Přihlášení na ${NAMES[this.activePlatform] || 'platformu'}`, subtitle: 'Na vybranou platformu ještě nejsi přihlášen. Vyber, kde se přihlásit.', only: ['twitch', 'kick', 'youtube'].filter((p) => !linked.includes(p)) }
+      ? { title: 'Připojit další platformu', subtitle: 'Vyber platformu, kterou chceš připojit ke svému účtu.', only: missing }
       : {});
   }
 
