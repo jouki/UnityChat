@@ -26,7 +26,7 @@ test('normalizeCatalog: jen validní zvuky, řazení tier → jméno, doplnění
 test('normalizeState: tiery, cooldown, výchozí role', () => {
   const s = normalizeState({ role: 'moderator', tiers: [{ tier: 2, startedAt: '2026-09-24T10:00:00Z', expiresAt: null }, { tier: 0 }], cooldown: { globalReadyAt: '2026-09-24T10:00:10Z', userReadyAt: 'nesmysl' } });
   assert.equal(s.role, 'moderator');
-  assert.deepEqual(s.tiers, [{ tier: 2, startedAt: '2026-09-24T10:00:00Z', expiresAt: null }]);
+  assert.deepEqual(s.tiers, [{ tier: 2, startedAt: '2026-09-24T10:00:00Z', expiresAt: null, paused: false, remainingMs: null, available: true, totalMs: null }]);
   assert.deepEqual(s.cooldown, { globalReadyAt: '2026-09-24T10:00:10Z', userReadyAt: null });
   assert.deepEqual(normalizeState(undefined), { role: 'viewer', tiers: [], cooldown: { globalReadyAt: null, userReadyAt: null } });
 });
@@ -51,4 +51,15 @@ test('normalizeCatalog: displayName a ikona (emoji / 7TV jen z cdn.7tv.app)', ()
   assert.equal(c.sounds[1].displayName, null);
   assert.equal(normalizeIcon({ kind: '7tv', id: 'x', url: 'https://evil.example/emote/x/2x.webp' }, null), null, 'cizí host ne');
   assert.equal(normalizeIcon({ kind: '7tv', id: 'x', url: 'https://cdn.7tv.app/emote/x/2x.webp" onerror="' }, null), null, 'žádné uvozovky');
+});
+
+test('normalizeState v1.1: zmrazený tier propustí paused, remainingMs, totalMs; available false', () => {
+  const s = normalizeState({ tiers: [
+    { tier: 1, startedAt: '2026-09-24T10:00:00Z', expiresAt: null, paused: true, remainingMs: 272000.4, available: false, totalMs: 420000 },
+    { tier: 2, startedAt: '2026-09-24T10:00:00Z', expiresAt: '2026-09-24T10:10:00Z', paused: false, available: true, totalMs: 600000 },
+    { tier: 3, startedAt: '2026-09-24T10:00:00Z', expiresAt: '2026-09-24T10:10:00Z', available: false },
+  ] });
+  assert.deepEqual(s.tiers[0], { tier: 1, startedAt: '2026-09-24T10:00:00Z', expiresAt: null, paused: true, remainingMs: 272000, available: false, totalMs: 420000 });
+  assert.equal(s.tiers[1].available, true);
+  assert.equal(s.tiers[2].available, false, 'server řekl, že nejde přehrát');
 });

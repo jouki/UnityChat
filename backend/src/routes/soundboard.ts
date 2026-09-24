@@ -71,12 +71,19 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
 }
 
 /** Stav diváka ze Židolišty (sfx-state) → tvar `me` pro klienta (bez identity). */
-export function normalizeState(raw: unknown): { role: string; tiers: { tier: number; startedAt: string | null; expiresAt: string | null }[]; cooldown: { globalReadyAt: string | null; userReadyAt: string | null } } {
+export interface StateTier { tier: number; startedAt: string | null; expiresAt: string | null; paused: boolean; remainingMs: number | null; available: boolean; totalMs: number | null }
+const nonNeg = (v: unknown): number | null => (Number.isFinite(v) && (v as number) >= 0 ? Math.round(v as number) : null);
+
+/** Kontrakt v1.1: zmrazený tier = paused + remainingMs (zamrzlý zbytek), available = smí se přehrát, totalMs = délka se sečtenými prodlouženími. */
+export function normalizeState(raw: unknown): { role: string; tiers: StateTier[]; cooldown: { globalReadyAt: string | null; userReadyAt: string | null } } {
   const j = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const tiers = (Array.isArray(j.tiers) ? j.tiers : [])
     .map((t) => (t ?? {}) as Record<string, unknown>)
     .filter((t) => posInt(t.tier))
-    .map((t) => ({ tier: t.tier as number, startedAt: iso(t.startedAt), expiresAt: iso(t.expiresAt) }));
+    .map((t) => {
+      const paused = t.paused === true;
+      return { tier: t.tier as number, startedAt: iso(t.startedAt), expiresAt: paused ? null : iso(t.expiresAt), paused, remainingMs: paused ? nonNeg(t.remainingMs) : null, available: !paused && t.available !== false, totalMs: nonNeg(t.totalMs) };
+    });
   const cd = (j.cooldown && typeof j.cooldown === 'object' ? j.cooldown : {}) as Record<string, unknown>;
   return { role: typeof j.role === 'string' ? j.role : 'viewer', tiers, cooldown: { globalReadyAt: iso(cd.globalReadyAt), userReadyAt: iso(cd.userReadyAt) } };
 }
