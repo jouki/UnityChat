@@ -74,6 +74,8 @@
   background: var(--bg-tertiary); color: var(--text-secondary);
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
 }
+/* „(Tier 1)“ za jménem tieru: menší a nevýrazné (stejně jako dashboard Židolišty). */
+.uc-sb-tiern { font-size: 0.85em; font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.6; }
 .uc-sb-time { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent-light); font-variant-numeric: tabular-nums; }
 .uc-sb-lock { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .uc-sb-hbar { flex-basis: 100%; }

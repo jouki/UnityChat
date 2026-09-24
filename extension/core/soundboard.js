@@ -113,7 +113,7 @@ export function soundboardIconState(state, now) {
   if (!state.me) return { mode: 'link', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
   const unlocked = unlockedTiers(state, now);
   if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
-  const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
+  const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), nameHtml: tierLabelHtml(state, tier), ...tierTime(t, now) }));
   // Všechno zmrazené: ikona neaktivní jako u zamčené odměny, tooltip ukáže zastavený čas.
   if (!playableTiers(state, now).size) return { mode: 'paused', title: 'Odměna je pozastavená', lines: ['Streamer časovač zastavil, sound efekty teď nejdou pustit.'], rows, cooldownMs: 0, remainingMs: null, progress: null };
   const timed = rows.filter((r) => r.remainingMs !== null);
@@ -142,12 +142,24 @@ export function sortTiers(state, tiers) {
   return [...tiers].sort((a, b) => tierPosition(state, a) - tierPosition(state, b) || a - b);
 }
 
-export function tierLabel(state, tier) {
+function tierParts(state, tier) {
   const t = state?.tiers?.find((x) => x.tier === tier);
   const n = tierPosition(state, tier);
   const name = String(t?.name || '').trim();
   // Název, který jen opakuje číslo („Tier 1“), nezdvojovat.
-  return name && name.toLowerCase() !== `tier ${n}` ? `Tier ${n} · ${name}` : `Tier ${n}`;
+  return { n, name: name && name.toLowerCase() !== `tier ${n}` ? name : '' };
+}
+
+/** Popisek tieru jako text: „BASIC (Tier 1)“, bez jména „Tier 1“ (stejně jako dashboard Židolišty). */
+export function tierLabel(state, tier) {
+  const { n, name } = tierParts(state, tier);
+  return name ? `${name} (Tier ${n})` : `Tier ${n}`;
+}
+
+/** Totéž jako HTML: „(Tier 1)“ menším a nevýrazným písmem. */
+export function tierLabelHtml(state, tier) {
+  const { n, name } = tierParts(state, tier);
+  return name ? `${esc(name)} <span class="uc-sb-tiern">(Tier ${n})</span>` : `Tier ${n}`;
 }
 
 /** Popisek zvuku v tlačítku: srozumitelný název, když ho mod v Židolišti nastavil, jinak jméno pro !se. */
@@ -279,7 +291,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   function renderTip(s = soundboardIconState(state, now())) {
     if (s.mode === 'hidden') { hideTip(); return; }
     const lines = (s.lines || []).map((l) => `<div class="uc-sb-tip-l">${esc(l)}</div>`).join('');
-    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
+    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${r.nameHtml || esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
     const cd = s.cooldownMs > 0 ? `<div class="uc-sb-tip-cd">Cooldown ${esc(formatRemaining(s.cooldownMs))}</div>` : '';
     tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
     tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${lines}${rows}${cd}`;
@@ -334,7 +346,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       ];
       const tiers = sortTiers(state, [...new Set(state.sounds.map((s) => s.tier))]);
       for (const tier of tiers) {
-        parts.push(section(`t${tier}`, esc(tierLabel(state, tier)), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
+        parts.push(section(`t${tier}`, tierLabelHtml(state, tier), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
       }
       body.innerHTML = parts.join('');
     }

@@ -47,7 +47,7 @@ const assert = require('node:assert/strict');
   const un = sb.normalizeSoundboard(raw(meWith([{ tier: 2, startedAt: iso(T0), expiresAt: null }, { tier: 1, startedAt: iso(T0), expiresAt: iso(T0 + 60_000) }])), T0);
   const ua = sb.soundboardIconState(un, T0);
   assert.equal(ua.remainingMs, null);
-  assert.equal(ua.rows.find((r) => r.tier === 2).name, 'Tier 2 · Speciální');
+  assert.equal(ua.rows.find((r) => r.tier === 2).name, 'Speciální (Tier 2)');
 
   // cooldown: delší z globálního a mého
   const cd = sb.normalizeSoundboard(raw(meWith([{ tier: 1, startedAt: iso(T0), expiresAt: null }], { globalReadyAt: iso(T0 + 4000), userReadyAt: iso(T0 + 12_000) })), T0);
@@ -76,7 +76,7 @@ const assert = require('node:assert/strict');
   // název tieru: nezdvojovat „Tier 1 · Tier 1“
   assert.equal(sb.tierLabel({ tiers: [{ tier: 1, name: 'Tier 1' }] }, 1), 'Tier 1');
   assert.equal(sb.tierLabel({ tiers: [{ tier: 1, name: 'tier 1 ' }] }, 1), 'Tier 1');
-  assert.equal(sb.tierLabel({ tiers: [{ tier: 2, name: 'Speciální' }] }, 2), 'Tier 2 · Speciální');
+  assert.equal(sb.tierLabel({ tiers: [{ tier: 2, name: 'Speciální' }] }, 2), 'Speciální (Tier 2)');
 
   // display name + ikona
   assert.equal(sb.soundLabel({ name: 'cejtimPicu', displayName: 'Cejtím to' }), 'Cejtím to');
@@ -107,7 +107,9 @@ const assert = require('node:assert/strict');
   // v1.2: pořadí a popisek tieru podle position
   const pst = { tiers: [{ tier: 1, name: null, position: 2 }, { tier: 4, name: 'VIP zvuky', position: 1 }] };
   assert.deepEqual(sb.sortTiers(pst, [1, 4]), [4, 1]);
-  assert.equal(sb.tierLabel(pst, 4), 'Tier 1 · VIP zvuky');
+  assert.equal(sb.tierLabel(pst, 4), 'VIP zvuky (Tier 1)');
+  assert.equal(sb.tierLabelHtml(pst, 4), 'VIP zvuky <span class="uc-sb-tiern">(Tier 1)</span>');
+  assert.equal(sb.tierLabelHtml({ tiers: [{ tier: 1, name: '<b>x' }] }, 1), '&lt;b&gt;x <span class="uc-sb-tiern">(Tier 1)</span>', 'jméno escapované');
   assert.equal(sb.tierLabel(pst, 1), 'Tier 2');
   assert.equal(sb.tierLabel({ tiers: [{ tier: 5, name: null }] }, 5), 'Tier 5', 'bez position = číslo');
 
