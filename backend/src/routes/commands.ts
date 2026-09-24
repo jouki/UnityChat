@@ -5,6 +5,7 @@ import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
 import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
 import { invalidateBlacklist } from './blacklist.js';
+import { handleSfxWebhook } from './soundboard.js';
 
 /**
  * GET /commands?channel=<twitch login>
@@ -146,13 +147,19 @@ export default async function commandRoutes(app: FastifyInstance) {
    * command v našeptávání hned. `reason: "workspaces"` = změna mapování
    * kanálů / bota → obnovit registr workspaců (lib/zidolista.ts).
    */
-  app.post<{ Body: { workspace?: string; reason?: string } }>('/commands/invalidate', async (req, reply) => {
+  app.post<{ Body: { workspace?: string; reason?: string; data?: unknown } }>('/commands/invalidate', async (req, reply) => {
     if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
     const slug = String(req.body?.workspace || '').toLowerCase();
     const reason = String(req.body?.reason || 'update');
     // Změna blacklistu slov (stejný webhook) → jen cache blacklistu + SSE `blacklist-change`.
     if (reason === 'blacklist') {
       const channels = await invalidateBlacklist(slug, app.log);
+      if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+      return { ok: true, channels };
+    }
+    // Soundboard (katalog, odemčení, přehrání, zamítnutí) → cache katalogu + SSE `soundboard-*`.
+    if (reason === 'sfx' || reason.startsWith('sfx-')) {
+      const channels = await handleSfxWebhook(slug, reason, req.body?.data, app.log);
       if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
       return { ok: true, channels };
     }

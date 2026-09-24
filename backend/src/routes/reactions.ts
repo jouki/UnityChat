@@ -8,13 +8,13 @@
 // v serverovém logu zpráv (posledních 24 h v kanálu) badge moderator/broadcaster.
 // Zámek per kanál: dokud animace běží, další pokusy dostanou 409 `busy`.
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, gt, ilike } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { requireWebSession, listIdentities } from '../lib/webAuth.js';
 import { broadcast } from '../sse/bus.js';
-import { rolesFromBadges } from '../sse/integrationStream.js';
+import { chatRole } from '../lib/chatRole.js';
 import { RateLimiter } from './chat.js';
 import { config } from '../config.js';
 
@@ -49,21 +49,8 @@ export function activeReaction(channel: string, now = Date.now()): ReactionEvent
 
 /** Je login v kanálu mod/broadcaster? Broadcaster = login kanálu; jinak badge z posledních zpráv. */
 export async function isModOrBroadcaster(platform: 'twitch' | 'kick' | 'youtube', login: string, channel: string): Promise<boolean> {
-  const l = login.toLowerCase();
-  // Broadcaster: login/slug/handle shodný s kanálem (u Roba i Joukiho je stejný na všech platformách).
-  if (l === channel.toLowerCase()) return true;
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const rows = await db
-    .select({ raw: messages.contentRaw, username: messages.platformUsername })
-    .from(messages)
-    .where(and(eq(messages.channel, channel.toLowerCase()), eq(messages.platform, platform), ilike(messages.platformUsername, l), gt(messages.sentAt, since)))
-    .orderBy(desc(messages.sentAt))
-    .limit(5);
-  for (const r of rows) {
-    const roles = rolesFromBadges(platform, (r.raw as Record<string, unknown> | null)?.badges, r.username, channel);
-    if (roles.isMod || roles.isBroadcaster) return true;
-  }
-  return false;
+  const role = await chatRole(platform, login, channel);
+  return role === 'moderator' || role === 'broadcaster';
 }
 
 export default async function reactionRoutes(app: FastifyInstance) {

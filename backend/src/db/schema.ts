@@ -320,6 +320,32 @@ export const rawProfiles = pgTable('raw_profiles', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Soundboard (spec 2026-09-24-soundboard-se-tiers-design.md): oblíbené zvuky a počty
+// přehrání per účet. Zvuky samotné žijí v Židolišti, sound_id = její stabilní id.
+// Ručně SQL (backend/sql/2026-09-24-soundboard.sql).
+export const soundboardFavorites = pgTable(
+  'soundboard_favorites',
+  {
+    accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => webAccounts.id, { onDelete: 'cascade' }),
+    workspace: text('workspace').notNull(),
+    soundId: integer('sound_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.accountId, t.workspace, t.soundId], name: 'soundboard_favorites_pk' }) }),
+);
+
+export const soundboardUsage = pgTable(
+  'soundboard_usage',
+  {
+    accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => webAccounts.id, { onDelete: 'cascade' }),
+    workspace: text('workspace').notNull(),
+    soundId: integer('sound_id').notNull(),
+    count: integer('count').notNull().default(0),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.accountId, t.workspace, t.soundId], name: 'soundboard_usage_pk' }) }),
+);
+
 // Session = náhodných 32 B; v DB jen SHA-256 hash, klient drží raw token
 // (localStorage, Authorization: Bearer). 30 dní klouzavě.
 export const webSessions = pgTable(
