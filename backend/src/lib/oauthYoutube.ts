@@ -7,14 +7,17 @@ import { config } from '../config.js';
 const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const CHANNELS_URL = 'https://www.googleapis.com/youtube/v3/channels';
+const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
 
-// Web verze: liveChatMessages.insert vyžaduje youtube.force-ssl (citlivý scope
+// Psaní do chatu: liveChatMessages.insert vyžaduje youtube.force-ssl (citlivý scope
 // → Google verifikace; do schválení jen test users v consent screenu).
-export const WEB_SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl'] as const;
-// Streamer flow (channels.list?mine=true) bere stejný scope: aplikace žádá jen
-// o force-ssl, youtube.readonly je z consent screenu odebraný (Google verifikace
-// 2026-09-24 — konfigurované scopes musí odpovídat tomu, o co aplikace žádá).
-const SCOPES = WEB_SCOPES;
+export const CHAT_SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl'] as const;
+// Přihlášení diváka (web + addon): navíc e-mail (necitlivý scope userinfo.email) pro QR dono
+// — dar se v Židolišti páruje s e-mailem dárce (spec 2026-09-25-qr-dono-v-unitychatu-design.md).
+export const WEB_SCOPES = [...CHAT_SCOPES, 'https://www.googleapis.com/auth/userinfo.email'] as const;
+// Streamer flow (channels.list?mine=true) a bot Židolišty e-mail nepotřebují → jen force-ssl
+// (minimální scopes; youtube.readonly je z consent screenu odebraný, Google verifikace 2026-09-24).
+const SCOPES = CHAT_SCOPES;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/youtube/callback`;
@@ -120,4 +123,21 @@ export async function fetchChannel(accessToken: string): Promise<YoutubeChannelI
 
 export function youtubeConfigured(): boolean {
   return Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET);
+}
+
+
+/**
+ * Ověřený e-mail Google účtu (scope userinfo.email). null = scope nebyl udělen
+ * (starší přihlášení bez e-mailu), e-mail neověřený nebo chyba — volající pak vezme
+ * e-mail jiné identity téhož účtu (spec QR dono).
+ */
+export async function fetchVerifiedEmail(accessToken: string): Promise<string | null> {
+  try {
+    const resp = await fetch(USERINFO_URL, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return null;
+    const j = (await resp.json()) as { email?: string; email_verified?: boolean };
+    return j.email && j.email_verified === true ? j.email : null;
+  } catch {
+    return null;
+  }
 }

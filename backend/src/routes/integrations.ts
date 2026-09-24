@@ -181,7 +181,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     if (t.platform === 'youtube') {
       if (!youtube.youtubeConfigured()) return botErrorRedirect(reply, t.returnTo, 'YouTube OAuth not configured');
       // Bot = jiný Google účet než ten přihlášený → nechat vybrat účet (select_account).
-      const url = youtube.buildAuthorizeUrl(signState(state), youtube.WEB_SCOPES).replace('prompt=consent', 'prompt=consent%20select_account');
+      const url = youtube.buildAuthorizeUrl(signState(state), youtube.CHAT_SCOPES).replace('prompt=consent', 'prompt=consent%20select_account');
       return reply.redirect(url, 302);
     }
     if (!kick.kickConfigured()) return botErrorRedirect(reply, t.returnTo, 'Kick OAuth not configured');
