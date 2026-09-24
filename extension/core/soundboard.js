@@ -25,7 +25,13 @@ export function normalizeSoundboard(raw, clientNow = Date.now()) {
     userId: String(r.me.userId ?? ''),
     login: r.me.login || '',
     role: r.me.role || 'viewer',
-    tiers: (Array.isArray(r.me.tiers) ? r.me.tiers : []).map((t) => ({ tier: t.tier, startedAt: ms(t.startedAt), expiresAt: ms(t.expiresAt) })),
+    // Kontrakt v1.1: zmrazená odměna má paused + remainingMs (zamrzlý čas), expiresAt pak null;
+    // available = smí se přehrát (zmrazená ne). Bez polí = v1 (běží, přehrát jde).
+    tiers: (Array.isArray(r.me.tiers) ? r.me.tiers : []).map((t) => {
+      const paused = t.paused === true;
+      const num = (v) => (Number.isFinite(v) && v >= 0 ? v : null);
+      return { tier: t.tier, startedAt: ms(t.startedAt), expiresAt: paused ? null : ms(t.expiresAt), paused, remainingMs: paused ? num(t.remainingMs) : null, totalMs: num(t.totalMs), available: !paused && t.available !== false };
+    }),
     cooldown: { globalReadyAt: ms(r.me.cooldown?.globalReadyAt), userReadyAt: ms(r.me.cooldown?.userReadyAt) },
   } : null;
   return {
@@ -42,16 +48,38 @@ export function normalizeSoundboard(raw, clientNow = Date.now()) {
   };
 }
 
-/** Tiery odemčené v čase `now` (serverové ms) → Map tier → { startedAt, expiresAt|null }. */
+/**
+ * Čas tieru: { remainingMs|null, progress|null, paused }. null remaining = bez omezení.
+ * Zmrazený tier má zamrzlý remainingMs; progress z totalMs (když ho server pošle), jinak ze startedAt→expiresAt.
+ */
+export function tierTime(t, now) {
+  if (t.paused) {
+    const rem = t.remainingMs;
+    return { paused: true, remainingMs: rem, progress: rem !== null && t.totalMs ? Math.min(1, Math.max(0, rem / t.totalMs)) : null };
+  }
+  if (t.expiresAt === null) return { paused: false, remainingMs: null, progress: null };
+  const rem = t.expiresAt - now;
+  const total = t.totalMs || (t.startedAt !== null ? t.expiresAt - t.startedAt : null);
+  return { paused: false, remainingMs: rem, progress: !total || total <= 0 ? 1 : Math.min(1, Math.max(0, rem / total)) };
+}
+
+const rank = (t, now) => (t.available ? 2 : 1) * 1e15 + (t.paused ? (t.remainingMs ?? 0) : t.expiresAt === null ? 1e14 : t.expiresAt - now);
+
+/** Tiery odemčené v čase `now` (serverové ms), včetně zmrazených → Map tier → záznam. */
 export function unlockedTiers(state, now) {
   const out = new Map();
   for (const t of state?.me?.tiers || []) {
-    if (t.expiresAt !== null && t.expiresAt <= now) continue;
+    if (!t.paused && t.expiresAt !== null && t.expiresAt <= now) continue;
     const prev = out.get(t.tier);
-    // Stejný tier víckrát (nemělo by nastat, Židolišta slučuje): drží ten, co vyprší později.
-    if (!prev || (prev.expiresAt !== null && (t.expiresAt === null || t.expiresAt > prev.expiresAt))) out.set(t.tier, t);
+    // Stejný tier víckrát (Židolišta slučuje, ale pro jistotu): hratelný před zmrazeným, pak ten delší.
+    if (!prev || rank(t, now) > rank(prev, now)) out.set(t.tier, t);
   }
   return out;
+}
+
+/** Tiery, ze kterých se teď smí přehrávat (odemčené, nezmrazené). */
+export function playableTiers(state, now) {
+  return new Set([...unlockedTiers(state, now)].filter(([, t]) => t.available !== false && !t.paused).map(([tier]) => tier));
 }
 
 /** Zbývající cooldown v ms (globální nebo můj, co je delší); 0 = lze hned. */
@@ -84,12 +112,9 @@ export function soundboardIconState(state, now) {
   if (!state.me) return { mode: 'link', title: 'Soundboard', lines: [`Připoj účet ${PLATFORM_NAMES[state.platform] || state.platform} k UnityChatu.`] };
   const unlocked = unlockedTiers(state, now);
   if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
-  const rows = [...unlocked.entries()].sort((a, b) => a[0] - b[0]).map(([tier, t]) => ({
-    tier,
-    name: tierLabel(state, tier),
-    remainingMs: t.expiresAt === null ? null : t.expiresAt - now,
-    progress: t.expiresAt === null ? null : progressOf(t, now),
-  }));
+  const rows = [...unlocked.entries()].sort((a, b) => a[0] - b[0]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
+  // Všechno zmrazené: ikona neaktivní jako u zamčené odměny, tooltip ukáže zastavený čas.
+  if (!playableTiers(state, now).size) return { mode: 'paused', title: 'Odměna je pozastavená', lines: ['Streamer časovač zastavil, sound efekty teď nejdou pustit.'], rows, cooldownMs: 0, remainingMs: null, progress: null };
   const timed = rows.filter((r) => r.remainingMs !== null);
   const unlimited = rows.some((r) => r.remainingMs === null);
   const longest = timed.reduce((a, r) => (!a || r.remainingMs > a.remainingMs ? r : a), null);
@@ -104,12 +129,6 @@ export function soundboardIconState(state, now) {
   };
 }
 
-function progressOf(t, now) {
-  if (t.expiresAt === null) return null;
-  const total = t.startedAt !== null ? t.expiresAt - t.startedAt : null;
-  if (!total || total <= 0) return 1;
-  return Math.min(1, Math.max(0, (t.expiresAt - now) / total));
-}
 
 export function tierLabel(state, tier) {
   const t = state?.tiers?.find((x) => x.tier === tier);
@@ -247,7 +266,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   function renderTip(s = soundboardIconState(state, now())) {
     if (s.mode === 'hidden') { hideTip(); return; }
     const lines = (s.lines || []).map((l) => `<div class="uc-sb-tip-l">${esc(l)}</div>`).join('');
-    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${esc(r.name)}</span><b>${r.remainingMs === null ? 'bez omezení' : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
+    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
     const cd = s.cooldownMs > 0 ? `<div class="uc-sb-tip-cd">Cooldown ${esc(formatRemaining(s.cooldownMs))}</div>` : '';
     tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
     tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${lines}${rows}${cd}`;
@@ -257,46 +276,52 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
 
   // ---- panel ----
   const favSet = () => new Set(state?.favorites || []);
-  function soundBtn(s, unlocked, cd, favs) {
-    const locked = !unlocked.has(s.tier);
+  function soundBtn(s, { playable, unlocked, cd, favs }) {
+    const locked = !playable.has(s.tier);
     const cls = ['uc-sb-s', locked ? 'locked' : '', cd > 0 && !locked ? 'cd' : ''].filter(Boolean).join(' ');
     const label = soundLabel(s);
-    const title = locked ? `${label} — ${tierLabel(state, s.tier)} není odemčený` : `!se ${s.name}`;
+    const why = unlocked.get(s.tier)?.paused ? 'je pozastavený' : 'není odemčený';
+    const title = locked ? `${label} — ${tierLabel(state, s.tier)} ${why}` : `!se ${s.name}`;
     return `<div class="${cls}" data-id="${s.id}" title="${esc(title)}">
       <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
       <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
     </div>`;
   }
-  function section(key, head, list, unlocked, cd, favs, extra = '') {
+  function section(key, head, list, ctx, extra = '') {
     if (!list.length) return '';
-    return `<div class="uc-sb-sec" data-sec="${esc(key)}"><div class="uc-sb-h">${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, unlocked, cd, favs)).join('')}</div></div>`;
+    return `<div class="uc-sb-sec" data-sec="${esc(key)}"><div class="uc-sb-h">${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, ctx)).join('')}</div></div>`;
+  }
+
+  /** Hlavička sekce tieru: zamčeno / pozastaveno se zamrzlým časem / bez omezení / odpočet + pruh. */
+  function tierBadge(u, t) {
+    if (!u) return `<span class="uc-sb-lock">${LOCK_SVG} zamčeno</span>`;
+    const tt = tierTime(u, t);
+    const bar = tt.progress === null ? '' : `<i class="uc-sb-hbar${tt.paused ? ' paused' : ''}" style="--p:${tt.progress.toFixed(4)}"></i>`;
+    if (tt.paused) return `<span class="uc-sb-time paused">⏸ ${tt.remainingMs === null ? 'pozastaveno' : esc(formatRemaining(tt.remainingMs))}</span>${bar}`;
+    if (tt.remainingMs === null) return '<span class="uc-sb-time">bez omezení</span>';
+    return `<span class="uc-sb-time" data-exp="${u.expiresAt}">${esc(formatRemaining(tt.remainingMs))}</span>${bar}`;
   }
 
   function renderPanel() {
     if (!state) return;
     const t = now();
     const unlocked = unlockedTiers(state, t);
-    const cd = cooldownLeft(state, t);
-    const favs = favSet();
+    const ctx = { unlocked, playable: playableTiers(state, t), cd: cooldownLeft(state, t), favs: favSet() };
     const byId = new Map(state.sounds.map((s) => [s.id, s]));
     const q = search.value.trim();
     const top = body.scrollTop;
     if (q) {
       const hits = searchSounds(state.sounds, q);
-      body.innerHTML = hits.length ? section('search', `Výsledky pro „${esc(q)}“`, hits, unlocked, cd, favs) : `<div class="uc-sb-empty">Žádný zvuk neodpovídá „${esc(q)}“.</div>`;
+      body.innerHTML = hits.length ? section('search', `Výsledky pro „${esc(q)}“`, hits, ctx) : `<div class="uc-sb-empty">Žádný zvuk neodpovídá „${esc(q)}“.</div>`;
     } else {
       const parts = [
-        section('fav', 'Oblíbené', state.favorites.map((id) => byId.get(id)).filter(Boolean), unlocked, cd, favs),
-        section('recent', 'Často používané', state.recent.map((id) => byId.get(id)).filter(Boolean), unlocked, cd, favs),
+        section('fav', 'Oblíbené', state.favorites.map((id) => byId.get(id)).filter(Boolean), ctx),
+        section('recent', 'Často používané', state.recent.map((id) => byId.get(id)).filter(Boolean), ctx),
       ];
       const tiers = [...new Set(state.sounds.map((s) => s.tier))].sort((a, b) => a - b);
       for (const tier of tiers) {
-        const u = unlocked.get(tier);
-        const badge = !u ? `<span class="uc-sb-lock">${LOCK_SVG} zamčeno</span>`
-          : u.expiresAt === null ? '<span class="uc-sb-time">bez omezení</span>'
-          : `<span class="uc-sb-time" data-exp="${u.expiresAt}">${esc(formatRemaining(u.expiresAt - t))}</span><i class="uc-sb-hbar" style="--p:${progressOf(u, t).toFixed(4)}"></i>`;
-        parts.push(section(`t${tier}`, esc(tierLabel(state, tier)), state.sounds.filter((s) => s.tier === tier), unlocked, cd, favs, badge));
+        parts.push(section(`t${tier}`, esc(tierLabel(state, tier)), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
       }
       body.innerHTML = parts.join('');
     }
@@ -351,7 +376,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
 
   function send(sound) {
     const t = now();
-    if (!unlockedTiers(state, t).has(sound.tier)) return;
+    if (!playableTiers(state, t).has(sound.tier)) return;
     if (cooldownLeft(state, t) > 0) return;
     log?.('Soundboard', `!se ${sound.name}`);
     onSend?.(sound);
@@ -424,7 +449,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     renderButton();
     if (!isOpen()) return;
     // Mimo změnu odemčení/cooldownu stačí přepsat čísla, ne celý panel (neblikat pod myší).
-    const sig = `${[...unlockedTiers(state, now()).keys()].join(',')}|${cooldownLeft(state, now()) > 0}`;
+    const sig = `${[...unlockedTiers(state, now()).keys()].join(',')}|${[...playableTiers(state, now())].join(',')}|${cooldownLeft(state, now()) > 0}`;
     if (sig !== lastSig) { lastSig = sig; renderPanel(); return; }
     const t = now();
     for (const el of body.querySelectorAll('.uc-sb-time[data-exp]')) el.textContent = formatRemaining(Number(el.dataset.exp) - t);
@@ -432,7 +457,8 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       const tier = Number(sec.dataset.sec?.slice(1));
       const u = unlockedTiers(state, t).get(tier);
       const bar = sec.querySelector('.uc-sb-hbar');
-      if (bar && u) bar.style.setProperty('--p', progressOf(u, t).toFixed(4));
+      const p = u ? tierTime(u, t).progress : null;
+      if (bar && p !== null) bar.style.setProperty('--p', p.toFixed(4));
     }
     renderStatus();
   }, 1000);

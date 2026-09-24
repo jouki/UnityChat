@@ -86,6 +86,24 @@ const assert = require('node:assert/strict');
   assert.equal(sb.soundIconHtml({ icon: { kind: '7tv', url: 'https://evil.example/x.webp' } }), '', 'cizí host se nevykreslí');
   assert.match(sb.soundIconHtml({ emoji: '🍺' }), /🍺/, 'staré pole emoji');
 
+  // kontrakt v1.1: zmrazený tier — čas stojí, přehrát nejde
+  const pz = sb.normalizeSoundboard(raw(meWith([{ tier: 1, startedAt: iso(T0 - 60_000), expiresAt: iso(T0 + 999_999), paused: true, remainingMs: 272_000, totalMs: 600_000, available: false }])), T0);
+  assert.equal(pz.me.tiers[0].expiresAt, null, 'u zmrazeného se expiresAt ignoruje');
+  assert.deepEqual([...sb.unlockedTiers(pz, T0 + 3_600_000).keys()], [1], 'zmrazený nevyprší');
+  assert.equal(sb.playableTiers(pz, T0).size, 0, 'zmrazený není hratelný');
+  const pzs = sb.soundboardIconState(pz, T0 + 50_000);
+  assert.equal(pzs.mode, 'paused');
+  assert.equal(pzs.rows[0].remainingMs, 272_000, 'zamrzlý čas se neodpočítává');
+  assert.ok(Math.abs(pzs.rows[0].progress - 272 / 600) < 1e-9);
+  // jeden tier zmrazený, druhý běží → aktivní, hratelný jen běžící
+  const mix = sb.normalizeSoundboard(raw(meWith([
+    { tier: 1, startedAt: iso(T0), expiresAt: iso(T0 + 60_000) },
+    { tier: 2, startedAt: iso(T0), paused: true, remainingMs: 30_000 },
+  ])), T0);
+  assert.equal(sb.soundboardIconState(mix, T0).mode, 'active');
+  assert.deepEqual([...sb.playableTiers(mix, T0)], [1]);
+  assert.equal(sb.tierTime(mix.me.tiers[1], T0).paused, true);
+
   // formát času
   assert.equal(sb.formatRemaining(12_300), '13 s');
   assert.equal(sb.formatRemaining(272_000), '4:32');
