@@ -123,6 +123,28 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   let publicId = null, pollTimer = null, versionTimer = null, sampleAudio = null, paidShown = false;
   let ringRaf = null, ringStart = 0, ringPeriod = 0;
   let profile = null, verifier = null;
+  let qrRaw = null, qrVs = '';
+  const gradId = `ucqd-g-${Math.random().toString(36).slice(2, 8)}`;
+  /** Serverové SVG (bílé pozadí, černé moduly) → černé pozadí a moduly v gradientu UnityChatu. */
+  function brandQrSvg(svg) {
+    return svg
+      .replace(/<path fill="#ffffff"/i, '<path fill="#000000"')
+      .replace(/stroke="#000000"/i, `stroke="url(#${gradId})"`)
+      .replace(/(<svg[^>]*>)/i, `$1<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="0.45" stop-color="#ffc800"/><stop offset="1" stop-color="#ff8c00"/></linearGradient></defs>`);
+  }
+  function lockCurrency(on) {
+    const g = $('.uc-qd-cur');
+    g.classList.toggle('locked', on);
+    g.title = on ? 'Měnu změníš po návratu tlačítkem Zpět (nový QR kód).' : '';
+    for (const btn of g.querySelectorAll('button')) btn.disabled = on;
+  }
+  /** Přechod mezi obrazovkami panelu (formulář ↔ QR ↔ ověření): vjezd z boku + prolnutí. */
+  function animateIn(el, dir) {
+    if (!el) return;
+    el.classList.remove('uc-qd-in-fwd', 'uc-qd-in-back');
+    void el.offsetWidth;
+    el.classList.add(dir === 'back' ? 'uc-qd-in-back' : 'uc-qd-in-fwd');
+  }
   const detectTestmode = makeTestmodeDetector();
 
   const panel = doc.createElement('div');
@@ -183,9 +205,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       <p class="uc-qd-sub">Naskenuj QR kód mobilní aplikací banky</p>
       <div class="uc-qd-qr"></div>
       <div class="uc-qd-amount"></div>
-      <p class="uc-qd-tiny">VS <b class="uc-qd-vs"></b> · IBAN <b class="uc-qd-iban"></b></p>
       <button type="button" class="uc-qd-dl" data-act="download">Stáhnout QR kód</button>
-      <p class="uc-qd-tiny">Platíš přímo na účet streamera. UnityChat peníze nepřijímá ani nedrží.</p>
       <div class="uc-qd-notice uc-qd-notice2" hidden></div>
       <div class="uc-qd-status"><span class="uc-qd-st">Čekám na platbu…</span><span class="uc-qd-ring" hidden><i></i><em></em></span></div>
     </div>`;
@@ -339,13 +359,14 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   function askCode(values) {
     const email = values.email.trim();
     form.hidden = true; verifyEl.hidden = false;
+    animateIn(verifyEl, 'fwd');
     verifier?.destroy();
     verifier = startEmailVerification({
       container: verifyEl, api, email, log,
       onVerified: (em) => { profile = { ...(profile || {}), email: em, verified: true }; renderMail(); closeVerify(); createIntent(values); },
       // Kód teď poslat nejde (limit / výpadek služeb): QR dono nezablokovat, e-mail se pošle neověřený.
       onCannotSend: () => { closeVerify(); setError('E-mail teď nejde ověřit, tip pošleme bez ověření.'); createIntent(values); },
-      onBack: () => closeVerify(),
+      onBack: () => { closeVerify(); animateIn(form, 'back'); },
     });
   }
   function closeVerify() { verifier?.destroy(); verifier = null; verifyEl.hidden = true; form.hidden = false; clearConfigNotice(); }
@@ -370,10 +391,13 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   function showResult(res) {
     form.hidden = true; $('.uc-qd-res').hidden = false;
+    animateIn($('.uc-qd-res'), 'fwd');
+    lockCurrency(true);
     // SVG kreslí náš server (knihovna qrcode), vkládá se jako obsah z důvěryhodného zdroje.
-    $('.uc-qd-qr').innerHTML = typeof res.qrSvg === 'string' && res.qrSvg.startsWith('<svg') ? res.qrSvg : '<p class="uc-qd-tiny">QR se nepodařilo vykreslit.</p>';
-    $('.uc-qd-vs').textContent = res.vs || '';
-    $('.uc-qd-iban').textContent = res.iban || '';
+    // Zobrazení: černé pozadí + moduly v gradientu UnityChatu; stažení bere původní černobílé (qrRaw).
+    qrRaw = typeof res.qrSvg === 'string' && res.qrSvg.startsWith('<svg') ? res.qrSvg : null;
+    $('.uc-qd-qr').innerHTML = qrRaw ? brandQrSvg(qrRaw) : '<p class="uc-qd-tiny">QR se nepodařilo vykreslit.</p>';
+    qrVs = res.vs || '';
     const c = res.currency === 'CZK' ? 'Kč' : res.currency;
     $('.uc-qd-amount').textContent = `${formatAmount(res.amount, res.currency)} ${c}${res.czkPreview ? ` (≈ ${res.czkPreview} Kč)` : ''}`;
     const st = $('.uc-qd-status'); st.classList.remove('ok'); $('.uc-qd-st').textContent = 'Čekám na platbu…';
@@ -409,19 +433,20 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     win.clearTimeout(pollTimer); stopRing(); publicId = null;
     if (paidShown) { f.message.value = ''; $('.uc-qd-count').textContent = `0 / ${MSG_MAX}`; paidShown = false; }
     $('.uc-qd-res').hidden = true; form.hidden = false;
+    animateIn(form, 'back');
+    lockCurrency(false);
     clearConfigNotice();
     renderWho(); renderMail();
   }
   function downloadQr() {
-    const svg = $('.uc-qd-qr svg');
-    if (!svg) return;
-    // SVG → PNG přes canvas (banky i telefony PNG berou líp než SVG).
+    if (!qrRaw) return;
+    // Klasická černobílá verze (spolehlivé skenování), ne barevná z obrazovky. SVG → PNG přes canvas.
     const img = new win.Image();
-    const data = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new win.XMLSerializer().serializeToString(svg))}`;
+    const data = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(qrRaw)}`;
     img.onload = () => {
       const size = 660, cv = doc.createElement('canvas'); cv.width = size; cv.height = size;
       const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size); ctx.drawImage(img, 0, 0, size, size);
-      const a = doc.createElement('a'); a.href = cv.toDataURL('image/png'); a.download = `qr-dono-${$('.uc-qd-vs').textContent || 'kod'}.png`;
+      const a = doc.createElement('a'); a.href = cv.toDataURL('image/png'); a.download = `qr-dono-${qrVs || 'kod'}.png`;
       doc.body.appendChild(a); a.click(); a.remove();
     };
     img.src = data;
@@ -506,6 +531,9 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   panel.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act], [data-cur]');
     if (!b) { if (!e.target.closest('input, textarea, select')) panel.focus(); return; }
+    // Na obrazovce s QR je měna zamčená: přepnutí by vytvořilo další (nezaplacený) záznam v dashboardu
+    // a platba za už naskenovaný kód by se nespárovala. Změna jen přes „Zpět".
+    if (b.dataset.cur && !$('.uc-qd-res').hidden) return;
     if (b.dataset.cur && b.dataset.cur !== cur) {
       cur = b.dataset.cur;
       try { currency?.save?.(cur); } catch { /* ignore */ }
