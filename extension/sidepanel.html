@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="sidepanel.css">
   <link rel="stylesheet" href="composer.css">
   <link rel="stylesheet" href="soundboard.css">
+  <link rel="stylesheet" href="qr-dono.css">
 </head>
 <body>
   <!-- Header -->
@@ -27,6 +28,8 @@
 
   <!-- Settings Panel -->
   <div id="settings" class="hidden">
+    <!-- Email účtu (core/email-verify.js createEmailSettings) — zatím jen v Dev mode. -->
+    <div id="email-settings" class="setting-row dev-only"></div>
     <details class="settings-section" id="channels-section">
       <summary>
         <span>Kanály</span>
@@ -178,6 +181,8 @@
       <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M20 8h-3V6a3 3 0 0 0-6 0v2H8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM13 6a1 1 0 0 1 2 0v2h-2V6zm5 14H10v-2h8v2zm0-4H10v-2h8v2z"/></svg>
       <span class="tc-claim-label">Vyzvednout bonus</span>
     </span>
+    <!-- QR dono (core/qr-dono.js) — zatím jen v Dev mode; bez credits pill je v řádku samo. -->
+    <button id="btn-qrdono" type="button" class="uc-tool-btn" title="QR dono" aria-label="QR dono"></button>
   </div>
 
   <!-- Input pro odesílání zpráv -->

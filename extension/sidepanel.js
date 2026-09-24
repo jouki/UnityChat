@@ -1115,6 +1115,70 @@ class UnityChat {
     });
   }
 
+  /** Dev mode (pamatuje se v configu): nástroje, editace jména, QR dono a email účtu. */
+  _applyDevMode(on) {
+    document.getElementById('dev-tools')?.classList.toggle('hidden', !on);
+    const un = document.getElementById('input-username');
+    if (un) un.readOnly = !on;
+    document.body.classList.toggle('uc-dev', on);
+    if (on) this._initQrDono();
+    else this._qd?.close?.();
+  }
+
+  /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
+  async _ucApi(path, { method = 'GET', body } = {}) {
+    const token = await this._ucSessionToken();
+    const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    let j = {};
+    try { j = await r.json(); } catch {}
+    if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status };
+    return j;
+  }
+
+  /** API QR dona + ověření e-mailu (backend proxy na Židolištu, spec 2026-09-25-qr-dono). */
+  _donateApi() {
+    const channel = () => (this.config.channel || '').toLowerCase();
+    return {
+      config: () => this._ucApi(`/donate/config?channel=${encodeURIComponent(channel())}`),
+      testToken: (token) => this._ucApi('/donate/test-token', { method: 'POST', body: { channel: channel(), token } }),
+      createIntent: (b) => this._ucApi('/donate/intents', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform } }),
+      intentStatus: (id) => this._ucApi(`/donate/intents/${encodeURIComponent(id)}`),
+      profile: () => this._ucApi('/account/profile'),
+      emailStart: (email) => this._ucApi('/account/email/start', { method: 'POST', body: { email } }),
+      emailVerify: (code) => this._ucApi('/account/email/verify', { method: 'POST', body: { code } }),
+    };
+  }
+
+  /** QR dono + email v nastavení — vytvoří se až při zapnutí Dev mode. */
+  _initQrDono() {
+    const core = window.UC_CORE;
+    if (this._qd || !core?.createQrDono) return;
+    const btn = document.getElementById('btn-qrdono');
+    if (!btn) return;
+    const api = this._donateApi();
+    this._qd = core.createQrDono({
+      host: document.getElementById('input-area'),
+      button: btn,
+      api,
+      identity: () => {
+        const id = this._identity(this.activePlatform);
+        return id ? { platform: this.activePlatform, name: id.displayName || id.login } : null;
+      },
+      onLogin: () => this._openLoginModal(),
+      currency: {
+        load: () => { try { return localStorage.getItem('uc_qd_currency'); } catch { return null; } },
+        save: (v) => { try { localStorage.setItem('uc_qd_currency', v); } catch {} },
+      },
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    const slot = document.getElementById('email-settings');
+    if (slot && core.createEmailSettings) {
+      this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
+    }
+    this._ucLog('QrDono', 'zapnuto (Dev mode)');
+  }
+
   /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
   _initSoundboard() {
     const core = window.UC_CORE;
@@ -1187,6 +1251,8 @@ class UnityChat {
     // panel because dump runs in the service worker context.
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
+    // Dev mode se pamatuje v configu (QR dono, email účtu) — listenery se napojují dřív než config.
+    { const dm = document.getElementById('chk-devmode'); if (dm) dm.checked = this.config.devMode === true; this._applyDevMode(this.config.devMode === true); }
     this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
     await this._pickBootStreamer();
     this._bootMark('streamer picked', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
@@ -1679,11 +1745,13 @@ class UnityChat {
 
 
     // Dev mode
+    $('chk-devmode').checked = this.config.devMode === true;
+    this._applyDevMode(this.config.devMode === true);
     $('chk-devmode').addEventListener('change', () => {
       const on = $('chk-devmode').checked;
-      $('dev-tools').classList.toggle('hidden', !on);
-      // Enable/disable username editing
-      $('input-username').readOnly = !on;
+      this.config.devMode = on;
+      this._saveConfig();
+      this._applyDevMode(on);
     });
     $('btn-dump-cache').addEventListener('click', () => {
       // Dump dat zpráv ze store (in-memory; historie jde ze serveru).
@@ -2806,6 +2874,7 @@ class UnityChat {
     // (detect loop runs every 3s — without this guard it overwrites user-typed values)
     if (!changed) return;
     this._loadSoundboard();
+    this._qd?.refreshIdentity?.();
 
     // Update username field to show current platform's username
     const el = document.getElementById('input-username');
@@ -4349,6 +4418,8 @@ class UnityChat {
     this._ucLog('Account', `stav: ${linked.length ? linked.map((p) => `${p}=${acc.platforms[p].login}`).join(' ') : 'nepřihlášen'}`);
     this._renderComposer();
     this._loadSoundboard();
+    this._qd?.refreshIdentity?.();
+    this._emailSettings?.refresh?.();
   }
 
   /** Jméno, pod kterým mě vidí chat platformy: Twitch/Kick display name, YouTube handle (login),
