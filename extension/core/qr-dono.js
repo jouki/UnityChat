@@ -193,7 +193,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       </div>
       <div class="uc-qd-row">
         <label class="uc-qd-f">
-          <span class="uc-qd-l">Částka <em class="uc-qd-min"></em></span>
+          <span class="uc-qd-l">Částka <em class="uc-qd-min" data-act="min" title="Vyplnit minimální částku"></em></span>
           <span class="uc-qd-amt"><input name="amount" inputmode="decimal" autocomplete="off"><b class="uc-qd-sym"></b></span>
           <span class="uc-qd-meta uc-qd-czk"></span>
         </label>
@@ -270,6 +270,15 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     renderMail();
   }
 
+  /** Klik na „min. X Kč“ vyplní minimální částku (desetinná čárka u eur). */
+  function fillMin() {
+    const cc = currencyConfig(cfg, cur);
+    if (!cc) return;
+    f.amount.value = String(cc.minAmount).replace('.', ',');
+    f.amount.dispatchEvent(new win.Event('input', { bubbles: true }));
+    f.amount.focus();
+    L(`min ${cc.minAmount} ${cur}`);
+  }
   function renderCurrency() {
     const c = CURRENCIES[cur];
     for (const b of panel.querySelectorAll('.uc-qd-cur button')) { const on = b.dataset.cur === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
@@ -567,6 +576,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     if (act === 'close') close();
     else if (act === 'login') onLogin?.();
     else if (act === 'back') back();
+    else if (act === 'min') fillMin();
     else if (act === 'download') downloadQr();
     else if (act === 'sample') {
       if (sampleAudio) { stopSample(); return; }
