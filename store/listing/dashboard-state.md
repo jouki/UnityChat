@@ -178,9 +178,9 @@ and files that ship inside the extension.
 
 | Checkbox | Stav | Proč |
 |---|---|---|
-| Údaje umožňující zjištění totožnosti | ☑ ANO | username uživatele na platformě jde na backend (`/users/seen`), jména cizích uživatelů u přezdívek (`/nicknames`) |
+| Údaje umožňující zjištění totožnosti | ☑ ANO | username uživatele na platformě jde na backend (`/users/seen`), jména cizích uživatelů u přezdívek (`/nicknames`), od 2026-09-25 e-mail zadaný uživatelem (QR dono → Židolišta) |
 | Zdravotní informace | ☐ NE | — |
-| Finanční a platební údaje | ☐ NE | — |
+| Finanční a platební údaje | ☑ ANO (od 2026-09-25) | QR dono: částka, měna a zpráva daru jdou přes backend Židolišti |
 | Ověřovací informace | ☑ ANO | čtení Twitch `auth-token` cookie (`cookies` permission); neopouští Twitch |
 | Osobní komunikace | ☑ ANO | archiv chatu: server ukládá veřejné zprávy z chatů podporovaných streamerů, panel je zobrazuje |
 | Poloha | ☐ NE | — |
@@ -197,11 +197,13 @@ and files that ship inside the extension.
 ```
 https://jouki.cz/UnityChat/privacy
 ```
-Policy platná od **19. 9. 2026** (CS/EN), popisuje: lokální konfiguraci (1a),
-Google OAuth `youtube.readonly` pro streamery (1b), data posílaná na
-`api.jouki.cz` + **archiv chatu** kanálů robdiesalot/tensterakdary/arcadebulls
-bez časového omezení, mazání na žádost (1c), Twitch `auth-token` cookie (1d),
-účely (2), retence (5), GDPR práva (6). Kontakt `m.joukal+unitychat@gmail.com`.
+Policy platná od **25. 9. 2026** (CS/EN), popisuje: lokální konfiguraci (1a),
+Google OAuth pro streamery (1b), data posílaná na `api.jouki.cz` + **archiv chatu**
+kanálů robdiesalot/tensterakdary/arcadebulls bez časového omezení, mazání na žádost
+(1c), cookie Twitch `auth-token` a Kick `session_token` (1d), přihlášení diváka
+v rozšíření i na webu + psaní přes účet (1e), **e-mail zadaný uživatelem + dary přes
+QR kód, předání Židolišti, Brevo/Resend** (1f), účely (2), uložení (3), sdílení (4),
+retence (5), GDPR práva (6). Kontakt `m.joukal+unitychat@gmail.com`.
 Zdroj: repo `jouki/jouki.cz`, `unitychat/privacy/index.html`.
 
 ## Karta „Přístup"

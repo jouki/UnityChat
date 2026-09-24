@@ -20,6 +20,10 @@ volání na vlastní backend:
 | `DELETE /nicknames` | `{platform, username}` | smazání přezdívky |
 | `POST /chat/uc-sent` | `{platform, channel, username, text}` | od v3.40.5: po odeslání **commandu** (`!…`, jde bez UC markeru) — server podle toho zprávu v chatu označí jako odeslanou z UnityChatu (zlaté logo). Jen text commandu, který uživatel sám poslal do veřejného chatu. Spadá pod *Personal communications* (už zaškrtnuto). |
 | `GET /blacklist`, `GET /commands` | query `channel` | čtení sdíleného blacklistu slov a commandů Židolišty (žádná data o uživateli) |
+| `POST /auth/:platform/start`, `/auth/exchange`, `GET /auth/me` | OAuth přihlášení účtu (od v3.40.19 i v addonu) | identita z platformy (ID, login, jméno, avatar) + šifrované tokeny pro psaní do chatu; **e-mail se z platforem nečte** |
+| `POST /chat/send` | `{platform, text, replyTo?, ucReplyTo?, channel}` | od v3.40.25 odeslání zprávy účtem uživatele (text, který sám napsal) |
+| `GET /account/profile`, `POST /account/email/start`, `POST /account/email/verify` | `{email}` / `{code}` | od v3.40.33 (Dev mode): **e-mail zadaný uživatelem**, ověření 6místným kódem (Brevo / Resend), ověřený se ukládá k účtu |
+| `GET /donate/config`, `POST /donate/intents`, `GET /donate/intents/:id`, `POST /donate/test-token` | přezdívka, e-mail, částka, měna, zpráva, hlas TTS, platforma | od v3.40.33 (Dev mode): **QR dono** — backend předá Židolišti (stejný správce), ta vrátí QR platbu a stav zaplacení |
 
 **Rozšíření samo chat zprávy na backend neposílá.** Od v3.39 (2026-09-19) ale
 backend veřejný chat podporovaných streamerů (robdiesalot, tensterakdary,
@@ -35,12 +39,12 @@ kromě toho, co si daná služba stejně přečte z requestu.
 
 | Kategorie | Odpověď | Odůvodnění |
 |---|---|---|
-| Personally identifiable information | **ANO** | CWS definuje PII včetně *username*. Na backend jde uživatelovo jméno na platformě (`/users/seen`) a jména, kterým uživatel nastavuje přezdívky (`/nicknames`). |
+| Personally identifiable information | **ANO** | CWS definuje PII včetně *username* a *e-mailu*. Na backend jde uživatelovo jméno na platformě (`/users/seen`), jména, kterým uživatel nastavuje přezdívky (`/nicknames`), a od 2026-09-25 **e-mail, který uživatel sám zadá** (QR dono, ověření kódem) — ten se předává Židolišti. |
 | Authentication information | **ANO** | Definice zahrnuje *authentication cookies*. Rozšíření čte Twitch `auth-token` cookie. Neopouští Twitch, ale reviewer vidí `cookies` permission — nezaškrtnout a nechat ho to objevit je horší varianta. |
 | Web browsing activity | **ANO** | `/streamers/seen` posílá handle sledovaného kanálu, což je informace o tom, jakou stránku uživatel sleduje. |
 | Website content | **ANO** | Rozšíření čte obsah chatu ze stránek platforem (text zpráv, jména, badge). Zůstává lokálně, ale čte se. |
 | Personal communications | **ANO** | Archiv chatu je od 2026-09-19 **aktivní**: server ukládá veřejné zprávy z chatů podporovaných streamerů (od všech chatujících) a rozšíření je zobrazuje. Zaškrtnuto už od 2026-09-16 (tehdy jako plánovaná funkce). |
-| Financial and payment information | **NE** | — |
+| Financial and payment information | **ANO** (od 2026-09-25) | QR dono: částka, měna a zpráva daru jdou přes backend Židolišti (záznam o daru/transakci). Platbu provádí uživatel ve své bance, karty ani bankovnictví nezpracováváme. |
 | Health information | **NE** | — |
 | Location | **NE** | — |
 | User activity | **NE** | Žádné sledování kliků, pohybu myši ani keystroke logging. |

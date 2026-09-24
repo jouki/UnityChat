@@ -20,7 +20,8 @@ const unpacked = path.join(outDir, 'unpacked');
 
 export const GECKO_ID = 'unitychat@jouki.cz';
 export const MIN_FIREFOX = '128.0';
-export const DATA_COLLECTION = ['personallyIdentifyingInfo', 'authenticationInfo', 'browsingActivity', 'websiteContent', 'personalCommunications'];
+// financialAndPaymentInfo: QR dono (částka, měna a zpráva daru jdou přes backend Židolišti; 2026-09-25).
+export const DATA_COLLECTION = ['personallyIdentifyingInfo', 'authenticationInfo', 'browsingActivity', 'websiteContent', 'personalCommunications', 'financialAndPaymentInfo'];
 
 /** Chrome manifest → Firefox manifest (čistá funkce, testovatelná). */
 export function toFirefoxManifest(m) {
@@ -42,7 +43,8 @@ export function toFirefoxManifest(m) {
       // disclosure v Chrome Web Store (store/listing/privacy-disclosure.md):
       // jméno uživatele na platformě (/users/seen, /nicknames), přihlašovací cookie Twitch/Kick
       // (jen k API těch platforem), sledovaný kanál (/streamers/seen, /streamers/lookup),
-      // obsah chatu platforem, text odeslaného commandu (/chat/uc-sent) a archiv chatu.
+      // obsah chatu platforem, text odeslaného commandu (/chat/uc-sent) a archiv chatu,
+      // e-mail zadaný uživatelem a údaje o daru (QR dono → Židolišta).
       data_collection_permissions: { required: DATA_COLLECTION },
     },
   };
