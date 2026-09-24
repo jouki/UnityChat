@@ -1256,6 +1256,7 @@ class UnityChat {
     // panel because dump runs in the service worker context.
     try { chrome.runtime.sendMessage({ type: 'BOOT_WATCH_START' }).catch(() => {}); } catch {}
     await this._loadConfig();
+    this._applyBarCollapsed(this.config.barCollapsed === true);
     // Dev mode se pamatuje v configu (QR dono, email účtu) — listenery se napojují dřív než config.
     { const dm = document.getElementById('chk-devmode'); if (dm) dm.checked = this.config.devMode === true; this._applyDevMode(this.config.devMode === true); }
     this._bootMark('config loaded', `channel=${this.config.channel} roomId=${this.config._roomId || '—'}`);
@@ -1633,6 +1634,11 @@ class UnityChat {
       }
       this._dumpLogs();
     });
+    $('btn-bar').addEventListener('click', () => {
+      this.config.barCollapsed = !(this.config.barCollapsed === true);
+      this._saveConfig();
+      this._applyBarCollapsed(this.config.barCollapsed);
+    });
     $('btn-settings').addEventListener('click', () => {
       const opening = $('settings').classList.toggle('hidden') === false;
       if (opening) this._refreshAccount();
@@ -1957,6 +1963,27 @@ class UnityChat {
     for (const p of ['twitch', 'youtube', 'kick']) {
       const dot = document.querySelector(`#st-${p} .dot`);
       if (dot && !this.config[p]) dot.className = 'dot disabled';
+    }
+    this._updateBarDot();
+  }
+
+  /** Souhrnná tečka v hlavičce: zelená = aspoň jedna platforma připojená, žlutá = žádná, ale
+   *  některá se připojuje, červená = všechny odpojené. Vypnuté platformy se nepočítají. */
+  _updateBarDot() {
+    const dot = document.querySelector('#btn-bar .dot');
+    if (!dot) return;
+    const dots = ['twitch', 'youtube', 'kick'].map((p) => document.querySelector(`#st-${p} .dot`)).filter((d) => d && !d.classList.contains('disabled'));
+    const state = dots.some((d) => d.classList.contains('connected')) ? 'connected'
+      : dots.some((d) => d.classList.contains('connecting')) ? 'connecting' : 'error';
+    dot.className = `dot ${state}`;
+  }
+
+  _applyBarCollapsed(collapsed) {
+    document.getElementById('bar')?.classList.toggle('collapsed', collapsed);
+    const b = document.getElementById('btn-bar');
+    if (b) {
+      b.setAttribute('aria-expanded', String(!collapsed));
+      b.title = collapsed ? 'Připojení platforem — rozbalit řádek' : 'Připojení platforem — sbalit řádek';
     }
   }
 
@@ -4134,6 +4161,7 @@ class UnityChat {
         if (stEl) stEl.title = `${name} - Disconnected`;
       }
     }
+    this._updateBarDot();
     if (status === 'error' && detail) {
       this._sys(`${platform.toUpperCase()}: ${detail}`);
     }

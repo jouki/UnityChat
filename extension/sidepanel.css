@@ -140,7 +140,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 2px;
 }
 
-#btn-reconnect, #btn-popout, #btn-dump, #btn-settings {
+#btn-bar, #btn-reconnect, #btn-popout, #btn-dump, #btn-settings {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -233,10 +233,12 @@ body.layout-large #settings details summary { font-size: 15px; }
 #btn-dump, #btn-popout {
   font-size: 14px;
 }
-#btn-reconnect, #btn-popout { display: inline-flex; align-items: center; }
+#btn-bar, #btn-reconnect, #btn-popout { display: inline-flex; align-items: center; }
+#btn-bar { justify-content: center; min-width: 28px; align-self: stretch; }
+#btn-bar .dot { width: 9px; height: 9px; }
 #btn-reconnect:active svg { transform: rotate(-90deg); transition: transform 0.15s; }
 
-#btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
+#btn-bar:hover, #btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -587,7 +589,12 @@ body.uc-dev .dev-only { display: block; }
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   gap: 8px;
+  max-height: 40px;
+  overflow: hidden;
+  transition: max-height 200ms ease, padding 200ms ease, opacity 200ms ease, border-color 200ms ease;
 }
+/* Sbaleno tlačítkem #btn-bar v hlavičce (config.barCollapsed). */
+#bar.collapsed { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; border-bottom-width: 0; }
 
 /* Stavová tečka žije uvnitř filter tlačítka. Bez stavu = červená
    (nepřipojeno), vyfiltrovaná platforma = šedá bez ohledu na stav. */
