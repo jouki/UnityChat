@@ -57,6 +57,8 @@ const EnvSchema = z.object({
   MAIL_FROM: z.string().email().default('noreply-unitychat@jouki.cz'),
   // Celkový denní strop odeslaných e-mailů (Brevo 300 + Resend 100 − rezerva).
   MAIL_DAILY_BUDGET: z.coerce.number().int().positive().default(380),
+  // Kam jde měsíční udržovací e-mail (lib/mailKeepalive.ts; Brevo klíč vyprší po 90 dnech nečinnosti). Prázdné = vypnuto.
+  MAIL_KEEPALIVE_TO: z.string().default('m.joukal+unitychat@gmail.com'),
   ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),

@@ -30,6 +30,7 @@ import { toClientMessage } from './routes/chat.js';
 import { toRow } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
+import { startMailKeepalive } from './lib/mailKeepalive.js';
 
 const startedAt = Date.now();
 
@@ -83,6 +84,7 @@ const ingest = createIngest({
 });
 app.addHook('onReady', async () => {
   ingest.start();
+  startMailKeepalive(app.log);
   // Registr workspaců Židolišty (mapování kanálů pro stream) + loginy botů pro isBot.
   // Kanály workspaců se přidávají do ingestu automaticky (env CHAT_INGEST_CHANNELS je jen základ).
   onWorkspaces((list) => {
