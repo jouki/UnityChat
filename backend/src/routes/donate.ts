@@ -12,6 +12,7 @@
 // Limity Židolišty jsou per IP → posíláme X-UC-Client-Ip (reálná IP diváka, trustProxy)
 // spolu s X-Api-Key, ať se limit počítá podle diváka, ne podle backendu.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import QRCode from 'qrcode';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
@@ -35,6 +36,15 @@ const IntentBody = z.object({
   markPaid: z.boolean().optional(),
 }).strict();
 const TokenBody = z.object({ channel: Channel, token: z.string().trim().min(1).max(200) }).strict();
+
+/**
+ * QR řetězec (PayBySquare / SPD) → SVG. Addon nesmí načítat vzdálený kód (MV3/CWS), takže
+ * QR nekreslí klient knihovnou z CDN jako web Židolišty, ale server. Úroveň opravy M jako tam.
+ */
+export async function qrSvg(text: string): Promise<string | null> {
+  if (!text || text.length > 2000) return null;
+  return QRCode.toString(text, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, color: { dark: '#000000', light: '#ffffff' } });
+}
 
 /** Přezdívka pro Židolištu: display name platformy, na kterou divák píše (≤ 40 znaků, jako jejich zod). */
 export function donorNickname(identity: { displayName: string | null; login: string }): string {
@@ -121,6 +131,9 @@ export default async function donateRoutes(app: FastifyInstance) {
     try {
       const u = await upstream(req, `/donate/public/${encodeURIComponent(slug)}/intents`, { method: 'POST', body });
       req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken }, 'donate: intent');
+      if (u.status === 200 && typeof u.json.qrString === 'string') {
+        try { u.json.qrSvg = await qrSvg(u.json.qrString); } catch (e) { req.log.warn({ err: (e as Error).message }, 'donate: qr svg failed'); }
+      }
       return reply.code(u.status).send(u.json);
     } catch (e) { return fail(reply, e, app.log, 'intents'); }
   });
