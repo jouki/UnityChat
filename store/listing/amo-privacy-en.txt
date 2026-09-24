@@ -76,11 +76,13 @@ UnityChat lets you send the streamer a donation by bank transfer via a QR code. 
 
 - E-mail — entered in the donation form or in UnityChat settings. If you choose to verify it, we send it a one-time 6-digit code; a verified e-mail is stored with your UnityChat account (it applies to all linked platforms) so you don't have to enter it again. An unverified e-mail is not stored with the account, it is only passed on with the donation.
 
-- Donation details — nickname, amount and currency, message text and the chosen text-to-speech voice, the platform you donate from, and the time. We remember the last nickname you used with your account.
+- Donation details — nickname, e-mail (the verified one from your account, otherwise the one you entered), amount and currency, message text and the chosen text-to-speech voice and language. We remember the last nickname you used with your account.
+
+- IP address — when a donation is created we pass your IP address to Židolišta for abuse protection (request limits) and to guess the currency by country. Židolišta stores only a fingerprint (hash) of it.
 
 We pass this data to Židolišta, which creates the payment details for the QR code (the streamer's account number, variable symbol, amount), matches the payment to the donation by its variable symbol once it arrives in the streamer's account, and shows or reads the donation on stream. The e-mail is used to confirm that donations come from you and to link your donations to your account. We do not send you marketing. You make the payment itself in your own bank; neither UnityChat nor Židolišta processes payment cards or banking credentials.
 
-Verification codes are sent through the e-mail providers Brevo (France, EU) and, as a fallback, Resend (USA; the transfer outside the EU is governed by the provider's contractual safeguards for EU data transfers). The provider only receives the recipient address and the message with the code.
+Verification codes are sent through the e-mail providers Brevo (France, EU) and, as a fallback, Resend (USA; transfer outside the EU based on the EU-US Data Privacy Framework). The provider only receives the recipient address and the message with the code (no links). We store only a fingerprint (hash) of the code; Židolišta never receives the verification code. To prevent abuse we log, for each code sent, the address, a fingerprint of the IP address (not the IP itself), the provider used and the time.
 
 2. How we use the data
 
@@ -122,7 +124,7 @@ We keep linked-account data (streamers and, in the web version, viewers — poin
 
 Usernames, channel handles and nicknames under point 1c) are kept without a time limit — until you ask us to delete them, or until we remove them ourselves as no longer needed. You can request erasure at any time at the e-mail address above.
 
-We keep your verified e-mail with your account until you change it or ask for deletion. A verification code is valid for 10 minutes. Donation records (point 1f) are kept by Židolišta as the streamer's donation records; you can ask for their deletion at the same e-mail address.
+We keep your verified e-mail with your account until you change it or ask for the account or e-mail to be deleted (for now at the e-mail address above; self-service deletion in the app is being prepared). A verification code is valid for 10 minutes (at most 5 attempts); its record is deleted after verification, at the latest one day after it expires. The log of sent codes (point 1f) is kept for 30 days. Donation records are kept by Židolišta as the streamer's donation records; you can ask for their deletion at the same e-mail address.
 
 Messages in the chat archive (point 1c) are likewise kept without a time limit — until you ask us to delete your messages, or until we prune the archive ourselves. On request we delete all messages of a given author.
 
