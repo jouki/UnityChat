@@ -1,0 +1,127 @@
+/* QR dono (core/qr-dono.js) — addon i web vedle sidepanel.css, stejné proměnné.
+   Panel se kotví nad hostitele (#input-area) jako soundboard. */
+
+.uc-qd {
+  position: absolute; bottom: 100%; left: 10px; right: 10px; z-index: 32;
+  max-width: 460px; max-height: min(620px, 80vh); overflow-y: auto;
+  margin-bottom: 6px; padding: 10px 12px 12px;
+  background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary); font-size: 13px; outline: none;
+}
+.uc-qd.hidden { display: none; }
+.uc-qd:focus-visible { border-color: var(--accent); }
+
+.uc-qd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.uc-qd-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: var(--accent-light); }
+.uc-qd-cur { display: inline-flex; margin-left: auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.uc-qd-cur button {
+  padding: 4px 10px; border: none; background: transparent; color: var(--text-secondary);
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.uc-qd-cur button small { font-weight: 400; opacity: 0.7; }
+.uc-qd-cur button.on { background: var(--accent-gradient); color: #1a1000; }
+.uc-qd-x { border: none; background: transparent; color: var(--text-secondary); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 4px; }
+.uc-qd-x:hover { color: var(--text-primary); }
+
+.uc-qd-form { display: flex; flex-direction: column; gap: 9px; }
+.uc-qd-who { color: var(--text-secondary); font-size: 12px; }
+.uc-qd-who b { color: var(--text-primary); }
+.uc-qd-who button { margin-left: 6px; padding: 2px 8px; border: none; border-radius: 4px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-weight: 700; cursor: pointer; }
+.uc-qd-plat { opacity: 0.7; }
+.uc-qd-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 360px) { .uc-qd-row { grid-template-columns: 1fr; } }
+.uc-qd-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.uc-qd-l { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
+.uc-qd-l em { margin-left: auto; font-style: normal; font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.8; }
+.uc-qd input, .uc-qd select, .uc-qd textarea {
+  width: 100%; box-sizing: border-box; padding: 7px 9px;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text-primary); font: inherit; outline: none;
+}
+.uc-qd textarea { resize: vertical; min-height: 60px; }
+.uc-qd input:focus, .uc-qd select:focus, .uc-qd textarea:focus { border-color: var(--accent); }
+.uc-qd .invalid { border-color: #ff6b6b !important; }
+.uc-qd-amt { position: relative; display: block; }
+.uc-qd-amt input { padding-right: 32px; }
+.uc-qd-sym { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-weight: 700; pointer-events: none; }
+.uc-qd-meta { color: var(--text-muted); font-size: 11px; min-height: 1em; }
+.uc-qd-sample { margin-left: auto; padding: 1px 7px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--accent-light); font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; cursor: pointer; }
+.uc-qd-sample.playing { color: #ff7aa8; border-color: #ff7aa8; }
+
+.uc-qd-test { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px; border: 1px dashed var(--border); border-radius: 6px; }
+.uc-qd-test[hidden] { display: none; }
+.uc-qd-test input[name="ttoken"] { flex: 1 1 100%; }
+.uc-qd-test label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.uc-qd-test input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+/* Ověřený token (serverem) = zelené pole a tlačítko „Testovací tip“, jako na webu. */
+.uc-qd input[name="ttoken"].valid { border-color: #7fd18b; background: #1d3b22; color: #c9f2cf; }
+.uc-qd-notice { padding: 7px 9px; border-radius: 5px; background: rgba(255, 200, 0, 0.1); color: var(--accent-light); font-size: 12px; }
+.uc-qd-notice[hidden], .uc-qd-err[hidden] { display: none; }
+.uc-qd-err { color: #ff8a8a; font-size: 12px; }
+.uc-qd-go {
+  padding: 9px 12px; border: none; border-radius: 999px; background: var(--accent-gradient); color: #1a1000;
+  font: inherit; font-weight: 800; cursor: pointer; box-shadow: var(--accent-glow);
+}
+.uc-qd-go:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.uc-qd-go.test { background: linear-gradient(160deg, #7fd18b, #3fa34d); color: #07210c; box-shadow: 0 0 8px rgba(80, 200, 100, 0.5); }
+
+.uc-qd-res { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.uc-qd-res[hidden], .uc-qd-form[hidden] { display: none; }
+.uc-qd-back { align-self: flex-start; padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; }
+.uc-qd-sub { margin: 0; color: var(--text-secondary); }
+.uc-qd-qr { width: min(260px, 100%); aspect-ratio: 1; padding: 8px; background: #fff; border-radius: 8px; box-sizing: border-box; }
+.uc-qd-qr svg { display: block; width: 100%; height: 100%; }
+.uc-qd-amount { font-size: 20px; font-weight: 800; color: var(--accent-light); }
+.uc-qd-tiny { margin: 0; color: var(--text-muted); font-size: 11px; word-break: break-all; }
+.uc-qd-tiny b { color: var(--text-secondary); font-weight: 600; }
+.uc-qd-dl { padding: 4px 10px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--accent-light); font: inherit; font-size: 12px; cursor: pointer; }
+.uc-qd-status { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); font-weight: 700; }
+.uc-qd-status.ok { background: rgba(80, 200, 100, 0.15); color: #7fd18b; }
+/* Kolečko do další kontroly banky (conic-gradient + maska, jako web Židolišty). */
+.uc-qd-ring { position: relative; width: 20px; height: 20px; }
+.uc-qd-ring[hidden] { display: none; }
+.uc-qd-ring i { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(transparent var(--deg, 0deg), var(--accent) 0);
+  -webkit-mask: radial-gradient(circle, transparent 8px, #000 8.5px); mask: radial-gradient(circle, transparent 8px, #000 8.5px); }
+.uc-qd-ring em { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 10px; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .uc-qd-ring i { background: var(--accent); } }
+
+/* ---- e-mail + „Potvrdit email při první platbě“ s vlastním tooltipem ---- */
+.uc-qd-mail { display: flex; flex-direction: column; gap: 6px; }
+.uc-qd-mail[hidden], .uc-qd-verify[hidden], .uc-qd-confirm[hidden] { display: none; }
+.uc-qd-confirm { position: relative; display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.uc-qd-confirm input { width: auto; accent-color: var(--accent); }
+.uc-qd-tip {
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 2; width: min(300px, 80vw);
+  padding: 8px 10px; border-radius: 7px; background: var(--bg-primary); border: 1px solid var(--border);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5); color: var(--text-primary); font-size: 12px; line-height: 1.4;
+  opacity: 0; visibility: hidden; transform: translateY(4px); transition: opacity 0.15s, transform 0.15s, visibility 0.15s; pointer-events: none;
+}
+.uc-qd-confirm:hover .uc-qd-tip, .uc-qd-confirm:focus-within .uc-qd-tip { opacity: 1; visibility: visible; transform: none; }
+
+/* ---- ověření kódem (core/email-verify.js + code-input.js), sdílí i nastavení ---- */
+.uc-ev { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 6px 0; text-align: center; }
+.uc-ev-t { margin: 0; color: var(--text-secondary); }
+.uc-ev-t b { color: var(--text-primary); word-break: break-all; }
+.uc-ev-err { margin: 0; color: #ff8a8a; font-size: 12px; }
+.uc-ev-err[hidden], .uc-ev-ok[hidden], .uc-ev-row[hidden], .uc-ev-code[hidden] { display: none; }
+.uc-ev-row { display: flex; gap: 8px; }
+.uc-ev-row button { padding: 5px 12px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.uc-ev-resend:not(:disabled) { color: var(--accent-light); border-color: rgba(255, 140, 0, 0.5); }
+.uc-ev-resend:disabled { cursor: default; opacity: 0.7; }
+.uc-code { display: flex; gap: 6px; }
+.uc-code input {
+  width: 38px; height: 46px; padding: 0; text-align: center; font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 7px; color: var(--text-primary); outline: none; caret-color: var(--accent);
+}
+.uc-code input:focus { border-color: var(--accent); box-shadow: var(--accent-glow); }
+.uc-code.busy input { opacity: 0.6; }
+.uc-code.bad input { border-color: #ff6b6b; animation: uc-code-shake 0.3s; }
+@keyframes uc-code-shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+/* Úspěch: kružnice + fajfka se „nakreslí“, pak přijde QR. */
+.uc-ev-ok { display: flex; flex-direction: column; align-items: center; gap: 6px; color: #7fd18b; font-weight: 700; }
+.uc-ev-ok svg { width: 56px; height: 56px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.uc-ev-ok circle { stroke-dasharray: 151; stroke-dashoffset: 151; animation: uc-ev-draw 0.5s ease-out forwards; }
+.uc-ev-ok path { stroke-dasharray: 36; stroke-dashoffset: 36; animation: uc-ev-draw 0.35s 0.45s ease-out forwards; }
+@keyframes uc-ev-draw { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) { .uc-ev-ok circle, .uc-ev-ok path { animation: none; stroke-dashoffset: 0; } .uc-code.bad input { animation: none; } }
