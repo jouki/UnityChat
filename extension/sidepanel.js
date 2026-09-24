@@ -1133,8 +1133,8 @@ class UnityChat {
       },
       // Nepřihlášený → sekce účtu; přihlášený bez účtu na aktivní platformě → rovnou připojit tu platformu.
       onLogin: (platform) => {
-        this._openAccountSettings();
-        if (platform && this._account) this._accountAction(platform, 'link');
+        if (platform && this._account) this._loginPlatform(platform);
+        else this._openLoginModal();
       },
       volume: {
         load: () => { try { return Number(localStorage.getItem('uc_sfx_volume') ?? 0.6); } catch { return 0.6; } },
@@ -1332,6 +1332,9 @@ class UnityChat {
     // pin cards entirely. FETCH_PINS pulls pinned messages straight from
     // the server — works regardless of chat UI visibility.
     this._startPinPoll();
+    try { const r = await chrome.storage.local.get('uc_send_platform'); if (['twitch', 'kick', 'youtube'].includes(r.uc_send_platform)) this._sendPlatform = r.uc_send_platform; } catch {}
+    if (!this._sendPlatform) this._sendPlatform = 'twitch';
+    if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
     this._refreshAccount();
     this._bootMark('_init done');
     this._bootPending = false;
@@ -1550,13 +1553,21 @@ class UnityChat {
       const opening = $('settings').classList.toggle('hidden') === false;
       if (opening) this._refreshAccount();
     });
-    // Účet: ikona v hlavičce otevře nastavení na sekci účtu.
-    $('btn-account').addEventListener('click', () => this._openAccountSettings());
-    $('account-rows').addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-platform]');
-      if (b) this._accountAction(b.dataset.platform, b.dataset.action, b);
+    // Pole pro psaní (jako web): badge + šipka → menu „Psát jako", bez přihlášení výzva.
+    $('platform-btn').addEventListener('click', (e) => { e.stopPropagation(); this._togglePlatformMenu(); });
+    document.addEventListener('click', (e) => { if (!$('platform-menu').contains(e.target)) this._closePlatformMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') this._closePlatformMenu(); });
+    $('login-cta').addEventListener('click', () => this._openLoginModal());
+    // Záloha: stará cesta přes otevřenou kartu (dev mode).
+    $('chk-legacy-send').checked = this._legacySend();
+    $('chk-legacy-send').addEventListener('change', () => {
+      this.config.legacyTabSend = $('chk-legacy-send').checked;
+      this._saveConfig();
+      this._ucLog('Send', `režim: ${this.config.legacyTabSend ? 'otevřená karta (záloha)' : 'účet'}`);
+      if (this.config.legacyTabSend) this._detectActivePlatform();
+      else this._setActivePlatform(this._sendPlatform);
+      this._renderComposer();
     });
-    $('btn-account-logout').addEventListener('click', () => this._accountLogout());
 
     // Nickname (empty = delete)
     $('btn-nickname').addEventListener('click', async () => {
@@ -2310,7 +2321,7 @@ class UnityChat {
   async _detectActivePlatform() {
     try {
       const tab = await this._findStreamTab();
-      if (!tab) { this._setActivePlatform(null); this._hideSwitchOffer(); return; }
+      if (!tab) { if (this._legacySend()) this._setActivePlatform(null); this._hideSwitchOffer(); return; }
 
       let resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
 
@@ -2320,10 +2331,10 @@ class UnityChat {
         resp = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
       }
 
-      this._setActivePlatform(resp?.platform || null);
+      if (this._legacySend()) this._setActivePlatform(resp?.platform || null);
 
       // Track username per platform + persist
-      if (resp?.username && resp?.platform) {
+      if (resp?.username && resp?.platform && (this._legacySend() || !this._identity(resp.platform))) {
         const name = resp.username.replace(/^@/, '');
         const prev = this._platformUsernames[resp.platform];
         this._platformUsernames[resp.platform] = name;
@@ -2366,7 +2377,7 @@ class UnityChat {
         this._hideSwitchOffer();
       }
     } catch {
-      this._setActivePlatform(null);
+      if (this._legacySend()) this._setActivePlatform(null);
     }
   }
 
@@ -2784,11 +2795,7 @@ class UnityChat {
       this.platformBadge.className = 'badge';
     }
 
-    this.msgInput.disabled = !platform;
-    this.sendBtn.disabled = !platform;
-    this.msgInput.placeholder = platform
-      ? `Zpráva do ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`
-      : 'Otevři stream pro odesílání...';
+    this._renderComposer();
 
     // Only update settings fields when platform actually changes
     // (detect loop runs every 3s — without this guard it overwrites user-typed values)
@@ -3275,6 +3282,8 @@ class UnityChat {
 
   _setReply(platform, username, messageId, message, senderId) {
     this._reply = { platform, username, messageId, message, senderId };
+    // Odpověď jde nativně jen na platformu zprávy — přepnout na ni, když na ní mám účet (jako web).
+    if (!this._legacySend() && platform !== this.activePlatform && this._identity(platform)) this._selectSendPlatform(platform, { quiet: true });
 
     let el = document.getElementById('reply-indicator');
     if (!el) {
@@ -3329,10 +3338,13 @@ class UnityChat {
       return;
     }
 
-    // Send protection: if the active tab's channel differs from the configured
+    const legacy = this._legacySend();
+    if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
+
+    // Send protection (jen stará cesta přes kartu): if the active tab's channel differs from the configured
     // channel for this platform, refuse to send. Auto-switch should normally
     // fix this transparently — this is a safety net for the transient window.
-    try {
+    if (legacy) try {
       const tab = await this._findStreamTab(this.activePlatform);
       if (tab?.url) {
         const tabHandle = this._parseChannelFromUrl(tab.url, this.activePlatform);
@@ -3370,7 +3382,8 @@ class UnityChat {
     // Optimistic UI: show message instantly
     // Native reply support: Twitch (GQL) + Kick (API reply metadata).
     // For cross-platform or YouTube → fallback to @mention prefix.
-    const username = this._platformUsernames[platform] || this.config.username || 'me';
+    const identity = legacy ? null : this._identity(platform);
+    const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
     const ucProfile = this.nicknames.get(platform, username);
     const hasNativeReply = reply && reply.platform === platform
       && (platform === 'twitch' || platform === 'kick');
@@ -3398,6 +3411,12 @@ class UnityChat {
       ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null } } : {}),
     });
 
+    if (!legacy) {
+      await this._sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw: text });
+      return;
+    }
+
+    // ---- Stará cesta (záloha): odeslání přes otevřenou kartu se streamem ----
     // Send in background (don't block UI)
     try {
       const tab = await this._findStreamTab(platform);
@@ -3459,6 +3478,66 @@ class UnityChat {
     } catch (err) {
       this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
+    }
+  }
+
+  /**
+   * Odeslání účtem uživatele přes backend (POST /chat/send, stejně jako web): Twitch Helix,
+   * Kick API, YouTube liveChatMessages.insert. Marker UnityChatu přidává server (ne na !/ commandy)
+   * a commandy sám hlásí pro zlaté logo. Echo z chatu spáruje optimistickou zprávu jako dřív.
+   */
+  async _sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw }) {
+    let text = wireText;
+    if (reply && !hasNativeReply) {
+      const at = `@${reply.username.replace(/^@/, '')}`;
+      if (!text.toLowerCase().startsWith(at.toLowerCase())) text = `${at} ${text}`;
+    }
+    const replyTo = hasNativeReply && reply?.messageId ? reply.messageId : null;
+    this._ucLog('Send', `účet ${platform} "${text.slice(0, 60)}"${replyTo ? ' reply→' + replyTo : ''}`);
+    const fail = (reason) => {
+      this._markSendFailed(optId, reason);
+      // Text vrátit do pole, ať o něj člověk nepřijde.
+      if (!external && !this.msgInput.value) { this.msgInput.value = raw; this._autoResizeInput?.(); }
+    };
+    try {
+      const token = await this._ucSessionToken();
+      const r = await fetch(`${UC_API}/chat/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ platform, text, replyTo, replyToUser: replyTo ? reply.username.replace(/^@/, '') : null, channel: (this.config.channel || '').toLowerCase() }),
+        signal: AbortSignal.timeout(15000),
+      });
+      const j = await r.json().catch(() => ({}));
+      this._ucLog('Send', `→ ${r.status} ${j.ok ? `id=${j.id || '-'}` : (j.error || '')}${j.fallback ? ' fallback=' + j.fallback : ''}`);
+      if (r.status === 401) {
+        fail('přihlášení vypršelo');
+        this._sys('Přihlášení vypršelo, přihlas se znovu.');
+        await chrome.storage.local.remove('uc_session');
+        this._account = null;
+        this._afterAccountChange();
+        return;
+      }
+      if (!r.ok || j.ok === false) {
+        const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : (j.error || `HTTP ${r.status}`);
+        fail(reason);
+        this._sys(`Chyba: ${reason}`);
+        return;
+      }
+      // Kick odpověď odmítl (odpověď na starou zprávu) a server poslal „@login text" → optimistická
+      // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
+      if (j.fallback === 'mention') this._dropOptimistic(optId);
+      // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora).
+      if (platform === 'youtube') {
+        setTimeout(() => {
+          if (this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)) {
+            this._markSendFailed(optId, 'YouTube zprávu přijal, ale v chatu ji nezobrazil — nejspíš blokuje odkazy nebo ji zadržel filtr');
+            this._ucLog('Send', 'youtube: bez echa 20 s → označeno');
+          }
+        }, 20_000);
+      }
+    } catch (e) {
+      fail(e.message || 'neodesláno');
+      this._sys(`Nelze odeslat: ${e.message || e}`);
     }
   }
 
@@ -4123,10 +4202,10 @@ class UnityChat {
     return ej.token;
   }
 
-  /** Stav účtu z /auth/me → ikona v hlavičce + sekce „Účet UnityChat" v nastavení. */
+  /** Stav účtu z /auth/me → pole pro psaní (výběr platformy, výzva k přihlášení). */
   async _refreshAccount() {
     const token = await this._ucSessionToken();
-    if (!token) { this._account = null; this._renderAccount(); return null; }
+    if (!token) { this._account = null; this._afterAccountChange(); return null; }
     try {
       const r = await fetch(`${UC_API}/auth/me`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
       if (r.status === 401) {
@@ -4138,81 +4217,154 @@ class UnityChat {
         this._account = { accountId: j.accountId, platforms: j.platforms || {} };
       }
       // Jiná chyba (síť, 5xx): nechat poslední známý stav.
-    } catch (e) { this._ucLog('Account', `me FAIL ${e.message || e}`); }
-    this._renderAccount();
-    this._loadSoundboard();
+    } catch (e) { this._ucLog('Account', `me FAIL ${e.message || e}`); if (this._account === undefined) this._account = null; }
+    this._afterAccountChange();
     return this._account;
   }
 
-  _renderAccount() {
+  _afterAccountChange() {
     const acc = this._account;
-    const linked = acc ? ['twitch', 'kick', 'youtube'].filter((p) => acc.platforms?.[p]) : [];
-    const btn = document.getElementById('btn-account');
-    if (btn) {
-      btn.classList.toggle('logged', linked.length > 0);
-      btn.title = linked.length
-        ? `Účet UnityChat — ${linked.map((p) => acc.platforms[p].displayName || acc.platforms[p].login).join(', ')}`
-        : 'Účet UnityChat — nepřihlášen';
-    }
-    const sum = document.getElementById('account-summary');
-    if (sum) sum.textContent = linked.length ? '· přihlášen' : '';
-    const rows = document.getElementById('account-rows');
-    if (!rows) return;
+    const linked = this._linkedPlatforms();
+    // Moje jméno na platformě = identita z účtu (zvýraznění zmínek, vlastní zprávy, optimistická zpráva).
+    for (const p of linked) this._platformUsernames[p] = this._accountName(p);
+    // Vybraná platforma bez přihlášení → první přihlášená (jako web setMe).
+    if (!this._legacySend() && linked.length && !linked.includes(this._sendPlatform)) this._selectSendPlatform(linked[0], { quiet: true });
+    this._ucLog('Account', `stav: ${linked.length ? linked.map((p) => `${p}=${acc.platforms[p].login}`).join(' ') : 'nepřihlášen'}`);
+    this._renderComposer();
+    this._loadSoundboard();
+  }
+
+  /** Jméno, pod kterým mě vidí chat platformy: Twitch/Kick display name, YouTube handle (login),
+   *  ne název kanálu — podle něj se páruje optimistická zpráva s echem (_contentKey). */
+  _accountName(platform) {
+    const id = this._identity(platform);
+    if (!id) return null;
+    return platform === 'youtube' ? id.login : (id.displayName || id.login);
+  }
+
+  _linkedPlatforms() {
+    return ['twitch', 'kick', 'youtube'].filter((p) => this._account?.platforms?.[p]);
+  }
+
+  /** Identita přihlášeného účtu na platformě ({login, displayName}) nebo null. */
+  _identity(platform = this.activePlatform) {
+    return (platform && this._account?.platforms?.[platform]) || null;
+  }
+
+  /** Záloha (dev mode): posílání přes otevřenou kartu se streamem, platforma podle aktivního tabu. */
+  _legacySend() {
+    return this.config?.legacyTabSend === true;
+  }
+
+  _selectSendPlatform(platform, { quiet = false } = {}) {
+    this._sendPlatform = platform;
+    try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
+    if (!this._legacySend()) this._setActivePlatform(platform);
+    if (!quiet && this._identity(platform)) this.msgInput.focus();
+  }
+
+  /** Pole pro psaní podle přihlášení: bez účtu na vybrané platformě výzva místo pole. */
+  _renderComposer() {
+    const legacy = this._legacySend();
+    const platform = this.activePlatform;
+    const id = this._identity(platform);
+    const known = legacy || this._account !== undefined;   // undefined = /auth/me ještě neodpověděl
+    const canWrite = legacy ? !!platform : !!id;
     const NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
-    const BADGE = { twitch: 'tw', kick: 'ki', youtube: 'yt' };
-    rows.textContent = '';
-    for (const p of ['twitch', 'kick', 'youtube']) {
-      const id = acc?.platforms?.[p];
-      const row = document.createElement('div');
-      row.className = 'account-row';
-      const badge = document.createElement('span');
-      badge.className = `badge ${BADGE[p]}`;
-      badge.textContent = NAMES[p];
-      const name = document.createElement('span');
-      name.className = 'account-name' + (id ? '' : ' off');
-      name.textContent = id ? (id.displayName || id.login) : `${NAMES[p]} — nepřipojeno`;
-      if (id) name.title = `${NAMES[p]}: ${id.login}`;
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.dataset.platform = p;
-      b.dataset.action = id ? 'unlink' : 'link';
-      b.textContent = id ? 'Odpojit' : (linked.length ? 'Připojit' : 'Přihlásit');
-      if (!id) b.classList.add('primary');
-      row.append(badge, name, b);
-      rows.appendChild(row);
-    }
-    document.getElementById('btn-account-logout')?.classList.toggle('hidden', !linked.length);
+    const wrap = this.msgInput.closest('.msg-input-wrap');
+    const cta = document.getElementById('login-cta');
+    const btn = document.getElementById('platform-btn');
+    wrap?.classList.toggle('hidden', known && !canWrite);
+    this.sendBtn.classList.toggle('hidden', known && !canWrite);
+    cta?.classList.toggle('hidden', !known || canWrite);
+    btn?.classList.toggle('hidden', known && !canWrite);
+    this.msgInput.disabled = !canWrite;
+    this.sendBtn.disabled = !canWrite;
+    this.msgInput.placeholder = platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
+    if (btn) btn.title = id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
+    // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
+    document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
+    const menu = document.getElementById('platform-menu');
+    if (menu && !menu.classList.contains('hidden')) this._renderPlatformMenu();
   }
 
-  async _accountAction(platform, action, btn) {
-    if (btn) btn.disabled = true;
+  _renderPlatformMenu() {
+    const menu = document.getElementById('platform-menu');
+    window.UC_CORE.renderPlatformMenu(menu, {
+      me: this._account,
+      current: this.activePlatform,
+      onSelect: (p) => this._selectSendPlatform(p),
+      onLogin: (p) => this._loginPlatform(p),
+      onUnlink: (p) => this._unlinkPlatform(p),
+      onLogout: () => this._accountLogout(),
+      onClose: () => this._closePlatformMenu(),
+    });
+  }
+
+  _togglePlatformMenu() {
+    const menu = document.getElementById('platform-menu');
+    if (!menu) return;
+    if (menu.classList.contains('hidden')) {
+      this._renderPlatformMenu();
+      menu.classList.remove('hidden');
+      document.getElementById('platform-btn')?.setAttribute('aria-expanded', 'true');
+    } else this._closePlatformMenu();
+  }
+
+  _closePlatformMenu() {
+    document.getElementById('platform-menu')?.classList.add('hidden');
+    document.getElementById('platform-btn')?.setAttribute('aria-expanded', 'false');
+  }
+
+  /** Přihlašovací okno se třemi logy (core LoginModal, stejné jako web). */
+  _openLoginModal() {
+    const core = window.UC_CORE;
+    if (!this._loginModal) {
+      const logos = {};
+      for (const p of ['twitch', 'kick', 'youtube']) logos[p] = { base: `icons/platform/${p}.svg`, gold: `icons/platform/${p}-gold.svg` };
+      this._loginModal = new core.LoginModal({
+        logos,
+        note: 'Přihlášení proběhne v okně prohlížeče přímo u platformy.<br>UnityChat nikdy nevidí tvoje heslo.',
+        onPick: async (p) => {
+          const ok = await this._loginPlatform(p);
+          if (ok) this._loginModal.close();
+        },
+      });
+    }
+    const NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
+    const linked = this._linkedPlatforms();
+    this._loginModal.open(this._account
+      ? { title: `Přihlášení na ${NAMES[this.activePlatform] || 'platformu'}`, subtitle: 'Na vybranou platformu ještě nejsi přihlášen. Vyber, kde se přihlásit.', only: ['twitch', 'kick', 'youtube'].filter((p) => !linked.includes(p)) }
+      : {});
+  }
+
+  /** Přihlásit / připojit platformu a rovnou na ni psát. Vrací true při úspěchu. */
+  async _loginPlatform(platform) {
     try {
-      if (action === 'link') {
-        await this._ucLogin(platform);
-      } else {
-        const token = await this._ucSessionToken();
-        const r = await fetch(`${UC_API}/auth/${platform}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-        this._ucLog('Account', `unlink ${platform} → ${r.status}`);
-        await this._refreshAccount();
-        // Poslední platforma pryč = není čím se prokázat → odhlásit úplně.
-        if (this._account && !['twitch', 'kick', 'youtube'].some((p) => this._account.platforms?.[p])) await this._accountLogout();
-      }
+      await this._ucLogin(platform);
+      await this._refreshAccount();
+      if (this._identity(platform)) this._selectSendPlatform(platform);
+      return true;
     } catch (e) {
-      this._ucLog('Account', `${action} ${platform} FAIL ${e.message || e}`);
+      const msg = String(e.message || e);
+      this._ucLog('Account', `login ${platform} FAIL ${msg}`);
       // Zavřené okno přihlášení není chyba, kterou je potřeba hlásit.
-      if (!/cancel|closed|did not approve/i.test(String(e.message || e))) this._sys(`Přihlášení (${platform}) selhalo: ${e.message || e}`);
-    } finally {
-      if (btn) btn.disabled = false;
-      this._renderAccount();
+      if (/cancel|closed|did not approve/i.test(msg)) return false;
+      const text = /429/.test(msg) ? 'Příliš mnoho pokusů za sebou, zkus to za chvíli.' : `Přihlášení se nepodařilo: ${msg}`;
+      if (!this._loginModal?.showError(text)) this._sys(text);
+      return false;
     }
   }
 
-  _openAccountSettings() {
-    const settings = document.getElementById('settings');
-    const section = document.getElementById('account-section');
-    settings?.classList.remove('hidden');
-    if (section) { section.open = true; section.scrollIntoView({ block: 'nearest' }); }
-    this._refreshAccount();
+  async _unlinkPlatform(platform) {
+    const token = await this._ucSessionToken();
+    try {
+      const r = await fetch(`${UC_API}/auth/${platform}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      this._ucLog('Account', `unlink ${platform} → ${r.status}`);
+    } catch (e) { this._ucLog('Account', `unlink FAIL ${e.message || e}`); }
+    await this._refreshAccount();
+    // Poslední platforma pryč = není čím se prokázat → odhlásit úplně.
+    if (this._account && !this._linkedPlatforms().length) await this._accountLogout();
   }
 
   async _accountLogout() {
@@ -4223,7 +4375,7 @@ class UnityChat {
     await chrome.storage.local.remove('uc_session');
     this._account = null;
     this._ucLog('Account', 'logout');
-    this._renderAccount();
+    this._afterAccountChange();
   }
 
   async _triggerPoop(platform, messageId) {
