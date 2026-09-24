@@ -91,6 +91,14 @@
 .uc-qd-mail[hidden], .uc-qd-verify[hidden], .uc-qd-confirm[hidden] { display: none; }
 .uc-qd-confirm { position: relative; display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .uc-qd-confirm input { width: auto; accent-color: var(--accent); }
+/* (i) za popiskem — napoví, že nad textem je vysvětlení (tooltip .uc-qd-tip). */
+.uc-qd-info {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 14px; height: 14px; border-radius: 50%; border: 1px solid currentColor;
+  font: italic 700 10px/1 Georgia, serif; opacity: 0.75;
+}
+.uc-qd-confirm:hover .uc-qd-info { opacity: 1; color: var(--accent-light); }
+.uc-qd-tip strong { color: var(--accent-light); }
 .uc-qd-tip {
   position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 2; width: min(300px, 80vw);
   padding: 8px 10px; border-radius: 7px; background: var(--bg-primary); border: 1px solid var(--border);

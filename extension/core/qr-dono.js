@@ -6,7 +6,7 @@
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
 
-export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a výhodu pro nadcházející funkce.';
+export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
 /** Předvyplnění přezdívky podle pořadí ze specu. */
 export function prefillNickname(profile, identityName) {
@@ -15,7 +15,6 @@ export function prefillNickname(profile, identityName) {
 
 export const CURRENCIES = { CZK: { code: 'CZK', flag: 'CZ', sym: 'Kč', step: 1 }, EUR: { code: 'EUR', flag: 'SK', sym: '€', step: 0.01 } };
 export const MSG_MAX = 300;
-const PLATFORM_LABEL = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 const TESTMODE = 'testmode';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -151,7 +150,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
           <span class="uc-qd-l">E-mail</span>
           <input name="email" type="email" maxlength="120" autocomplete="email">
         </label>
-        <label class="uc-qd-confirm"><input type="checkbox" name="confirm" checked> <span>Potvrdit email při první platbě</span><span class="uc-qd-tip" role="tooltip">${CONFIRM_TOOLTIP}</span></label>
+        <label class="uc-qd-confirm"><input type="checkbox" name="confirm" checked> <span>Potvrdit email při první platbě</span><span class="uc-qd-info" aria-hidden="true">i</span><span class="uc-qd-tip" role="tooltip">${CONFIRM_TOOLTIP}</span></label>
       </div>
       <div class="uc-qd-row">
         <label class="uc-qd-f">
@@ -210,9 +209,9 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   }
   function renderWho() {
     const id = identity?.();
-    $('.uc-qd-who').innerHTML = id
-      ? `Tipuješ jako <b>${esc(id.name)}</b> <span class="uc-qd-plat">(${esc(PLATFORM_LABEL[id.platform] || id.platform)})</span>`
-      : 'Pro QR dono se přihlas k UnityChatu. <button type="button" data-act="login">Přihlásit</button>';
+    // Přihlášený: řádek „Tipuješ jako…" pryč (pokyn usera 2026-09-25), zůstává jen výzva k přihlášení.
+    $('.uc-qd-who').innerHTML = id ? '' : 'Pro QR dono se přihlas k UnityChatu. <button type="button" data-act="login">Přihlásit</button>';
+    $('.uc-qd-who').hidden = !!id;
     submitBtn.disabled = !id || !currencyConfig(cfg, cur);
   }
   /** E-mail pole + checkbox jen dokud účet nemá ověřený e-mail (po ověření zmizí i po „Zpět“). */
