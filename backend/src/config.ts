@@ -51,6 +51,12 @@ const EnvSchema = z.object({
   ZIDOLISTA_INBOUND_KEY: z.string().default(''),
   // "1" = jen nový klíč a platný podpis; jinak přechod (projde i ZIDOLISTA_API_KEY, podpis se jen loguje).
   ZIDOLISTA_INBOUND_STRICT: z.string().default(''),
+  // E-maily (ověřovací kód QR dona, lib/mailer.ts): Brevo primárně, Resend záloha. Bez klíčů = ověření vypnuté.
+  BREVO_API_KEY: z.string().default(''),
+  RESEND_API_KEY: z.string().default(''),
+  MAIL_FROM: z.string().email().default('noreply-unitychat@jouki.cz'),
+  // Celkový denní strop odeslaných e-mailů (Brevo 300 + Resend 100 − rezerva).
+  MAIL_DAILY_BUDGET: z.coerce.number().int().positive().default(380),
   ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),

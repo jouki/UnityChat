@@ -1,7 +1,7 @@
 // QR dono v UnityChatu (spec docs/superpowers/specs/2026-09-25-qr-dono-v-unitychatu-design.md):
 // proxy na veřejné API donací Židolišty (RobJewsALot docs/fio-donations/04-public-api.md, 13-czk).
 // Addon ani web nevolají Židolištu přímo (CORS z chrome-extension:// neprojde, nové oprávnění
-// addonu user nechce). Přezdívku doplňuje server z přihlášeného účtu, klient ji nepošle.
+// addonu user nechce). Přezdívku posílá klient (předvyplněná), e-mail ověřený k účtu doplní server.
 //
 //   GET  /donate/config?channel=               konfigurace formuláře (+ absolutní URL ukázek hlasů)
 //   POST /donate/test-token {channel, token}   → {valid} (token ověřuje Židolišta, nikdy klient)
@@ -16,6 +16,8 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
+import { EMAIL_RE, normEmail } from '../lib/emailVerify.js';
+import { rememberDonateNickname, verifiedEmail } from './account.js';
 import { workspaceForChannel } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
 
@@ -34,6 +36,9 @@ const IntentBody = z.object({
   testToken: z.string().trim().max(200).optional(),
   markTest: z.boolean().optional(),
   markPaid: z.boolean().optional(),
+  // Přezdívka je vidět vždy (předvyplněná), e-mail jen když účet ještě nemá ověřený.
+  nickname: z.string().trim().min(1).max(40),
+  email: z.string().trim().max(120).optional(),
 }).strict();
 const TokenBody = z.object({ channel: Channel, token: z.string().trim().min(1).max(200) }).strict();
 
@@ -44,11 +49,6 @@ const TokenBody = z.object({ channel: Channel, token: z.string().trim().min(1).m
 export async function qrSvg(text: string): Promise<string | null> {
   if (!text || text.length > 2000) return null;
   return QRCode.toString(text, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, color: { dark: '#000000', light: '#ffffff' } });
-}
-
-/** Přezdívka pro Židolištu: display name platformy, na kterou divák píše (≤ 40 znaků, jako jejich zod). */
-export function donorNickname(identity: { displayName: string | null; login: string }): string {
-  return (identity.displayName?.trim() || identity.login).slice(0, 40);
 }
 
 async function slugFor(channel: string): Promise<string | null> {
@@ -125,12 +125,16 @@ export default async function donateRoutes(app: FastifyInstance) {
     if (!slug) return reply.code(404).send({ ok: false, error: 'workspace_not_found' });
     const ident = (await listIdentities(req.webAccountId!)).find((i) => i.platform === b.data.platform);
     if (!ident) return reply.code(403).send({ ok: false, error: 'platform_not_linked' });
-    const { channel: _c, platform: _p, ...rest } = b.data;
-    // E-mail zatím NE: čeká na právní analýzu a úpravu zásad ochrany soukromí (spec, task „E-mail k identitě“).
-    const body = { ...rest, nickname: donorNickname(ident), email: '' };
+    const { channel: _c, platform: _p, email: givenEmail, ...rest } = b.data;
+    // E-mail: ověřený e-mail účtu má přednost, jinak ten, který divák zadal (povinný).
+    // Z loginů platforem se e-mail nečte (Twitch Developer Agreement VI.C, spec „Identita“).
+    const email = (await verifiedEmail(req.webAccountId!)) ?? (givenEmail ? normEmail(givenEmail) : '');
+    if (!EMAIL_RE.test(email)) return reply.code(400).send({ ok: false, error: 'email_required' });
+    const body = { ...rest, email };
     try {
       const u = await upstream(req, `/donate/public/${encodeURIComponent(slug)}/intents`, { method: 'POST', body });
       req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken }, 'donate: intent');
+      if (u.status === 200) await rememberDonateNickname(req.webAccountId!, b.data.nickname).catch((e) => req.log.warn({ err: (e as Error).message }, 'donate: nickname save failed'));
       if (u.status === 200 && typeof u.json.qrString === 'string') {
         try { u.json.qrSvg = await qrSvg(u.json.qrString); } catch (e) { req.log.warn({ err: (e as Error).message }, 'donate: qr svg failed'); }
       }
