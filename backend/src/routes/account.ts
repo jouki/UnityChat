@@ -9,7 +9,7 @@
 // přihlášeného, cooldown, denní strop na účet / adresu / IP a celkový rozpočet.
 import type { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
-import { and, eq, gt, or, sql } from 'drizzle-orm';
+import { and, eq, gt, lt, or, sql } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { accountDonatePrefs, accountEmails, emailSendLog, emailVerifications, nicknames } from '../db/schema.js';
@@ -19,6 +19,16 @@ import { providersConfigured, sendMail, verificationMail } from '../lib/mailer.j
 import { RateLimiter } from './chat.js';
 
 const DAY_MS = 24 * 60 * 60_000;
+// Retence (zásady ochrany soukromí, bod 1f): log odeslaných e-mailů 30 dní (limity počítají 24 h),
+// nedokončená / propadlá ověření po 1 dni od vypršení kódu.
+export const SEND_LOG_RETENTION_MS = 30 * DAY_MS;
+export const PENDING_RETENTION_MS = DAY_MS;
+
+export async function purgeEmailData(now = Date.now()): Promise<{ log: number; pending: number }> {
+  const log = await db.delete(emailSendLog).where(lt(emailSendLog.sentAt, new Date(now - SEND_LOG_RETENTION_MS))).returning({ id: emailSendLog.id });
+  const pending = await db.delete(emailVerifications).where(lt(emailVerifications.expiresAt, new Date(now - PENDING_RETENTION_MS))).returning({ id: emailVerifications.accountId });
+  return { log: log.length, pending: pending.length };
+}
 
 /** Ověřený e-mail účtu, nebo null. */
 export async function verifiedEmail(accountId: number): Promise<string | null> {
@@ -44,6 +54,13 @@ const count = (rows: { n: number }[]) => Number(rows[0]?.n ?? 0);
 
 export default async function accountRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 1);
+  // Úklid 1× za hodinu (a hned po startu); běžící timer nesmí držet proces při vypínání.
+  const purge = () => purgeEmailData().then((r) => { if (r.log || r.pending) app.log.info(r, 'account: email data purged'); })
+    .catch((e) => app.log.warn({ err: (e as Error).message }, 'account: email purge failed'));
+  app.addHook('onReady', async () => { void purge(); });
+  const purgeTimer = setInterval(purge, 60 * 60_000);
+  purgeTimer.unref();
+  app.addHook('onClose', async () => clearInterval(purgeTimer));
 
   app.get('/account/profile', { preHandler: requireWebSession }, async (req) => {
     const id = req.webAccountId!;

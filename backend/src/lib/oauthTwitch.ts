@@ -11,11 +11,12 @@ const USER_URL = 'https://api.twitch.tv/helix/users';
 // those can be requested separately if future features need them.
 const SCOPES = ['user:read:email'] as const;
 // Web verze: posílání zpráv jako uživatel (Helix POST /chat/messages).
-export const WEB_SCOPES = ['user:read:email', 'user:write:chat'] as const;
+// Bez user:read:email: e-mail z Twitche nečteme (Developer Agreement VI.C, spec 2026-09-25-qr-dono) → minimální scopes.
+export const WEB_SCOPES = ['user:write:chat'] as const;
 // Účet chat bota Židolišty: user:bot navíc, aby zprávy poslané app access tokenem
 // nesly odznak „Chat Bot" (Helix Send Chat Message: app token + user:bot u bota +
 // channel:bot u broadcastera nebo mod). Bez toho jde fallback user tokenem (bez odznaku).
-export const BOT_SCOPES = ['user:read:email', 'user:write:chat', 'user:bot'] as const;
+export const BOT_SCOPES = ['user:write:chat', 'user:bot'] as const;
 // Souhlas broadcastera s botem v jeho kanálu (jen kvůli odznaku; token se neukládá).
 export const BROADCASTER_BOT_SCOPES = ['channel:bot'] as const;
 
