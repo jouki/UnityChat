@@ -142,6 +142,7 @@
 ## Changelog dokumentace
 ### 2026-09-24 (session unitychat-8f)
 
+- **CLAUDE.md** — milestone v3.40.25 (addon posílá přes účet, sdílený `core/login-modal.js` + `composer.css`, záloha `legacyTabSend`).
 - **CLAUDE.md** — verze v3.40.22 (release PR #27), milestone v3.40.19–22 (přihlášení v addonu, soundboard), AMO release přes workflow `amo-release.yml`.
 
 ### 2026-09-23 (session unitychat-a8)
