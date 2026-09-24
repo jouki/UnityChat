@@ -113,7 +113,9 @@ function progressOf(t, now) {
 
 export function tierLabel(state, tier) {
   const t = state?.tiers?.find((x) => x.tier === tier);
-  return t?.name ? `Tier ${tier} · ${t.name}` : `Tier ${tier}`;
+  const name = String(t?.name || '').trim();
+  // Název, který jen opakuje číslo („Tier 1“), nezdvojovat.
+  return name && name.toLowerCase() !== `tier ${tier}` ? `Tier ${tier} · ${name}` : `Tier ${tier}`;
 }
 
 /** Hledání: bez diakritiky a velikosti písmen, začátek jména má přednost. */
