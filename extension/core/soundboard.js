@@ -118,6 +118,19 @@ export function tierLabel(state, tier) {
   return name && name.toLowerCase() !== `tier ${tier}` ? `Tier ${tier} · ${name}` : `Tier ${tier}`;
 }
 
+/** Popisek zvuku v tlačítku: srozumitelný název, když ho mod v Židolišti nastavil, jinak jméno pro !se. */
+export const soundLabel = (s) => (s?.displayName && String(s.displayName).trim()) || s?.name || '';
+
+/** Ikona zvuku → HTML: 7TV obrázek (jen z cdn.7tv.app, backend to hlídá i tady), emoji, nebo nic. */
+export function soundIconHtml(s) {
+  const i = s?.icon;
+  if (i?.kind === '7tv' && /^https:\/\/cdn\.7tv\.app\/emote\/[A-Za-z0-9]+\/[1-4]x\.(webp|avif|png|gif)$/.test(i.url || '')) {
+    return `<img class="uc-sb-img" src="${esc(i.url)}" alt="${esc(i.name || '')}" loading="lazy" decoding="async">`;
+  }
+  const emoji = i?.kind === 'emoji' ? i.value : s?.emoji;
+  return emoji ? `<span class="uc-sb-em">${esc(emoji)}</span>` : '';
+}
+
 /** Hledání: bez diakritiky a velikosti písmen, začátek jména má přednost. */
 export function searchSounds(sounds, query) {
   const norm = (s) => String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -125,8 +138,9 @@ export function searchSounds(sounds, query) {
   if (!q) return [];
   const starts = [], inside = [];
   for (const s of sounds) {
-    const n = norm(s.name);
-    if (n.startsWith(q)) starts.push(s); else if (n.includes(q)) inside.push(s);
+    // Hledá se podle jména pro !se i podle srozumitelného názvu (displayName).
+    const names = [norm(s.name), norm(s.displayName)].filter(Boolean);
+    if (names.some((n) => n.startsWith(q))) starts.push(s); else if (names.some((n) => n.includes(q))) inside.push(s);
   }
   return [...starts, ...inside];
 }
@@ -246,11 +260,12 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   function soundBtn(s, unlocked, cd, favs) {
     const locked = !unlocked.has(s.tier);
     const cls = ['uc-sb-s', locked ? 'locked' : '', cd > 0 && !locked ? 'cd' : ''].filter(Boolean).join(' ');
-    const title = locked ? `${s.name} — ${tierLabel(state, s.tier)} není odemčený` : `!se ${s.name}`;
+    const label = soundLabel(s);
+    const title = locked ? `${label} — ${tierLabel(state, s.tier)} není odemčený` : `!se ${s.name}`;
     return `<div class="${cls}" data-id="${s.id}" title="${esc(title)}">
-      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${s.emoji ? `<span class="uc-sb-em">${esc(s.emoji)}</span>` : ''}<span class="uc-sb-n">${esc(s.name)}</span></button>
-      <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(s.name)}">${SPEAKER_SVG}</button>
-      <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(s.name)}">${STAR_SVG}</button>
+      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
+      <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
+      <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
     </div>`;
   }
   function section(key, head, list, unlocked, cd, favs, extra = '') {

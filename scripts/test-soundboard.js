@@ -78,6 +78,14 @@ const assert = require('node:assert/strict');
   assert.equal(sb.tierLabel({ tiers: [{ tier: 1, name: 'tier 1 ' }] }, 1), 'Tier 1');
   assert.equal(sb.tierLabel({ tiers: [{ tier: 2, name: 'Speciální' }] }, 2), 'Tier 2 · Speciální');
 
+  // display name + ikona
+  assert.equal(sb.soundLabel({ name: 'cejtimPicu', displayName: 'Cejtím to' }), 'Cejtím to');
+  assert.equal(sb.soundLabel({ name: 'boom', displayName: '  ' }), 'boom');
+  assert.deepEqual(sb.searchSounds([{ name: 'cejtimPicu', displayName: 'Bulharský hymnus' }], 'bulhar').map((s) => s.name), ['cejtimPicu'], 'hledání i podle displayName bez diakritiky');
+  assert.match(sb.soundIconHtml({ icon: { kind: '7tv', name: 'RAGEY', url: 'https://cdn.7tv.app/emote/01F7JCJ0D80007RBBSW6MHGEVC/2x.webp' } }), /<img class="uc-sb-img"/);
+  assert.equal(sb.soundIconHtml({ icon: { kind: '7tv', url: 'https://evil.example/x.webp' } }), '', 'cizí host se nevykreslí');
+  assert.match(sb.soundIconHtml({ emoji: '🍺' }), /🍺/, 'staré pole emoji');
+
   // formát času
   assert.equal(sb.formatRemaining(12_300), '13 s');
   assert.equal(sb.formatRemaining(272_000), '4:32');

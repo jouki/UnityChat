@@ -25,7 +25,19 @@ const PLATFORMS: Platform[] = ['twitch', 'kick', 'youtube'];
 const RECENT_MAX = 8;
 const CATALOG_CACHE_MS = 60_000;
 
-export interface Sound { id: number; name: string; tier: number; emoji: string | null; url: string; durationMs: number | null }
+export type SoundIcon = { kind: 'emoji'; value: string } | { kind: '7tv'; id: string; name: string; url: string };
+export interface Sound { id: number; name: string; displayName: string | null; tier: number; emoji: string | null; icon: SoundIcon | null; url: string; durationMs: number | null }
+
+/** Ikona zvuku z katalogu: emoji, nebo 7TV emote (URL jen z cdn.7tv.app — obrázek se vkládá do klienta). */
+export function normalizeIcon(v: unknown, emoji: string | null): SoundIcon | null {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  if (o.kind === '7tv' && typeof o.id === 'string' && /^[A-Za-z0-9]{1,40}$/.test(o.id)
+    && typeof o.url === 'string' && /^https:\/\/cdn\.7tv\.app\/emote\/[A-Za-z0-9]{1,40}\/[1-4]x\.(webp|avif|png|gif)$/.test(o.url)) {
+    return { kind: '7tv', id: o.id, name: typeof o.name === 'string' ? o.name.slice(0, 40) : '', url: o.url };
+  }
+  if (o.kind === 'emoji' && typeof o.value === 'string' && o.value.trim() && o.value.length <= 16) return { kind: 'emoji', value: o.value.trim() };
+  return emoji ? { kind: 'emoji', value: emoji } : null;
+}
 export interface Tier { tier: number; name: string | null }
 interface Catalog { at: number; etag: string | null; tiers: Tier[]; sounds: Sound[]; serverNow: string | null; error?: string }
 
@@ -44,7 +56,8 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
     if (!id || !tier || !name || name.length > 40 || /\s/.test(name) || !isHttps(o.url)) continue;
     const emoji = typeof o.emoji === 'string' && o.emoji.trim() && o.emoji.length <= 16 ? o.emoji.trim() : null;
     const durationMs = Number.isFinite(o.durationMs) && (o.durationMs as number) > 0 ? Math.round(o.durationMs as number) : null;
-    sounds.push({ id, name, tier, emoji, url: o.url, durationMs });
+    const displayName = typeof o.displayName === 'string' && o.displayName.trim() ? o.displayName.trim().slice(0, 40) : null;
+    sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs });
   }
   const tiers = new Map<number, Tier>();
   for (const t of Array.isArray(j.tiers) ? j.tiers : []) {

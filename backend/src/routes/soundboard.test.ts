@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCatalog, normalizeState } from './soundboard.js';
+import { normalizeCatalog, normalizeState, normalizeIcon } from './soundboard.js';
 import { highestRole } from '../lib/chatRole.js';
 
 test('normalizeCatalog: jen validní zvuky, řazení tier → jméno, doplnění chybějícího tieru', () => {
@@ -38,4 +38,17 @@ test('highestRole: broadcaster > mod > vip > sub > viewer', () => {
   assert.equal(highestRole({ ...f, isSub: true, isVip: true }), 'vip');
   assert.equal(highestRole({ ...f, isSub: true, isMod: true }), 'moderator');
   assert.equal(highestRole({ ...f, isMod: true, isBroadcaster: true }), 'broadcaster');
+});
+
+test('normalizeCatalog: displayName a ikona (emoji / 7TV jen z cdn.7tv.app)', () => {
+  const c = normalizeCatalog({ sounds: [
+    { id: 1, name: 'cejtimPicu', displayName: '  Cejtím p… ', tier: 1, emoji: '🍺', url: 'https://z/1.mp3' },
+    { id: 2, name: 'ragey', tier: 1, icon: { kind: '7tv', id: '01F7JCJ0D80007RBBSW6MHGEVC', name: 'RAGEY', url: 'https://cdn.7tv.app/emote/01F7JCJ0D80007RBBSW6MHGEVC/2x.webp' }, url: 'https://z/2.mp3' },
+  ] });
+  assert.equal(c.sounds[0].displayName, 'Cejtím p…');
+  assert.deepEqual(c.sounds[0].icon, { kind: 'emoji', value: '🍺' }, 'staré pole emoji → ikona');
+  assert.equal(c.sounds[1].icon?.kind, '7tv');
+  assert.equal(c.sounds[1].displayName, null);
+  assert.equal(normalizeIcon({ kind: '7tv', id: 'x', url: 'https://evil.example/emote/x/2x.webp' }, null), null, 'cizí host ne');
+  assert.equal(normalizeIcon({ kind: '7tv', id: 'x', url: 'https://cdn.7tv.app/emote/x/2x.webp" onerror="' }, null), null, 'žádné uvozovky');
 });
