@@ -1158,7 +1158,8 @@ class UnityChat {
     if (!btn) return;
     const api = this._donateApi();
     this._qd = core.createQrDono({
-      host: document.getElementById('input-area'),
+      // Kotva = řádek s QR tlačítkem (nad polem pro psaní) → panel se otevře nad ním, nepřekryje ho.
+      host: document.getElementById('tw-credits'),
       button: btn,
       api,
       identity: () => {
