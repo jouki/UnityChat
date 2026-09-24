@@ -165,14 +165,15 @@
 @media (prefers-reduced-motion: reduce) { .uc-ev-ok circle, .uc-ev-ok path { animation: none; stroke-dashoffset: 0; } .uc-code.bad input { animation: none; } }
 
 /* ---- Email v nastavení (core/email-verify.js createEmailSettings) ---- */
-.uc-es { display: flex; flex-direction: column; gap: 6px; }
+.uc-es { display: flex; flex-direction: column; gap: 10px; }
 .uc-es-l { color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
-.uc-es-row, .uc-es-new { display: flex; gap: 6px; }
+.uc-es-row, .uc-es-new { display: flex; align-items: center; gap: 8px; }
 .uc-es-new[hidden], .uc-es-err[hidden], .uc-es-verify[hidden] { display: none; }
 .uc-es input { flex: 1; min-width: 0; box-sizing: border-box; padding: 7px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 5px; color: var(--text-primary); font: inherit; outline: none; }
 .uc-es input:focus { border-color: var(--accent); }
 .uc-es-val:disabled { color: var(--text-muted); opacity: 0.8; cursor: default; }
-.uc-es button { flex-shrink: 0; padding: 6px 12px; border: none; border-radius: 5px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
+/* Velikostí jako „Uložit“ v nastavení (.btn-nick): 12px, padding 5×12, stejná šířka obou tlačítek. */
+.uc-es button { flex-shrink: 0; min-width: 104px; padding: 5px 12px; border: none; border-radius: 4px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-size: 12px; font-weight: 700; line-height: 1.4; cursor: pointer; white-space: nowrap; }
 .uc-es button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Spárovat / Změnit email: nenápadné — jen UnityChat gradient v rámečku (Poslat kód zůstává plné). */
 .uc-es .uc-es-btn {
