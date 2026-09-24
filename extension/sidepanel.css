@@ -488,7 +488,6 @@ body.uc-dev #tw-credits .uc-tool-btn {
   width: 26px; height: 24px; padding: 0; border-radius: 6px; cursor: pointer;
   background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
 }
-body.uc-dev #tw-credits .uc-tool-btn:hover, body.uc-dev #tw-credits .uc-tool-btn.active { color: var(--accent-light); border-color: var(--accent); }
 body.uc-dev #tw-credits .uc-tool-btn svg { width: 16px; height: 16px; }
 .dev-only { display: none; }
 body.uc-dev .dev-only { display: block; }
@@ -2957,12 +2956,18 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .msg-input-wrap:has(#msg-input.hidden) { display: none; }
 .emote-btn {
   position: absolute; right: 4px; bottom: 3px;
-  width: 26px; height: 26px; padding: 0;
+  width: 26px; height: 26px; padding: 0; box-sizing: border-box;
   display: flex; align-items: center; justify-content: center;
-  border: none; border-radius: 5px; background: transparent;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
   color: var(--text-secondary, #9a9aa6); cursor: pointer;
 }
-.emote-btn:hover, .emote-btn.active { color: var(--accent); background: rgba(255, 140, 0, 0.12); }
+/* Jednotný hover ikonových tlačítek (emoty, soundboard, QR dono): tmavé pozadí, UnityChat gradient
+   v rámečku, zlatá ikona — stejně jako „Změnit email". */
+.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active {
+  color: var(--accent-light);
+  border-color: transparent;
+  background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
+}
 #msg-input:disabled + .emote-btn { opacity: 0.4; pointer-events: none; }
 
 .uc-ep {
