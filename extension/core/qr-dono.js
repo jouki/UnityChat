@@ -150,7 +150,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
           <span class="uc-qd-l">E-mail</span>
           <input name="email" type="email" maxlength="120" autocomplete="email">
         </label>
-        <label class="uc-qd-confirm"><input type="checkbox" name="confirm" checked> <span>Potvrdit email při první platbě</span><span class="uc-qd-info" aria-hidden="true">i</span><span class="uc-qd-tip" role="tooltip">${CONFIRM_TOOLTIP}</span></label>
+        <label class="uc-qd-confirm"><input type="checkbox" name="confirm" checked> <span>Potvrdit email při první platbě</span><svg class="uc-qd-info" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="4.9" r="0.95" fill="currentColor"/><path d="M8 7.2v4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="uc-qd-tip" role="tooltip">${CONFIRM_TOOLTIP}</span></label>
       </div>
       <div class="uc-qd-row">
         <label class="uc-qd-f">
@@ -158,10 +158,11 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
           <span class="uc-qd-amt"><input name="amount" inputmode="decimal" autocomplete="off"><b class="uc-qd-sym"></b></span>
           <span class="uc-qd-meta uc-qd-czk"></span>
         </label>
-        <label class="uc-qd-f">
+        <!-- div, ne label: label by klik do volného místa pole přesměroval na tlačítko ukázky. -->
+        <div class="uc-qd-f">
           <span class="uc-qd-l">TTS hlas <button type="button" class="uc-qd-sample" data-act="sample" hidden>▶ ukázka</button></span>
-          <select name="voice"></select>
-        </label>
+          <select name="voice" aria-label="TTS hlas"></select>
+        </div>
       </div>
       <label class="uc-qd-f">
         <span class="uc-qd-l">Zpráva <em class="uc-qd-count">0 / ${MSG_MAX}</em></span>

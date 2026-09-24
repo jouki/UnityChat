@@ -92,11 +92,7 @@
 .uc-qd-confirm { position: relative; display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .uc-qd-confirm input { width: auto; accent-color: var(--accent); }
 /* (i) za popiskem — napoví, že nad textem je vysvětlení (tooltip .uc-qd-tip). */
-.uc-qd-info {
-  display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 14px; height: 14px; border-radius: 50%; border: 1px solid currentColor;
-  font: italic 700 10px/1 Georgia, serif; opacity: 0.75;
-}
+.uc-qd-info { flex: none; display: block; opacity: 0.75; transition: opacity 120ms ease, color 120ms ease; }
 .uc-qd-confirm:hover .uc-qd-info { opacity: 1; color: var(--accent-light); }
 .uc-qd-tip strong { color: var(--accent-light); }
 .uc-qd-tip {
