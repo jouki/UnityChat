@@ -17,8 +17,9 @@ and Kick into one side panel, so a viewer can read all three chats in a single
 list and send a message to any of them without switching tabs.
 
 Every feature serves that one purpose: reading the chats, rendering their
-emotes and badges, and sending or replying to messages on the user's behalf
-using the session they are already logged in with on each platform.
+emotes and badges, and writing to them on the user's behalf with the account
+they sign in with - messages, replies, chat commands such as sound effects,
+and an optional donation message for the streamer paid by bank QR code.
 ```
 
 **Proč takhle:** Single purpose musí být jedna věta, ze které je vidět, že
@@ -121,19 +122,19 @@ nežádáme.
 
 ### Host permissions
 
-⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze má 977 — původní delší
-varianta se tam nevešla, proto je badges.twitch.tv sloučený k api.ivr.fi.
+⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze (3.41.0, 2026-09-25) má 829 znaků —
+api.jouki.cz nově zmiňuje přihlášení, psaní účtem, zvukové efekty a dary přes QR.
 
 ```
-twitch.tv, youtube.com, kick.com (and their API hosts api.twitch.tv, gql.twitch.tv): the three chat platforms the extension merges. Needed to read the live chat and to send messages using the user's own session.
+twitch.tv, youtube.com, kick.com (+ api.twitch.tv, gql.twitch.tv): the three chat platforms the extension merges - reading the live chat and sending messages.
 
-wss://irc-ws.chat.twitch.tv: Twitch's public IRC gateway, how the extension reads Twitch chat in real time.
+wss://irc-ws.chat.twitch.tv: Twitch's public IRC gateway for reading Twitch chat in real time.
 
-7tv.io, cdn.7tv.app, api.betterttv.net, cdn.betterttv.net, api.frankerfacez.com, cdn.frankerfacez.com, static-cdn.jtvnw.net, files.kick.com: emote providers. Chat is unreadable without them - these hosts supply the emote definitions and images that the messages reference.
+7tv.io, cdn.7tv.app, api.betterttv.net, cdn.betterttv.net, api.frankerfacez.com, cdn.frankerfacez.com, static-cdn.jtvnw.net, files.kick.com: emote providers - the emote definitions and images that chat messages reference.
 
-api.ivr.fi: public API for Twitch badge images (subscriber, mod, VIP) shown next to usernames. badges.twitch.tv: Twitch's own endpoint, fallback for the same images.
+api.ivr.fi, badges.twitch.tv: Twitch badge images (subscriber, mod, VIP) shown next to usernames.
 
-api.jouki.cz: the extension's own backend. It stores cross-platform nicknames, the channels the extension is used on, and serves the chat history archive the panel loads on open. See the privacy policy for what is sent.
+api.jouki.cz: the extension's own backend - signing in and sending messages with the user's own account, shared nicknames, the chat history archive, chat sound effects and an optional donation via bank QR code. See the privacy policy for what is sent.
 ```
 
 **Proč seskupené:** dashboard má jedno pole na všechny host permissions.

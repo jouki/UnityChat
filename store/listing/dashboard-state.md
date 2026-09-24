@@ -197,7 +197,7 @@ and files that ship inside the extension.
 ```
 https://jouki.cz/UnityChat/privacy
 ```
-Policy platná od **25. 9. 2026** (CS/EN), popisuje: lokální konfiguraci (1a),
+Policy platná od **25. 9. 2026** (CS/EN; ve 3.41.0 doplněny v 1c odpovědi napříč platformami a soundboard, podmínky mají nový bod 4 Dary přes QR a zvukové efekty), popisuje: lokální konfiguraci (1a),
 Google OAuth pro streamery (1b), data posílaná na `api.jouki.cz` + **archiv chatu**
 kanálů robdiesalot/tensterakdary/arcadebulls bez časového omezení, mazání na žádost
 (1c), cookie Twitch `auth-token` a Kick `session_token` (1d), přihlášení diváka
