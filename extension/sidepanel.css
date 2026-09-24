@@ -2994,3 +2994,10 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .emote-preview .ep-names .ep-name { opacity: 0.75; }
 .emote-preview .ep-names .ep-name.active, .emote-preview .ep-names .ep-name:only-child { opacity: 1; }
 .emote-preview .ep-plus { color: var(--text-secondary, #9a9aa6); font-weight: 400; }
+
+
+/* ---- Příjezd nové zprávy zespodu (core/slide-in.js) — OBS chat, web i addon ---- */
+@property --uc-slide { syntax: '<length>'; inherits: true; initial-value: 0px; }
+#chat.uc-sliding { transition: --uc-slide var(--uc-slide-ms, 160ms) cubic-bezier(0.2, 0.7, 0.2, 1); }
+#chat.uc-sliding.uc-slide-jump { transition: none; }
+#chat.uc-sliding > * { transform: translateY(var(--uc-slide)); }

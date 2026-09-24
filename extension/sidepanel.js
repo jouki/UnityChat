@@ -6864,6 +6864,7 @@ class UnityChat {
     // user's reading line dead still as new messages stack below.
     const preserveScroll = !this.autoScroll && !isHistory;
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
+    let appendedAtEnd = false;
 
     if (this._prependCursor) {
       // Starší stránka ze serveru (vzestupně) → před první dosavadní uzel.
@@ -6880,6 +6881,7 @@ class UnityChat {
       return;
     } else {
       this.chatEl.appendChild(el);
+      appendedAtEnd = true;
     }
 
     if (isHistory) return;
@@ -6892,7 +6894,8 @@ class UnityChat {
     }
 
     if (this.autoScroll) this._unloadTop();
-    this._scroll();
+    // Nová zpráva na konci plynule přijede zespodu (zkušebně, pokyn usera 2026-09-24).
+    this._scroll(appendedAtEnd && !this._bootLoading ? el : null);
   }
 
   // ---- Historie ze serveru + DOM okno ---------------------------------
@@ -7223,7 +7226,7 @@ class UnityChat {
     return `${n} nových zpráv`;
   }
 
-  _scroll() {
+  _scroll(slideEl = null) {
     if (this.autoScroll) {
       requestAnimationFrame(() => {
         // Open a 200ms suppression window so the resulting scroll event
@@ -7231,6 +7234,7 @@ class UnityChat {
         // chat) doesn't get re-interpreted as the user scrolling away.
         this._programmaticScrollUntil = performance.now() + 200;
         this.chatEl.scrollTop = this.chatEl.scrollHeight;
+        if (slideEl) window.UC_CORE?.slideInMessage?.(this.chatEl, slideEl);
       });
     }
   }
