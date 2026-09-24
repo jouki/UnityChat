@@ -28,8 +28,6 @@
 
   <!-- Settings Panel -->
   <div id="settings" class="hidden">
-    <!-- Email účtu (core/email-verify.js createEmailSettings) — zatím jen v Dev mode. -->
-    <div id="email-settings" class="setting-row dev-only"></div>
     <details class="settings-section" id="channels-section">
       <summary>
         <span>Kanály</span>
@@ -47,6 +45,8 @@
         <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
       </div>
     </details>
+    <!-- Email účtu (core/email-verify.js createEmailSettings) — zatím jen v Dev mode. -->
+    <div id="email-settings" class="setting-row dev-only"></div>
     <div class="setting-row">
       <label for="input-username">USERNAME (TWITCH)</label>
       <input type="text" id="input-username" placeholder="Detekováno automaticky" spellcheck="false" autocomplete="off" readonly>

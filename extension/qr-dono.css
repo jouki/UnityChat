@@ -171,4 +171,10 @@
 .uc-es-val:disabled { color: var(--text-muted); opacity: 0.8; cursor: default; }
 .uc-es button { flex-shrink: 0; padding: 6px 12px; border: none; border-radius: 5px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .uc-es button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Spárovat / Změnit email: nenápadné — jen UnityChat gradient v rámečku (Poslat kód zůstává plné). */
+.uc-es .uc-es-btn {
+  border: 1px solid transparent; font-weight: 600; color: var(--accent-light);
+  background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
+}
+.uc-es .uc-es-btn:hover:not(:disabled) { color: #fff; box-shadow: 0 0 8px rgba(255, 140, 0, 0.35); }
 .uc-es-err { margin: 0; color: #ff8a8a; font-size: 12px; }
