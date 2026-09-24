@@ -26,6 +26,61 @@ export const cannotSend = (e) => ['mail_disabled', 'mail_budget', 'send_failed',
 const fmtLeft = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s} s`; };
 
 /**
+ * Blok „Email“ v nastavení UnityChatu (addon i web): zašedlé pole s ověřeným e-mailem a tlačítko
+ * „Spárovat email“ (bez ověřeného) / „Změnit email“ (s ověřeným) → zadání adresy → kód.
+ * @param {object} o
+ * @param {HTMLElement} o.container
+ * @param {{ profile(): Promise<object>, emailStart(email: string): Promise<object>, emailVerify(code: string): Promise<object> }} o.api
+ * @param {(email: string) => void} [o.onChange]   po úspěšném ověření
+ * @param {(tag: string, text: string) => void} [o.log]
+ * @returns {{ refresh(): Promise<void>, destroy(): void }}
+ */
+export function createEmailSettings({ container, api, onChange, log }) {
+  container.classList.add('uc-es');
+  let verifier = null;
+  const render = (p) => {
+    const verified = !!p?.verified;
+    container.innerHTML = `
+      <label class="uc-es-l">Email</label>
+      <div class="uc-es-row">
+        <input class="uc-es-val" type="email" value="${esc(p?.email || '')}" placeholder="nespárovaný" readonly disabled>
+        <button type="button" class="uc-es-btn">${verified ? 'Změnit email' : 'Spárovat email'}</button>
+      </div>
+      <div class="uc-es-new" hidden>
+        <input class="uc-es-in" type="email" maxlength="120" autocomplete="email" placeholder="tvůj@email.cz">
+        <button type="button" class="uc-es-send">Poslat kód</button>
+      </div>
+      <p class="uc-es-err" hidden></p>
+      <div class="uc-es-verify" hidden></div>`;
+    const q = (s) => container.querySelector(s);
+    const err = (m) => { q('.uc-es-err').textContent = m || ''; q('.uc-es-err').hidden = !m; };
+    if (p && p.mailEnabled === false) { q('.uc-es-btn').disabled = true; q('.uc-es-btn').title = 'Ověřování e-mailu je teď vypnuté.'; }
+    q('.uc-es-btn').addEventListener('click', () => { q('.uc-es-new').hidden = false; q('.uc-es-in').focus(); });
+    const go = () => {
+      const email = q('.uc-es-in').value.trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err('Vyplň platný e-mail.'); return; }
+      err('');
+      q('.uc-es-new').hidden = true; q('.uc-es-verify').hidden = false;
+      verifier?.destroy();
+      verifier = startEmailVerification({
+        container: q('.uc-es-verify'), api, email, log,
+        onVerified: (em) => { verifier = null; onChange?.(em); refresh(); },
+        onCannotSend: (e) => { verifier?.destroy(); verifier = null; q('.uc-es-verify').hidden = true; err(emailErrorText(e)); },
+        onBack: () => { verifier?.destroy(); verifier = null; q('.uc-es-verify').hidden = true; q('.uc-es-new').hidden = false; },
+      });
+    };
+    q('.uc-es-send').addEventListener('click', go);
+    q('.uc-es-in').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  };
+  async function refresh() {
+    try { render(await api.profile()); }
+    catch (e) { log?.('EmailVerify', `profile fail ${e?.error || e}`); render(null); }
+  }
+  refresh();
+  return { refresh, destroy() { verifier?.destroy(); container.innerHTML = ''; } };
+}
+
+/**
  * Vykreslí krok „Na email jsme ti poslali 6místný kód…“ do `container` a pošle první kód.
  * @param {object} o
  * @param {HTMLElement} o.container

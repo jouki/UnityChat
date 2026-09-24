@@ -125,3 +125,15 @@
 .uc-ev-ok path { stroke-dasharray: 36; stroke-dashoffset: 36; animation: uc-ev-draw 0.35s 0.45s ease-out forwards; }
 @keyframes uc-ev-draw { to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) { .uc-ev-ok circle, .uc-ev-ok path { animation: none; stroke-dashoffset: 0; } .uc-code.bad input { animation: none; } }
+
+/* ---- Email v nastavení (core/email-verify.js createEmailSettings) ---- */
+.uc-es { display: flex; flex-direction: column; gap: 6px; }
+.uc-es-l { color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
+.uc-es-row, .uc-es-new { display: flex; gap: 6px; }
+.uc-es-new[hidden], .uc-es-err[hidden], .uc-es-verify[hidden] { display: none; }
+.uc-es input { flex: 1; min-width: 0; box-sizing: border-box; padding: 7px 9px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 5px; color: var(--text-primary); font: inherit; outline: none; }
+.uc-es input:focus { border-color: var(--accent); }
+.uc-es-val:disabled { color: var(--text-muted); opacity: 0.8; cursor: default; }
+.uc-es button { flex-shrink: 0; padding: 6px 12px; border: none; border-radius: 5px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.uc-es button:disabled { opacity: 0.5; cursor: not-allowed; }
+.uc-es-err { margin: 0; color: #ff8a8a; font-size: 12px; }
