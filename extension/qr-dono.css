@@ -77,24 +77,17 @@
 .uc-qd-sub { margin: 0; color: var(--text-secondary); }
 /* QR v barvách UnityChatu: bez pozadí, moduly v gradientu (core brandQrSvg), glow přímo na modulech. */
 /* Měkké tmavé pozadí pod QR — vyšší kontrast pro skenování, okraje se ztrácejí do panelu. */
-.uc-qd-qr {
-  position: relative;
-  width: min(260px, 100%); aspect-ratio: 1; padding: 12px; box-sizing: border-box; border-radius: 18px;
-  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.75) 72%, rgba(0, 0, 0, 0) 100%);
+.uc-qd-qr { position: relative; width: min(260px, 100%); aspect-ratio: 1; padding: 12px; box-sizing: border-box; }
+.uc-qd-qr > svg { position: relative; z-index: 1; display: block; width: 100%; height: 100%; }
+/* Glow přímo na QR: rozmazaná kopie kódu za ním. Rozmazání se vykreslí jednou, pulzuje jen
+   průhlednost (kompozitor) → plynulé i na slabším počítači. */
+.uc-qd-qr-glow {
+  position: absolute; inset: 12px; z-index: 0; pointer-events: none;
+  filter: blur(7px); opacity: 0.55; will-change: opacity;
+  animation: uc-qd-qr-glow 2.6s ease-in-out infinite;
 }
-/* Glow na modulech je statický (filtr se nepřekresluje každý snímek); pulz dělá jen průhlednost
-   vrstvy kolem kódu — to zvládá kompozitor a animace je plynulá. */
-.uc-qd-qr svg {
-  position: relative; z-index: 1; display: block; width: 100%; height: 100%;
-  filter: drop-shadow(0 0 1.5px rgba(255, 180, 40, 0.45)) drop-shadow(0 0 9px rgba(255, 120, 0, 0.28));
-}
-.uc-qd-qr::before {
-  content: ''; position: absolute; inset: -6%; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(closest-side, transparent 66%, rgba(255, 140, 0, 0.22) 82%, transparent 100%);
-  opacity: 0.55; will-change: opacity;
-  animation: uc-qd-halo 2.6s ease-in-out infinite;
-}
-@keyframes uc-qd-halo { 50% { opacity: 1; } }
+.uc-qd-qr-glow svg { display: block; width: 100%; height: 100%; }
+@keyframes uc-qd-qr-glow { 50% { opacity: 0.95; } }
 .uc-qd-amount {
   font-size: 30px; line-height: 1.15; font-weight: 800; letter-spacing: 0.3px;
   background: linear-gradient(160deg, #ffe08a 0%, #ffc800 40%, #ff8c00 100%);
@@ -108,7 +101,7 @@
 @keyframes uc-qd-in-fwd { from { opacity: 0; transform: translate3d(16px, 0, 0); } to { opacity: 1; transform: none; } }
 @keyframes uc-qd-in-back { from { opacity: 0; transform: translate3d(-16px, 0, 0); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .uc-qd-in-fwd, .uc-qd-in-back, .uc-qd-qr::before { animation: none; }
+  .uc-qd-in-fwd, .uc-qd-in-back, .uc-qd-qr-glow { animation: none; }
 }
 .uc-qd-tiny { margin: 0; color: var(--text-muted); font-size: 11px; word-break: break-all; }
 .uc-qd-tiny b { color: var(--text-secondary); font-weight: 600; }

@@ -126,11 +126,12 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   let qrRaw = null, qrVs = '';
   const gradId = `ucqd-g-${Math.random().toString(36).slice(2, 8)}`;
   /** Serverové SVG (bílé pozadí, černé moduly) → bez pozadí, moduly v gradientu UnityChatu. */
-  function brandQrSvg(svg) {
+  function brandQrSvg(svg, suffix = '') {
+    const gid = gradId + suffix;
     return svg
       .replace(/<path fill="#ffffff"[^>]*\/>/i, '')   // bez pozadí — glow jde jen na políčka (CSS drop-shadow)
-      .replace(/stroke="#000000"/i, `stroke="url(#${gradId})"`)
-      .replace(/(<svg[^>]*>)/i, `$1<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="0.45" stop-color="#ffc800"/><stop offset="1" stop-color="#ff8c00"/></linearGradient></defs>`);
+      .replace(/stroke="#000000"/i, `stroke="url(#${gid})"`)
+      .replace(/(<svg[^>]*>)/i, `$1<defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="0.45" stop-color="#ffc800"/><stop offset="1" stop-color="#ff8c00"/></linearGradient></defs>`);
   }
   function lockCurrency(on) {
     const g = $('.uc-qd-cur');
@@ -151,14 +152,15 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     el.classList.add(dir === 'back' ? 'uc-qd-in-back' : 'uc-qd-in-fwd');
     if (h0 == null || win.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     win.clearTimeout(navTimer);
-    panel.style.transition = ''; panel.style.height = '';
+    panel.style.transition = ''; panel.style.height = ''; panel.style.overflowY = '';
     const h1 = panel.offsetHeight;
     if (Math.abs(h1 - h0) < 2) return;
     panel.style.height = `${h0}px`;
+    panel.style.overflowY = 'hidden';   // obsah je během přechodu vyšší než panel → bez posuvníku
     void panel.offsetHeight;
     panel.style.transition = 'height 320ms cubic-bezier(0.22, 0.8, 0.24, 1)';
     panel.style.height = `${h1}px`;
-    navTimer = win.setTimeout(() => { panel.style.transition = ''; panel.style.height = ''; }, 340);
+    navTimer = win.setTimeout(() => { panel.style.transition = ''; panel.style.height = ''; panel.style.overflowY = ''; }, 340);
   }
   const detectTestmode = makeTestmodeDetector();
 
@@ -412,7 +414,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     // SVG kreslí náš server (knihovna qrcode), vkládá se jako obsah z důvěryhodného zdroje.
     // Zobrazení: černé pozadí + moduly v gradientu UnityChatu; stažení bere původní černobílé (qrRaw).
     qrRaw = typeof res.qrSvg === 'string' && res.qrSvg.startsWith('<svg') ? res.qrSvg : null;
-    $('.uc-qd-qr').innerHTML = qrRaw ? brandQrSvg(qrRaw) : '<p class="uc-qd-tiny">QR se nepodařilo vykreslit.</p>';
+    // Glow = rozmazaná kopie QR za kódem (pulzuje jen průhlednost → plynulé), kód nahoře ostrý.
+    $('.uc-qd-qr').innerHTML = qrRaw
+      ? `<div class="uc-qd-qr-glow" aria-hidden="true">${brandQrSvg(qrRaw, '-glow')}</div>${brandQrSvg(qrRaw)}`
+      : '<p class="uc-qd-tiny">QR se nepodařilo vykreslit.</p>';
     qrVs = res.vs || '';
     const c = res.currency === 'CZK' ? 'Kč' : res.currency;
     $('.uc-qd-amount').textContent = `${formatAmount(res.amount, res.currency)} ${c}${res.czkPreview ? ` (≈ ${res.czkPreview} Kč)` : ''}`;
