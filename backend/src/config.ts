@@ -47,6 +47,10 @@ const EnvSchema = z.object({
   // klíč = GET /commands vrací prázdný seznam. Mapování kanál → workspace slug.
   ZIDOLISTA_API_BASE: z.string().url().default('https://api-zidolista.jouki.cz'),
   ZIDOLISTA_API_KEY: z.string().default(''),
+  // Klíč Židolišta → UnityChat (X-Api-Key + HMAC podpis X-UC-Signature), lib/inboundAuth.ts.
+  ZIDOLISTA_INBOUND_KEY: z.string().default(''),
+  // "1" = jen nový klíč a platný podpis; jinak přechod (projde i ZIDOLISTA_API_KEY, podpis se jen loguje).
+  ZIDOLISTA_INBOUND_STRICT: z.string().default(''),
   ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),

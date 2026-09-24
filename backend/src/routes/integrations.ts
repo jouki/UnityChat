@@ -12,7 +12,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { keyMatches } from './commands.js';
+import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { RateLimiter } from './chat.js';
 import { signState, type StateInput } from '../lib/session.js';
 import * as twitch from '../lib/oauthTwitch.js';
@@ -100,11 +100,7 @@ export function botErrorRedirect(reply: FastifyReply, returnTo: string | undefin
 
 export default async function integrationRoutes(app: FastifyInstance, opts: { ingest?: Ingest }) {
   const sendLimiter = new RateLimiter(5, 1); // per workspace: 5 najednou, doplňuje 1/s
-  const auth = (req: FastifyRequest, reply: FastifyReply): boolean => {
-    if (keyMatches(req.headers['x-api-key'])) return true;
-    void reply.code(401).send({ ok: false, error: 'unauthorized' });
-    return false;
-  };
+  const auth = (req: FastifyRequest, reply: FastifyReply): boolean => inboundAuthorized(req, reply);
 
   // ---- SSE stream zpráv ----
   app.get<{ Querystring: { lastEventId?: string } }>('/integrations/chat/stream', async (req, reply) => {
