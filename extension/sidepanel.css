@@ -2963,7 +2963,8 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 }
 /* Jednotný hover ikonových tlačítek (emoty, soundboard, QR dono): tmavé pozadí, UnityChat gradient
    v rámečku, zlatá ikona — stejně jako „Změnit email". */
-.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active {
+.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active,
+body.uc-dev #tw-credits .uc-tool-btn:hover, body.uc-dev #tw-credits .uc-tool-btn.active {
   color: var(--accent-light);
   border-color: transparent;
   background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
