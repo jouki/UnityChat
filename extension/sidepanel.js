@@ -118,6 +118,10 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
+      // Odpověď napříč platformami (server spároval nahlášenou odpověď se zprávou) → ↩ s citací.
+      this._eventSource.addEventListener('uc-reply', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUcReply) this.onUcReply(d); } catch {}
+      });
       // Soundboard (Židolišta → backend → SSE): změna zvuků/odemčení = refetch, přehrání/odmítnutí = core.
       for (const type of ['soundboard-change', 'soundboard-played', 'soundboard-denied']) {
         this._eventSource.addEventListener(type, (e) => {
@@ -1237,7 +1241,8 @@ class UnityChat {
       if (type === 'soundboard-change') { clearTimeout(this._sfxRefetchTimer); this._sfxRefetchTimer = setTimeout(() => this._loadSoundboard(), Math.random() * 3000); }
       else this._sfx?.onSse(type, d);
     };
-    this.nicknames.onUcMark = (d) => this._applyUcMark(d);   // id zprávy je jednoznačné, kanál netřeba
+    this.nicknames.onUcMark = (d) => this._applyUcMark(d);
+    this.nicknames.onUcReply = (d) => this._applyUcReply(d);   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
@@ -3413,8 +3418,13 @@ class UnityChat {
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
-      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null } } : {}),
+      ...(reply ? { replyTo: { id: reply.messageId, username: reply.username, message: reply.message || null, ...(hasNativeReply ? {} : { platform: reply.platform, uc: true }) } } : {}),
     });
+    // Echo z platformy nese „@jméno text" — upgrade (_upgradeOptimistic) ho musí zase skrýt.
+    if (reply && !hasNativeReply) {
+      const optEl = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+      if (optEl) optEl.dataset.ucReplyUser = reply.username.replace(/^@/, '');
+    }
 
     if (!legacy) {
       await this._sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw: text });
@@ -3475,10 +3485,13 @@ class UnityChat {
         const reason = resp?.error || 'nepodařilo se odeslat';
         this._markSendFailed(optId, reason);
         this._sys(`Chyba: ${reason}`);
-      } else if (text.startsWith('!')) {
+      } else if (text.startsWith('!') || (reply && !hasNativeReply)) {
         // Command jde bez markeru (rozbil by boty) → serveru nahlásit, že je z UnityChatu;
         // ingest zprávu označí a všem pošle SSE `uc-mark` (zlaté logo), backend lib/ucSends.ts.
-        this._reportUcSent(platform, username, markedText);
+        // Odpověď napříč platformami: server ji spáruje s echem (SSE `uc-reply`, ↩ u všech).
+        const crossReply = reply && !hasNativeReply ? window.UC_CORE.ucReplyPayload(reply) : null;
+        const sent = crossReply && !markedText.startsWith(`@${reply.username.replace(/^@/, '')}`) ? `@${reply.username.replace(/^@/, '')} ${markedText}` : markedText;
+        this._reportUcSent(platform, username, sent, crossReply);
       }
     } catch (err) {
       this._markSendFailed(optId, err.message);
@@ -3509,7 +3522,11 @@ class UnityChat {
       const r = await fetch(`${UC_API}/chat/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ platform, text, replyTo, replyToUser: replyTo ? reply.username.replace(/^@/, '') : null, channel: (this.config.channel || '').toLowerCase() }),
+        body: JSON.stringify({
+          platform, text, replyTo, replyToUser: replyTo ? reply.username.replace(/^@/, '') : null, channel: (this.config.channel || '').toLowerCase(),
+          // Odpověď napříč platformami (nebo na YouTube): server ji spáruje s echem a ukáže všem v UnityChatu.
+          ...(reply && !replyTo ? { ucReplyTo: window.UC_CORE.ucReplyPayload(reply) } : {}),
+        }),
         signal: AbortSignal.timeout(15000),
       });
       const j = await r.json().catch(() => ({}));
@@ -3576,14 +3593,84 @@ class UnityChat {
   }
 
   /** POST /chat/uc-sent — command odeslaný z UnityChatu (bez markeru) dostane u všech zlaté logo. */
-  _reportUcSent(platform, username, text) {
+  _reportUcSent(platform, username, text, replyTo = null) {
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel || !username || username === 'me') return;
     fetch(`${UC_API}/chat/uc-sent`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, channel, username, text }),
+      body: JSON.stringify({ platform, channel, username, text, ...(replyTo ? { replyTo } : {}) }),
       signal: AbortSignal.timeout(8000),
     }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+  }
+
+  /** ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami). */
+  _buildReplyCtx(msg) {
+    const rt = msg.replyTo;
+    const rp = rt.platform || msg.platform;
+    const ctx = document.createElement('div');
+    ctx.className = 'reply-ctx';
+    if (rt.id) ctx.classList.add('clickable');
+    // Show nickname if available, otherwise platform username
+    const replyRawName = (rt.username || '').replace(/^@/, '');
+    const replyProfile = this.nicknames.get(rp, replyRawName);
+    const replyDisplayName = replyProfile?.nickname || replyRawName;
+    let replyBodyHtml = '';
+    if (rt.message) {
+      // Render emotes in reply context using platform-specific parser.
+      // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
+      let body;
+      if (rp === 'kick') body = this.emotes.renderKick(rt.message);
+      else if (rp === 'twitch') body = this.emotes.renderTwitch(rt.message, null);
+      else body = this.emotes.renderPlain(rt.message);
+      replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
+    }
+    // Odpověď na zprávu z jiné platformy: malé logo té platformy.
+    const pBadge = rt.platform && rt.platform !== msg.platform
+      ? `<span class="badge ${({ twitch: 'tw', kick: 'ki', youtube: 'yt' })[rt.platform] || ''} rctx-pi">${this.emotes._eh(rt.platform)}</span> ` : '';
+    ctx.innerHTML = `&#8617; ${pBadge}<span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` + replyBodyHtml;
+    if (rt.id) {
+      ctx.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._scrollToMessage(rt.id);
+      });
+    }
+    return ctx;
+  }
+
+  /**
+   * SSE `uc-reply`: server spároval odpověď napříč platformami se zprávou. Zpráva ještě
+   * nedorazila → zapamatovat (_addMessage si ji vezme); už je v DOM → doplnit ↩ a skrýt @jméno.
+   */
+  _applyUcReply({ id, replyTo }) {
+    if (!id || !replyTo?.id) return;
+    const key = String(id);
+    if (!this._ucReplies) this._ucReplies = new Map();
+    this._ucReplies.set(key, replyTo);
+    if (this._ucReplies.size > 500) this._ucReplies.delete(this._ucReplies.keys().next().value);
+    let n = 0;
+    for (const el of this.chatEl.querySelectorAll(`.msg[data-msg-id="${CSS.escape(key)}"]`)) {
+      n++;
+      if (el.querySelector(':scope > .reply-ctx')) continue;
+      const platform = el.dataset.platform || replyTo.platform;
+      el.insertBefore(this._buildReplyCtx({ platform, replyTo }), el.querySelector(':scope > .msg-tag-line, :scope > .pi') || el.firstChild);
+      this._stripReplyMentionInDom(el, replyTo.username);
+    }
+    this._ucLog('UcReply', `${key} → ${replyTo.platform}:${replyTo.id} el=${n}`);
+  }
+
+  /** Vykreslená zpráva: úvodní „@jméno" (span.mention nebo text) v .tx pryč. */
+  _stripReplyMentionInDom(el, username) {
+    const tx = el.querySelector('.tx');
+    const re = window.UC_CORE?.replyMentionRe?.(username);
+    if (!tx || !re) return;
+    const first = tx.firstChild;
+    if (first?.nodeType === 1 && first.classList?.contains('mention') && re.test(first.textContent + ' ')) {
+      first.remove();
+      const next = tx.firstChild;
+      if (next?.nodeType === 3) next.textContent = next.textContent.replace(/^\s+/, '');
+    } else if (first?.nodeType === 3 && re.test(first.textContent)) {
+      first.textContent = first.textContent.replace(re, '');
+    }
   }
 
   /** SSE `uc-mark`: server poznal zprávu z UnityChatu bez markeru → zlaté logo (i u vykreslené). */
@@ -6280,6 +6367,10 @@ class UnityChat {
   // Returns {ids, content} — callers mutate them directly. Returns null if
   // the platform/channel can't be resolved (let the caller skip dedup).
   _addMessage(msg) {
+    // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
+    // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.
+    if (msg && !msg.replyTo && msg.id && this._ucReplies?.has(String(msg.id))) msg = { ...msg, replyTo: this._ucReplies.get(String(msg.id)) };
+    if (msg?.replyTo?.uc && window.UC_CORE?.stripReplyMention) msg = window.UC_CORE.stripReplyMention(msg);
     // Defensive drop: a regular chat message with no body is just a
     // "username:" line with empty text — these were showing up in
     // production (confirmed in debug logs) from scraped system lines
@@ -6598,40 +6689,8 @@ class UnityChat {
       this._renderMilestoneEvent(el, msg);
     } else {
 
-    // Reply context (Twitch reply-parent tagy)
-    if (msg.replyTo) {
-      const ctx = document.createElement('div');
-      ctx.className = 'reply-ctx';
-      if (msg.replyTo.id) ctx.classList.add('clickable');
-      // Show nickname if available, otherwise platform username
-      const replyRawName = (msg.replyTo.username || '').replace(/^@/, '');
-      const replyProfile = this.nicknames.get(msg.platform, replyRawName);
-      const replyDisplayName = replyProfile?.nickname || replyRawName;
-      let replyBodyHtml = '';
-      if (msg.replyTo.message) {
-        // Render emotes in reply context using platform-specific parser.
-        // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
-        let body;
-        if (msg.platform === 'kick') {
-          body = this.emotes.renderKick(msg.replyTo.message);
-        } else if (msg.platform === 'twitch') {
-          body = this.emotes.renderTwitch(msg.replyTo.message, null);
-        } else {
-          body = this.emotes.renderPlain(msg.replyTo.message);
-        }
-        replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
-      }
-      ctx.innerHTML =
-        `&#8617; <span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` +
-        replyBodyHtml;
-      if (msg.replyTo.id) {
-        ctx.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this._scrollToMessage(msg.replyTo.id);
-        });
-      }
-      el.appendChild(ctx);
-    }
+    // Reply context (Twitch reply-parent tagy, Kick reply, odpověď napříč platformami)
+    if (msg.replyTo) el.appendChild(this._buildReplyCtx(msg));
 
     // Tag line (right-aligned, above message content). Priority:
     // reply/mention/raid > suspicious (sus user OR message was cleared by mod)
@@ -7086,7 +7145,8 @@ class UnityChat {
       .replace(/[^a-z0-9\s]/g, '')
       .trim()
       .substring(0, 80);
-    return norm(username) + '|' + norm(message);
+    // Úvodní @zmínka se nepočítá: optimistická odpověď napříč platformami ji v UnityChatu nemá, echo ano.
+    return norm(username) + '|' + norm(String(message).replace(/^\s*@\S+\s+/, ''));
   }
 
   // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
@@ -7132,6 +7192,10 @@ class UnityChat {
   _upgradeOptimistic(optId, realMsg) {
     // Update DOM element in-place
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+    // Vlastní odpověď napříč platformami: echo nese „@jméno text", v UnityChatu bez něj.
+    if (el?.dataset.ucReplyUser && window.UC_CORE?.stripReplyMention) {
+      realMsg = window.UC_CORE.stripReplyMention({ ...realMsg, replyTo: { username: el.dataset.ucReplyUser } });
+    }
     if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
     // uc-mark mohl přijít dřív než echo (server byl rychlejší) → teď, když má element skutečné id.
     if (el && this._ucMarkedIds?.has(realMsg.id)) this._applyUcMark({ platform: realMsg.platform, id: realMsg.id });

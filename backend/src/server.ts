@@ -11,7 +11,7 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
-import { ucSends, markUc } from './lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply } from './lib/ucSends.js';
 import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
@@ -71,6 +71,9 @@ const ingest = createIngest({
   onLive: (m) => {
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).
     if (ucSends.match(m)) markUc(m, app.log);
+    // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
+    const rep = ucReplies.take(m);
+    if (rep?.data) attachUcReply(m, rep.data, app.log);
     publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
     publishIntegration(m);

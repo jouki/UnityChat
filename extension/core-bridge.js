@@ -23,8 +23,9 @@ import * as emotePreview from './core/emote-preview.js';
 import * as soundboard from './core/soundboard.js';
 import * as loginModal from './core/login-modal.js';
 import * as slideIn from './core/slide-in.js';
+import * as ucReply from './core/uc-reply.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...emotePreview, ...soundboard, ...loginModal, ...slideIn });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...emotePreview, ...soundboard, ...loginModal, ...slideIn, ...ucReply });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

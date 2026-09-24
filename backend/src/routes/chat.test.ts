@@ -48,3 +48,13 @@ test('toClientMessage: historical=false pro živé zprávy z ingestu (řádek be
   assert.equal(c.id, 'abc');
   assert.equal(c.timestamp, 1789820014396);
 });
+
+test('toClientMessage: odpověď napříč platformami z content_raw.ucReply (YouTube i Kick), nativní má přednost', () => {
+  const ucReply = { platform: 'twitch', id: 'tw-9', username: 'Tonner', message: 'ahoj' };
+  const yt = toClientMessage({ ...base, platform: 'youtube', isReply: false, replyToMessageId: null, contentRaw: { runs: [], ucReply } });
+  assert.deepEqual(yt.replyTo, { ...ucReply, uc: true });
+  const kick = toClientMessage({ ...base, platform: 'kick', isReply: false, replyToMessageId: null, contentRaw: { content: 'x', ucReply } });
+  assert.equal(kick.replyTo?.id, 'tw-9');
+  const native = toClientMessage({ ...base, contentRaw: { ...(base.contentRaw as object), ucReply } });
+  assert.equal(native.replyTo?.id, 'p1', 'nativní odpověď platformy vyhrává');
+});
