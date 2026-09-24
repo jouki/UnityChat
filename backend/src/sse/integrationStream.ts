@@ -66,7 +66,7 @@ export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
     userId: m.platformUserId,
     text: m.content,
     ...roles,
-    isBot: isBotAuthor(m.platform, m.username, workspace),
+    isBot: isBotAuthor(m.platform, m.username, workspace, m.platformUserId),
     replyTo: m.replyToMessageId ? { messageId: m.replyToMessageId, user: replyUser } : null,
     timestamp: m.sentAt.toISOString(),
   };

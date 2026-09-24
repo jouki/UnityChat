@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.40.18
+# UnityChat - Chrome Extension + Backend v3.40.22
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.40.18** (dev i master; release 2026-09-23)
+- Aktuální: **v3.40.22** (dev i master; release PR #27 2026-09-24)
 
 ## Chrome Web Store (v3.38.58+)
 
@@ -455,7 +455,7 @@ Kód zůstává jeden (`extension/`), pro Firefox se mění jen manifest: `node 
 tlačítko v chatu Twitche = `open()` s fallbackem na záložku (zpráva z content scriptu nemusí nést
 gesto uživatele). Přihlášení: Firefox vrací `https://<40 hex>.extensions.allizom.org/` — povoleno
 v `isAllowedReturnTo`. `web-ext lint`: 0 chyb; na AMO bude potřeba `data_collection_permissions`
-a projít 27 varování `innerHTML`. **v3.40.18 odeslána na AMO 2026-09-23** (veřejně, jen desktop; podklady `store/listing/amo.md`, zásady `amo-privacy-en.txt`).
+a projít 27 varování `innerHTML`. **v3.40.18 odeslána na AMO 2026-09-23** (veřejně, jen desktop; podklady `store/listing/amo.md`, zásady `amo-privacy-en.txt`). Od 2026-09-24 nahrává každou novou verzi po merge do master workflow `amo-release.yml` (`web-ext sign --channel listed`, secrets `AMO_JWT_ISSUER`/`AMO_JWT_SECRET`); 3.40.22 prošla.
 
 ## Známé limitace / gotchas
 
@@ -843,6 +843,7 @@ nespustí** — Coolify webhook přijme (200 OK), ale do fronty nic nezařadí.
 - **v3.38.64** - **YouTube layout po skrytí chatu**: křížek u YT chatu je UC intercept → `hideYtChat()`. Ta (1) neposílala `resize` event, takže když flexy už měl `theater`, player zůstal v šířce sloupce, dokud user nepřepnul fullscreen; (2) nechávala `#secondary` (sloupec s chatem) s computed 402px → prázdný obdélník pod playerem. Fix: `#secondary` width:0 (NE display:none — iframe), resize po hide i show. UC_LOG `YtLayout`. Memory `feedback_youtube_layout.md` aktualizována (bylo 159 dní staré a neodpovídalo kódu).
 - **v3.38.65** - **Platform badge = logo platformy**: `.msg .pi` a header/reply `.badge` už nejsou textové chipy TW/YT/KI, ale SVG loga v `extension/icons/platform/{twitch,youtube,kick}.svg` (background-image, text zůstává v DOM jen pro kopírování). Uživatel UnityChatu (`.pi.uc`) dostává zlaté varianty `*-gold.svg` + původní glow — zatím placeholder (zlatý gradient + tmavý glyf), finální zlatou verzi kreslí user. Kick logo je aproximace (blokové K). ⚠️ `preview.html` na jouki.cz načítá reálné `sidepanel.css` → po deployi landing přerenderovat `panel-mock.png` pro store screenshot.
 - **v3.38.76** - **Obnoven SEND_CHAT handler**: při rušení scrape (.74) skript uřízl i následující blok v `content/twitch.js` → Twitch zprávy ve v3.38.74–75 vůbec neodcházely („nepodařilo se odeslat“). Ověřeno diffem proti 6326c39. Poučení: při mazání bloku přes python nikdy nehledat uzavírací závorku „od konce textu“, vždy mazat přesný literál celého bloku.
+- **v3.40.19–22** - **Release** (PR #27, 2026-09-24; CWS 3.40.22 v review, AMO přes workflow): **přihlášení k účtu UnityChat hned v addonu** (nastavení → „Účet UnityChat“ + ikona v hlavičce; Twitch/Kick/YouTube přes `chrome.identity`, připojení další platformy s Bearer na `/auth/:platform/start`, odpojení, odhlášení; stav z `/auth/me`, UC_LOG `Account`); **soundboard sound efektů** (spec `docs/superpowers/specs/2026-09-24-soundboard-se-tiers-design.md`): sdílený `core/soundboard.js` + `soundboard.css`, backend `GET /soundboard`, `PUT /soundboard/favorites`, SSE `soundboard-change/played/denied` (proxy na Židolištu, SQL `backend/sql/2026-09-24-soundboard.sql`), addon tlačítko s notou vedle emotů, klik = `!se <jméno>` přes `_sendMessage({ text })` (rozepsaný text zůstává), refetch po SSE rozprostřený do 0–3 s (limit Židolišty per IP), UC_LOG `Sfx`. Backend: YouTube streamer flow žádá `youtube.force-ssl` místo `readonly` (Google verifikace).
 - **v3.40.5–18** - **Release** (2026-09-23): zlaté logo i u commandů z UnityChatu (server páruje hlášení odeslání, `lib/ucSends.ts`, SSE `uc-mark`); vrstvení ZW emotů z osobního 7TV setu + náhled stacku se všemi emoty (`core/emote-preview.js`); **Firefox build** (`scripts/build-firefox.mjs`, postranní lišta) a opravy, které z něj vzešly: Twitch send přes GQL s `dropReason`, dump z panelu, YouTube/Kick odeslání ověřené (jinak API), YouTube přes backend při consent stránce, Kick jméno z `/api/v1/user`, Kick API s `Authorization: Bearer session_token`; tlačítko UnityChatu v záhlaví chatu Kicku (`content/uc-header-button.js` sdílené s Twitchem, injekce podle manifestu); Kick odpověď na starou zprávu → `@jméno` bez zdvojení. Backend: `kick_user_id` = ID uživatele (dřív ID kanálu → web na Kick 404), YouTube ingest hledá live po 10 s.
 - **v3.40.1–4** - **Release** (2026-09-23): cenzura zpráv i jmen podle sdíleného blacklistu slov ze Židolišty (`core/censor.js`, backend `GET /blacklist`, SSE `blacklist-change`; přesné slovo bez ohledu na velikost písmen), @zmínka víceslovnou přezdívkou se přeloží na login (`core/mentions.js`), menu emotů na dotyku bez automatické klávesnice a na úzké obrazovce přes celou šířku.
 - **v3.40.0** - **Release** (2026-09-23): shrnuje 3.39.51–57 — nastavení „Přehrávat zvuky" a „Po animaci se vrátit na konec chatu", announcement skryje odpověď StreamElements (`hideBotReplies`) + volba „neukazovat v OBS" (`hideInBrowserSource`), tlačítko emotů v poli pro psaní se sdíleným výběrem a hledáním (`core/emote-picker.js`).

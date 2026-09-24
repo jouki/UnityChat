@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { timingSafeEqual, createHash } from 'node:crypto';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
 import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
 import { invalidateBlacklist } from './blacklist.js';
 import { handleSfxWebhook } from './soundboard.js';
+import { inboundAuthorized } from '../lib/inboundAuth.js';
 
 /**
  * GET /commands?channel=<twitch login>
@@ -128,15 +128,6 @@ async function fetchZidolista(slug: string): Promise<PublicCommand[]> {
   return toPublicCommands(j.commands);
 }
 
-export function keyMatches(candidate: unknown): boolean {
-  const key = config.ZIDOLISTA_API_KEY;
-  const got = String(Array.isArray(candidate) ? candidate[0] : candidate ?? '').trim();
-  if (!key || !got) return false;
-  const a = createHash('sha256').update(key).digest();
-  const b = createHash('sha256').update(got).digest();
-  return timingSafeEqual(a, b);
-}
-
 export default async function commandRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 10);
 
@@ -148,7 +139,7 @@ export default async function commandRoutes(app: FastifyInstance) {
    * kanálů / bota → obnovit registr workspaců (lib/zidolista.ts).
    */
   app.post<{ Body: { workspace?: string; reason?: string; data?: unknown } }>('/commands/invalidate', async (req, reply) => {
-    if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
+    if (!inboundAuthorized(req, reply)) return reply;
     const slug = String(req.body?.workspace || '').toLowerCase();
     const reason = String(req.body?.reason || 'update');
     // Změna blacklistu slov (stejný webhook) → jen cache blacklistu + SSE `blacklist-change`.

@@ -24,28 +24,42 @@ export interface BotIdentity {
 
 export type BotState = 'online' | 'expired' | 'missing';
 
-// platform:login → množina workspaců, které tímto účtem mluví ('_shared' = všechny)
+// Účet bota → množina workspaců, které jím mluví ('_shared' = všechny). Klíč je id účtu
+// na platformě (`platform#id`) i login (`platform:login`): id se nemění a ingest ho má
+// vždy, login je záloha. Kick: ingest nese sender.username, identita slug — liší se
+// (Jouki_BOT vs jouki-bot), takže jen podle loginu by zpráva bota nedostala isBot a
+// Židolišta by ji vyhodnotila jako command (bezpečnostní audit 2026-09-24).
 const botLogins = new Map<string, Set<string>>();
 
-function remember(platform: string, login: string, workspace: string): void {
-  const k = `${platform}:${login.toLowerCase()}`;
-  const s = botLogins.get(k) ?? new Set<string>();
-  s.add(workspace);
-  botLogins.set(k, s);
+const loginKey = (platform: string, login: string) => `${platform}:${String(login).toLowerCase()}`;
+const idKey = (platform: string, id: string) => `${platform}#${id}`;
+
+export function rememberBot(platform: string, login: string, workspace: string, platformUserId?: string | null): void {
+  const keys = [loginKey(platform, login)];
+  if (platformUserId) keys.push(idKey(platform, String(platformUserId)));
+  for (const k of keys) {
+    const s = botLogins.get(k) ?? new Set<string>();
+    s.add(workspace);
+    botLogins.set(k, s);
+  }
 }
+
+/** Jen pro testy. */
+export function _resetBotsForTest(): void { botLogins.clear(); }
 
 /** Načíst loginy botů do paměti (boot). */
 export async function loadBotLogins(): Promise<number> {
-  const rows = await db.select({ workspace: botIdentities.workspace, platform: botIdentities.platform, login: botIdentities.login }).from(botIdentities);
+  const rows = await db.select({ workspace: botIdentities.workspace, platform: botIdentities.platform, login: botIdentities.login, platformUserId: botIdentities.platformUserId }).from(botIdentities);
   botLogins.clear();
-  for (const r of rows) remember(r.platform, r.login, r.workspace);
+  for (const r of rows) rememberBot(r.platform, r.login, r.workspace, r.platformUserId);
   return rows.length;
 }
 
-/** Píše tuhle zprávu bot daného workspace (sdílený nebo vlastní)? */
-export function isBotAuthor(platform: string, login: string, workspace: string): boolean {
-  const s = botLogins.get(`${platform}:${String(login).toLowerCase()}`);
-  return !!s && (s.has(SHARED) || s.has(workspace));
+/** Píše tuhle zprávu bot daného workspace (sdílený nebo vlastní)? Shoda podle id účtu nebo loginu. */
+export function isBotAuthor(platform: string, login: string, workspace: string, platformUserId?: string | null): boolean {
+  const sets = [botLogins.get(loginKey(platform, login))];
+  if (platformUserId) sets.push(botLogins.get(idKey(platform, String(platformUserId))));
+  return sets.some((s) => !!s && (s.has(SHARED) || s.has(workspace)));
 }
 
 export async function upsertBotIdentity(workspace: string, platform: Platform, identity: IdentityInfo, tokens: TokenSet): Promise<void> {
@@ -57,7 +71,7 @@ export async function upsertBotIdentity(workspace: string, platform: Platform, i
       target: [botIdentities.workspace, botIdentities.platform],
       set: { platformUserId: identity.platformUserId, login: identity.login.toLowerCase(), displayName: identity.displayName || null, avatarUrl: identity.avatarUrl || null, state: 'online', ...cols },
     });
-  remember(platform, identity.login, workspace);
+  rememberBot(platform, identity.login, workspace, identity.platformUserId);
 }
 
 export async function storeBotTokens(workspace: string, platform: Platform, tokens: TokenSet): Promise<void> {
@@ -69,8 +83,11 @@ export async function markBotExpired(workspace: string, platform: Platform): Pro
 }
 
 export async function deleteBotIdentity(workspace: string, platform: Platform): Promise<boolean> {
-  const rows = await db.delete(botIdentities).where(and(eq(botIdentities.workspace, workspace), eq(botIdentities.platform, platform))).returning({ login: botIdentities.login });
-  for (const r of rows) botLogins.get(`${platform}:${r.login}`)?.delete(workspace);
+  const rows = await db.delete(botIdentities).where(and(eq(botIdentities.workspace, workspace), eq(botIdentities.platform, platform))).returning({ login: botIdentities.login, platformUserId: botIdentities.platformUserId });
+  for (const r of rows) {
+    botLogins.get(loginKey(platform, r.login))?.delete(workspace);
+    botLogins.get(idKey(platform, r.platformUserId))?.delete(workspace);
+  }
   return rows.length > 0;
 }
 

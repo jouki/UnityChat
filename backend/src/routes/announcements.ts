@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { broadcast } from '../sse/bus.js';
-import { keyMatches, botLogins } from './commands.js';
+import { botLogins } from './commands.js';
+import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { getWorkspaces } from '../lib/zidolista.js';
 
 /**
@@ -80,7 +81,7 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
 
 export default async function announcementRoutes(app: FastifyInstance) {
   app.post('/announcements', async (req, reply) => {
-    if (!keyMatches(req.headers['x-api-key'])) return reply.code(401).send({ ok: false, error: 'unauthorized' });
+    if (!inboundAuthorized(req, reply)) return reply;
     // Mapování kanál → workspace z registru Židolišty (lib/zidolista.ts); env je jen fallback.
     const workspaces = new Map<string, string>();
     for (const w of await getWorkspaces({ log: app.log })) if (w.channels.twitch) workspaces.set(w.channels.twitch, w.slug);
