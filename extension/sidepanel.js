@@ -118,6 +118,10 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
+      // Změna nastavení donací v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
+      this._eventSource.addEventListener('donate-config-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onDonateConfigChange) this.onDonateConfigChange(d); } catch {}
+      });
       // Odpověď napříč platformami (server spároval nahlášenou odpověď se zprávou) → ↩ s citací.
       this._eventSource.addEventListener('uc-reply', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcReply) this.onUcReply(d); } catch {}
@@ -1309,7 +1313,15 @@ class UnityChat {
       else this._sfx?.onSse(type, d);
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
-    this.nicknames.onUcReply = (d) => this._applyUcReply(d);   // id zprávy je jednoznačné, kanál netřeba
+    this.nicknames.onUcReply = (d) => this._applyUcReply(d);
+    // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
+    this.nicknames.onDonateConfigChange = (d) => {
+      if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
+      if (!this._qd) return;
+      clearTimeout(this._qdReloadTimer);
+      this._qdReloadTimer = setTimeout(() => this._qd?.reloadConfig?.(), Math.random() * 2000);
+      this._ucLog('QrDono', 'donate-config-change → reload');
+    };   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
       if (this.config.username) {
