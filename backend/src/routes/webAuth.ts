@@ -11,7 +11,7 @@ import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import {
   allowedOrigins, isAllowedReturnTo, issueCode, consumeCode, bearerToken, validateWebSession, deleteWebSession,
-  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity,
+  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity, signOutAccount,
   needsRefresh, type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
@@ -121,9 +121,13 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     return { ok: true, accountId: req.webAccountId, platforms };
   });
 
+  // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.
   app.post('/auth/logout', async (req) => {
     const raw = bearerToken(req);
-    if (raw) await deleteWebSession(raw);
+    if (!raw) return { ok: true };
+    const accountId = await validateWebSession(raw);
+    if (accountId !== null) await signOutAccount(accountId);
+    else await deleteWebSession(raw);
     return { ok: true };
   });
 

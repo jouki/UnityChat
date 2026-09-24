@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { webAccounts, webIdentities, webSessions } from '../db/schema.js';
 import { encryptToken, decryptToken } from './crypto.js';
@@ -107,6 +107,26 @@ export async function deleteWebSession(raw: string): Promise<void> {
   await db.delete(webSessions).where(eq(webSessions.tokenHash, hashToken(raw)));
 }
 
+/**
+ * „Odhlásit se" = odhlásit všechny platformy účtu (pokyn usera 2026-09-24, web i addon):
+ * identity se označí jako odhlášené a tokeny se zahodí, všechny session účtu končí.
+ * Identita v DB zůstává, aby další přihlášení vrátilo stejný účet (oblíbené zvuky…),
+ * ale počítá se jen platforma, přes kterou se člověk přihlásí znovu.
+ */
+export async function signOutAccount(accountId: number, now = new Date()): Promise<void> {
+  const empty = Buffer.alloc(0);
+  await db
+    .update(webIdentities)
+    .set({
+      signedOutAt: now,
+      accessTokenEncrypted: empty, tokenIv: empty, tokenAuthTag: empty,
+      refreshTokenEncrypted: null, refreshIv: null, refreshAuthTag: null,
+      expiresAt: null, updatedAt: now,
+    })
+    .where(eq(webIdentities.accountId, accountId));
+  await db.delete(webSessions).where(eq(webSessions.accountId, accountId));
+}
+
 export function bearerToken(req: FastifyRequest): string | null {
   const h = req.headers.authorization;
   if (typeof h !== 'string') return null;
@@ -198,6 +218,7 @@ export async function completeWebLogin(
         displayName: identity.displayName || null,
         avatarUrl: identity.avatarUrl || null,
         ...cols,
+        signedOutAt: null,
       },
     });
 
@@ -223,7 +244,7 @@ export async function listIdentities(accountId: number): Promise<PublicIdentity[
       platformUserId: webIdentities.platformUserId,
     })
     .from(webIdentities)
-    .where(eq(webIdentities.accountId, accountId));
+    .where(and(eq(webIdentities.accountId, accountId), isNull(webIdentities.signedOutAt)));
   return rows as PublicIdentity[];
 }
 
@@ -238,7 +259,7 @@ export async function getDecryptedIdentity(accountId: number, platform: Platform
   const rows = await db
     .select()
     .from(webIdentities)
-    .where(and(eq(webIdentities.accountId, accountId), eq(webIdentities.platform, platform)))
+    .where(and(eq(webIdentities.accountId, accountId), eq(webIdentities.platform, platform), isNull(webIdentities.signedOutAt)))
     .limit(1);
   if (!rows.length) return null;
   const r = rows[0];

@@ -256,6 +256,9 @@ export const webIdentities = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     scopes: text('scopes').array(),
     keyVersion: integer('key_version').notNull().default(1),
+    // „Odhlásit se" (2026-09-24): identita zůstane kvůli návaznosti účtu (oblíbené zvuky apod.),
+    // tokeny se zahodí a do dalšího přihlášení přes tuhle platformu se k účtu nepočítá.
+    signedOutAt: timestamp('signed_out_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
