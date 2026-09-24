@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UnityChat</title>
   <link rel="stylesheet" href="sidepanel.css">
+  <link rel="stylesheet" href="soundboard.css">
 </head>
 <body>
   <!-- Header -->
@@ -193,6 +194,7 @@
     <span id="active-badge" class="badge">--</span>
     <div class="msg-input-wrap">
       <textarea id="msg-input" rows="1" placeholder="Otevři stream pro odesílání..." autocomplete="off" spellcheck="false" disabled></textarea>
+      <button id="btn-sfx" type="button" class="emote-btn hidden" aria-label="Soundboard"></button>
       <button id="btn-emotes" type="button" class="emote-btn" title="Emoty"></button>
     </div>
     <button id="btn-send" disabled>&#10148;</button>

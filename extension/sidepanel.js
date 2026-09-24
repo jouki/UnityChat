@@ -118,6 +118,12 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
+      // Soundboard (Židolišta → backend → SSE): změna zvuků/odemčení = refetch, přehrání/odmítnutí = core.
+      for (const type of ['soundboard-change', 'soundboard-played', 'soundboard-denied']) {
+        this._eventSource.addEventListener(type, (e) => {
+          try { const d = JSON.parse(e.data); if (this.onSoundboard) this.onSoundboard(type, d); } catch {}
+        });
+      }
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1050,6 +1056,7 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
     this._initEmotePicker();
+    this._initSoundboard();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
     // pushed to background (persisted to chrome.storage.session) so the log
@@ -1102,6 +1109,63 @@ class UnityChat {
       },
       log: (tag, text) => this._ucLog(tag, text),
     });
+  }
+
+  /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
+  _initSoundboard() {
+    const core = window.UC_CORE;
+    const btn = document.getElementById('btn-sfx');
+    if (!btn || !core?.createSoundboard) return;
+    this._sfx = core.createSoundboard({
+      host: document.getElementById('input-area'),
+      button: btn,
+      // Klik na zvuk = `!se <jméno>` vlastním účtem diváka, stejnou cestou jako psaní (command → bez markeru).
+      onSend: (s) => this._sendMessage({ text: `!se ${s.name}` }),
+      onFavorite: async (soundId, on) => {
+        const token = await this._ucSessionToken();
+        const r = await fetch(`${UC_API}/soundboard/favorites`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ channel: (this.config.channel || '').toLowerCase(), soundId, on }),
+        });
+        this._ucLog('Sfx', `favorite ${soundId} ${on} → ${r.status}`);
+        if (!r.ok) throw new Error(`favorites ${r.status}`);
+      },
+      // Nepřihlášený → sekce účtu; přihlášený bez účtu na aktivní platformě → rovnou připojit tu platformu.
+      onLogin: (platform) => {
+        this._openAccountSettings();
+        if (platform && this._account) this._accountAction(platform, 'link');
+      },
+      volume: {
+        load: () => { try { return Number(localStorage.getItem('uc_sfx_volume') ?? 0.6); } catch { return 0.6; } },
+        save: (v) => { try { localStorage.setItem('uc_sfx_volume', String(v)); } catch {} },
+      },
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+  }
+
+  /** Stav soundboardu pro aktivní platformu + kanál (GET /soundboard, Bearer volitelně). */
+  async _loadSoundboard() {
+    if (!this._sfx) return;
+    const platform = this.activePlatform;
+    const channel = (this.config.channel || '').toLowerCase();
+    const seq = (this._sfxSeq = (this._sfxSeq || 0) + 1);
+    if (!platform || !channel) { this._sfx.update(null); return; }
+    try {
+      const token = await this._ucSessionToken();
+      const r = await fetch(`${UC_API}/soundboard?channel=${encodeURIComponent(channel)}&platform=${platform}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: 'no-store',
+      });
+      if (seq !== this._sfxSeq) return;   // mezitím přišel novější požadavek
+      if (!r.ok) {
+        this._ucLog('Sfx', `load ${channel}/${platform} → ${r.status}`);
+        if (r.status === 404) this._sfx.update(null);   // kanál bez soundboardu → tlačítko schované
+        return;
+      }
+      const j = await r.json();
+      this._sfx.update(j);
+      this._ucLog('Sfx', `load ${channel}/${platform} sounds=${j.sounds?.length ?? 0} loggedIn=${!!j.loggedIn} me=${j.me ? `${j.me.role} tiers=${j.me.tiers?.length ?? 0}` : 'null'}`);
+    } catch (e) { this._ucLog('Sfx', `load FAIL ${e.message || e}`); }
   }
 
   async _init() {
@@ -1167,6 +1231,11 @@ class UnityChat {
     // Předehrát video do cache (fetch by bez host_permission pro robdiesalot.com neprošel, <video> ano).
     { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.src = POOP_VIDEO_URL; v.load(); this._poopPreload = v; }
     this.nicknames.onCommandsChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadUcCommands().catch(() => {}); };
+    this.nicknames.onSoundboard = (type, d) => {
+      if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
+      if (type === 'soundboard-change') this._loadSoundboard();
+      else this._sfx?.onSse(type, d);
+    };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onLoad = () => {
@@ -1481,12 +1550,7 @@ class UnityChat {
       if (opening) this._refreshAccount();
     });
     // Účet: ikona v hlavičce otevře nastavení na sekci účtu.
-    $('btn-account').addEventListener('click', () => {
-      $('settings').classList.remove('hidden');
-      $('account-section').open = true;
-      $('account-section').scrollIntoView({ block: 'nearest' });
-      this._refreshAccount();
-    });
+    $('btn-account').addEventListener('click', () => this._openAccountSettings());
     $('account-rows').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-platform]');
       if (b) this._accountAction(b.dataset.platform, b.dataset.action, b);
@@ -2535,6 +2599,7 @@ class UnityChat {
     this._resetChat();
     this._isModOnChannel = false; // re-detect from badges on new channel
     this._loadUcCommands().catch(() => {});
+    this._loadSoundboard();
     this._loadBlacklist().catch(() => {});
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
@@ -2727,6 +2792,7 @@ class UnityChat {
     // Only update settings fields when platform actually changes
     // (detect loop runs every 3s — without this guard it overwrites user-typed values)
     if (!changed) return;
+    this._loadSoundboard();
 
     // Update username field to show current platform's username
     const el = document.getElementById('input-username');
@@ -3248,12 +3314,14 @@ class UnityChat {
     return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform), (login) => this._chatUsers?.get(login)?.name || login);
   }
 
-  async _sendMessage() {
-    const text = this.msgInput.value.trim();
+  async _sendMessage(opts = {}) {
+    // opts.text = zpráva mimo pole pro psaní (soundboard `!se …`): rozepsaný text, odpověď i historie zůstávají.
+    const external = typeof opts.text === 'string';
+    const text = (external ? opts.text : this.msgInput.value).trim();
     if (!text || !this.activePlatform) return;
 
     // /uc commands — local mock messages for testing (mod/broadcaster only)
-    if (text.startsWith('/uc ')) {
+    if (!external && text.startsWith('/uc ')) {
       this.msgInput.value = '';
       this.msgInput.style.height = 'auto';
       this._handleUcCommand(text.substring(4).trim());
@@ -3283,18 +3351,20 @@ class UnityChat {
     // zpátky přes _processMentions.
     const wireText = this._resolveNicknameMentions(text, platform);
     const markedText = isCmd ? wireText : wireText + ' ' + UC_MARKER;
-    const reply = this._reply ? { ...this._reply } : null;
+    const reply = !external && this._reply ? { ...this._reply } : null;
 
-    // Save to message history (max 50)
-    this._msgHistory.push(text);
-    if (this._msgHistory.length > 50) this._msgHistory.shift();
-    this._msgHistoryIdx = -1;
-    this._msgHistoryDraft = '';
+    if (!external) {
+      // Save to message history (max 50)
+      this._msgHistory.push(text);
+      if (this._msgHistory.length > 50) this._msgHistory.shift();
+      this._msgHistoryIdx = -1;
+      this._msgHistoryDraft = '';
 
-    // Clear input IMMEDIATELY — responsive feel
-    this.msgInput.value = '';
-    this.msgInput.style.height = 'auto';
-    this._clearReply();
+      // Clear input IMMEDIATELY — responsive feel
+      this.msgInput.value = '';
+      this.msgInput.style.height = 'auto';
+      this._clearReply();
+    }
 
     // Optimistic UI: show message instantly
     // Native reply support: Twitch (GQL) + Kick (API reply metadata).
@@ -4069,6 +4139,7 @@ class UnityChat {
       // Jiná chyba (síť, 5xx): nechat poslední známý stav.
     } catch (e) { this._ucLog('Account', `me FAIL ${e.message || e}`); }
     this._renderAccount();
+    this._loadSoundboard();
     return this._account;
   }
 
@@ -4133,6 +4204,14 @@ class UnityChat {
       if (btn) btn.disabled = false;
       this._renderAccount();
     }
+  }
+
+  _openAccountSettings() {
+    const settings = document.getElementById('settings');
+    const section = document.getElementById('account-section');
+    settings?.classList.remove('hidden');
+    if (section) { section.open = true; section.scrollIntoView({ block: 'nearest' }); }
+    this._refreshAccount();
   }
 
   async _accountLogout() {
