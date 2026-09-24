@@ -163,7 +163,7 @@ export default async function soundboardRoutes(app: FastifyInstance) {
 
     const raw = bearerToken(req);
     const accountId = raw ? await validateWebSession(raw) : null;
-    const empty = { ok: true, channel: ch.data, serverNow: new Date().toISOString(), loggedIn: accountId !== null, tiers: [], sounds: [], me: null, favorites: [], recent: [] };
+    const empty = { ok: true, channel: ch.data, platform, serverNow: new Date().toISOString(), loggedIn: accountId !== null, tiers: [], sounds: [], me: null, favorites: [], recent: [] };
     const slug = (await workspaceForChannel('twitch', ch.data))?.slug;
     if (!slug || !config.ZIDOLISTA_API_KEY) return empty;
 
