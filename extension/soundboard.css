@@ -15,6 +15,22 @@
 .uc-sb-btn:not(.uc-sb-off) { color: var(--accent-light); }
 .uc-sb-btn.uc-sb-cd { color: var(--text-secondary); }
 
+/* ---- hover nad panelem: celý název + délka (core/soundboard.js showHover) ---- */
+.uc-sb-hover {
+  position: absolute; z-index: 32; box-sizing: border-box;
+  padding: 7px 10px; border-radius: 7px;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary); font-size: 13px; line-height: 1.35; pointer-events: none;
+}
+.uc-sb-hover.hidden { display: none; }
+.uc-sb-hover-t { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.uc-sb-hover-t .uc-sb-img { height: 20px; width: auto; }
+.uc-sb-hover-n { overflow-wrap: anywhere; }
+.uc-sb-hover-d { flex: none; font-weight: 400; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.uc-sb-hover-s { margin-top: 2px; font-size: 11px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+.uc-sb-hover-s.locked { font-family: inherit; color: #ff8a8a; }
+
 /* ---- tooltip ---- */
 .uc-sb-tip {
   position: absolute; bottom: 100%; right: 30px; z-index: 31; margin-bottom: 6px;

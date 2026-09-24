@@ -166,6 +166,17 @@ export function tierLabelHtml(state, tier) {
 export const soundLabel = (s) => (s?.displayName && String(s.displayName).trim()) || s?.name || '';
 
 /** Ikona zvuku → HTML: 7TV obrázek (jen z cdn.7tv.app, backend to hlídá i tady), emoji, nebo nic. */
+/** Délka zvuku pro hover („2,4 s", „12 s", „1:05"); null/0 → ''. */
+export function formatSoundDuration(ms) {
+  const n = Number(ms);
+  if (!(n > 0)) return '';
+  const sec = n / 1000;
+  if (sec < 10) return `${sec.toFixed(1).replace('.', ',')} s`;
+  if (sec < 60) return `${Math.round(sec)} s`;
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(Math.round(sec - m * 60)).padStart(2, '0')}`;
+}
+
 export function soundIconHtml(s) {
   const i = s?.icon;
   if (i?.kind === '7tv' && /^https:\/\/cdn\.7tv\.app\/emote\/[A-Za-z0-9]+\/[1-4]x\.(webp|avif|png|gif)$/.test(i.url || '')) {
@@ -306,8 +317,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     const cls = ['uc-sb-s', locked ? 'locked' : '', cd > 0 && !locked ? 'cd' : ''].filter(Boolean).join(' ');
     const label = soundLabel(s);
     const why = unlocked.get(s.tier)?.paused ? 'je pozastavený' : 'není odemčený';
-    const title = locked ? `${label} — ${tierLabel(state, s.tier)} ${why}` : `!se ${s.name}`;
-    return `<div class="${cls}" data-id="${s.id}" title="${esc(title)}">
+    return `<div class="${cls}" data-id="${s.id}" data-why="${locked ? esc(`${tierLabel(state, s.tier)} ${why}`) : ''}">
       <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
       <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
@@ -384,6 +394,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     audio.pause();
+    hideHover();
   }
   const isOpen = () => !panel.classList.contains('hidden');
   const toggle = () => (isOpen() ? close() : open());
@@ -451,6 +462,33 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     audio.volume = vol;
     try { volume?.save?.(vol); } catch { /* ignore */ }
   });
+  // Hover nad panelem: celý název zvuku (v mřížce se zkracuje) + délka, pod tím `!se jméno`
+  // nebo proč je zvuk zamčený. Leží mimo panel (ten má overflow: hidden), kotví se nad něj.
+  const hover = doc.createElement('div');
+  hover.className = 'uc-sb-hover hidden';
+  hover.setAttribute('role', 'tooltip');
+  host.appendChild(hover);
+  let hoverId = null;
+  function showHover(card) {
+    const sound = card && state?.sounds.find((s) => s.id === Number(card.dataset.id));
+    if (!sound || !isOpen()) { hideHover(); return; }
+    if (hoverId === sound.id && !hover.classList.contains('hidden')) return;
+    hoverId = sound.id;
+    const dur = formatSoundDuration(sound.durationMs);
+    const why = card.dataset.why;
+    hover.innerHTML = `<div class="uc-sb-hover-t">${soundIconHtml(sound)}<span class="uc-sb-hover-n">${esc(soundLabel(sound))}</span>${dur ? `<span class="uc-sb-hover-d">(${esc(dur)})</span>` : ''}</div>`
+      + `<div class="uc-sb-hover-s${why ? ' locked' : ''}">${why ? esc(why) : `!se ${esc(sound.name)}`}</div>`;
+    hover.style.left = `${panel.offsetLeft}px`;
+    hover.style.width = `${panel.offsetWidth}px`;
+    hover.style.bottom = `calc(100% + ${panel.offsetHeight + 12}px)`;
+    hover.classList.remove('hidden');
+  }
+  function hideHover() { hoverId = null; hover.classList.add('hidden'); }
+  body.addEventListener('mouseover', (e) => showHover(e.target.closest('.uc-sb-s')));
+  body.addEventListener('mouseleave', hideHover);
+  body.addEventListener('focusin', (e) => showHover(e.target.closest('.uc-sb-s')));
+  body.addEventListener('scroll', hideHover, { passive: true });
+
   panel.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
   panel.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
@@ -511,6 +549,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       audio.pause();
       panel.remove();
       tip.remove();
+      hover.remove();
     },
   };
 }
