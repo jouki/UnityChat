@@ -36,3 +36,11 @@ test('mailer: předmět s kódem, text i HTML; bez služeb = no_provider', async
   assert.doesNotMatch(m.html, /<img|href=/i, 'bez obrázků a odkazů');
   assert.deepEqual(await sendMail(m, undefined, []), { ok: false, error: 'no_provider' });
 });
+
+test('emailChangeAllowedAt: bez e-mailu hned, po ověření až za 24 h', async () => {
+  const { emailChangeAllowedAt, EMAIL_CHANGE_COOLDOWN_MS } = await import('./emailVerify.js');
+  const now = 1_000_000_000_000;
+  assert.equal(emailChangeAllowedAt(null, now), 0);
+  assert.equal(emailChangeAllowedAt(new Date(now - 60_000), now), now - 60_000 + EMAIL_CHANGE_COOLDOWN_MS);
+  assert.equal(emailChangeAllowedAt(new Date(now - EMAIL_CHANGE_COOLDOWN_MS - 1), now), 0);
+});

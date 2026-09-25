@@ -1,7 +1,7 @@
 // Účet UnityChatu: e-mail zadaný uživatelem a ověřený kódem + předvyplnění QR dona
 // (spec docs/superpowers/specs/2026-09-25-qr-dono-v-unitychatu-design.md, sekce Identita).
 //
-//   GET  /account/profile            { email, verified, lastNickname, ucNickname, mailEnabled }
+//   GET  /account/profile            { email, verified, changeAllowedAt, lastNickname, ucNickname, mailEnabled }
 //   POST /account/email/start {email} pošle 6místný kód (cooldown 2/5/15 min, denní limity)
 //   POST /account/email/verify {code} ověří kód → e-mail patří účtu (všem propojeným identitám)
 //
@@ -14,7 +14,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { accountDonatePrefs, accountEmails, emailSendLog, emailVerifications, nicknames } from '../db/schema.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
-import { CODE_TTL_MS, EMAIL_RE, LIMITS, MAX_ATTEMPTS, cleanCode, codeHash, ipHash, newCode, nextAllowedAt, normEmail } from '../lib/emailVerify.js';
+import { CODE_TTL_MS, EMAIL_RE, emailChangeAllowedAt, LIMITS, MAX_ATTEMPTS, cleanCode, codeHash, ipHash, newCode, nextAllowedAt, normEmail } from '../lib/emailVerify.js';
 import { providersConfigured, sendMail, verificationMail } from '../lib/mailer.js';
 import { RateLimiter } from './chat.js';
 
@@ -32,8 +32,12 @@ export async function purgeEmailData(now = Date.now()): Promise<{ log: number; p
 
 /** Ověřený e-mail účtu, nebo null. */
 export async function verifiedEmail(accountId: number): Promise<string | null> {
-  const [r] = await db.select({ email: accountEmails.email }).from(accountEmails).where(eq(accountEmails.accountId, accountId)).limit(1);
-  return r?.email ?? null;
+  return (await verifiedEmailRow(accountId))?.email ?? null;
+}
+
+async function verifiedEmailRow(accountId: number): Promise<{ email: string; verifiedAt: Date } | null> {
+  const [r] = await db.select({ email: accountEmails.email, verifiedAt: accountEmails.verifiedAt }).from(accountEmails).where(eq(accountEmails.accountId, accountId)).limit(1);
+  return r ?? null;
 }
 
 export async function rememberDonateNickname(accountId: number, nickname: string): Promise<void> {
@@ -64,12 +68,14 @@ export default async function accountRoutes(app: FastifyInstance) {
 
   app.get('/account/profile', { preHandler: requireWebSession }, async (req) => {
     const id = req.webAccountId!;
-    const [email, [prefs], uc] = await Promise.all([
-      verifiedEmail(id),
+    const [row, [prefs], uc] = await Promise.all([
+      verifiedEmailRow(id),
       db.select({ lastNickname: accountDonatePrefs.lastNickname }).from(accountDonatePrefs).where(eq(accountDonatePrefs.accountId, id)).limit(1),
       ucNickname(id),
     ]);
-    return { ok: true, email, verified: !!email, lastNickname: prefs?.lastNickname ?? null, ucNickname: uc, mailEnabled: providersConfigured().length > 0 };
+    const email = row?.email ?? null;
+    const changeAt = emailChangeAllowedAt(row?.verifiedAt ?? null);
+    return { ok: true, email, verified: !!email, changeAllowedAt: changeAt ? new Date(changeAt).toISOString() : null, lastNickname: prefs?.lastNickname ?? null, ucNickname: uc, mailEnabled: providersConfigured().length > 0 };
   });
 
   app.post<{ Body: { email?: unknown } }>('/account/email/start', { preHandler: requireWebSession }, async (req, reply) => {
@@ -78,7 +84,11 @@ export default async function accountRoutes(app: FastifyInstance) {
     const email = normEmail(String(req.body?.email ?? ''));
     if (!EMAIL_RE.test(email) || email.length > 120) return reply.code(400).send({ ok: false, error: 'bad_email' });
     if (!providersConfigured().length) return reply.code(503).send({ ok: false, error: 'mail_disabled' });
-    if ((await verifiedEmail(accountId)) === email) return { ok: true, alreadyVerified: true, email };
+    const current = await verifiedEmailRow(accountId);
+    if (current?.email === email) return { ok: true, alreadyVerified: true, email };
+    // Změna ověřeného e-mailu jen 1× za 24 h (jinak by šlo rozesílat kódy na libovolné adresy).
+    const changeAt = emailChangeAllowedAt(current?.verifiedAt ?? null);
+    if (changeAt) return reply.code(429).send({ ok: false, error: 'change_cooldown', retryAt: new Date(changeAt).toISOString() });
 
     const now = Date.now();
     const [pending] = await db.select().from(emailVerifications).where(eq(emailVerifications.accountId, accountId)).limit(1);
@@ -132,6 +142,9 @@ export default async function accountRoutes(app: FastifyInstance) {
       await db.update(emailVerifications).set({ attempts: v.attempts + 1 }).where(eq(emailVerifications.accountId, accountId));
       return reply.code(400).send({ ok: false, error: 'bad_code', left: Math.max(0, MAX_ATTEMPTS - v.attempts - 1) });
     }
+    const current = await verifiedEmailRow(accountId);
+    const changeAt = emailChangeAllowedAt(current && current.email !== v.email ? current.verifiedAt : null);
+    if (changeAt) return reply.code(429).send({ ok: false, error: 'change_cooldown', retryAt: new Date(changeAt).toISOString() });
     const now = new Date();
     await db.insert(accountEmails).values({ accountId, email: v.email, verifiedAt: now, updatedAt: now })
       .onConflictDoUpdate({ target: accountEmails.accountId, set: { email: v.email, verifiedAt: now, updatedAt: now } });
