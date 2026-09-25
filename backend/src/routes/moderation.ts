@@ -15,7 +15,8 @@ import { db } from '../db/index.js';
 import { moderationActions } from '../db/schema.js';
 import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
-import { publishDeleted } from '../lib/messageDeletes.js';
+import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
+import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { deletePlatformMessage, type ModResult } from '../lib/modActions.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
@@ -69,6 +70,30 @@ export async function buildMissingScopes(
   return out;
 }
 
+export interface DeleteTargetDeps {
+  /** Platformní kanál UC kanálu (registr, viz registryPlatformChannel). */
+  platformChannel: (channel: string, platform: Platform) => Promise<string | null>;
+  /** messages.channel zprávy, null = v archivu není. */
+  messageChannel: (platform: Platform, messageId: string) => Promise<string | null>;
+}
+
+/**
+ * Zpráva musí být v archivu a patřit kanálu, jehož modem účet je. Vrací kanál přesně jak je
+ * v messages.channel (pro markDeleted expectedChannel), jinak null → 404, bez SSE/platformy/zápisu.
+ * Bez toho by broadcaster vlastního kanálu (login == channel) smazal zprávu z cizího kanálu.
+ */
+export async function resolveDeleteTarget(channel: string, platform: Platform, messageId: string, deps: DeleteTargetDeps): Promise<string | null> {
+  const want = await deps.platformChannel(channel, platform);
+  if (!want) return null;
+  const got = await deps.messageChannel(platform, messageId);
+  return channelMatches(got, want) ? got : null;
+}
+
+const targetDeps: DeleteTargetDeps = {
+  platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
+  messageChannel: archivedMessageChannel,
+};
+
 export default async function moderationRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 2);
   const DEFAULT_CHANNEL = (config.CHAT_INGEST_CHANNELS.split(',').find((c) => c.startsWith('twitch:'))?.split(':')[1] || 'robdiesalot').toLowerCase();
@@ -104,8 +129,15 @@ export default async function moderationRoutes(app: FastifyInstance) {
     }
     const by = `${mods[0].platform}:${mods[0].login}`;
 
+    // Zpráva musí patřit kanálu moda — jinak nic (žádné SSE, platforma ani zápis).
+    const stored = await resolveDeleteTarget(channel, platform, messageId, targetDeps);
+    if (!stored) {
+      req.log.info({ accountId, channel, platform }, 'moderation delete: zpráva mimo kanál / není v archivu');
+      return reply.code(404).send({ ok: false, error: 'not_found' });
+    }
+
     // SSE hned — klienti skryjí zprávu okamžitě, nečekají na platformu.
-    await publishDeleted({ channel, platform, messageId, by, reason: 'mod' });
+    await publishDeleted({ channel, platform, messageId, by, reason: 'mod', expectedChannel: stored });
 
     // Chyba platformy po SSE se nesmí propsat jako 500 — deletePlatformMessage svoje chyby
     // sama zabalí do ModResult, try/catch je jen pojistka proti neočekávané výjimce.

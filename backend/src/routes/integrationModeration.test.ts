@@ -43,7 +43,7 @@ test('delete: SSE (reason mod, by zidolista:<id>) → smazání botem → modera
   const r = await runIntegrationModeration('delete', 'Rob', { platform: 'twitch', messageId: 'm1', actor }, deps);
   assert.deepEqual(r, { status: 200, body: { ok: true, result: 'bot' } });
   assert.deepEqual(log.map((l) => l.name), ['publishDeleted', 'deleteAsBot', 'recordAction']);
-  assert.deepEqual(log[0].args[0], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod' });
+  assert.deepEqual(log[0].args[0], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod', expectedChannel: 'robdiesalot' });
   assert.deepEqual(log[1].args[0], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1' });
   assert.deepEqual(log[2].args[0], {
     channel: 'robdiesalot', accountId: null, actor: 'zidolista:7', action: 'delete', platform: 'twitch',

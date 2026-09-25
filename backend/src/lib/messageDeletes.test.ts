@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deletedEvent, publishDeleted, type PublishDeletedDeps } from './messageDeletes.js';
+import { deletedEvent, publishDeleted, channelMatches, type PublishDeletedDeps, type MarkDeletedParams } from './messageDeletes.js';
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -62,6 +62,47 @@ test('publishDeleted: každé smazání jde i do integračního streamu (dep int
   };
   await publishDeleted({ channel: 'robdiesalot', platform: 'youtube', messageId: 'pd-int-1', by: null, reason: 'platform' }, deps);
   assert.deepEqual(seen, [{ channel: 'robdiesalot', platform: 'youtube', messageId: 'pd-int-1', by: null, reason: 'platform', at: 1700000000000 }]);
+});
+
+test('channelMatches: normalizace jako ingest (velikost písmen, YouTube @), chybějící strana → false', () => {
+  assert.equal(channelMatches('robdiesalot', 'robdiesalot'), true);
+  assert.equal(channelMatches('@RobDiesALot', 'robdiesalot'), true);
+  assert.equal(channelMatches('jouki', 'robdiesalot'), false);
+  assert.equal(channelMatches(null, 'robdiesalot'), false);
+  assert.equal(channelMatches('robdiesalot', null), false);
+});
+
+test('publishDeleted: expectedChannel se předá do markDeleted (pojistka AND channel = …)', async () => {
+  const seen: MarkDeletedParams[] = [];
+  const deps: PublishDeletedDeps = {
+    markDeleted: async (p) => { seen.push(p); return { channel: null, login: null }; },
+    broadcast: () => {},
+    now: () => 1700000000000,
+  };
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'pd-exp-1', by: 'twitch:jouki', reason: 'mod', expectedChannel: 'robdiesalot' }, deps);
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'pd-exp-2', by: null, reason: 'platform' }, deps);
+  assert.equal(seen[0].expectedChannel, 'robdiesalot');
+  assert.equal(seen[1].expectedChannel, undefined);
+});
+
+test('publishDeleted: když markDeleted selže, dedup se nezapíše — opakování do 60 s projde', async () => {
+  let fail = true;
+  let markCalls = 0;
+  let broadcasts = 0;
+  const deps: PublishDeletedDeps = {
+    markDeleted: async () => { markCalls++; if (fail) throw new Error('db down'); return { channel: null, login: null }; },
+    broadcast: () => { broadcasts++; },
+    now: () => 1700000000000,
+  };
+  const p = { channel: 'robdiesalot', platform: 'twitch' as const, messageId: 'pd-fail-1', by: null, reason: 'platform' as const };
+  await assert.rejects(publishDeleted(p, deps), /db down/);
+  assert.equal(broadcasts, 0);
+  fail = false;
+  await publishDeleted(p, deps); // retry hned — musí projít
+  assert.equal(markCalls, 2);
+  assert.equal(broadcasts, 1);
+  await publishDeleted(p, deps); // teď už dedup
+  assert.equal(markCalls, 2);
 });
 
 test('markDeleted: nastaví deleted_* jen když ještě není smazaná; vrátí channel+login', { skip: !url && 'TEST_DATABASE_URL není nastavené' }, async () => {

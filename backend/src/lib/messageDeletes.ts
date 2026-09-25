@@ -8,6 +8,7 @@ import { messages } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
 import { publishModIntegration } from '../sse/integrationStream.js';
 import type { Platform } from './zidolista.js';
+import { normPlatformChannel } from './ucChannel.js';
 
 export type DeleteReason = 'mod' | 'platform' | 'link_filter';
 
@@ -16,6 +17,8 @@ export interface MarkDeletedParams {
   messageId: string;
   by: string | null;
   reason: DeleteReason;
+  /** Kanál zprávy přesně jak je v messages.channel — když je zadán, jiný kanál se needituje (pojistka pro moderaci). */
+  expectedChannel?: string;
 }
 
 export interface MarkDeletedResult {
@@ -32,7 +35,12 @@ export async function markDeleted(p: MarkDeletedParams): Promise<MarkDeletedResu
   const rows = await db
     .update(messages)
     .set({ deletedAt: new Date(), deletedBy: p.by, deletedReason: p.reason })
-    .where(and(eq(messages.platform, p.platform), eq(messages.platformMessageId, p.messageId), isNull(messages.deletedAt)))
+    .where(and(
+      eq(messages.platform, p.platform),
+      eq(messages.platformMessageId, p.messageId),
+      isNull(messages.deletedAt),
+      p.expectedChannel !== undefined ? eq(messages.channel, p.expectedChannel) : undefined,
+    ))
     .returning({ channel: messages.channel, login: messages.platformUsername });
   const hit = rows[0];
   return { channel: hit?.channel ?? null, login: hit?.login ?? null };
@@ -64,6 +72,8 @@ export interface PublishDeletedParams {
   messageId: string;
   by: string | null;
   reason: DeleteReason;
+  /** Předá se do markDeleted (viz MarkDeletedParams.expectedChannel); ingest ho nedává. */
+  expectedChannel?: string;
 }
 
 export interface PublishDeletedDeps {
@@ -95,13 +105,29 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
   const t = deps.now();
   const last = recentlyPublished.get(key);
   if (last !== undefined && t - last < DEDUP_MS) return;
+  // Dedup se zapíše až po úspěšném zápisu — když DB selže, opakování do 60 s musí projít.
+  await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, expectedChannel: p.expectedChannel });
   recentlyPublished.set(key, t);
   if (recentlyPublished.size > 1000) {
     for (const [k, at] of recentlyPublished) if (t - at >= DEDUP_MS) recentlyPublished.delete(k);
   }
-  await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason });
   const ev = deletedEvent({ channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t });
   deps.broadcast('message-deleted', ev);
   // Výpadek registru workspaců nesmí shodit mazání (route už poslala SSE, ingest jede dál).
   try { await deps.integration?.(ev); } catch { /* ignore */ }
+}
+
+/** messages.channel zprávy (platformní kanál, jak ho uložil ingest); null = v archivu není. */
+export async function archivedMessageChannel(platform: Platform, messageId: string): Promise<string | null> {
+  const rows = await db
+    .select({ channel: messages.channel })
+    .from(messages)
+    .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId)))
+    .limit(1);
+  return rows[0]?.channel ?? null;
+}
+
+/** Patří zpráva (kanál z archivu) do očekávaného platformního kanálu? Normalizace jako ingest/registr. */
+export function channelMatches(got: string | null | undefined, want: string | null | undefined): boolean {
+  return !!got && !!want && normPlatformChannel(got) === normPlatformChannel(want);
 }

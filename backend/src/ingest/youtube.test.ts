@@ -90,6 +90,29 @@ test('YouTubeListener: markChatItemAsDeletedAction/removeChatItemAction v akcíc
   ]);
 });
 
+test('YouTubeListener: stejné smazání v opakovaných odpovědích → onDelete jen jednou', async () => {
+  const body = JSON.stringify({ contents: { liveChatRenderer: {
+    continuations: [{ timedContinuationData: { continuation: 'T1', timeoutMs: 10 } }],
+    actions: [{ markChatItemAsDeletedAction: { targetItemId: 'dup1' } }],
+  } } });
+  let polls = 0;
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith('/robdiesalot/live')) return new Response('"isLive":true "videoId":"ABCDEFGHIJK"', { status: 200 });
+    if (url.startsWith('https://www.youtube.com/live_chat?v=')) {
+      return new Response(`<script>var ytInitialData = ${body};</script>"INNERTUBE_API_KEY":"KEY" "clientVersion":"2.20260101.00.00"`, { status: 200 });
+    }
+    if (url.includes('/get_live_chat')) { polls++; return new Response(JSON.stringify({ continuationContents: { liveChatContinuation: JSON.parse(body).contents.liveChatRenderer } }), { status: 200 }); }
+    return new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+  const deleted: string[] = [];
+  const l = new YouTubeListener('robdiesalot', () => {}, { fetchImpl, log: { info() {}, warn() {}, error() {} }, minPollMs: 10, onDelete: (d) => deleted.push(d.messageId) });
+  l.start();
+  await new Promise((r) => setTimeout(r, 120));
+  l.stop();
+  assert.ok(polls >= 2, `polls=${polls}`);
+  assert.deepEqual(deleted, ['dup1']);
+});
+
 test('YouTubeListener: offline → live, nový stream → přepojení, konec streamu → zpět hledat', async () => {
   let live: string | null = null;   // aktuální videoId na /live (null = offline)
   const chatFor: string[] = [];

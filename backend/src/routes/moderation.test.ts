@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, type DeleteTargetDeps } from './moderation.js';
 
 test('DeleteBody: platný požadavek projde', () => {
   const r = DeleteBody.safeParse({ platform: 'twitch', messageId: 'abc-123' });
@@ -66,4 +66,28 @@ test('buildMissingScopes: missingModScopes pro každou platformu ze scopesFor (n
 test('buildMissingScopes: prázdný seznam platforem → prázdný objekt', async () => {
   const r = await buildMissingScopes([], async () => null);
   assert.deepEqual(r, {});
+});
+
+// Archiv: platform:id → messages.channel; registr: Rob má Kick "robdiesalot", YouTube "@RobDiesALot".
+const archive: Record<string, string> = { 'twitch:rob-1': 'robdiesalot', 'twitch:jouki-1': 'jouki', 'youtube:yt-1': '@robdiesalot', 'kick:k-1': 'robdiesalot' };
+const targetDeps: DeleteTargetDeps = {
+  platformChannel: async (channel, platform) => (platform === 'twitch' ? channel : channel === 'robdiesalot' ? (platform === 'youtube' ? '@RobDiesALot' : 'robdiesalot') : null),
+  messageChannel: async (platform, id) => archive[`${platform}:${id}`] ?? null,
+};
+
+test('resolveDeleteTarget: zpráva z vlastního kanálu → kanál přesně z archivu', async () => {
+  assert.equal(await resolveDeleteTarget('robdiesalot', 'twitch', 'rob-1', targetDeps), 'robdiesalot');
+  assert.equal(await resolveDeleteTarget('robdiesalot', 'youtube', 'yt-1', targetDeps), '@robdiesalot');
+  assert.equal(await resolveDeleteTarget('robdiesalot', 'kick', 'k-1', targetDeps), 'robdiesalot');
+});
+
+test('resolveDeleteTarget: broadcaster vlastního kanálu nesmí smazat zprávu z cizího kanálu → null', async () => {
+  // jouki je "broadcaster" kanálu jouki (login == channel), ale zpráva rob-1 patří Robovi
+  assert.equal(await resolveDeleteTarget('jouki', 'twitch', 'rob-1', targetDeps), null);
+  assert.equal(await resolveDeleteTarget('robdiesalot', 'twitch', 'jouki-1', targetDeps), null);
+});
+
+test('resolveDeleteTarget: zpráva není v archivu / kanál nemá platformu v registru → null', async () => {
+  assert.equal(await resolveDeleteTarget('robdiesalot', 'twitch', 'neexistuje', targetDeps), null);
+  assert.equal(await resolveDeleteTarget('jouki', 'kick', 'k-1', targetDeps), null);
 });

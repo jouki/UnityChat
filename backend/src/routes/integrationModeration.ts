@@ -10,16 +10,14 @@
 // (ws.channels.twitch = UC kanál) a zpráva musí patřit kanálu workspace na své platformě —
 // workspace nesmí moderovat cizí kanál ani s platným klíčem.
 import type { FastifyInstance } from 'fastify';
-import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { messages, moderationActions, type NewModerationAction } from '../db/schema.js';
+import { moderationActions, type NewModerationAction } from '../db/schema.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { workspaceBySlug, type Platform, type WorkspaceInfo } from '../lib/zidolista.js';
-import { publishDeleted, type PublishDeletedParams } from '../lib/messageDeletes.js';
+import { publishDeleted, archivedMessageChannel, channelMatches, type PublishDeletedParams } from '../lib/messageDeletes.js';
 import { publishHidden, publishUnhidden, type HideParams, type HideResult } from '../lib/messageHides.js';
 import { deletePlatformMessage, type ModResult } from '../lib/modActions.js';
-import { normPlatformChannel } from '../lib/ucChannel.js';
 import { resultRecord } from './moderation.js';
 import { RateLimiter } from './chat.js';
 
@@ -66,7 +64,7 @@ export async function runIntegrationModeration(action: IntegrationModAction, slu
   // Zpráva musí být v archivu kanálu workspace na své platformě (registr = to, co ingest ukládá).
   const want = ws.channels[platform];
   const got = await deps.messageChannel(platform, messageId);
-  if (!want || !got || normPlatformChannel(got) !== normPlatformChannel(want)) {
+  if (!channelMatches(got, want)) {
     deps.log.info({ workspace: ws.slug, platform, action }, 'integration moderation: zpráva mimo workspace');
     return { status: 200, body: { ok: true, result: action === 'delete' ? 'error:not_found' : 'not_found' } };
   }
@@ -82,7 +80,7 @@ export async function runIntegrationModeration(action: IntegrationModAction, slu
 
   if (action === 'delete') {
     // SSE hned — klienti skryjí zprávu okamžitě, nečekají na platformu.
-    await deps.publishDeleted({ channel, platform, messageId, by, reason: 'mod' });
+    await deps.publishDeleted({ channel, platform, messageId, by, reason: 'mod', expectedChannel: got! });
     // Chyba platformy po SSE nesmí být 500 — deletePlatformMessage chyby balí do ModResult, catch je pojistka.
     let result: ModResult;
     try { result = await deps.deleteAsBot({ channel, platform, messageId }); }
@@ -100,20 +98,11 @@ export async function runIntegrationModeration(action: IntegrationModAction, slu
   return { status: 200, body: { ok: true, result } };
 }
 
-async function messageChannel(platform: Platform, messageId: string): Promise<string | null> {
-  const rows = await db
-    .select({ channel: messages.channel })
-    .from(messages)
-    .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId)))
-    .limit(1);
-  return rows[0]?.channel ?? null;
-}
-
 export default async function integrationModerationRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(20, 5); // per workspace — Chat Log může mazat dávkou, ale ne bez konce
   const deps: IntegrationModDeps = {
     workspaceBySlug,
-    messageChannel,
+    messageChannel: archivedMessageChannel,
     publishDeleted: (p) => publishDeleted(p),
     deleteAsBot: (p) => deletePlatformMessage({ accountId: null, ...p }, { log: app.log }),
     publishHidden: (p) => publishHidden(p),

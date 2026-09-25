@@ -96,6 +96,8 @@ export class YouTubeListener implements IngestListener {
   private usePageRefresh = false;
   private apiFails = 0;
   private seen = new Set<string>();
+  /** Už nahlášená smazání — page refresh vrací tytéž akce pořád dokola, onDelete má jít jednou. */
+  private seenDeletes = new Set<string>();
   private readonly fetchImpl: typeof fetch;
   private readonly log: Logger;
   private readonly liveCheckMs: number;
@@ -281,6 +283,9 @@ export class YouTubeListener implements IngestListener {
     for (const a of actions) {
       const delId = normalizeYoutubeDelete(a);
       if (delId) {
+        if (this.seenDeletes.has(delId)) continue;
+        this.seenDeletes.add(delId);
+        if (this.seenDeletes.size > 2000) this.seenDeletes = new Set([...this.seenDeletes].slice(-1000));
         if (this.onDelete) {
           try { this.onDelete({ platform: 'youtube', channel: this.handle, messageId: delId }); } catch (err) { this.log.error({ err }, 'youtube ingest: onDelete threw'); }
         }
