@@ -387,6 +387,10 @@ export function createGifFlow(deps: GifFlowDeps) {
             } else {
               await safe('obnovení zprávy', () => deps.restore({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, userId: m.platformUserId, platformChannel: m.channel }));
             }
+          } else if (p.preDeleted === 'link_filter' && res.ok) {
+            // Přeznačení na gif_request proběhlo (výš), ale médium/žádost se neuložily → vrátit link_filter,
+            // jinak by zpráva zůstala smazaná bez žádosti a permit by ji už neobnovil.
+            await safe('vrácení na link_filter', () => deps.store.retagDeleted(m.platform, m.platformMessageId, 'gif_request', 'link_filter'));
           }
           return 'failed';
         }

@@ -263,3 +263,14 @@ test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, coold
   const n = names(ok.calls);
   assert.ok(n.indexOf('warm') >= 0 && n.indexOf('warm') < n.indexOf('broadcast:gif-message'), 'předehřátí před rozesláním');
 });
+
+test('intercept: smazáno filtrem, přeznačení uspěje, pak selže uložení média / žádosti → zpět na link_filter (permit ji obnoví)', async () => {
+  for (const broken of ['saveMedia', 'insertRequest'] as const) {
+    const s = setup();
+    s.mem.store[broken] = async () => { throw new Error('db down'); };
+    assert.equal(await s.flow.intercept(params({ preDeleted: 'link_filter', needAccess: true })), 'failed');
+    assert.deepEqual(s.mem.log.filter((l) => l.startsWith('retag:')), ['retag:m1:link_filter->gif_request', 'retag:m1:gif_request->link_filter'], broken);
+    assert.equal(s.mem.reqs.size, 0);
+    assert.equal(s.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
+  }
+});
