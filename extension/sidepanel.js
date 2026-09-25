@@ -33,6 +33,7 @@ const DEFAULTS = {
   sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
   reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
+  deletedStyle: 'label', // vzhled smazané zprávy pro diváka: label | dim | strike | hide (core/moderation.js)
 };
 
 // =============================================================
@@ -126,6 +127,12 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-reply', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcReply) this.onUcReply(d); } catch {}
       });
+      // Moderace: smazaná zpráva (mod v UnityChatu / na platformě), skrytá / znovu zobrazená jen v UnityChatu.
+      for (const type of ['message-deleted', 'message-hidden', 'message-unhidden']) {
+        this._eventSource.addEventListener(type, (e) => {
+          try { const d = JSON.parse(e.data); if (this.onModeration) this.onModeration(type, d); } catch {}
+        });
+      }
       // Soundboard (Židolišta → backend → SSE): změna zvuků/odemčení = refetch, přehrání/odmítnutí = core.
       for (const type of ['soundboard-change', 'soundboard-played', 'soundboard-denied']) {
         this._eventSource.addEventListener(type, (e) => {
@@ -1358,6 +1365,7 @@ class UnityChat {
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
+    this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
@@ -1550,6 +1558,18 @@ class UnityChat {
         this.config.replyOneLine = rolBox.checked;
         this._saveConfig();
         this._applyReplyOneLine();
+      });
+    }
+    // Vzhled smazaných zpráv (core/moderation.js) — změna se hned promítne do vykreslených zpráv
+    const delSel = $('input-deleted-style');
+    if (delSel) {
+      const styles = window.UC_CORE?.DELETED_STYLES || ['label', 'dim', 'strike', 'hide'];
+      delSel.value = styles.includes(this.config.deletedStyle) ? this.config.deletedStyle : 'label';
+      delSel.addEventListener('change', () => {
+        this.config.deletedStyle = delSel.value;
+        this._saveConfig();
+        this._reapplyDeleted();
+        this._ucLog('Mod', `styl smazaných → ${delSel.value}`);
       });
     }
     // Po animaci reakce zpět na konec chatu
@@ -2770,6 +2790,7 @@ class UnityChat {
     this._loadSoundboard();
     this._loadBlacklist().catch(() => {});
     this._refreshDonoAvailability();
+    this._loadModState();   // mod na novém kanálu? (tlačítko smazat)
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -4247,14 +4268,165 @@ class UnityChat {
     }
   }
 
-  // Single message delete (CLEARMSG). Just one DOM node + cache entry.
+  // Single message delete (CLEARMSG) — stejná cesta jako smazání přes UnityChat (SSE message-deleted).
   _applyTwitchClearMsg(msgId) {
     if (!msgId) return;
-    const note = 'Deleted by mod';
-    const msgEl = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
-    if (msgEl) this._markMessageCleared(msgEl, note);
-    const cached = this.store.get(msgId);
-    if (cached) cached._cleared = note;
+    this._applyDeleted('twitch', msgId);
+  }
+
+  // ---- Moderace: smazané / skryté zprávy (core/moderation.js, backend /moderation/*) ----
+
+  /** Uzly zprávy v DOM i zaparkované mimo okno. */
+  _msgEls(id, platform = null) {
+    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
+    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    return platform ? els.filter((el) => !el.dataset.platform || el.dataset.platform === platform) : els;
+  }
+
+  /** Má zpráva v datech text? (historie posílá smazané/skryté bez obsahu) */
+  _msgHasContent(msg) {
+    const probe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
+    return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
+  }
+
+  _isModerated(msg) {
+    return !!(msg && (msg._deleted || msg.deleted || msg._hidden || msg.hidden));
+  }
+
+  /** Vzhled smazané/skryté zprávy podle role a nastavení. Smazání má přednost před skrytím. */
+  _paintDeleted(el, msg) {
+    const core = window.UC_CORE;
+    if (!el || !core?.applyDeleted) return;
+    const deleted = !!(msg._deleted || msg.deleted);
+    const hidden = !deleted && !!(msg._hidden || msg.hidden);
+    const hasContent = this._msgHasContent(msg);
+    const mode = core.deletedMode({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
+    // Přechod z „Zpráva smazána" na styl s textem → text zpátky z dat.
+    const tx = el.querySelector('.tx');
+    if (tx && hasContent && mode !== 'label' && tx.querySelector('.uc-deleted-label')) {
+      tx.innerHTML = this._renderMsgBody(msg);
+      this._processMentions(tx, msg.platform);
+    }
+    core.applyDeleted(el, { mode, hidden, hasContent, label: hidden ? 'Skryto v UnityChatu' : 'Zpráva smazána' });
+  }
+
+  /** Zrušit vzhled smazání/skrytí a vykreslit text znovu z dat. */
+  _restoreMessage(el, msg) {
+    window.UC_CORE?.clearDeleted?.(el);
+    const tx = el.querySelector('.tx');
+    if (tx && msg) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+  }
+
+  /** Označit zprávu jako smazanou (hidden = jen skrytá v UnityChatu) ve store i ve všech jejích uzlech. */
+  _applyDeleted(platform, id, { hidden = false } = {}) {
+    if (!id) return 0;
+    const cached = this.store.get(String(id)) || this.store.get(id);
+    const msg = cached && (!platform || cached.platform === platform) ? cached : null;
+    if (msg) { if (hidden) msg._hidden = true; else msg._deleted = true; }
+    const els = this._msgEls(id, platform);
+    for (const el of els) this._paintDeleted(el, msg || { platform, [hidden ? '_hidden' : '_deleted']: true, message: el.querySelector('.tx')?.textContent || '' });
+    return els.length;
+  }
+
+  /** Vrátit lokální smazání (odmítnuté optimistické smazání). */
+  _undoDeleted(platform, id) {
+    const msg = this.store.get(String(id));
+    if (msg) msg._deleted = false;
+    for (const el of this._msgEls(id, platform)) {
+      if (msg && this._isModerated({ ...msg, deleted: false })) this._paintDeleted(el, msg);
+      else this._restoreMessage(el, msg);
+    }
+  }
+
+  /** Nastavení stylu nebo role se změnily → přebarvit všechny smazané/skryté zprávy. */
+  _reapplyDeleted() {
+    let n = 0;
+    for (const el of [...this.chatEl.querySelectorAll('.msg[data-msg-id]'), ...(this._parkedTop || []), ...(this._parkedBottom || [])]) {
+      const msg = el.dataset?.msgId ? this.store.get(el.dataset.msgId) : null;
+      if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); n++; }
+    }
+    return n;
+  }
+
+  /** SSE message-deleted / message-hidden / message-unhidden z /nicknames/stream. */
+  _onModerationEvent(type, d) {
+    if (!d?.messageId) return;
+    if (d.channel && d.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    let n = 0;
+    if (type === 'message-deleted') n = this._applyDeleted(d.platform, d.messageId);
+    else if (type === 'message-hidden') n = this._applyDeleted(d.platform, d.messageId, { hidden: true });
+    else if (type === 'message-unhidden') n = this._unhideMessage(d);
+    this._ucLog('Mod', `${type} ${d.platform}:${d.messageId} by=${d.by || '?'}${d.reason ? ` reason=${d.reason}` : ''} → ${n} el`);
+  }
+
+  /** Zrušené skrytí: data ze SSE (celá zpráva) → vykreslit na místě, nebo přidat běžnou cestou. */
+  _unhideMessage(d) {
+    const fresh = d.message && typeof d.message === 'object' ? d.message : null;
+    const msg = this.store.get(String(d.messageId));
+    if (msg) {
+      msg._hidden = false; msg.hidden = false;
+      if (fresh) for (const k of ['message', 'ytRuns', 'kickContent', 'twitchEmotes', 'twitchEmotesOffset']) if (fresh[k] !== undefined) msg[k] = fresh[k];
+    }
+    const els = this._msgEls(d.messageId, d.platform);
+    for (const el of els) {
+      if (msg && this._isModerated(msg)) this._paintDeleted(el, msg);
+      else this._restoreMessage(el, msg || fresh);
+    }
+    if (!els.length && !msg && fresh) this._addMessage({ ...fresh, hidden: false });
+    return els.length;
+  }
+
+  /** Mod smaže zprávu: hned lokálně, pak POST /moderation/delete (backend pošle SSE všem). */
+  async _deleteMessage(el) {
+    const id = el?.dataset.msgId;
+    const platform = el?.dataset.platform;
+    if (!id || String(id).startsWith('sent-')) { this._sys('Počkej, až se zpráva potvrdí z chatu.'); return; }
+    const NAMES = { twitch: 'Twitchi', kick: 'Kicku', youtube: 'YouTube' };
+    const channel = (this.config.channel || '').toLowerCase();
+    this._applyDeleted(platform, id);
+    let res;
+    try {
+      res = await this._ucApi('/moderation/delete', { method: 'POST', body: { channel, platform, messageId: id } });
+    } catch (e) {
+      this._ucLog('Mod', `delete ${platform}:${id} FAIL ${e.status || 0} ${e.error || e.message || e}`);
+      this._undoDeleted(platform, id);
+      if (e.status === 403) { this._sys('Mazat můžou jen modi.'); this._loadModState(); }
+      else if (e.status === 401) { this._sys('Přihlášení vypršelo, přihlas se znovu.'); this._refreshAccount(); }
+      else if (e.status === 429) this._sys('Mažeš moc rychle, chvíli počkej.');
+      else this._sys(`Zprávu se nepodařilo smazat (${e.error || e.message || e}).`);
+      return;
+    }
+    const result = String(res?.result || '');
+    this._ucLog('Mod', `delete ${platform}:${id} → ${result}`);
+    if (result === 'bot') {
+      this._sysAction('Smazáno botem — tvůj účet nemá oprávnění moderovat', 'Povolit moderaci účtem',
+        () => this._loginPlatform(platform, { mod: true }));
+    } else if (result.startsWith('error')) {
+      this._sys(`V UnityChatu smazáno, na ${NAMES[platform] || platform} se smazat nepodařilo`);
+    }
+  }
+
+  /** Jsem na kanálu mod (podle účtu UnityChatu)? → body.uc-can-moderate + přebarvit smazané. */
+  async _loadModState() {
+    const channel = (this.config.channel || '').toLowerCase();
+    const seq = (this._modSeq = (this._modSeq || 0) + 1);
+    let can = false;
+    let platforms = [];
+    if (this._signedIn && channel) {
+      try {
+        const j = await this._ucApi(`/moderation/me?channel=${encodeURIComponent(channel)}`);
+        can = !!j.mod;
+        platforms = j.platforms || [];
+        const missing = Object.entries(j.missingScopes || {}).filter(([, s]) => s?.length).map(([p]) => p);
+        if (missing.length) this._ucLog('Mod', `chybí mod scopes: ${missing.join(',')}`);
+      } catch (e) { this._ucLog('Mod', `me FAIL ${e.status || 0} ${e.error || e.message || e}`); }
+    }
+    if (seq !== this._modSeq) return;   // mezitím novější dotaz (přepnutí kanálu, přihlášení)
+    const changed = can !== !!this._canModerate;
+    this._canModerate = can;
+    document.body.classList.toggle('uc-can-moderate', can);
+    if (changed) this._reapplyDeleted();
+    this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
   }
 
   // Apply the .cleared class + append (or update) the inline mod-action
@@ -4451,12 +4623,13 @@ class UnityChat {
 
   /** Přihlášení (nebo napojení další platformy na účet, když už session je) —
    *  stejný flow jako web: /auth/:platform/start → OAuth v okně prohlížeče → /auth/exchange. */
-  async _ucLogin(platform = 'twitch') {
+  async _ucLogin(platform = 'twitch', { mod = false } = {}) {
     const returnTo = chrome.identity.getRedirectURL();
     const current = await this._ucSessionToken();
     const headers = { 'Content-Type': 'application/json' };
     if (current) headers.Authorization = `Bearer ${current}`;   // napojit na existující účet
-    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify({ returnTo }) });
+    // mod: true = navíc moderátorské scopes (mazání zpráv) — backend /auth/:platform/start.
+    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify(mod ? { returnTo, mod: true } : { returnTo }) });
     const sj = await start.json().catch(() => ({}));
     if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
     const final = await chrome.identity.launchWebAuthFlow({ url: sj.url, interactive: true });
@@ -4509,6 +4682,7 @@ class UnityChat {
     this._signedIn = linked.length > 0;
     this._updateQrAvailability();
     this._emailSettings?.refresh?.();
+    this._loadModState();
   }
 
   /** Jméno, pod kterým mě vidí chat platformy: Twitch/Kick display name, YouTube handle (login),
@@ -4621,9 +4795,9 @@ class UnityChat {
   }
 
   /** Přihlásit / připojit platformu a rovnou na ni psát. Vrací true při úspěchu. */
-  async _loginPlatform(platform) {
+  async _loginPlatform(platform, { mod = false } = {}) {
     try {
-      await this._ucLogin(platform);
+      await this._ucLogin(platform, { mod });
       await this._refreshAccount();
       if (this._identity(platform)) this._selectSendPlatform(platform);
       return true;
@@ -4686,6 +4860,19 @@ class UnityChat {
     el.textContent = text;
     this.chatEl.appendChild(el);
     this._scroll();
+    return el;
+  }
+
+  /** Systémový řádek s tlačítkem akce (jednorázové — po kliknutí zmizí). */
+  _sysAction(text, label, onClick) {
+    const el = this._sys(text);
+    const btn = document.createElement('button');
+    btn.className = 'sys-action';
+    btn.textContent = label;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); btn.remove(); onClick(); });
+    el.appendChild(document.createTextNode(' '));
+    el.appendChild(btn);
+    return el;
   }
 
   // Twitch's hash fallback may not match the color Twitch actually stores for
@@ -6588,7 +6775,8 @@ class UnityChat {
       this._ucLog('Annc', `skryta odpověď bota ${msg.username}: „${String(msg.message || '').slice(0, 40)}"`);
       return;
     }
-    if (textEmpty && !isSystem) {
+    // Smazaná / skrytá zpráva z historie přichází bez obsahu — vykreslí se jako „Zpráva smazána".
+    if (textEmpty && !isSystem && !this._isModerated(msg)) {
       // Log root-cause clues — which source produced an empty message.
       try {
         chrome.runtime.sendMessage({
@@ -7085,9 +7273,25 @@ class UnityChat {
       this._triggerPoop(msg.platform, host?.dataset.msgId || msg.id);
     });
     actions.insertBefore(poopBtn, actions.firstChild);
+    // Smazat zprávu (mod) — hned vlevo od 💩; vykreslené vždy, vidět jen s body.uc-can-moderate
+    // (role se může změnit až po vykreslení). Id i platforma se čtou až při kliknutí z datasetu.
+    const delBtn = document.createElement('button');
+    delBtn.className = 'msg-action-btn';
+    delBtn.dataset.act = 'delete';
+    delBtn.title = 'Smazat zprávu';
+    delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._deleteMessage(delBtn.closest('.msg'));
+    });
+    actions.insertBefore(delBtn, poopBtn);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard
+
+    // Smazaná / skrytá zpráva (historie, nebo uzel vykreslený znovu z dat ve store).
+    if (this._isModerated(msg)) this._paintDeleted(el, msg);
 
     // Historie (boot / starší stránka) není „nová zpráva" — bez unread logiky.
     const isHistory = this._bootLoading || !!this._prependCursor;

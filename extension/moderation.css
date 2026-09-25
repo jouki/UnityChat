@@ -31,3 +31,27 @@
   border-radius: 3px;
   vertical-align: middle;
 }
+
+/* Skrytý styl / skrytá zpráva pro diváka — `hidden` atribut by přebilo `.msg { display }`. */
+.uc-deleted--hide {
+  display: none !important;
+}
+
+/* Tlačítko „Smazat zprávu" (koš) jen pro mody (body.uc-can-moderate z GET /moderation/me). */
+.msg-action-btn[data-act="delete"] { display: none; }
+body.uc-can-moderate .msg-action-btn[data-act="delete"] { display: flex; }
+body.uc-can-moderate .msg-action-btn[data-act="delete"]:hover { color: #ff9a9d; }
+
+/* Systémový řádek s akcí (např. „Povolit moderaci účtem"). */
+.sys .sys-action {
+  margin-left: 4px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: #ffb347;
+  background: rgba(255, 140, 0, 0.12);
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.sys .sys-action:hover { background: rgba(255, 140, 0, 0.25); }
