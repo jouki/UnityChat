@@ -34,18 +34,41 @@ export interface ClientMessage {
   historical: boolean;
   /** Odesláno z UnityChatu bez markeru (command) — server to ví z hlášení odeslání (lib/ucSends.ts). */
   uc?: boolean;
+  /** Smazáno modem/platformou/link filtrem (lib/messageDeletes.ts) — obsah pod tímto se nikdy neposílá. */
+  deleted?: boolean;
+  deletedReason?: string | null;
 }
 
-/** Pole, která mapování potřebuje — DB řádek (Message) i čerstvý řádek z ingestu (toRow) je mají. */
+/**
+ * Pole, která mapování potřebuje — DB řádek (Message) i čerstvý řádek z ingestu (toRow) je mají.
+ * deletedAt/deletedReason jsou tu volitelné: živé zprávy z ingestu nikdy nejsou smazané v okamžiku
+ * emitu (viz server.ts onLive), takže NewMessage je vůbec nenese.
+ */
 export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platformUserId' | 'platformUsername' | 'content' | 'sentAt'> & {
   contentRaw?: unknown;
   isReply?: boolean | null;
   replyToMessageId?: string | null;
   isUnitychatUser?: boolean | null;
+  deletedAt?: Date | null;
+  deletedReason?: string | null;
 };
 
 /** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
 export function toClientMessage(row: ClientRow, historical = true): ClientMessage {
+  if (row.deletedAt) {
+    // Smazaná zpráva: text, emoty i reply-to zůstávají jen v DB (audit) — klient nikdy nedostane obsah.
+    return {
+      platform: row.platform,
+      id: row.platformMessageId,
+      username: row.platformUsername,
+      userId: row.platformUserId,
+      message: '',
+      timestamp: row.sentAt.getTime(),
+      historical,
+      deleted: true,
+      deletedReason: row.deletedReason,
+    };
+  }
   const out = toClientMessageBase(row, historical);
   // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
   const ur = ((row.contentRaw || {}) as Record<string, unknown>).ucReply as Record<string, unknown> | undefined;

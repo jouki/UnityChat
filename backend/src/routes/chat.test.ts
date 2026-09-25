@@ -59,3 +59,11 @@ test('toClientMessage: odpověď napříč platformami z content_raw.ucReply (Yo
   const native = toClientMessage({ ...base, contentRaw: { ...(base.contentRaw as object), ucReply } });
   assert.equal(native.replyTo?.id, 'p1', 'nativní odpověď platformy vyhrává');
 });
+
+test('toClientMessage: smazaná zpráva nenese obsah', () => {
+  const row = { ...base, content: 'https://evil', contentRaw: { segments: [{ type: 'text', value: 'https://evil' }] }, deletedAt: new Date(), deletedReason: 'mod' };
+  const m = toClientMessage(row as any, true);
+  assert.equal(m.deleted, true);
+  assert.equal(m.message, '');
+  assert.ok(!JSON.stringify(m).includes('evil'));
+});
