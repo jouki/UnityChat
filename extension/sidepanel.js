@@ -132,6 +132,10 @@ class NicknameManager {
           try { const d = JSON.parse(e.data); if (this.onSoundboard) this.onSoundboard(type, d); } catch {}
         });
       }
+      // Změna stavu návrhu zvuku (schváleno / zamítnuto v Židolištce) → „Moje návrhy“.
+      this._eventSource.addEventListener('sfx-request', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onSfxRequest) this.onSfxRequest(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1153,10 +1157,10 @@ class UnityChat {
   }
 
   /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
-  async _ucApi(path, { method = 'GET', body } = {}) {
+  async _ucApi(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
     const token = await this._ucSessionToken();
     const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
     let j = {};
     try { j = await r.json(); } catch {}
     if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status };
@@ -1227,6 +1231,31 @@ class UnityChat {
     this._refreshDonoAvailability();
   }
 
+  /**
+   * API návrhů zvuků (backend /soundboard/requests*, proxy na Židolištu). Identitu a roli
+   * ověří server z přihlášení; klient posílá jen kanál a platformu, za kterou navrhuje.
+   */
+  _sfxRequestApi() {
+    const channel = () => (this.config.channel || '').toLowerCase();
+    const log = (text) => this._ucLog('SfxReq', text);
+    return {
+      // Stažení a převod zvuku na serveru Židolišty může trvat desítky sekund (YouTube).
+      prepare: async (url) => {
+        const r = await this._ucApi('/soundboard/requests/prepare', { method: 'POST', body: { channel: channel(), platform: this.activePlatform, url }, timeoutMs: 130000 })
+          .catch((e) => { log(`prepare → ${e.status || ''} ${e.error}`); throw e; });
+        log(`prepare → ${r.mode} ${r.source} ${r.durationMs ?? '?'} ms`);
+        return r;
+      },
+      submit: async (b) => {
+        const r = await this._ucApi('/soundboard/requests', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform }, timeoutMs: 70000 })
+          .catch((e) => { log(`submit → ${e.status || ''} ${e.error}`); throw e; });
+        log(`submit → id=${r.requestId}`);
+        return r;
+      },
+      list: () => this._ucApi(`/soundboard/requests?channel=${encodeURIComponent(channel())}`),
+    };
+  }
+
   /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
   _initSoundboard() {
     const core = window.UC_CORE;
@@ -1257,6 +1286,8 @@ class UnityChat {
         save: (v) => { try { localStorage.setItem('uc_sfx_volume', String(v)); } catch {} },
       },
       log: (tag, text) => this._ucLog(tag, text),
+      // Tlačítko „Navrhnout zvuk“ vedle hledání (core/sfx-request.js).
+      requestApi: this._sfxRequestApi(),
     });
   }
 
@@ -1355,6 +1386,11 @@ class UnityChat {
       // Změnu dostanou všichni diváci naráz → refetch rozprostřít do 0–3 s (backend volá Židolištu z jedné IP).
       if (type === 'soundboard-change') { clearTimeout(this._sfxRefetchTimer); this._sfxRefetchTimer = setTimeout(() => this._loadSoundboard(), Math.random() * 3000); }
       else this._sfx?.onSse(type, d);
+    };
+    this.nicknames.onSfxRequest = (d) => {
+      if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
+      this._ucLog('SfxReq', `SSE ${d?.requestId} → ${d?.status}`);
+      this._sfx?.onSfxRequest(d);
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
