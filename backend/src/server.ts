@@ -12,7 +12,7 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
-import { ucSends, markUc, ucReplies, attachUcReply } from './lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from './lib/ucSends.js';
 import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
@@ -150,6 +150,8 @@ const linkFilter = createLinkFilter({
     accessSync: (q) => gifAccessSync(q, { log: app.log }),
     tryReserve: (channel, platform, userId) => gifFlow.tryReserve(channel, platform, userId),
     intercept: (p) => gifFlow.intercept(p),
+    reviewRequested: (m) => gifReviews.requested(m),
+    lateReview: (m) => gifReviews.lateRequested(m),
   },
 });
 

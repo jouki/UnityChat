@@ -4,11 +4,11 @@ import { db } from '../db/index.js';
 import { messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
-import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply, gifReviews } from '../lib/ucSends.js';
 import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
-import { gifFromRaw, type GifMediaView } from '../lib/gifIds.js';
+import { gifFromRaw, gifReplaces, type GifMediaView } from '../lib/gifIds.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -47,6 +47,8 @@ export interface ClientMessage {
   segments?: unknown[];
   /** Schválený GIF (moderace část 4): syntetická zpráva `gif-<id>`, médium z našeho serveru. */
   gif?: GifMediaView;
+  /** Schválený GIF nahrazuje původní zprávu (`<platform>:<messageId>`, smazanou s gif_request) na jejím místě. */
+  replaces?: string;
 }
 
 /**
@@ -83,7 +85,11 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
   const out = toClientContent(row, historical);
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
-  if (gif) out.gif = gif;
+  if (gif) {
+    out.gif = gif;
+    const rep = gifReplaces(row.contentRaw);
+    if (rep) out.replaces = rep;
+  }
   return out;
 }
 
@@ -218,7 +224,7 @@ export default async function chatRoutes(app: FastifyInstance) {
    * (lib/ucSends.ts) a klienti dostanou SSE `uc-mark` → zlaté logo. Jen commandy.
    */
   // Jen přihlášený a jen za vlastní účet (dřív bez ověření → podvržené citace, 2026-09-25).
-  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string; replyTo?: unknown } }>('/chat/uc-sent', { preHandler: requireWebSession }, async (req, reply) => {
+  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string; replyTo?: unknown; gifReview?: boolean } }>('/chat/uc-sent', { preHandler: requireWebSession }, async (req, reply) => {
     if (!ucLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const platform = String(req.body?.platform || '');
     const channel = String(req.body?.channel || '').toLowerCase().replace(/^@/, '');
@@ -234,8 +240,11 @@ export default async function chatRoutes(app: FastifyInstance) {
       return reply.code(403).send({ ok: false, error: 'not_owner' });
     }
     const ucReply = await verifyUcReply(parseUcReply(req.body?.replyTo));
-    if (!isCmd && !ucReply) return reply.code(400).send({ ok: false, error: 'bad_request' });
+    // GIF od moda v Dev módu (záložní odesílání přes kartu): schvalovat jako od diváka (lib/ucSends.ts gifReviews).
+    const gifReview = req.body?.gifReview === true;
+    if (!isCmd && !ucReply && !gifReview) return reply.code(400).send({ ok: false, error: 'bad_request' });
     const ch = await platformChannel(platform, channel);
+    if (gifReview) gifReviews.report({ platform, channel: ch, username, text });
     let hit = null;
     if (isCmd) {
       hit = ucSends.report({ platform, channel: ch, username, text });

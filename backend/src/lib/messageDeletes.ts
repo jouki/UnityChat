@@ -10,7 +10,8 @@ import { publishModIntegration } from '../sse/integrationStream.js';
 import type { Platform } from './zidolista.js';
 import { normPlatformChannel } from './ucChannel.js';
 
-export type DeleteReason = 'mod' | 'platform' | 'link_filter' | 'gif_request';
+// gif_rejected: původní zpráva zamítnutého / propadlého GIFu (dřív gif_request, lib/gifRequests.ts GIF_REJECTED_REASON).
+export type DeleteReason = 'mod' | 'platform' | 'link_filter' | 'gif_request' | 'gif_rejected';
 
 /**
  * Po každém smazání (i duplicitním) — odměna GIF (část 4) si tu označí smazaný schválený GIF (`gif-…`).

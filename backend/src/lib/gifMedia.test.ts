@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve, dirname } from 'node:path';
 import {
   classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia,
   resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, type Transport, type TransportResponse, type LookupAll,
@@ -166,4 +169,21 @@ test('resolveGif: stránka bez og médií → no_media; HTTP chyba → http_<sta
   const t = fakeTransport({ 'https://giphy.com/gifs/a-1': { headers: { 'content-type': 'text/html' }, body: Buffer.from('<title>x</title>') } });
   await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/a-1', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'no_media');
   await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/b-2', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'http_404');
+});
+
+// Klient (bublina cooldownu) rozpoznává GIF odkazy kopií v extension/core/gif-links.js — musí dát stejný výsledek.
+test('gifCandidate / classifyGifUrl: core/gif-links.js = backend (vědomá kopie)', async () => {
+  const corePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../extension/core/gif-links.js');
+  if (!existsSync(corePath)) return; // Docker image (jen backend/)
+  const core = (await import(pathToFileURL(corePath).href)) as { gifCandidate: typeof gifCandidate; classifyGifUrl: typeof classifyGifUrl; hasGifLink: (t: string) => boolean };
+  const texts = [
+    'koukni tohle: https://tenor.com/view/cat-gif-1. lol', 'ahoj neco.cz/x a giphy.com/gifs/abc-1', 'ahoj seznam.cz', 'bez odkazu', '',
+    'https://media1.tenor.com/m/abc/cat.gif', 'i.imgur.com/AbCdE12.gifv', 'https://7tv.app/emotes/01F7JCJ0D80007RBBSW6MHGEVC', 'neco.cz/video.mp4',
+    'https://neco.cz/obrazek.png', 'https://imgur.com/gallery/AbCdE12', '(https://giphy.com/gifs/x-1)', 'ftp://neco.cz/a.gif', 'www.tenor.com/cs/view/a-1',
+    'https://tenor.com/search/cat', 'mail@tenor.com', 'https://media3.giphy.com/media/abc/giphy.gif!', '🔥https://i.giphy.com/abc.webp',
+  ];
+  for (const t of texts) {
+    assert.deepEqual(core.gifCandidate(t), gifCandidate(t), t);
+    assert.equal(core.hasGifLink(t), gifCandidate(t) !== null, t);
+  }
 });

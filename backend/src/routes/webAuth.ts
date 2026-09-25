@@ -17,7 +17,7 @@ import {
 import { outgoingText, SendError } from '../lib/webSend.js';
 import { sendAsAccount, sendUcReply } from '../lib/accountSend.js';
 import { pendingWarnings } from '../lib/accountWarnings.js';
-import { ucSends, markUc, ucReplies, attachUcReply } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -44,6 +44,8 @@ const SendBody = z.object({
   replyToUser: z.string().max(60).optional().nullable(),
   /** Odpověď napříč platformami (UnityChat): na kterou zprávu se odpovídá — server ji spáruje s echem. */
   ucReplyTo: z.object({ platform: z.string(), id: z.string(), username: z.string().optional(), message: z.string().optional(), authorUc: z.boolean().optional() }).optional().nullable(),
+  /** GIF od moda schvalovat jako od diváka (Dev mód v UnityChatu, lib/ucSends.ts gifReviews). */
+  gifReview: z.boolean().optional(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';
@@ -182,6 +184,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
         replyTo: body.data.replyTo, replyToUser: body.data.replyToUser,
         ingest: opts.ingest, log: req.log,
         beforeSend: async (ident) => {
+          // Před odesláním: echo z ingestu už hlášení najde (linkFilter → gifReviews.requested).
+          if (body.data.gifReview) gifReviews.report({ platform, channel: await platformChannel(platform, channel), userId: ident.platformUserId, text });
           if (!ucReply) return;
           const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident.platformUserId, text, data: ucReply });
           if (rh) attachUcReply(rh, ucReply, req.log, { late: true });

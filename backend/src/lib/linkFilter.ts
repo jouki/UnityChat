@@ -283,6 +283,10 @@ export interface GifHook {
   tryReserve: (channel: string, platform: string, userId: string) => boolean;
   /** Převod + žádost na pozadí (lib/gifRequests.ts createGifFlow().intercept). */
   intercept: (p: GifInterceptParams) => Promise<unknown>;
+  /** Mod z UnityChatu v Dev módu nahlásil „schvalovat jako divák" před zprávou (lib/ucSends.ts gifReviews). */
+  reviewRequested?: (m: IngestMessage) => boolean;
+  /** Totéž, ale hlášení přišlo až po zprávě (ověří se po stažení média). */
+  lateReview?: (m: IngestMessage) => boolean;
 }
 
 export interface LinkVerdict { host: string; channel: string; gif?: boolean }
@@ -339,6 +343,15 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const candidate = (gif.candidate ?? gifCandidate)(m.content);
     if (!candidate) return null;
     const query: GifAccessQuery = { workspace: ws.slug, platform: m.platform, userId: m.platformUserId, login: m.username.toLowerCase(), role: highestRole(roles) };
+    // Mod / broadcaster (badge zprávy, stejný zdroj jako ostatní moderace): schváleno rovnou, bez Židolišty a cooldownu.
+    // Výjimka: zpráva z UnityChatu v Dev módu (gifReview) jde jako od diváka — hlášení před zprávou tady, po ní v interceptu.
+    if ((roles.isMod || roles.isBroadcaster) && !gif.reviewRequested?.(m)) {
+      if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
+      m.deleted = { by: 'filter', reason: 'gif_request' };
+      const lateReview = gif.lateReview ? () => gif.lateReview!(m) : undefined;
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct: host ? () => act(m, ucChannel, host) : null, linkBlocked, auto: true, lateReview }).catch(() => {});
+      return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
+    }
     const access = gif.accessSync(query);
     if (access === 'denied' || !gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
     const filterAct = host ? () => act(m, ucChannel, host) : null;

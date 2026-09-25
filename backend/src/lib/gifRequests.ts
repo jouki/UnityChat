@@ -12,6 +12,10 @@
 //       zamítnuto → médium pryč, nic veřejně;
 //     obojí → `gif-decided` modům + odesílateli.
 //   Propadnutí: pending po expires_at → expired + `gif-decided` (status expired), médium pryč.
+//   UX 2026-09-25: původní zprávu (gif_request) klienti nevykreslují; schválený GIF `gif-<id>` nese čas původní
+//   zprávy a `replaces: <platform>:<messageId>` (nahradí ji na místě); zamítnutí/propadnutí → důvod přeznačen
+//   na gif_rejected + SSE message-deleted (běžně smazaná zpráva). Mod / broadcaster (badge) → `auto`: schváleno
+//   hned bez Židolišty, bez cooldownu (gif-used se nevolá) a bez karet; Dev mód v UC (gifReview) = jako divák.
 //   Převod selže → zpráva se bere jako běžný odkaz (filtr ji smaže, nebo se v UC obnoví, když by ji filtr pustil).
 // Nic tady nesmí shodit ingest. NIKDY nelogovat tokeny.
 import { randomBytes, createHash } from 'node:crypto';
@@ -60,12 +64,29 @@ export function pendingView(r: GifRequest): GifPendingView {
   };
 }
 
-/** Řádek schválené žádosti → syntetická zpráva archivu (messages). Id `gif-<requestId>`, čas = schválení. */
-export function approvedMessageRow(r: GifRequest, at: Date) {
+/**
+ * Důvod smazání původní zprávy po zamítnutí / propadnutí žádosti (UX 2026-09-25): `gif_request` klienti
+ * nevykreslují vůbec (odesílatel má kartu „čeká na schválení", po schválení zprávu nahradí GIF), po
+ * zamítnutí se z ní stane běžně smazaná zpráva. Vlastní důvod (ne `mod`), ať audit ukáže, že šlo o GIF,
+ * a mod ji v UnityChatu neodkryje (POST /moderation/restore → 409 not_restorable).
+ */
+export const GIF_REJECTED_REASON = 'gif_rejected' as const;
+
+/** Čas původní zprávy (meta.sentAt, ms) — schválený GIF ji nahradí na jejím místě; starší žádosti bez něj = vznik žádosti. */
+export function originalSentAt(r: Pick<GifRequest, 'meta' | 'createdAt'>): Date {
+  const v = Number(((r.meta || {}) as Record<string, unknown>).sentAt);
+  return Number.isFinite(v) && v > 0 ? new Date(v) : r.createdAt;
+}
+
+/**
+ * Řádek schválené žádosti → syntetická zpráva archivu (messages). Id `gif-<requestId>`, čas = čas PŮVODNÍ
+ * zprávy (nahrazuje ji na jejím místě, `replaces: <platform>:<messageId>`); `_at` (čas schválení) se nepoužívá.
+ */
+export function approvedMessageRow(r: GifRequest, _at?: Date) {
   const meta = (r.meta || {}) as Record<string, unknown>;
   const text = r.textWithoutLink;
   const contentRaw: Record<string, unknown> = {
-    gif: { mediaId: r.mediaId, kind: r.kind, width: r.width, height: r.height, requestId: r.id },
+    gif: { mediaId: r.mediaId, kind: r.kind, width: r.width, height: r.height, requestId: r.id, replaces: `${r.platform}:${r.messageId}` },
     ...(meta.color ? { color: meta.color } : {}),
     ...(meta.badges !== undefined ? { badges: meta.badges } : {}),
   };
@@ -82,7 +103,7 @@ export function approvedMessageRow(r: GifRequest, at: Date) {
     isUnitychatUser: false,
     isReply: false,
     replyToMessageId: null,
-    sentAt: at,
+    sentAt: originalSentAt(r),
   };
 }
 
@@ -287,6 +308,16 @@ export interface GifInterceptParams {
   filterAct: (() => Promise<void>) | null;
   /** Filtr odkazů by host zablokoval → token se vyřadí i z textu nad GIFem. Chybí = ponechat ostatní odkazy. */
   linkBlocked?: (host: string) => boolean;
+  /**
+   * Mod / broadcaster (badge zprávy): GIF se schválí rovnou (`by` = on sám), bez přístupu ze Židolišty,
+   * bez cooldownu (gif-used se nevolá) a bez karty ke schválení.
+   */
+  auto?: boolean;
+  /**
+   * Klient nahlásil „schvalovat jako divák" (Dev mód, lib/ucSends.ts gifReviews) až po echu zprávy
+   * (/chat/uc-sent). Ověří se po stažení média; true → z auto se stane běžná žádost.
+   */
+  lateReview?: () => boolean;
 }
 
 /**
@@ -306,15 +337,69 @@ export function createGifFlow(deps: GifFlowDeps) {
     try { await fn(); } catch (e) { deps.log.warn({ err: (e as Error).message }, `gif: ${what} selhalo`); }
   };
 
-  const decided = async (r: GifRequest, status: GifStatus, by: string | null) => {
+  const decided = async (r: GifRequest, status: GifStatus, by: string | null, opts: { quiet?: boolean } = {}) => {
     closed.add(r.id);
     if (closed.size > 2000) closed.delete(closed.values().next().value!);
     const k = userKey(r.channel, r.platform, r.userId);
     if (pending.get(k) === r.id) pending.delete(k);
+    // Zamítnuto / propadlo: původní zpráva (v UC dosud nevykreslená, gif_request) → běžně smazaná.
+    if (status === 'rejected' || status === 'expired') await rejectOriginal(r, status === 'rejected' ? by : null);
+    // Auto-schválení modem: nikdo žádost neviděl (gif-pending ani gif.pending nešlo) → ani rozhodnutí neohlašovat.
+    if (opts.quiet) return;
     const ev = { requestId: r.id, channel: r.channel, approved: status === 'approved', status, by };
     await safe('gif-decided', () => deps.notify(r, 'gif-decided', ev));
     await safe('integrace gif.decided', async () => deps.integration({ type: 'gif.decided', workspace: r.workspace, requestId: r.id, platform: r.platform, userId: r.userId, login: r.login, status, by }));
   };
+
+  /** Původní zpráva: gif_request → gif_rejected v archivu + SSE message-deleted (klienti ji ukážou jako smazanou). */
+  const rejectOriginal = async (r: GifRequest, by: string | null) => {
+    await safe('přeznačení původní zprávy na gif_rejected', () => deps.store.retagDeleted(r.platform as Platform, r.messageId, 'gif_request', GIF_REJECTED_REASON));
+    await safe('message-deleted gif_rejected', async () => deps.broadcast('message-deleted', { channel: r.channel, platform: r.platform, messageId: r.messageId, by: by ?? 'filter', reason: GIF_REJECTED_REASON, at: deps.now() }));
+  };
+
+  /**
+   * Rozhodnutí (mod přes routu, nebo auto-schválení modova GIFu). První vyhrává: podmíněný UPDATE; pozdější → 409.
+   * `auto`: bez gif-used (mod nemá cooldown) a bez gif-decided / gif.decided (žádost nikdo neviděl).
+   */
+  const decideCore = async (p: { requestId: number; approve: boolean; by: string; accountId: number | null; auto?: boolean }): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const at = new Date(deps.now());
+    const r = await deps.store.decide(p.requestId, p.approve ? 'approved' : 'rejected', p.by, at);
+    if (!r) {
+      const cur = await deps.store.get(p.requestId);
+      if (!cur) return { status: 404, body: { ok: false, error: 'not_found' } };
+      return { status: 409, body: { ok: false, error: 'already_decided', status: cur.status === 'pending' ? 'expired' : cur.status } };
+    }
+    const status: GifStatus = p.approve ? 'approved' : 'rejected';
+    let published = true;
+    if (p.approve) {
+      // Cooldown hned (gifUsed ho nastaví lokálně synchronně, před voláním Židolišty), ne až po rozeslání.
+      // Auto (mod / broadcaster): cooldown se neuplatňuje → gif-used se nevolá.
+      const usedP = p.auto ? Promise.resolve() : Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
+        .catch((e) => deps.log.warn({ err: (e as Error).message }, 'gif: gif-used selhalo'));
+      // Zpráva jde ven jen když je v archivu (jinak by po reloadu zmizela) — jeden opakovaný pokus.
+      let msg: ClientMessage | null = null;
+      for (let attempt = 0; attempt < 2 && !msg; attempt++) {
+        try { msg = await deps.store.insertApprovedMessage(r, at); }
+        catch (e) { deps.log.warn({ requestId: r.id, attempt: attempt + 1, err: (e as Error).message }, 'gif: zápis schválené zprávy do archivu selhal'); }
+      }
+      if (msg) {
+        if (r.mediaId) await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
+        deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
+        await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg!));
+      } else {
+        published = false;
+        deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán');
+      }
+      await usedP;
+    } else if (r.mediaId) {
+      await safe('smazání média', async () => { await deps.store.deleteMedia(r.mediaId!); deps.mediaDeleted?.(r.mediaId!); });
+    }
+    await decided(r, status, p.by, { quiet: p.auto });
+    await safe('moderation_actions', async () => deps.recordAction?.({ channel: r.channel, accountId: p.accountId, actor: p.by, action: p.approve ? 'gif_approve' : 'gif_reject', platform: r.platform, targetLogin: r.login, targetMessageId: r.messageId, params: { requestId: r.id, ...(p.auto ? { auto: true } : {}) }, result: { status } }));
+    return { status: 200, body: { ok: true, requestId: r.id, status, ...(published ? {} : { published: false }) } };
+  };
+  const approveCore = (requestId: number, by: string, accountId: number | null, opts: { auto?: boolean } = {}) =>
+    decideCore({ requestId, approve: true, by, accountId, auto: opts.auto });
 
   return {
     /** Synchronně (onLive): smí uživatel založit žádost? Rezervuje místo (jedna žádost na uživatele současně). */
@@ -326,8 +411,9 @@ export function createGifFlow(deps: GifFlowDeps) {
     },
 
     /** Převod + žádost na pozadí. Vrací výsledek (log/testy); nikdy nevyhodí. */
-    async intercept(p: GifInterceptParams): Promise<'requested' | 'denied' | 'failed' | 'cancelled'> {
+    async intercept(p: GifInterceptParams): Promise<'requested' | 'approved' | 'denied' | 'failed' | 'cancelled'> {
       const { m } = p;
+      let auto = !!p.auto;
       const k = userKey(p.ucChannel, m.platform, m.platformUserId);
       busy.add(k);
       try {
@@ -341,6 +427,11 @@ export function createGifFlow(deps: GifFlowDeps) {
           deps.resolve(p.candidate).then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, code: e instanceof GifError ? e.code : 'exception' })),
           deps.sleep(FLUSH_WAIT_MS),
         ]);
+        // Mod z UnityChatu v Dev módu (hlášení došlo po echu) → schvalování jako divák.
+        if (auto && p.lateReview?.()) {
+          auto = false;
+          deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: mod v Dev módu → žádost ke schválení (pozdní hlášení)');
+        }
         let created: GifRequest | null = null;
         if (res.ok && p.preDeleted === 'link_filter') {
           // Zprávu smazal filtr; mezitím ji mohl obnovit permit (deleted_reason zrušen) → žádost nevytvářet.
@@ -357,14 +448,15 @@ export function createGifFlow(deps: GifFlowDeps) {
           try {
             mediaId = await deps.store.saveMedia(res.v);
             const raw = (m.contentRaw || {}) as Record<string, unknown>;
-            // requestTtlSec z odpovědi Židolišty (z cache, už načtená); chybí → 300 s.
-            const access = await deps.access(p.query).catch(() => null);
+            // requestTtlSec z odpovědi Židolišty (z cache, už načtená); chybí → 300 s. Auto (mod) Židolištu nepotřebuje.
+            const access = auto ? null : await deps.access(p.query).catch(() => null);
             created = await deps.store.insertRequest({
               channel: p.ucChannel, workspace: p.workspace, platform: m.platform, platformChannel: m.channel,
               userId: m.platformUserId, login: m.username.toLowerCase(), messageId: m.platformMessageId,
               textWithoutLink: textWithoutLink(m.content, p.candidate.token, p.linkBlocked), mediaId, kind: res.v.kind,
               width: res.v.width, height: res.v.height,
-              meta: { displayName: m.username, ...(raw.color ? { color: raw.color } : {}), ...(raw.badges !== undefined ? { badges: raw.badges } : {}) },
+              // sentAt: schválený GIF nahradí původní zprávu na jejím místě (approvedMessageRow).
+              meta: { displayName: m.username, sentAt: m.sentAt.getTime(), ...(raw.color ? { color: raw.color } : {}), ...(raw.badges !== undefined ? { badges: raw.badges } : {}), ...(auto ? { auto: true } : {}) },
               expiresAt: new Date(deps.now() + (access?.requestTtlSec ?? 300) * 1000),
             });
             // Zámek uživatele hned po vzniku žádosti (ne až po mazání na platformě) — a jen když ji mezitím
@@ -405,6 +497,14 @@ export function createGifFlow(deps: GifFlowDeps) {
           deps.log.info({ channel: p.ucChannel, platform: m.platform, result }, 'gif: původní zpráva smazána');
         }
 
+        if (auto) {
+          // Mod / broadcaster: schválit hned (stejná cesta jako decide approve), bez cooldownu a bez karet.
+          const by = `${m.platform}:${m.username.toLowerCase()}`;
+          const out = await approveCore(created.id, by, null, { auto: true });
+          deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id, status: out.status }, 'gif: mod → schváleno rovnou');
+          return out.status === 200 ? 'approved' : 'requested';
+        }
+
         const view = pendingView(created);
         // Rozhodnuto dřív, než jsme stihli ohlásit (mod ji viděl v GET /moderation/gif/pending) → gif-pending neposílat,
         // gif-decided už odešlo.
@@ -425,41 +525,8 @@ export function createGifFlow(deps: GifFlowDeps) {
     /**
      * Rozhodnutí moda (mod už ověřený routou). První vyhrává: podmíněný UPDATE; pozdější → 409 already_decided.
      */
-    async decide(p: { requestId: number; approve: boolean; by: string; accountId: number | null }): Promise<{ status: number; body: Record<string, unknown> }> {
-      const at = new Date(deps.now());
-      const r = await deps.store.decide(p.requestId, p.approve ? 'approved' : 'rejected', p.by, at);
-      if (!r) {
-        const cur = await deps.store.get(p.requestId);
-        if (!cur) return { status: 404, body: { ok: false, error: 'not_found' } };
-        return { status: 409, body: { ok: false, error: 'already_decided', status: cur.status === 'pending' ? 'expired' : cur.status } };
-      }
-      const status: GifStatus = p.approve ? 'approved' : 'rejected';
-      let published = true;
-      if (p.approve) {
-        // Cooldown hned (gifUsed ho nastaví lokálně synchronně, před voláním Židolišty), ne až po rozeslání.
-        const usedP = Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
-          .catch((e) => deps.log.warn({ err: (e as Error).message }, 'gif: gif-used selhalo'));
-        // Zpráva jde ven jen když je v archivu (jinak by po reloadu zmizela) — jeden opakovaný pokus.
-        let msg: ClientMessage | null = null;
-        for (let attempt = 0; attempt < 2 && !msg; attempt++) {
-          try { msg = await deps.store.insertApprovedMessage(r, at); }
-          catch (e) { deps.log.warn({ requestId: r.id, attempt: attempt + 1, err: (e as Error).message }, 'gif: zápis schválené zprávy do archivu selhal'); }
-        }
-        if (msg) {
-          if (r.mediaId) await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
-          deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
-          await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg!));
-        } else {
-          published = false;
-          deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán');
-        }
-        await usedP;
-      } else if (r.mediaId) {
-        await safe('smazání média', async () => { await deps.store.deleteMedia(r.mediaId!); deps.mediaDeleted?.(r.mediaId!); });
-      }
-      await decided(r, status, p.by);
-      await safe('moderation_actions', async () => deps.recordAction?.({ channel: r.channel, accountId: p.accountId, actor: p.by, action: p.approve ? 'gif_approve' : 'gif_reject', platform: r.platform, targetLogin: r.login, targetMessageId: r.messageId, params: { requestId: r.id }, result: { status } }));
-      return { status: 200, body: { ok: true, requestId: r.id, status, ...(published ? {} : { published: false }) } };
+    decide(p: { requestId: number; approve: boolean; by: string; accountId: number | null }): Promise<{ status: number; body: Record<string, unknown> }> {
+      return decideCore(p);
     },
 
     /** Propadlé žádosti → expired, médium pryč, gif-decided (status expired). Vrací počet. */

@@ -22,3 +22,10 @@ export function gifFromRaw(raw: unknown): GifMediaView | null {
   const dim = (v: unknown): number | null => (typeof v === 'number' && v > 0 ? v : null);
   return { url: gifMediaUrl(g.mediaId), kind: String(g.kind || 'gif'), width: dim(g.width), height: dim(g.height) };
 }
+
+/** content_raw.gif.replaces (`<platform>:<messageId>` původní zprávy) → řetězec, jinak null. */
+export function gifReplaces(raw: unknown): string | null {
+  const g = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).gif : null) as Record<string, unknown> | null | undefined;
+  const v = g && typeof g.replaces === 'string' ? g.replaces : '';
+  return /^(twitch|kick|youtube):[^\s]{1,200}$/.test(v) ? v : null;
+}

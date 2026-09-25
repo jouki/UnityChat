@@ -469,7 +469,7 @@ docker exec -i <postgres> psql -U postgres -d unitychat < backend/sql/2026-09-25
 ```
 Tabulky `gif_media` (id = 32 hex, `bytes` bytea ≤ 10 MB, kind, content_type, size, sha256, width, height) a
 `gif_requests` (id, channel = UC kanál, workspace, platform, platform_channel, user_id, login, message_id původní
-zprávy, text_without_link, media_id, kind, width, height, meta `{displayName, color, badges}`, status
+zprávy, text_without_link, media_id, kind, width, height, meta `{displayName, sentAt, color, badges, auto?}`, status
 `pending|approved|rejected|expired|deleted`, decided_by, decided_at, created_at, expires_at); indexy `(status, expires_at)`,
 `(channel, created_at)`, `(media_id)`.
 **Úložiště = DB (bytea):** kontejner backendu nemá trvalý svazek; zamítnuté a propadlé médium se maže hned,
@@ -551,19 +551,63 @@ načte **před** rozesláním `gif-message`. Zamítnuté, propadlé i smazané m
 
 ### Po schválení — všem
 - Archiv: syntetická zpráva `messages` s `platform_message_id = "gif-<requestId>"` (platforma a autor původní
-  zprávy, `channel` = platformní kanál, čas = schválení, `content` = text bez odkazu, `content_raw.gif`).
-  `/chat/history` ji vrací běžně, zpráva má navíc `gif: { url, kind, width, height }`.
+  zprávy, `channel` = platformní kanál, **čas = čas původní zprávy** (`meta.sentAt` žádosti; starší žádosti bez něj =
+  vznik žádosti), `content` = text bez odkazu, `content_raw.gif` včetně `replaces`).
+  `/chat/history` ji vrací běžně, zpráva má navíc `gif: { url, kind, width, height }` a
+  **`replaces: "<platform>:<messageId>"`** původní zprávy (UX 2026-09-25) — klient jí nahradí uzel původní zprávy
+  na jejím místě (když ho nemá, vloží GIF podle času).
 - SSE `/nicknames/stream`:
 ```
 event: gif-message
 data: { "channel": "robdiesalot", "requestId": 12,
         "message": { "platform": "twitch", "id": "gif-12", "username": "Divak", "userId": "42", "message": "hele lol",
                      "timestamp": 1790000100000, "historical": false, "color": "#ff0000", "badgesRaw": "subscriber/1",
-                     "gif": { "url": "https://api.jouki.cz/media/gif/<id>", "kind": "mp4", "width": 498, "height": 280 } } }
+                     "gif": { "url": "https://api.jouki.cz/media/gif/<id>", "kind": "mp4", "width": 498, "height": 280 },
+                     "replaces": "twitch:abc" } }
 ```
   Stejná zpráva jde i do `/chat/stream` (`event: message`) — klient, který poslouchá oba, deduplikuje podle
   `platform:id` (ChatStore). Pak `gif-used` do Židolišty (cooldown).
 - Zobrazení: 100 %, max šířka chatu, max 400 × 250 px, poměr zachován.
+
+### Původní zpráva v klientech (UX 2026-09-25)
+- Smazaná s `deleted_reason: 'gif_request'` (čeká na schválení / schválená) se v UnityChatu **nevykresluje vůbec**
+  (divák ani mod, v chatu ani v Profilu; addon třída `uc-gif-held`, core `isGifHeldReason`). Odesílatel má kartu
+  „GIF čeká na schválení“. Ozvěna smazání z platformy (`reason: 'platform'`, bot ji smazal) ji neodkryje
+  (core `gifHeldAfter`). SSE `message-deleted gif_request`, které předběhne zprávu z vlastního spojení (IRC), se
+  pamatuje a zpráva se rovnou vykreslí schovaná.
+- **Schváleno** → `gif-message` s `replaces` (viz výš); původní řádek zůstává `gif_request` (schovaný navždy).
+- **Zamítnuto / propadlo** → důvod se v archivu přeznačí `gif_request → gif_rejected` a jde SSE
+  `message-deleted { channel, platform, messageId, by: <mod>|"filter", reason: "gif_rejected", at }` → klienti ji
+  ukážou jako **běžně smazanou**. Zvolen vlastní důvod (ne `mod`): audit ukáže, že šlo o GIF, a mod ji v UnityChatu
+  neodkryje (`POST /moderation/restore` → `409 not_restorable`, v klientu bez oka). Historie dává stejný výsledek.
+
+### Mod / broadcaster (UX 2026-09-25)
+- GIF od moda / broadcastera (role z badge zprávy, stejný zdroj jako ostatní moderace) se **schválí rovnou** při
+  zachycení: zpráva se hned schová (`gif_request`), médium se stáhne, žádost vznikne a projde stejnou cestou jako
+  `decide` approve s `by = "<platform>:<login>"` (on sám), audit `gif_approve` s `params.auto: true`. **Mod má vždy
+  povoleno** (Židolišta `gif-access` se neptá, odměnu nepotřebuje) a **cooldown se neuplatňuje** (`gif-used` se
+  nevolá). Nikdo nic neschvaluje → `gif-pending`, `gif.pending`, `gif-decided` ani `gif.decided` se neposílají.
+  Převod selže → zpráva se v UC obnoví (`message-restored`, mod filtr nemá).
+- **Výjimka Dev mód:** mod, který píše z UnityChatu se zapnutým Dev módem, jde přes schvalování jako divák (testování).
+  Klient pošle `gifReview: true` v `POST /chat/send` (server nahlásí před odesláním) nebo v `POST /chat/uc-sent`
+  (záložní cesta přes kartu, po odeslání); backend páruje s echem jako `ucSends` / `ucReplies`
+  (`lib/ucSends.ts` `gifReviews`: platforma, kanál, odesílatel, text do 20 s). Hlášení před zprávou → běžná GIF cesta
+  (přístup ze Židolišty s rolí moda, cooldown); hlášení po zprávě → zjistí se po stažení média a z auto se stane
+  běžná žádost (bez ověření přístupu — mod má vždy povoleno), cooldown po schválení platí.
+- Mod píšící přímo na platformě (mimo UC) = vždy auto.
+
+### Bublina cooldownu (klient, UX 2026-09-25)
+`GET /gif/state?channel=&platform=&review=1` (Bearer, rate limit 10 + 1/s per účet, `no-store`) — stav odměny pro
+**vlastní** identitu účtu na platformě, kam uživatel píše (`platform`, jinak první propojená):
+`{ ok, allowed, cooldownUntil|null, cooldownSec, serverNow }` (+ `mod: true` = mod bez Dev módu: povoleno, bez
+cooldownu). Čas `cooldownUntil` je čas serveru, klient přepočte přes `serverNow`. Zdroj = stejný jako zachycení
+(`chatRole` z archivu, `gifAccess` cache 60 s + lokální cooldown po schválení). `review=1` = Dev mód moda (jako divák).
+Klient (core `gif-links.js` = kopie detektoru `lib/gifMedia.ts`, shodu hlídá `gifMedia.test.ts`; core
+`gif-cooldown.js` `GifCooldown`): GIF odkaz v poli (input/paste) → dotaz (cache do konce cooldownu, jinak 60 s);
+běžící cooldown → bublina nad polem s kolečkem `.uc-qd-ring` (QR dono) a sekundami, odpočet, po doběhnutí zmizí.
+Odeslání GIFu během cooldownu se zablokuje (text zůstane, okraj pole červený, bublina červeně „Můžeš až za:“).
+Po odeslání GIFu se cooldown nastaví lokálně z `cooldownSec`; vlastní `gif-decided` rejected/expired ho zruší,
+approved ho obnoví od teď.
 
 ### Smazání schváleného GIFu (část 1)
 `POST /moderation/delete { platform, messageId: "gif-12" }` (i Chat Log Židolišty) funguje beze změny: SSE
