@@ -247,12 +247,14 @@ vlastní rate limit per účet **5 + 2/s** (429 `rate_limited`), `Cache-Control:
 Cíl musí mít zprávu v archivu **aktuálního** kanálu (`resolveUserTargets`) — jinak `404 not_found`
 (mod kanálu A si nevyhledá libovolné userId). Identity = cíl + všechny identity jeho UC účtu (i na platformách,
 které kanál nemá). Zprávy = `messages`, kde `(platform, platform_user_id)` ∈ identity
-(index `messages_platform_user_sent_idx`, SQL `backend/sql/2026-09-25-user-history-index.sql`).
+(index `messages_platform_user_sent_idx` na `(platform, platform_user_id, sent_at DESC) INCLUDE (channel)`,
+SQL `backend/sql/2026-09-25-user-history-index.sql`; stránka zpráv = UNION ALL s LIMIT per identita).
+Záložky (identity + počty po kanálech) se cachují per (účet moda, kanál, cíl) 10 s; summary je vždy přepočítá.
 Kanál záložky = UC kanál (Twitch login streamera): Kick/YouTube kanál → registr Židolišty (Twitch kanál workspace),
 jinak adresář `streamers`, jinak platformní kanál sám.
 
 ### `GET /moderation/user-history/summary?channel=&platform=&userId=&login=`
-`login` jen pro čitelnost (server bere login z archivu).
+`login` jen do logu serveru (moderation user-history); login cíle se bere z archivu.
 ```json
 { "ok": true,
   "user": { "platform": "twitch", "userId": "1", "login": "spammer", "displayName": "SpAmMeR",

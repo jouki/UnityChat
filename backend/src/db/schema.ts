@@ -78,8 +78,9 @@ export const messages = pgTable(
     channelSentIdx: index('messages_channel_sent_idx').on(t.channel, t.sentAt),
     platformUsernameIdx: index('messages_platform_username_idx').on(t.platform, t.platformUsername),
     userIdIdx: index('messages_user_id_idx').on(t.userId),
-    // Chat historie uživatele (lib/userHistory.ts) — ručně sql/2026-09-25-user-history-index.sql.
-    platformUserSentIdx: index('messages_platform_user_sent_idx').on(t.platform, t.platformUserId, t.sentAt),
+    // Chat historie uživatele (lib/userHistory.ts) — ručně sql/2026-09-25-user-history-index.sql
+    // (tam navíc INCLUDE (channel), které Drizzle neumí popsat; tabulky se spravují ručním SQL).
+    platformUserSentIdx: index('messages_platform_user_sent_idx').on(t.platform, t.platformUserId, t.sentAt.desc()),
   }),
 );
 

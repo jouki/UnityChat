@@ -10,6 +10,7 @@
 // Bezpečnost: cíl MUSÍ mít zprávu v archivu aktuálního kanálu (resolveUserTargets, stejně jako
 // timeout/ban) — mod kanálu A si tak nevyhledá libovolné userId z celého archivu.
 import { and, desc, eq, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { unionAll } from 'drizzle-orm/pg-core';
 import { db } from '../db/index.js';
 import { messages, moderationActions, nicknames, type Message } from '../db/schema.js';
 import { encodeCursor, type decodeCursor } from './cursor.js';
@@ -80,20 +81,63 @@ export async function mergeChannels(groups: ChannelGroup[], current: string, ucC
   return { channels: [tab(current, byUc.get(current) ?? []), ...others], byUc };
 }
 
-export interface SummaryInput { channel: string; platform: Platform; userId: string }
+/** `accountId` = účet moda (klíč cache záložek). */
+export interface SummaryInput { accountId: number; channel: string; platform: Platform; userId: string }
 
-export async function buildSummary(input: SummaryInput, deps: HistoryDeps): Promise<Out> {
+/** Cíl + identity + skupiny kanálů + mapování na záložky — to, co summary i každá stránka zpráv potřebují. */
+export interface HistoryTabs { targets: ResolvedTargets; ids: UserTarget[]; groups: ChannelGroup[]; channels: HistoryChannel[]; byUc: Map<string, ChannelGroup[]> }
+
+export const HISTORY_TABS_TTL_MS = 10_000;
+const TABS_CACHE_MAX = 1000;
+
+/**
+ * Krátká cache záložek per (účet moda, kanál, cíl): scroll zpráv dělá stránku za stránkou a GROUP BY
+ * přes všechny zprávy uživatele + převod kanálů by se jinak opakoval u každé. Summary ji vždy obnoví.
+ */
+export class HistoryTabsCache {
+  private map = new Map<string, { at: number; value: HistoryTabs }>();
+  constructor(private readonly ttlMs = HISTORY_TABS_TTL_MS, private readonly now: () => number = Date.now) {}
+  static key(i: SummaryInput): string { return `${i.accountId}|${i.channel}|${i.platform}|${i.userId}`; }
+  get(i: SummaryInput): HistoryTabs | null {
+    const hit = this.map.get(HistoryTabsCache.key(i));
+    if (!hit) return null;
+    if (this.now() - hit.at > this.ttlMs) { this.map.delete(HistoryTabsCache.key(i)); return null; }
+    return hit.value;
+  }
+  set(i: SummaryInput, value: HistoryTabs): void {
+    if (this.map.size >= TABS_CACHE_MAX) this.map.clear();
+    this.map.set(HistoryTabsCache.key(i), { at: this.now(), value });
+  }
+}
+
+async function computeTabs(input: SummaryInput, deps: HistoryDeps): Promise<HistoryTabs | null> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
-  if (!targets) return { status: 404, body: { ok: false, error: 'not_found' } };
+  if (!targets) return null;
   const ids = await historyIdentities(targets, deps);
-  const [groups, name, moderation] = await Promise.all([
-    deps.channelGroups(ids),
+  const groups = await deps.channelGroups(ids);
+  const { channels, byUc } = await mergeChannels(groups, input.channel, deps.ucChannelOf);
+  return { targets, ids, groups, channels, byUc };
+}
+
+/** Záložky z cache (≤ 10 s), jinak spočítat a uložit; `fresh` = vždy spočítat (summary). */
+export async function historyTabs(input: SummaryInput, deps: HistoryDeps, cache: HistoryTabsCache | null, { fresh = false } = {}): Promise<HistoryTabs | null> {
+  const hit = !fresh && cache ? cache.get(input) : null;
+  if (hit) return hit;
+  const tabs = await computeTabs(input, deps);
+  if (tabs && cache) cache.set(input, tabs);
+  return tabs;
+}
+
+export async function buildSummary(input: SummaryInput, deps: HistoryDeps, cache: HistoryTabsCache | null = null): Promise<Out> {
+  const tabs = await historyTabs(input, deps, cache, { fresh: true });
+  if (!tabs) return { status: 404, body: { ok: false, error: 'not_found' } };
+  const { targets, ids, groups, channels } = tabs;
+  const [name, moderation] = await Promise.all([
     deps.latestName(targets.primary.platform, targets.primary.userId),
     deps.moderation(input.channel, ids, HISTORY_MODERATION_LIMIT),
   ]);
   let nick: { nickname: string; color: string | null } | null = null;
   for (const i of [targets.primary, ...ids]) { nick = await deps.nickname(i.platform, i.login); if (nick) break; }
-  const { channels } = await mergeChannels(groups, input.channel, deps.ucChannelOf);
   const all = groups.filter((g) => g.count > 0);
   return {
     status: 200,
@@ -120,11 +164,10 @@ export async function buildSummary(input: SummaryInput, deps: HistoryDeps): Prom
 export interface MessagesInput extends SummaryInput { inChannel: string; cursor: Cursor | null; limit: number }
 
 /** Stránka zpráv v záložce `inChannel`: jako /chat/history — nejstarší → nejnovější, `nextBefore` = starší stránka. */
-export async function buildMessages(input: MessagesInput, deps: HistoryDeps): Promise<Out> {
-  const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
-  if (!targets) return { status: 404, body: { ok: false, error: 'not_found' } };
-  const ids = await historyIdentities(targets, deps);
-  const { byUc } = await mergeChannels(await deps.channelGroups(ids), input.channel, deps.ucChannelOf);
+export async function buildMessages(input: MessagesInput, deps: HistoryDeps, cache: HistoryTabsCache | null = null): Promise<Out> {
+  const tabs = await historyTabs(input, deps, cache);
+  if (!tabs) return { status: 404, body: { ok: false, error: 'not_found' } };
+  const { ids, byUc } = tabs;
   const groups = byUc.get(input.inChannel) ?? [];
   const scope = ids
     .map((i) => ({ platform: i.platform, userId: i.userId, channels: [...new Set(groups.filter((g) => g.platform === i.platform).map((g) => g.channel))] }))
@@ -210,13 +253,25 @@ async function dbModeration(channel: string, ids: UserTarget[], limit: number): 
   return rows.map(toModItem);
 }
 
+/**
+ * Víc identit = UNION ALL: každá identita má vlastní dotaz s LIMIT (index (platform, platform_user_id,
+ * sent_at DESC) se projde jen o stránku), teprve výsledek se seřadí a ořízne. OR přes identity by
+ * plánovač musel řadit všechny zprávy uživatele.
+ */
 async function dbMessagesPage(scope: Array<{ platform: Platform; userId: string; channels: string[] }>, cursor: Cursor | null, limit: number): Promise<Message[]> {
-  const conds: SQL[] = [or(...scope.map((s) => and(eq(messages.platform, s.platform), eq(messages.platformUserId, s.userId), inArray(messages.channel, s.channels))!))!];
-  if (cursor) {
-    const at = new Date(cursor.sentAtMs);
-    conds.push(or(lt(messages.sentAt, at), and(eq(messages.sentAt, at), lt(messages.id, cursor.id)))!);
-  }
-  return db.select().from(messages).where(and(...conds)).orderBy(desc(messages.sentAt), desc(messages.id)).limit(limit + 1);
+  const n = limit + 1;
+  const one = (s: { platform: Platform; userId: string; channels: string[] }) => {
+    const conds: SQL[] = [eq(messages.platform, s.platform), eq(messages.platformUserId, s.userId), inArray(messages.channel, s.channels)];
+    if (cursor) {
+      const at = new Date(cursor.sentAtMs);
+      conds.push(or(lt(messages.sentAt, at), and(eq(messages.sentAt, at), lt(messages.id, cursor.id)))!);
+    }
+    return db.select().from(messages).where(and(...conds)).orderBy(desc(messages.sentAt), desc(messages.id)).limit(n);
+  };
+  if (!scope.length) return [];
+  if (scope.length === 1) return one(scope[0]);
+  const [a, b, ...rest] = scope.map(one);
+  return unionAll(a, b, ...rest).orderBy(desc(messages.sentAt), desc(messages.id)).limit(n);
 }
 
 export const dbHistoryDeps = (resolveTargets: HistoryDeps['resolveTargets'], accountIdentities: HistoryDeps['accountIdentities']): HistoryDeps => ({

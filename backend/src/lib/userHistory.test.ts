@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, buildMessages, historyIdentities, mergeChannels, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
+import { buildSummary, buildMessages, HistoryTabsCache, historyIdentities, mergeChannels, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
 import type { Message } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
 
@@ -61,9 +61,9 @@ test('mergeChannels: aktuální kanál první i s 0, ostatní jen s count>0 od p
 
 test('buildSummary: 404 bez zprávy v archivu kanálu; jinak identity, záložky, přezdívka z propojené identity, moderace aktuálního kanálu', async () => {
   const dd = deps();
-  assert.equal((await buildSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '999' }, dd)).status, 404);
-  assert.equal((await buildSummary({ channel: 'arcadebulls', platform: 'twitch', userId: '1' }, dd)).status, 404, 'cizí kanál moda');
-  const out = await buildSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, dd);
+  assert.equal((await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '999' }, dd)).status, 404);
+  assert.equal((await buildSummary({ accountId: 1, channel: 'arcadebulls', platform: 'twitch', userId: '1' }, dd)).status, 404, 'cizí kanál moda');
+  const out = await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, dd);
   assert.equal(out.status, 200);
   const b = out.body as { user: Record<string, unknown>; channels: Array<{ channel: string }>; moderation: unknown[] };
   assert.equal(b.user.displayName, 'SpAmMeR');
@@ -81,7 +81,7 @@ test('buildSummary: 404 bez zprávy v archivu kanálu; jinak identity, záložky
 
 test('buildMessages: rozsah jen platformní kanály záložky, pořadí nejstarší → nejnovější, smazaná bez obsahu, nextBefore', async () => {
   const dd = deps();
-  const out = await buildMessages({ channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 2 }, dd);
+  const out = await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 2 }, dd);
   assert.equal(out.status, 200);
   const scope = (dd.calls.messagesPage[0] as { scope: Array<{ platform: string; channels: string[] }> }).scope;
   assert.deepEqual(scope.map((s) => `${s.platform}:${s.channels.join('|')}`), ['twitch:robdiesalot', 'kick:robdiesalot-kick']);
@@ -94,14 +94,36 @@ test('buildMessages: rozsah jen platformní kanály záložky, pořadí nejstar�
 
 test('buildMessages: záložka jiného kanálu → jen jeho kanály; kanál bez zpráv → prázdno bez dotazu', async () => {
   const dd = deps();
-  await buildMessages({ channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'tensterakdary', cursor: { sentAtMs: 5, id: 3 }, limit: 50 }, dd);
+  await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'tensterakdary', cursor: { sentAtMs: 5, id: 3 }, limit: 50 }, dd);
   const call = dd.calls.messagesPage[0] as { scope: Array<{ platform: string; userId: string; channels: string[] }>; cursor: unknown };
   assert.deepEqual(call.scope, [{ platform: 'youtube', userId: 'UCx', channels: ['@tensterakdary'] }]);
   assert.deepEqual(call.cursor, { sentAtMs: 5, id: 3 });
-  const empty = await buildMessages({ channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'nula', cursor: null, limit: 50 }, dd);
+  const empty = await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'nula', cursor: null, limit: 50 }, dd);
   assert.deepEqual(empty.body, { ok: true, messages: [], nextBefore: null });
   assert.equal(dd.calls.messagesPage.length, 1);
-  assert.equal((await buildMessages({ channel: 'robdiesalot', platform: 'kick', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd)).status, 404);
+  assert.equal((await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'kick', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd)).status, 404);
+});
+
+test('HistoryTabsCache: stránky zpráv do 10 s bez nového GROUP BY; summary vždy obnoví; klíč = účet + cíl', async () => {
+  let t = 0;
+  const cache = new HistoryTabsCache(10_000, () => t);
+  let groupsCalls = 0;
+  const dd = deps();
+  const orig = dd.channelGroups;
+  dd.channelGroups = async (ids) => { groupsCalls++; return orig(ids); };
+  const inp = { accountId: 1, channel: 'robdiesalot', platform: 'twitch' as const, userId: '1' };
+  await buildSummary(inp, dd, cache);
+  assert.equal(groupsCalls, 1);
+  await buildMessages({ ...inp, inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd, cache);
+  await buildMessages({ ...inp, inChannel: 'arcadebulls', cursor: null, limit: 50 }, dd, cache);
+  assert.equal(groupsCalls, 1, 'stránky berou záložky z cache');
+  await buildMessages({ ...inp, accountId: 2, inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd, cache);
+  assert.equal(groupsCalls, 2, 'jiný mod = jiný klíč');
+  await buildSummary(inp, dd, cache);
+  assert.equal(groupsCalls, 3, 'summary počítá znovu');
+  t = 10_001;
+  await buildMessages({ ...inp, inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd, cache);
+  assert.equal(groupsCalls, 4, 'po TTL znovu');
 });
 
 test('clampHistoryLimit / toModItem', () => {
@@ -136,6 +158,9 @@ test('DB: skupiny kanálů, stránka zpráv a moderace přes identity (platform,
     assert.deepEqual(groups.map((g) => `${g.channel}:${g.count}`).sort(), ['__test_uh__:1', '__test_uh_jiny__:1'], 'Kick se stejným id je jiný člověk');
     const page = await dd.messagesPage([{ platform: 'twitch', userId: `${pre}u`, channels: [ch] }], null, 10);
     assert.deepEqual(page.map((r) => r.platformMessageId), [`${pre}-1`]);
+    // Víc identit = UNION ALL s LIMIT per identita, pak společné řazení a ořez.
+    const both = await dd.messagesPage([{ platform: 'twitch', userId: `${pre}u`, channels: [ch, '__test_uh_jiny__'] }, { platform: 'kick', userId: `${pre}u`, channels: [ch] }], null, 2);
+    assert.deepEqual(both.map((r) => r.platformMessageId), [`${pre}-3`, `${pre}-2`, `${pre}-1`], 'limit+1 řádků, od nejnovější');
     const mod = await dd.moderation(ch, ids, 20);
     assert.equal(mod[0]?.params.durationSec, 60);
     assert.equal((await dd.moderation(ch, [{ platform: 'kick', userId: `${pre}u`, login: 'a' }], 20)).length, 0);

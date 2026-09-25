@@ -44,7 +44,7 @@ import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
 import { decodeCursor } from '../lib/cursor.js';
-import { buildSummary, buildMessages, clampHistoryLimit, dbHistoryDeps } from '../lib/userHistory.js';
+import { buildSummary, buildMessages, clampHistoryLimit, dbHistoryDeps, HistoryTabsCache } from '../lib/userHistory.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
 import { config } from '../config.js';
 
@@ -171,7 +171,7 @@ export const UserHistoryQuery = z.object({
   channel: z.string().min(1).max(40).optional(),
   platform: PlatformEnum,
   userId: UserIdField,
-  /** Jen pro čitelnost logu — server bere login z archivu. */
+  /** Klientův login cíle — jen do logu (moderation user-history); server bere login z archivu. */
   login: z.string().max(60).optional(),
 });
 
@@ -249,6 +249,7 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
 
   // ---- Chat historie (nabídka moda): vlastní limit, čtení je levnější než akce, ale scroll dělá víc dotazů ----
   const historyLimiter = new RateLimiter(5, 2);
+  const historyTabs = new HistoryTabsCache();
   const historyDeps = dbHistoryDeps((channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets), accountIdentities);
   const historyGate = async (req: FastifyRequest, reply: FastifyReply, rawChannel: string | undefined): Promise<Gate | null> => {
     if (!historyLimiter.allow(String(req.webAccountId!))) { reply.code(429).send({ ok: false, error: 'rate_limited' }); return null; }
@@ -261,7 +262,8 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
     const g = await historyGate(req, reply, q.data.channel);
     if (!g) return reply;
-    const out = await buildSummary({ channel: g.channel, platform: q.data.platform, userId: q.data.userId }, historyDeps);
+    req.log.info({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId, login: q.data.login ?? null }, 'moderation user-history');
+    const out = await buildSummary({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId }, historyDeps, historyTabs);
     return reply.code(out.status).send(out.body);
   });
 
@@ -275,7 +277,7 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (!g) return reply;
     const inChannel = parseInChannel(q.data.inChannel, g.channel);
     if (!inChannel) return reply.code(400).send({ ok: false, error: 'in_channel' });
-    const out = await buildMessages({ channel: g.channel, platform: q.data.platform, userId: q.data.userId, inChannel, cursor, limit: clampHistoryLimit(q.data.limit) }, historyDeps);
+    const out = await buildMessages({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId, inChannel, cursor, limit: clampHistoryLimit(q.data.limit) }, historyDeps, historyTabs);
     return reply.code(out.status).send(out.body);
   });
 
