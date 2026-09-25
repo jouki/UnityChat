@@ -176,6 +176,11 @@ body.uc-can-moderate .msg-action-btn[data-act="restore"]:hover { color: #7fd0ff;
 .uc-mm-item--danger { color: #ff9a9d; }
 .uc-mm-back { color: var(--text-secondary, #adadb8); font-size: 12px; border-bottom: 1px solid var(--border, #2f2f35); border-radius: 5px 5px 0 0; margin-bottom: 2px; }
 .uc-mm-arrow { color: var(--text-secondary, #adadb8); }
+/* Ikona akce vlevo od názvu (nabídka moda). */
+.uc-mm-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; margin-right: -4px; opacity: 0.85; }
+.uc-mm-icon svg { display: block; }
+.uc-mm-label { flex: 1; min-width: 0; }
+.uc-mm-item:hover .uc-mm-icon, .uc-mm-item:focus-visible .uc-mm-icon { opacity: 1; }
 
 /* ---- Dialogy moderace (přejmenování, varování, potvrzení banu) + okno varování účtu ---- */
 .uc-mod-shade {

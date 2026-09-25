@@ -7,7 +7,7 @@
 // (addon `_ucApi`, web stejný tvar). Cizí text (jméno, přezdívka, důvod) jen přes textContent.
 // Žádné chrome.*, žádné globální stavy.
 
-import { fmtDuration } from './moderation.js';
+import { fmtDuration, MOD_ACTION_ICONS } from './moderation.js';
 import { PLATFORM_NAMES } from './soundboard.js';
 
 export const TIMEOUT_OPTIONS = [5, 30, 60, 300, 600, 1800, 3600, 7200];
@@ -521,7 +521,17 @@ export class ModMenu {
       b.dataset.id = it.id;
       if (it.disabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); b.title = 'Uživatele nejde určit (chybí jeho ID na platformě).'; }
       else if (it.title) b.title = it.title;
+      // Ikona akce vlevo (jen hlavní položky; konstantní SVG z core/moderation.js).
+      const iconSvg = this._view === 'root' ? MOD_ACTION_ICONS[it.id] : null;
+      if (iconSvg) {
+        const ic = doc.createElement('span');
+        ic.className = 'uc-mm-icon';
+        ic.setAttribute('aria-hidden', 'true');
+        ic.innerHTML = iconSvg;
+        b.appendChild(ic);
+      }
       const label = doc.createElement('span');
+      label.className = 'uc-mm-label';
       label.textContent = it.label;
       b.appendChild(label);
       if (it.sub) {

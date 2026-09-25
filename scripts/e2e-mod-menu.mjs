@@ -203,6 +203,7 @@ check('A hlavička: jméno + platforma', /Tester/.test(head || '') && /Twitch/.t
 await until(`!!document.querySelector('.uc-mod-menu')`, 1000);
 const items = await menuItems();
 check('A položky nabídky (Profil první)', JSON.stringify(items) === JSON.stringify(['Profil', 'Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Varovat…', 'Permit']), JSON.stringify(items));
+check('A každá hlavní položka má ikonu vlevo', await ev(`[...document.querySelectorAll('.uc-mod-menu .uc-mm-list > .uc-mm-item')].every(b => b.firstElementChild?.classList.contains('uc-mm-icon') && !!b.querySelector('.uc-mm-icon svg'))`) === true);
 check('A fokus na první položce (Profil)', await ev(`document.activeElement?.dataset?.id === 'history'`) === true);
 await key('ArrowDown');
 check('A šipka dolů → Smazat zprávu', await ev(`document.activeElement?.dataset?.id === 'delete'`) === true);

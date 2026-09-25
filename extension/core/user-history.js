@@ -11,7 +11,7 @@
 // chatu pro vykreslení (tělo zprávy, badge, citace odpovědi, barva jména) — panel nemá vlastní kopie.
 // Cizí text (jména, důvody, zprávy donů) jen přes textContent. Žádné chrome.*, žádné globální stavy.
 
-import { fmtDuration, deletedView, applyDeleted, applyModTag, modTagText, EYE_ICON_SVG, RESTORE_TITLE } from './moderation.js';
+import { fmtDuration, deletedView, applyDeleted, applyModTag, modTagText, RESTORE_TITLE, MOD_ACTION_ICONS } from './moderation.js';
 import { PLATFORM_NAMES } from './soundboard.js';
 import { escapeHtml } from './html.js';
 import { modErrorText, openModDialog, PLATFORM_LOC } from './mod-menu.js';
@@ -196,13 +196,9 @@ export function messageTarget(m, t) {
   return { channel: t.channel, platform: m.platform, userId: m.userId != null ? String(m.userId) : null, login: m.username || t.login, displayName: m.username || t.displayName || t.login, messageId: m.id != null ? String(m.id) : null };
 }
 
-const ICONS = {
-  delete: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>',
-  timeout: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>',
-  ban: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
-  permit: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>',
-  restore: EYE_ICON_SVG.replace(/width="14" height="14"/, 'width="13" height="13"'),
-};
+// Ikony akcí u zpráv v Profilu = stejné jako v nabídce moda (core/moderation.js), jen o pixel menší.
+const ICONS = Object.fromEntries(['delete', 'timeout', 'ban', 'permit', 'restore']
+  .map((k) => [k, MOD_ACTION_ICONS[k].replace(/width="14" height="14"/, 'width="13" height="13"')]));
 const ACTION_TITLES = { delete: 'Smazat zprávu', restore: RESTORE_TITLE, timeout: 'Timeout…', ban: 'Zabanovat…', permit: 'Permit…' };
 
 const toNode = (doc, v) => {

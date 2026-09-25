@@ -30,6 +30,23 @@ export const EYE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fil
   + '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 export const RESTORE_TITLE = 'Odkrýt zprávu (jen v UnityChatu)';
 
+const ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+/**
+ * Ikony akcí moda (14×14, stroke currentColor) — jeden zdroj pro nabídku moda (mod-menu.js) i ikony
+ * u zpráv v Profilu (user-history.js). Jen konstantní SVG, žádná data (bezpečné do innerHTML).
+ */
+export const MOD_ACTION_ICONS = {
+  history: ICON_SVG + '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>',
+  delete: ICON_SVG + '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>',
+  restore: EYE_ICON_SVG,
+  timeout: ICON_SVG + '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>',
+  ban: ICON_SVG + '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
+  unban: ICON_SVG + '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>',
+  rename: ICON_SVG + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>',
+  warn: ICON_SVG + '<path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+  permit: ICON_SVG + '<path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>',
+};
+
 /**
  * Vzhled smazané/skryté zprávy pro daného diváka.
  * @param {{style?: string, isMod?: boolean, raw?: boolean, hidden?: boolean}} opts
