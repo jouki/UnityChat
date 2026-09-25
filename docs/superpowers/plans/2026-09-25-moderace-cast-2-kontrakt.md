@@ -239,3 +239,45 @@ obnoví zprávu smazanou filtrem odkazů (SSE `message-restored`, integrační `
 Odpověď jako UC `/moderation/permit`: `{ ok, until, results: { permit, chat, restore? }, restored? }`;
 uživatel mimo kanál workspace → `200 { ok:true, result:'not_found' }`; chyby 400 body / bad_login,
 404 unknown_workspace | no_channel, 429 rate_limited.
+
+## Chat historie (nabídka moda, 2026-09-25)
+Položka „Chat historie“ v nabídce moda otevře panel s detailem uživatele (`extension/core/user-history.js`).
+Obě routy: Bearer (`requireWebSession`) + mod aktuálního `channel` (`modGate`, stejně jako akce části 2),
+vlastní rate limit per účet **5 + 2/s** (429 `rate_limited`), `Cache-Control: no-store`.
+Cíl musí mít zprávu v archivu **aktuálního** kanálu (`resolveUserTargets`) — jinak `404 not_found`
+(mod kanálu A si nevyhledá libovolné userId). Identity = cíl + všechny identity jeho UC účtu (i na platformách,
+které kanál nemá). Zprávy = `messages`, kde `(platform, platform_user_id)` ∈ identity
+(index `messages_platform_user_sent_idx`, SQL `backend/sql/2026-09-25-user-history-index.sql`).
+Kanál záložky = UC kanál (Twitch login streamera): Kick/YouTube kanál → registr Židolišty (Twitch kanál workspace),
+jinak adresář `streamers`, jinak platformní kanál sám.
+
+### `GET /moderation/user-history/summary?channel=&platform=&userId=&login=`
+`login` jen pro čitelnost (server bere login z archivu).
+```json
+{ "ok": true,
+  "user": { "platform": "twitch", "userId": "1", "login": "spammer", "displayName": "SpAmMeR",
+            "nickname": "Pan S", "color": "#ff0000",
+            "identities": [{ "platform": "twitch", "login": "spammer", "userId": "1" }, { "platform": "kick", "login": "spammer", "userId": "7" }],
+            "firstSeen": 1790000000000, "lastSeen": 1790500000000, "total": 11 },
+  "channels": [{ "channel": "robdiesalot", "count": 7, "firstAt": 1790000000000, "lastAt": 1790500000000 },
+               { "channel": "arcadebulls", "count": 3, "firstAt": 1790100000000, "lastAt": 1790200000000 }],
+  "moderation": [{ "action": "timeout", "at": 1790400000000, "by": "twitch:modik", "platform": "twitch",
+                   "params": { "durationSec": 600, "reason": "spam" } }] }
+```
+- `channels`: aktuální kanál **vždy první** (i s `count: 0`, pak `firstAt/lastAt: null`), další jen s `count > 0`,
+  seřazené od posledně aktivního. `firstSeen/lastSeen/total` = přes všechny kanály (ms).
+- `moderation`: posledních 20 z `moderation_actions` v **aktuálním** kanálu, akce `timeout|ban|unban|warn|permit|rename`
+  (shoda `params.userId` + platforma akce, nebo `params.targets` obsahuje identitu). `params` jen `durationSec`,
+  `reason`, u `rename` `nickname` (null = smazaná přezdívka). Mazání zpráv (`delete`) se neuvádí.
+- `nickname`/`color` = přezdívka UnityChatu první identity, která ji má (cíl má přednost).
+
+### `GET /moderation/user-history/messages?channel=&platform=&userId=&inChannel=&before=&limit=`
+`inChannel` = záložka (UC kanál, výchozí aktuální; smí být jiný), `limit` 1–100 (výchozí 50), `before` = kurzor
+`<sent_at_ms>:<id>` jako `/chat/history`.
+```json
+{ "ok": true, "messages": [ "/* tvar /chat/history (toClientMessage), historical: true */" ], "nextBefore": "1790000000000:123" }
+```
+Pořadí **stejné jako `/chat/history`**: v rámci stránky nejstarší → nejnovější, `nextBefore` = další (starší) stránka,
+`null` = konec. Smazané / skryté zprávy jdou bez obsahu (`deleted: true` / `hidden: true`) — konzistentní s chatem.
+Záložka, kde uživatel nic nenapsal → `{ ok: true, messages: [], nextBefore: null }`.
+Chyby: 400 `query` | `before` | `in_channel` | `channel`, 403 `not_mod`, 404 `not_found`, 429 `rate_limited`.

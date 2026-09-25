@@ -10,6 +10,8 @@
 //   POST /moderation/permit { channel, platform, userId, durationSec, messageId? }   (messageId: obnovení zprávy smazané filtrem odkazů, část 3)
 //   PUT  /moderation/nickname { channel, platform, login, nickname|null, color? }
 //   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
+//   GET  /moderation/user-history/summary?channel&platform&userId            (Chat historie: identity, záložky kanálů, moderace)
+//   GET  /moderation/user-history/messages?channel&platform&userId&inChannel&before&limit
 //   Kontrakt: docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md
 //
 // Kdo smí mazat: účet, jehož NĚKTERÁ propojená identita je mod/broadcaster kanálu na SVÉ
@@ -41,6 +43,9 @@ import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
+import { decodeCursor } from '../lib/cursor.js';
+import { buildSummary, buildMessages, clampHistoryLimit, dbHistoryDeps } from '../lib/userHistory.js';
+import { accountIdentities } from '../lib/moderationTargets.js';
 import { config } from '../config.js';
 
 const CHANNEL_RE = /^[a-z0-9_]{2,25}$/;
@@ -162,6 +167,27 @@ export const UserStateQuery = z.object({
   userId: UserIdField,
 });
 
+export const UserHistoryQuery = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  userId: UserIdField,
+  /** Jen pro čitelnost logu — server bere login z archivu. */
+  login: z.string().max(60).optional(),
+});
+
+/** Záložka Chat historie: UC kanál, nebo nenamapovaný Kick slug / YouTube handle (i '-' a '.'). */
+export function parseInChannel(raw: string | undefined, fallback: string): string | null {
+  const c = (raw || fallback).trim().toLowerCase().replace(/^@/, '');
+  return /^[a-z0-9_.-]{1,60}$/.test(c) ? c : null;
+}
+
+export const UserHistoryMessagesQuery = UserHistoryQuery.extend({
+  /** Záložka (UC kanál); výchozí = aktuální kanál. */
+  inChannel: z.string().min(1).max(61).optional(),
+  before: z.string().max(40).optional(),
+  limit: z.string().max(4).optional(),
+});
+
 export type Gate = { channel: string; accountId: number; by: string; modPlatforms: Platform[]; isBroadcaster: boolean };
 
 /**
@@ -220,6 +246,38 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     now: Date.now,
     log: app.log,
   };
+
+  // ---- Chat historie (nabídka moda): vlastní limit, čtení je levnější než akce, ale scroll dělá víc dotazů ----
+  const historyLimiter = new RateLimiter(5, 2);
+  const historyDeps = dbHistoryDeps((channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets), accountIdentities);
+  const historyGate = async (req: FastifyRequest, reply: FastifyReply, rawChannel: string | undefined): Promise<Gate | null> => {
+    if (!historyLimiter.allow(String(req.webAccountId!))) { reply.code(429).send({ ok: false, error: 'rate_limited' }); return null; }
+    return modGate(req, reply, rawChannel, false);
+  };
+
+  app.get('/moderation/user-history/summary', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const q = UserHistoryQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
+    const g = await historyGate(req, reply, q.data.channel);
+    if (!g) return reply;
+    const out = await buildSummary({ channel: g.channel, platform: q.data.platform, userId: q.data.userId }, historyDeps);
+    return reply.code(out.status).send(out.body);
+  });
+
+  app.get('/moderation/user-history/messages', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const q = UserHistoryMessagesQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
+    const cursor = q.data.before ? decodeCursor(q.data.before) : null;
+    if (q.data.before && !cursor) return reply.code(400).send({ ok: false, error: 'before' });
+    const g = await historyGate(req, reply, q.data.channel);
+    if (!g) return reply;
+    const inChannel = parseInChannel(q.data.inChannel, g.channel);
+    if (!inChannel) return reply.code(400).send({ ok: false, error: 'in_channel' });
+    const out = await buildMessages({ channel: g.channel, platform: q.data.platform, userId: q.data.userId, inChannel, cursor, limit: clampHistoryLimit(q.data.limit) }, historyDeps);
+    return reply.code(out.status).send(out.body);
+  });
 
   app.get<{ Querystring: { channel?: string } }>('/moderation/me', { preHandler: requireWebSession }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
