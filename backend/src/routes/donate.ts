@@ -130,7 +130,8 @@ export default async function donateRoutes(app: FastifyInstance) {
     // Z loginů platforem se e-mail nečte (Twitch Developer Agreement VI.C, spec „Identita“).
     const email = (await verifiedEmail(req.webAccountId!)) ?? (givenEmail ? normEmail(givenEmail) : '');
     if (!EMAIL_RE.test(email)) return reply.code(400).send({ ok: false, error: 'email_required' });
-    const body = { ...rest, email };
+    // Ověřený dárce (platforma + login z účtu UnityChatu) — Židolišta ho ukáže u daru (pokyn usera 2026-09-25).
+    const body = { ...rest, email, ucPlatform: ident.platform, ucLogin: ident.login };
     try {
       const u = await upstream(req, `/donate/public/${encodeURIComponent(slug)}/intents`, { method: 'POST', body });
       req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken }, 'donate: intent');
