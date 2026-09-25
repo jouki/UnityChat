@@ -1,4 +1,4 @@
-# UnityChat - Chrome Extension + Backend v3.40.28
+# UnityChat - Chrome Extension + Backend v3.41.0
 
 > **Infra & deploy runbook**: see `SERVER.md` (local-only, in `.gitignore`) for Hetzner VPS details, Coolify operations, jouki.cz DNS, GitHub deploy key, login credentials, common tasks, and gotchas. Start there if you need to touch anything on the live server. If `SERVER.md` is missing on a fresh clone, ask the user for it or reconstruct from memory.
 
@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.40.22** (dev i master; release PR #27 2026-09-24)
+- Aktuální: **v3.41.0** (dev i master; release PR #29 2026-09-25, CWS + AMO na review)
 
 ## Chrome Web Store (v3.38.58+)
 
