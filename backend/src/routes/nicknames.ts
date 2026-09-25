@@ -5,6 +5,7 @@ import { db } from '../db/index.js';
 import { nicknames } from '../db/schema.js';
 import { addClient, broadcast, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
+import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
@@ -14,6 +15,17 @@ const PutBody = z.object({
   nickname: z.string().min(1).max(30).transform((s) => s.trim()),
   color: z.string().regex(HEX_COLOR).nullable().optional(),
 });
+
+/** Smí účet měnit přezdívku u (platform, username)? Jen vlastní propojená identita
+ *  (dřív bez ověření → kdokoli přepsal přezdívku komukoli, hlášeno 2026-09-25). */
+export function ownsHandle(identities: Pick<PublicIdentity, 'platform' | 'login'>[], platform: string, username: string): boolean {
+  const u = username.trim().replace(/^@/, '').toLowerCase();
+  return identities.some((i) => i.platform === platform && i.login.trim().replace(/^@/, '').toLowerCase() === u);
+}
+
+async function assertOwner(accountId: number, platform: string, username: string): Promise<boolean> {
+  return ownsHandle(await listIdentities(accountId), platform, username);
+}
 
 export default async function nicknameRoutes(app: FastifyInstance) {
   // Bulk fetch all nicknames
@@ -32,7 +44,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
   });
 
   // Set/update nickname (rate-limited per user: 1 change per 5 min)
-  app.put('/nicknames', async (req, reply) => {
+  app.put('/nicknames', { preHandler: requireWebSession }, async (req, reply) => {
     const parsed = PutBody.safeParse(req.body);
     if (!parsed.success) {
       reply.code(400);
@@ -40,6 +52,11 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     const { platform, username, nickname, color } = parsed.data;
+    if (!(await assertOwner(req.webAccountId!, platform, username))) {
+      req.log.warn({ platform, username }, 'nicknames: PUT cizí přezdívky odmítnut');
+      reply.code(403);
+      return { ok: false, error: 'not_owner' };
+    }
     const rateLimitSecs = config.NICKNAME_RATE_LIMIT_SECS;
 
     // Check rate limit via updated_at
@@ -75,7 +92,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
   });
 
   // Delete nickname
-  app.delete('/nicknames', async (req, reply) => {
+  app.delete('/nicknames', { preHandler: requireWebSession }, async (req, reply) => {
     const parsed = z.object({
       platform: z.enum(['twitch', 'youtube', 'kick']),
       username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
@@ -87,6 +104,11 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     const { platform, username } = parsed.data;
+    if (!(await assertOwner(req.webAccountId!, platform, username))) {
+      req.log.warn({ platform, username }, 'nicknames: DELETE cizí přezdívky odmítnut');
+      reply.code(403);
+      return { ok: false, error: 'not_owner' };
+    }
     await db
       .delete(nicknames)
       .where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));

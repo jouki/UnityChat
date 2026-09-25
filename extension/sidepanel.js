@@ -203,12 +203,18 @@ class NicknameManager {
     return null;
   }
 
+  /** Hlavičky zápisu: server přijme změnu jen od přihlášeného majitele účtu (Bearer session). */
+  async _authHeaders() {
+    const token = await this.tokenProvider?.().catch(() => null);
+    return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  }
+
   async save(platform, username, nickname, color) {
     const cleanName = username.replace(/^@/, '');
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await this._authHeaders(),
         body: JSON.stringify({ platform, username: cleanName, nickname, color: color || null }),
       });
       const data = await resp.json();
@@ -227,7 +233,7 @@ class NicknameManager {
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await this._authHeaders(),
         body: JSON.stringify({ platform, username: cleanName }),
       });
       const data = await resp.json();
@@ -1024,6 +1030,8 @@ class UnityChat {
       assetUrl: (p) => chrome.runtime.getURL(p),
     });
     this.nicknames = new NicknameManager();
+    // Zápis přezdívky jen přihlášeným majitelem účtu (server ověřuje Bearer session).
+    this.nicknames.tokenProvider = () => this._ucSessionToken();
     this.twitch = new TwitchProvider({ log: (tag, text) => this._ucLog(tag, text) });
     this.kick = new KickProvider({ log: (tag, text) => this._ucLog(tag, text) });
     this._kickSubBadges = []; // Kick per-channel subscriber badge tiers
@@ -1808,6 +1816,9 @@ class UnityChat {
         }
         if (result.ok) saved++;
         else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
+        // Server bere změnu jen od přihlášeného majitele (platforma bez přihlášení → přeskočit tiše).
+        else if (result.error === 'not_owner') continue;
+        else if (/session/i.test(String(result.error))) lastError = 'Pro změnu přezdívky se přihlas';
         else lastError = result.error;
       }
 
