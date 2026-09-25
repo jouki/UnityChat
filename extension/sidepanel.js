@@ -144,6 +144,10 @@ class NicknameManager {
           try { const d = JSON.parse(e.data); if (this.onModeration) this.onModeration(type, d); } catch {}
         });
       }
+      // Moderace uživatele (timeout / ban / unban z nabídky moda, Židolišty nebo Twitch CLEARCHAT z ingestu).
+      this._eventSource.addEventListener('user-moderated', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUserModerated) this.onUserModerated(d); } catch {}
+      });
       // Soundboard (Židolišta → backend → SSE): změna zvuků/odemčení = refetch, přehrání/odmítnutí = core.
       for (const type of ['soundboard-change', 'soundboard-played', 'soundboard-denied']) {
         this._eventSource.addEventListener(type, (e) => {
@@ -852,6 +856,7 @@ class YouTubeProvider {
         badges,
         timestamp: Math.floor(Number(renderer.timestampUsec) / 1000) || Date.now(), // čas z YouTube (µs → ms)
         id,
+        userId: renderer.authorExternalChannelId || null,   // YouTube channel id (UC…) — moderace podle uživatele
         superChat: isSuperChat
       });
     }
@@ -1427,6 +1432,7 @@ class UnityChat {
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
     this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
+    this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
@@ -2101,6 +2107,7 @@ class UnityChat {
       }
     });
     this.sendBtn.addEventListener('click', () => this._sendMessage());
+    this.msgInput.closest('.msg-input-wrap')?.addEventListener('mousedown', () => { if (this._warnings?.blocked) this._warnings.open(); });
 
     this._updateDisabled();
   }
@@ -3639,6 +3646,7 @@ class UnityChat {
 
     const legacy = this._legacySend();
     if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
+    if (this._warnings?.blocked) { this._ucLog('ModMenu', 'send blokováno — nepotvrzené varování'); this._warnings.open(); return; }
 
     // Send protection (jen stará cesta přes kartu): if the active tab's channel differs from the configured
     // channel for this platform, refuse to send. Auto-switch should normally
@@ -3826,6 +3834,11 @@ class UnityChat {
         await chrome.storage.local.remove('uc_session');
         this._account = null;
         this._afterAccountChange();
+        return;
+      }
+      if (r.status === 403 && j.error === 'warning_pending') {
+        fail('nepotvrzené varování od moderátora');
+        this._loadWarnings();
         return;
       }
       if (!r.ok || j.ok === false) {
@@ -4107,14 +4120,14 @@ class UnityChat {
       case 'mod':
       case 'timeout': {
         const secs = parseInt(text, 10) || 600;
-        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _cleared: `Timeout (${secs >= 60 ? Math.round(secs / 60) + 'm' : secs + 's'})` });
+        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _deleted: true, _modTag: window.UC_CORE.modTagText({ action: 'timeout', durationSec: secs }) });
         break;
       }
       case 'ban':
-        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _cleared: 'Permanently banned' });
+        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _deleted: true, _modTag: window.UC_CORE.modTagText({ action: 'ban' }) });
         break;
       case 'delete':
-        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
+        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _deleted: true });
         break;
       case 'raidbanner': {
         const raider = (text && text !== 'test message') ? text : (this.config.channel || 'Karpo_cz');
@@ -4254,7 +4267,7 @@ class UnityChat {
   _setupProviders() {
     this.twitch.onMessage = (m) => this._addMessage(m);
     this.twitch.onStatus = (s, d) => this._status('twitch', s, d);
-    this.twitch.onClear = (e) => this._applyTwitchClear(e.user, e.banDuration);
+    this.twitch.onClear = (e) => this._applyTwitchClear(e);
     this.twitch.onClearMsg = (e) => this._applyTwitchClearMsg(e.id);
     this.twitch.onRoomId = (id) => {
       this.config._roomId = id;
@@ -4329,35 +4342,16 @@ class UnityChat {
 
   // ---- Mod actions: timeout / ban / single-message delete ---------------
 
-  _fmtBanDuration(seconds) {
-    if (!seconds) return '';
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-    return `${Math.floor(seconds / 86400)}d`;
-  }
-
-  // Mark every Twitch message from `username` as cleared (greyed) with a
-  // small label noting the action. Vanilla Twitch keeps the messages
-  // visible; we mirror that. Also persists into _msgCache so the cleared
-  // state survives reload / scroll-back.
-  _applyTwitchClear(username, banDuration) {
-    if (!username) return;
-    const u = String(username).toLowerCase();
-    const note = banDuration
-      ? `Timeout (${this._fmtBanDuration(banDuration)})`
-      : 'Permanently banned';
-    // DOM
-    const sel = `.msg[data-platform="twitch"] .un[data-username="${CSS.escape(u)}"]`;
-    for (const un of this.chatEl.querySelectorAll(sel)) {
-      const msgEl = un.closest('.msg');
-      if (!msgEl) continue;
-      this._markMessageCleared(msgEl, note);
-    }
-    // Data ve store (uzly mimo okno se vykreslí až po návratu — stav musí sedět)
-    for (const m of this.store.slice()) {
-      if (m.platform === 'twitch' && m.username && m.username.toLowerCase() === u) m._cleared = note;
-    }
+  // Twitch CLEARCHAT z vlastního IRC (timeout/ban odkudkoli) — stejná cesta jako SSE user-moderated
+  // (server tentýž CLEARCHAT z ingestu pošle znovu; aplikace je idempotentní, štítek se nezdvojí).
+  _applyTwitchClear(e) {
+    if (!e?.user) return;
+    const now = Date.now();
+    const n = window.UC_CORE.normalizeUserModerated({
+      platform: 'twitch', userId: e.userId || null, login: e.user,
+      action: e.banDuration ? 'timeout' : 'ban', until: e.banDuration ? now + e.banDuration * 1000 : null, at: now, by: null,
+    });
+    if (n) this._applyUserModerated(n, 'irc');
   }
 
   // Single message delete (CLEARMSG) — stejná cesta jako smazání přes UnityChat (SSE message-deleted).
@@ -4541,40 +4535,91 @@ class UnityChat {
     this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
   }
 
-  // Apply the .cleared class + append (or update) the inline mod-action
-  // note. Idempotent — repeated calls just refresh the label text.
-  _markMessageCleared(msgEl, label) {
-    if (!msgEl) return;
-    msgEl.classList.add('cleared');
-    let note = msgEl.querySelector('.cleared-note');
-    if (!note) {
-      note = document.createElement('span');
-      note.className = 'cleared-note';
-      msgEl.appendChild(note);
-    }
-    note.textContent = label;
+  // ---- Moderace část 2: nabídka na jméno, timeout/ban uživatele, varování účtu ----
 
-    // Retroactively upgrade tag-line from "First message" to "Suspicious" —
-    // a moderated user shouldn't keep the cheerful first-message label.
-    // Preserves higher-priority tags (reply/mention/raid) if already present.
-    const tagLine = msgEl.querySelector('.msg-tag-line');
-    if (tagLine) {
-      const tag = tagLine.querySelector('.msg-tag');
-      if (tag && tag.classList.contains('tag-first')) {
-        tag.classList.remove('tag-first');
-        tag.classList.add('tag-sus');
-        tag.textContent = 'Suspicious';
-      }
-    } else {
-      const newTagLine = document.createElement('div');
-      newTagLine.className = 'msg-tag-line';
-      newTagLine.innerHTML = `<span class="msg-tag tag-sus">Suspicious</span>`;
-      // Insert before message text (.tx) so tag-line appears above content,
-      // matching the initial render order.
-      const tx = msgEl.querySelector('.tx');
-      if (tx) msgEl.insertBefore(newTagLine, tx);
-      else msgEl.appendChild(newTagLine);
+  /** ID autora zprávy na platformě (Twitch user-id, Kick sender id, YouTube channel id). */
+  _msgUserId(msg) {
+    const id = msg?.userId ?? msg?.senderId ?? null;
+    return id != null && id !== '' ? String(id) : null;
+  }
+
+  _modMenu() {
+    if (!this._modMenuInst) {
+      this._modMenuInst = new window.UC_CORE.ModMenu({
+        doc: document,
+        api: (path, opts) => this._ucApi(path, opts),
+        onDelete: (t) => {
+          const el = t.messageId ? this._msgEls(t.messageId, t.platform)[0] : null;
+          if (el) this._deleteMessage(el);
+        },
+        notify: (text, info) => {
+          if (info?.error?.status === 401) { this._sys(text); this._refreshAccount(); return; }
+          if (info?.error?.status === 403 && info.error.error === 'not_mod') this._loadModState();
+          this._sys(text);
+        },
+        log: (tag, text) => this._ucLog(tag, text),
+      });
     }
+    return this._modMenuInst;
+  }
+
+  /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
+  _openModMenu(el, un, x, y) {
+    const id = el.dataset.msgId || null;
+    const msg = id ? this.store.get(id) : null;
+    const platform = el.dataset.platform || msg?.platform;
+    const login = msg?.username || un.dataset.username || '';
+    if (!platform || !login) return;
+    const nick = this.nicknames.get(platform, login);
+    const confirmed = id && !String(id).startsWith('sent-') && !msg?._optimistic;
+    this._modMenu().open({
+      channel: (this.config.channel || '').toLowerCase(),
+      platform,
+      userId: this._msgUserId(msg),
+      login,
+      displayName: un.textContent || login,
+      messageId: confirmed ? id : null,
+      nickname: nick?.nickname || null,
+      color: nick?.color || null,
+    }, { x, y });
+  }
+
+  /** SSE user-moderated z /nicknames/stream. */
+  _onUserModerated(d) {
+    const n = window.UC_CORE.normalizeUserModerated(d, this.config.channel || '');
+    if (!n) { this._ucLog('ModMenu', `user-moderated ignorováno (${d?.channel || '?'} ${d?.platform || '?'}:${d?.userId || '?'})`); return; }
+    this._applyUserModerated(n, 'sse');
+  }
+
+  /**
+   * Timeout / ban: předchozí zprávy uživatele dostanou styl smazaných zpráv (stejné nastavení deletedStyle)
+   * + štítek „Timeout (5 min)" / „Zabanován". Unban štítek sundá, obsah nechá, jak je.
+   * Idempotentní (SSE i vlastní IRC CLEARCHAT → jeden štítek).
+   */
+  _applyUserModerated(n, src) {
+    const core = window.UC_CORE;
+    const unban = n.action === 'unban';
+    const matches = (m) => m && m.platform === n.platform
+      && ((n.userId && this._msgUserId(m) === n.userId) || (n.login && String(m.username || '').toLowerCase().replace(/^@/, '') === n.login));
+    const ids = new Set();
+    for (const m of this.store.slice()) {
+      if (!matches(m)) continue;
+      if (unban) m._modTag = null;
+      else { m._deleted = true; m._modTag = n.tag; }
+      if (m.id != null) ids.add(String(m.id));
+    }
+    let count = 0;
+    for (const el of this._msgNodes()) {
+      const id = el.dataset.msgId;
+      const m = id ? this.store.get(id) : null;
+      const hit = m ? ids.has(String(id))
+        : (el.dataset.platform === n.platform && !!n.login && el.querySelector('.un')?.dataset.username === n.login);
+      if (!hit) continue;
+      if (!unban) this._paintDeleted(el, m || { platform: n.platform, _deleted: true, message: el.querySelector('.tx')?.textContent || '' });
+      core.applyModTag(el, unban ? null : n.tag);
+      count++;
+    }
+    this._ucLog('ModMenu', `user-moderated[${src}] ${n.action} ${n.platform}:${n.userId || '?'} ${n.login || '?'} tag=${n.tag || '-'} by=${n.by || '-'} → ${ids.size} zpráv, ${count} el`);
   }
 
   // ---- Loading overlay ---------------------------------------------------
@@ -4753,6 +4798,7 @@ class UnityChat {
     const ej = await ex.json().catch(() => ({}));
     if (!ex.ok || !ej.token) throw new Error(ej.error || `exchange ${ex.status}`);
     await chrome.storage.local.set({ uc_session: ej.token });
+    this._stopAccountStream();   // stream varování patří k předchozí session
     this._ucLog('Account', `login ok (${platform})`);
     this._refreshAccount();
     return ej.token;
@@ -4771,6 +4817,8 @@ class UnityChat {
       } else if (r.ok) {
         const j = await r.json();
         this._account = { accountId: j.accountId, platforms: j.platforms || {} };
+        // Nepotvrzená varování od moderátora (moderace část 2) — okno + blokace psaní.
+        this._warn().set(j.warnings || []);
       }
       // Jiná chyba (síť, 5xx): nechat poslední známý stav.
     } catch (e) { this._ucLog('Account', `me FAIL ${e.message || e}`); if (this._account === undefined) this._account = null; }
@@ -4795,6 +4843,47 @@ class UnityChat {
     this._updateQrAvailability();
     this._emailSettings?.refresh?.();
     this._loadModState();
+    // Varování účtu: SSE jen pro tento účet (ticket); bez přihlášení pryč.
+    if (this._signedIn) this._startAccountStream();
+    else { this._stopAccountStream(); this._warnings?.clear(); }
+  }
+
+  /** Okno varování od moderátora (core/account-warnings.js), lazy. */
+  _warn() {
+    if (!this._warnings) {
+      this._warnings = new window.UC_CORE.WarningModal({
+        doc: document,
+        onAck: (id) => this._ucApi(`/account/warnings/${encodeURIComponent(id)}/ack`, { method: 'POST' }),
+        onChange: () => this._renderComposer(),
+        log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
+      });
+    }
+    return this._warnings;
+  }
+
+  _startAccountStream() {
+    if (this._accStream) return;
+    this._accStream = window.UC_CORE.connectAccountStream({
+      baseUrl: UC_API,
+      getTicket: async () => (await this._ucApi('/account/stream-ticket', { method: 'POST' })).ticket,
+      onWarning: (w) => this._warn().add(w),
+      onAck: (id) => this._warn().remove(id),
+      log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
+    });
+  }
+
+  _stopAccountStream() {
+    this._accStream?.close();
+    this._accStream = null;
+  }
+
+  /** Nepotvrzená varování znovu ze serveru (po 403 warning_pending z /chat/send). */
+  async _loadWarnings() {
+    try {
+      const j = await this._ucApi('/account/warnings');
+      this._warn().set(j.warnings || []);
+    } catch (e) { this._ucLog('ModMenu', `warnings FAIL ${e.status || 0} ${e.error || e.message || e}`); }
+    this._warn().open();
   }
 
   /** Jméno, pod kterým mě vidí chat platformy: Twitch/Kick display name, YouTube handle (login),
@@ -4843,9 +4932,13 @@ class UnityChat {
     this.sendBtn.classList.toggle('hidden', known && !canWrite);
     cta?.classList.toggle('hidden', !known || canWrite);
     btn?.classList.toggle('hidden', known && !canWrite);
-    this.msgInput.disabled = !canWrite;
-    this.sendBtn.disabled = !canWrite;
-    this.msgInput.placeholder = platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
+    // Nepotvrzené varování od moderátora → psát nejde, dokud ho uživatel nepotvrdí (server blokuje taky).
+    const warned = canWrite && !!this._warnings?.blocked;
+    document.body.classList.toggle('uc-warning-pending', warned);
+    this.msgInput.disabled = !canWrite || warned;
+    this.sendBtn.disabled = !canWrite || warned;
+    this.msgInput.placeholder = warned ? 'Máš nepotvrzené varování od moderátora — potvrď ho, pak můžeš psát.'
+      : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
     if (btn) btn.title = id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
@@ -5375,7 +5468,7 @@ class UnityChat {
       isAction: !!m.isAction,
       scraped: !!m.scraped,
       optimistic: !!m._optimistic,
-      cleared: m._cleared || null,
+      modTag: m._modTag || null,
       msgLen: (m.message || '').length,
       msgPreview: (m.message || '').slice(0, 80),
     }));
@@ -6680,6 +6773,15 @@ class UnityChat {
     this._emotePreviewWired = true;
 
     // Delegated hover-intent over emote <img> inside chat message bodies.
+    // Pravé tlačítko na jméno → nabídka moda (core/mod-menu.js). Divák (ne mod) má nativní menu.
+    this.chatEl.addEventListener('contextmenu', (e) => {
+      const un = e.target?.closest?.('.un');
+      if (!un || !this._canModerate) return;
+      const el = un.closest('.msg');
+      if (!el) return;
+      e.preventDefault();
+      this._openModMenu(el, un, e.clientX, e.clientY);
+    });
     this.chatEl.addEventListener('mouseover', (e) => {
       const img = e.target?.closest?.('.tx .emote');
       if (!img) return;
@@ -6877,7 +6979,7 @@ class UnityChat {
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isMilestone
-      || msg?.isHighlight || msg?._cleared || msg?.isAction;
+      || msg?.isHighlight || msg?.isAction;
     // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
     if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
       this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
@@ -7143,19 +7245,6 @@ class UnityChat {
     if (isRedeem) el.classList.add('redeem');
     if (msg.isHighlight) el.classList.add('highlight');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
-    // Cached message that was cleared (timeout/ban/delete) in a previous
-    // session — re-apply the visual on render. Live clears go through
-    // _markMessageCleared after the message is already in the DOM.
-    if (msg._cleared) {
-      el.classList.add('cleared');
-      const cn = document.createElement('span');
-      cn.className = 'cleared-note';
-      cn.textContent = msg._cleared;
-      // Append at end after the rest of the message renders below.
-      // Defer with microtask so it lands as the last child.
-      Promise.resolve().then(() => el.appendChild(cn));
-    }
-
     // Determine if reply is TO the current user (not just any reply)
     const isReplyToMe = !!(msg.replyTo && replyTarget && myNames.has(replyTarget));
 
@@ -7176,7 +7265,7 @@ class UnityChat {
     // reply/mention/raid > suspicious (sus user OR message was cleared by mod)
     // > first message. Moderation-related flags win over first-message because
     // they're the signal that matters when scanning chat for trouble.
-    const susLike = msg.isSus || !!msg._cleared;
+    const susLike = msg.isSus || !!msg._modTag;
     const tagText =
       isReplyToMe ? 'Replying to you' :
       isMentioned ? 'Mentions you' :
@@ -7399,6 +7488,8 @@ class UnityChat {
 
     // Smazaná / skrytá zpráva (historie, nebo uzel vykreslený znovu z dat ve store).
     if (this._isModerated(msg)) this._paintDeleted(el, msg);
+    // Štítek timeoutu / banu uživatele (SSE user-moderated / CLEARCHAT) u uzlu vykresleného znovu z dat.
+    if (msg._modTag) window.UC_CORE.applyModTag(el, msg._modTag);
 
     // Historie (boot / starší stránka) není „nová zpráva" — bez unread logiky.
     const isHistory = this._bootLoading || !!this._prependCursor;

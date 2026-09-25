@@ -3,7 +3,7 @@
 // přes opts. Tělo 1:1 ze sidepanel.js v3.39.18 (plán web v0.1, Task 3).
 //
 // Callbacky: onMessage(msg), onStatus(state, detail?), onRoomId(id),
-// onClear(user), onClearMsg(id). Tvar msg beze změny (platform 'twitch', id,
+// onClear({user, userId, banDuration}), onClearMsg(id). Tvar msg beze změny (platform 'twitch', id,
 // username, userId, message, timestamp = tmi-sent-ts, color, badgesRaw,
 // twitchEmotes, firstMsg, isAction, replyTo, …).
 import { twitchDefaultColor } from './colors.js';
@@ -381,7 +381,7 @@ export class TwitchProvider {
     const banDuration = tags['ban-duration']
       ? parseInt(tags['ban-duration'], 10) || null
       : null;
-    this.onClear?.({ user: targetUser, banDuration });
+    this.onClear?.({ user: targetUser, userId: tags['target-user-id'] || null, banDuration });
   }
 
   // CLEARMSG — single message deletion. Tags: target-msg-id, login.

@@ -99,3 +99,71 @@ export function clearDeleted(el) {
   if (tag && typeof tag.remove === 'function') tag.remove();
   el.hidden = false;
 }
+
+// ---- Část 2: timeout / ban uživatele (SSE user-moderated, Twitch CLEARCHAT) ----
+
+/** Délka v sekundách → „5 s", „1 min", „2 h", „3 dny" (hlášky a štítky moderace). */
+export function fmtDuration(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s < 86400) return `${String(Math.round((s / 3600) * 10) / 10).replace('.', ',')} h`;
+  const d = Math.round(s / 86400);
+  return `${d} ${d === 1 ? 'den' : d < 5 ? 'dny' : 'dní'}`;
+}
+
+/**
+ * Text štítku u zpráv moderovaného uživatele: „Timeout (5 min)" / „Zabanován" / null (unban).
+ * Délka timeoutu: `durationSec`, jinak `until - at` (SSE user-moderated), jinak `until - now`.
+ * @param {{action: string, until?: number|null, at?: number|string|null, durationSec?: number|null, now?: number}} o
+ */
+export function modTagText({ action, until = null, at = null, durationSec = null, now = Date.now() } = {}) {
+  if (action === 'ban') return 'Zabanován';
+  if (action !== 'timeout') return null;
+  let sec = Number(durationSec);
+  if (!(sec > 0) && until) {
+    const from = at ? (typeof at === 'number' ? at : Date.parse(at)) : now;
+    sec = (Number(until) - (Number.isFinite(from) ? from : now)) / 1000;
+  }
+  return sec > 0 ? `Timeout (${fmtDuration(sec)})` : 'Timeout';
+}
+
+/**
+ * Normalizace SSE `user-moderated` (a lokálního Twitch CLEARCHAT) — null = neplatná / cizí kanál.
+ * @param {object} d  { channel, platform, userId, login, action, until, by, at }
+ * @param {string} [channel]  aktuální UC kanál (Twitch login streamera); bez něj se kanál nekontroluje
+ */
+export function normalizeUserModerated(d, channel) {
+  if (!d || typeof d !== 'object') return null;
+  if (!['timeout', 'ban', 'unban'].includes(d.action)) return null;
+  if (!['twitch', 'kick', 'youtube'].includes(d.platform)) return null;
+  if (channel != null && String(d.channel || '').toLowerCase() !== String(channel).toLowerCase()) return null;
+  const userId = d.userId != null && d.userId !== '' ? String(d.userId) : null;
+  const login = d.login ? String(d.login).toLowerCase().replace(/^@/, '') : null;
+  if (!userId && !login) return null;
+  return { platform: d.platform, userId, login, action: d.action, until: Number(d.until) || null, at: d.at ?? null, by: d.by ?? null, tag: modTagText(d) };
+}
+
+/**
+ * Štítek moderace uživatele na zprávě (`.uc-mod-tag`). `text` null = štítek pryč (unban).
+ * Idempotentní; se štítkem se schová obecné „Smazáno" (`.uc-mod-tagged`), ať nejsou dva.
+ */
+export function applyModTag(el, text) {
+  if (!el) return;
+  const q = typeof el.querySelector === 'function' ? el.querySelector('.uc-mod-tag') : null;
+  if (!text) {
+    if (q && typeof q.remove === 'function') q.remove();
+    el.classList.remove('uc-mod-tagged');
+    return;
+  }
+  let tag = q;
+  if (!tag) {
+    const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc) return;
+    tag = doc.createElement('span');
+    tag.className = 'uc-mod-tag';
+    el.appendChild(tag);
+  }
+  tag.textContent = text;
+  el.classList.add('uc-mod-tagged');
+}

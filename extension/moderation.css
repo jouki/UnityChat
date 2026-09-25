@@ -1,5 +1,5 @@
 /* Moderace — smazané a skryté zprávy (extension/core/moderation.js).
-   Styl navazuje na starší .cleared/.cleared-note (sidepanel.css ~687-707);
+   Styl navazuje na dřívější .cleared/.cleared-note (zrušené ve v3.45.0);
    nové .uc-deleted* třídy jsou nezávislé, aby je mohl používat i web/OBS. */
 
 .uc-deleted--dim .tx {
@@ -59,3 +59,160 @@ body.uc-can-moderate .msg-action-btn[data-act="delete"]:hover { color: #ff9a9d; 
 /* „Zpráva smazána" — text je pryč, takže ani kopírovat/odpovídat s citací (pojistka i v JS: _textSuppressed). */
 .msg.uc-deleted--label .msg-action-btn[data-act="copy"],
 .msg.uc-deleted--label .msg-action-btn[data-act="reply"] { display: none; }
+
+/* ---- Část 2: štítek moderace uživatele (timeout / ban) — core/moderation.js applyModTag ---- */
+.uc-mod-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: rgba(229, 72, 77, 0.15);
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  color: #ff9a9d;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+/* Se štítkem timeoutu/banu se obecné „Smazáno" neukazuje (jinak dva štítky). */
+.uc-mod-tagged .uc-deleted-tag { display: none; }
+
+/* ---- Kontextová nabídka moda na jméno (core/mod-menu.js) ---- */
+.uc-mod-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 190px;
+  max-width: calc(100vw - 16px);
+  padding: 4px;
+  background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+  color: var(--text-primary, #efeff1);
+  outline: none;
+}
+.uc-mm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 6px 8px 7px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border, #2f2f35);
+}
+.uc-mm-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.uc-mm-plat {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #adadb8);
+}
+.uc-mm-plat--twitch { color: #bf94ff; }
+.uc-mm-plat--kick { color: #53fc18; }
+.uc-mm-plat--youtube { color: #ff5c5c; }
+.uc-mm-login { flex-basis: 100%; font-size: 11px; color: var(--text-secondary, #adadb8); }
+.uc-mm-list { display: flex; flex-direction: column; }
+.uc-mm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.uc-mm-item:hover:not([disabled]), .uc-mm-item:focus-visible, .uc-mm-item:focus { background: var(--bg-hover, #26262c); outline: none; }
+.uc-mm-item[disabled] { opacity: 0.4; cursor: default; }
+.uc-mm-item--danger { color: #ff9a9d; }
+.uc-mm-back { color: var(--text-secondary, #adadb8); font-size: 12px; border-bottom: 1px solid var(--border, #2f2f35); border-radius: 5px 5px 0 0; margin-bottom: 2px; }
+.uc-mm-arrow { color: var(--text-secondary, #adadb8); }
+
+/* ---- Dialogy moderace (přejmenování, varování, potvrzení banu) + okno varování účtu ---- */
+.uc-mod-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.62);
+}
+.uc-mod-dialog {
+  width: min(360px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+  color: var(--text-primary, #efeff1);
+  font-size: 13px;
+}
+.uc-mod-dialog h2 { margin: 0 0 6px; font-size: 15px; overflow-wrap: anywhere; }
+.uc-mod-dialog-sub { margin: 0 0 12px; color: var(--text-secondary, #adadb8); font-size: 12px; line-height: 1.4; }
+.uc-mod-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.uc-mod-field-label { font-size: 12px; color: var(--text-secondary, #adadb8); }
+.uc-mod-field input[type="text"], .uc-mod-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg-primary, #0e0e10);
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 6px;
+  resize: vertical;
+}
+.uc-mod-field input:focus, .uc-mod-field textarea:focus { outline: none; border-color: var(--accent, #ff8c00); }
+.uc-mod-field--color { flex-direction: row; align-items: center; gap: 8px; }
+.uc-mod-field--color input[type="color"] { width: 36px; height: 24px; padding: 0; border: 1px solid var(--border, #2f2f35); border-radius: 4px; background: none; }
+.uc-mod-field--color input[type="color"]:disabled { opacity: 0.4; }
+.uc-mod-dialog-err { margin: 0 0 10px; color: #ff9a9d; font-size: 12px; }
+.uc-mod-dialog-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.uc-mod-btn {
+  padding: 6px 14px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: var(--bg-tertiary, #1f1f23);
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.uc-mod-btn:hover { background: var(--bg-hover, #26262c); }
+.uc-mod-btn--primary { color: #111; background: var(--accent-gradient, linear-gradient(160deg, #ffc800, #ff8c00)); border-color: transparent; }
+.uc-mod-btn--primary:hover { filter: brightness(1.08); background: var(--accent-gradient, linear-gradient(160deg, #ffc800, #ff8c00)); }
+.uc-mod-btn--danger { color: #fff; background: #c4373c; }
+.uc-mod-btn--danger:hover { background: #d8454a; }
+.uc-mod-btn:disabled { opacity: 0.6; cursor: default; }
+.uc-warn-dialog { border-color: rgba(229, 72, 77, 0.6); }
+.uc-warn-reason {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: rgba(229, 72, 77, 0.1);
+  border-left: 3px solid #e5484d;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.uc-warn-note, .uc-warn-more { margin: 0 0 12px; font-size: 12px; color: var(--text-secondary, #adadb8); }
+
+/* Pole pro psaní zablokované nepotvrzeným varováním. */
+body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
