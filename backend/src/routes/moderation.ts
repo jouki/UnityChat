@@ -27,8 +27,17 @@ const CHANNEL_RE = /^[a-z0-9_]{2,25}$/;
 export const DeleteBody = z.object({
   platform: z.enum(['twitch', 'kick', 'youtube']),
   messageId: z.string().min(1).max(128),
-  channel: z.string().regex(CHANNEL_RE).optional(),
+  // Formát/délka kanálu se NEřeší tady regexem case-sensitive (viz parseChannel) — jinak by
+  // "Rob" spadl na 400 dřív, než se stihne zlowercasovat (bug nalezený v code review).
+  channel: z.string().min(1).max(40).optional(),
 });
+
+/** Kanál → lowercase → validace `^[a-z0-9_]{2,25}$` (VŽDY v tomhle pořadí, ne obráceně — jinak
+ * velká písmena ve vstupu spadnou na chybu, než dostanou šanci se zlowercasovat). `null` = neplatný. */
+export function parseChannel(raw: string | undefined, fallback: string): string | null {
+  const c = (raw || fallback).toLowerCase();
+  return CHANNEL_RE.test(c) ? c : null;
+}
 
 /** Tvar `moderation_actions.result` pro akci 'delete' — jeden klíč = zasažená platforma. */
 export function resultRecord(platform: Platform, result: ModResult): Record<string, ModResult> {
@@ -66,8 +75,8 @@ export default async function moderationRoutes(app: FastifyInstance) {
 
   app.get<{ Querystring: { channel?: string } }>('/moderation/me', { preHandler: requireWebSession }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
-    const channel = String(req.query.channel || DEFAULT_CHANNEL).toLowerCase();
-    if (!CHANNEL_RE.test(channel)) return reply.code(400).send({ ok: false, error: 'channel' });
+    const channel = parseChannel(req.query.channel, DEFAULT_CHANNEL);
+    if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
 
     const accountId = req.webAccountId!;
     const platforms = await accountModPlatforms(accountId, channel);
@@ -83,7 +92,8 @@ export default async function moderationRoutes(app: FastifyInstance) {
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
     const accountId = req.webAccountId!;
     if (!limiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-    const channel = (body.data.channel || DEFAULT_CHANNEL).toLowerCase();
+    const channel = parseChannel(body.data.channel, DEFAULT_CHANNEL);
+    if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
     const { platform, messageId } = body.data;
 
     // Ověřit moda PŘED SSE/mazáním — přihlášený divák bez mod role bota mazat nesmí.

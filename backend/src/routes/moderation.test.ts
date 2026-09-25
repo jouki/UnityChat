@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, resultRecord, meResponse, buildMissingScopes } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes } from './moderation.js';
 
 test('DeleteBody: platný požadavek projde', () => {
   const r = DeleteBody.safeParse({ platform: 'twitch', messageId: 'abc-123' });
@@ -17,12 +17,30 @@ test('DeleteBody: messageId 1–128 znaků, mimo rozsah odmítnuto', () => {
   assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x'.repeat(128) }).success, true);
 });
 
-test('DeleteBody: channel volitelný, musí sedět na ^[a-z0-9_]{2,25}$', () => {
+test('DeleteBody: channel volitelný, jen hrubá délková mez — přesný formát řeší parseChannel PO lowercase', () => {
   assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x' }).success, true);
   assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'robdiesalot' }).success, true);
-  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'Rob' }).success, false);
-  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'a' }).success, false);
-  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'a'.repeat(26) }).success, false);
+  // Velké písmeno tu projde záměrně (zod validuje jen hrubě) — reálný formát/case řeší parseChannel
+  // až PO zlowercasování, jinak by "Rob" spadl na 400 dřív, než dostane šanci se zlowercasovat.
+  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'Rob' }).success, true);
+  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: '' }).success, false);
+  assert.equal(DeleteBody.safeParse({ platform: 'twitch', messageId: 'x', channel: 'a'.repeat(41) }).success, false);
+});
+
+test('parseChannel: lowercase PRVNÍ, pak validace ^[a-z0-9_]{2,25}$ — "Rob" je platný kanál "rob"', () => {
+  assert.equal(parseChannel('Rob', 'robdiesalot'), 'rob');
+  assert.equal(parseChannel('ROBDIESALOT', 'x'), 'robdiesalot');
+});
+
+test('parseChannel: chybějící vstup → fallback (i ten se lowercasuje)', () => {
+  assert.equal(parseChannel(undefined, 'RobDiesalot'), 'robdiesalot');
+});
+
+test('parseChannel: mimo formát (moc krátký/dlouhý, neplatný znak) → null', () => {
+  assert.equal(parseChannel('a', 'x'), null);
+  assert.equal(parseChannel('a'.repeat(26), 'x'), null);
+  assert.equal(parseChannel('rob-diesalot', 'x'), null);
+  assert.equal(parseChannel('rob diesalot', 'x'), null);
 });
 
 test('resultRecord: zabalí ModResult pod klíč platformy (tvar sloupce moderation_actions.result)', () => {

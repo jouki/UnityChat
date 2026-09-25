@@ -1,11 +1,11 @@
 // Nejvyšší role uživatele v kanálu podle serverového logu zpráv (badge posledních zpráv
 // za 24 h). Sdílí reakce (smí mod/broadcaster) a soundboard (role pro Židolištu).
-import { and, desc, eq, gt, ilike } from 'drizzle-orm';
+import { and, desc, eq, gt, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { rolesFromBadges } from '../sse/integrationStream.js';
 import { listIdentities, type PublicIdentity } from './webAuth.js';
-import { registryPlatformChannel } from './modActions.js';
+import { registryPlatformChannel } from './platformChannels.js';
 import type { Platform } from './zidolista.js';
 
 export type ChatRole = 'broadcaster' | 'moderator' | 'vip' | 'sub' | 'viewer';
@@ -14,6 +14,17 @@ const RANK: ChatRole[] = ['viewer', 'sub', 'vip', 'moderator', 'broadcaster'];
 /** Nejvyšší role z příznaků badge (isBroadcaster > isMod > isVip > isSub > viewer). */
 export function highestRole(r: { isBroadcaster: boolean; isMod: boolean; isVip: boolean; isSub: boolean }): ChatRole {
   return r.isBroadcaster ? 'broadcaster' : r.isMod ? 'moderator' : r.isVip ? 'vip' : r.isSub ? 'sub' : 'viewer';
+}
+
+/**
+ * Přesná case-insensitive shoda loginu — VŽDY tohle, nikdy `ilike`/`like`: login je
+ * uživatelský vstup a `_`/`%` jsou v (I)LIKE wildcard znaky. Útočník s loginem např.
+ * `jouki_28` by přes `ilike(col, 'jouki_28')` matchoval i řádky `jouki728` (podtržítko
+ * = "libovolný znak") — prošel by 403 gate za cizí mod řádky a nechal bota mazat.
+ * `=` porovnává byte-přesně, čísla ve WHERE se navíc parametrizují (žádná SQL injekce).
+ */
+export function usernameEqualsCondition(login: string): SQL {
+  return sql`lower(${messages.platformUsername}) = ${login.toLowerCase()}`;
 }
 
 /**
@@ -28,7 +39,7 @@ export async function chatRole(platform: 'twitch' | 'kick' | 'youtube', login: s
   const rows = await db
     .select({ raw: messages.contentRaw, username: messages.platformUsername })
     .from(messages)
-    .where(and(eq(messages.channel, channel.toLowerCase()), eq(messages.platform, platform), ilike(messages.platformUsername, l), gt(messages.sentAt, since)))
+    .where(and(eq(messages.channel, channel.toLowerCase()), eq(messages.platform, platform), usernameEqualsCondition(l), gt(messages.sentAt, since)))
     .orderBy(desc(messages.sentAt))
     .limit(5);
   let best: ChatRole = 'viewer';

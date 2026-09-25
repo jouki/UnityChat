@@ -165,7 +165,7 @@ export async function resolveChannels(channel: string): Promise<string[]> {
 
 /**
  * Kanál zprávy v ingestu pro danou platformu (YouTube handle / Kick slug podle streamers directory).
- * Zdroj: adresář `streamers` (fallback UC kanál). Moderace používá lib/modActions `registryPlatformChannel` (registr Židolišty).
+ * Zdroj: adresář `streamers` (fallback UC kanál). Moderace používá lib/platformChannels `registryPlatformChannel` (registr Židolišty).
  */
 export async function platformChannel(platform: string, channel: string): Promise<string> {
   if (platform === 'twitch') return channel;

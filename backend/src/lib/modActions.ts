@@ -3,7 +3,8 @@
 import { config } from '../config.js';
 import { getDecryptedIdentity, storeRefreshedTokens, needsRefresh, type TokenSet } from './webAuth.js';
 import { getBotIdentity, storeBotTokens, markBotExpired } from './botIdentities.js';
-import { workspaceForChannel, type Platform, type WorkspaceInfo } from './zidolista.js';
+import type { Platform, WorkspaceInfo } from './zidolista.js';
+import { defaultWorkspace, registryPlatformChannel } from './platformChannels.js';
 import { chatRole, type ChatRole } from './chatRole.js';
 import { missingModScopes } from './modScopes.js';
 import { refreshTokens } from './platformTokens.js';
@@ -41,19 +42,8 @@ export interface ModDeps {
   markBotExpired?: (workspace: string, platform: Platform) => Promise<void>;
 }
 
-const defaultWorkspace = (ucChannel: string) => workspaceForChannel('twitch', ucChannel);
-
-/**
- * Kanál na platformě pro UC kanál (Twitch login streamera): Twitch = týž, Kick/YouTube z registru Židolišty.
- * Registr = kanály, které ingest poslouchá a ukládá do messages.channel (role moda se čte odtud).
- * Pozor: routes/chat.ts `platformChannel(platform, channel)` bere adresář `streamers` (párování uc-sent) — jiný zdroj.
- */
-export async function registryPlatformChannel(channel: string, platform: Platform, ws?: WorkspaceInfo | null): Promise<string | null> {
-  const c = channel.toLowerCase();
-  if (platform === 'twitch') return c;
-  const w = ws === undefined ? await defaultWorkspace(c) : ws;
-  return w?.channels[platform] ?? null;
-}
+// registryPlatformChannel + defaultWorkspace: viz lib/platformChannels.ts (vytažené odsud, aby
+// chatRole.ts mohlo importovat registryPlatformChannel bez cyklu — modActions.ts importuje chatRole).
 
 class HttpFail extends Error { constructor(public status: number) { super(`HTTP ${status}`); } }
 class NoChannel extends Error {}
