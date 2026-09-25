@@ -51,7 +51,7 @@ export interface ModDeps {
 // registryPlatformChannel + defaultWorkspace: viz lib/platformChannels.ts (vytažené odsud, aby
 // chatRole.ts mohlo importovat registryPlatformChannel bez cyklu — modActions.ts importuje chatRole).
 
-class HttpFail extends Error { constructor(public status: number) { super(`HTTP ${status}`); } }
+class HttpFail extends Error { constructor(public status: number, public detail = '') { super(`HTTP ${status}`); } }
 /** Selhání s vlastním kódem → ModResult `error:<code>` (no_channel, not_live, …). */
 class ModFail extends Error { constructor(public code: string) { super(code); } }
 
@@ -87,7 +87,10 @@ async function platformCall(
   if (r.ok || (opts.okStatuses ?? []).includes(r.status)) {
     try { return ((await r.json()) as Record<string, unknown>) ?? {}; } catch { return {}; }
   }
-  throw new HttpFail(r.status);
+  // Důvod odmítnutí z těla odpovědi platformy (Twitch/Kick `message`) — jen do logu, bez tokenů (tělo je odpověď API).
+  let detail = '';
+  try { const j = (await r.json()) as Record<string, unknown>; detail = String(j?.message ?? j?.error ?? '').slice(0, 200); } catch {}
+  throw new HttpFail(r.status, detail);
 }
 
 /** Kontext pro operaci na platformě: aktér (už s čerstvým tokenem), platformní kanál, fetch. */
@@ -171,7 +174,7 @@ export async function withModActor<T>(
     }
     const status = statusOf(e);
     if (kind === 'bot' && status === 401) await expireBot(a.workspace!, p.platform).catch(() => {});
-    deps.log?.warn({ platform: p.platform, actor: kind, status }, `${label}: selhalo`);
+    deps.log?.warn({ platform: p.platform, actor: kind, status, detail: (e as HttpFail)?.detail || undefined }, `${label}: selhalo`);
     return { result: `error:${status || 'failed'}` };
   }
 }
