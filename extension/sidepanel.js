@@ -1065,6 +1065,7 @@ class UnityChat {
     this.platformBadge = document.getElementById('active-badge');
     this._initEmotePicker();
     this._initSoundboard();
+    this._initQrDono();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
     // pushed to background (persisted to chrome.storage.session) so the log
@@ -1119,14 +1120,27 @@ class UnityChat {
     });
   }
 
-  /** Dev mode (pamatuje se v configu): nástroje, editace jména, QR dono a email účtu. */
+  /** Dev mode (pamatuje se v configu): nástroje, editace jména; QR dono ukáže i u kanálu bez darů. */
   _applyDevMode(on) {
     document.getElementById('dev-tools')?.classList.toggle('hidden', !on);
     const un = document.getElementById('input-username');
     if (un) un.readOnly = !on;
     document.body.classList.toggle('uc-dev', on);
-    if (on) this._initQrDono();
-    else this._qd?.close?.();
+    if (!on && !document.body.classList.contains('uc-dono')) this._qd?.close?.();
+  }
+
+  /** QR dono tlačítko jen u kanálu, kde má streamer v Židolištce nastavené dary (body.uc-dono). */
+  async _refreshDonoAvailability() {
+    const ch = (this.config.channel || '').toLowerCase();
+    let on = false;
+    try {
+      const c = await this._donateApi().config();
+      on = !!(c?.enabled && (c.currencies ? Object.keys(c.currencies).length : c.iban));
+    } catch (e) { this._ucLog('QrDono', `dostupnost fail ${e?.error || e}`); }
+    if (ch !== (this.config.channel || '').toLowerCase()) return; // mezitím přepnutý kanál
+    document.body.classList.toggle('uc-dono', on);
+    if (!on && !document.body.classList.contains('uc-dev')) this._qd?.close?.();
+    this._ucLog('QrDono', `${ch}: ${on ? 'dary zapnuté' : 'bez darů'}`);
   }
 
   /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
@@ -1154,7 +1168,7 @@ class UnityChat {
     };
   }
 
-  /** QR dono + email v nastavení — vytvoří se až při zapnutí Dev mode. */
+  /** QR dono + email v nastavení (pro všechny od 3.41.1, dřív jen Dev mode). */
   _initQrDono() {
     const core = window.UC_CORE;
     if (this._qd || !core?.createQrDono) return;
@@ -1181,7 +1195,8 @@ class UnityChat {
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
     }
-    this._ucLog('QrDono', 'zapnuto (Dev mode)');
+    this._ucLog('QrDono', 'zapnuto');
+    this._refreshDonoAvailability();
   }
 
   /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
@@ -1320,7 +1335,7 @@ class UnityChat {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
       if (!this._qd) return;
       clearTimeout(this._qdReloadTimer);
-      this._qdReloadTimer = setTimeout(() => this._qd?.reloadConfig?.(), Math.random() * 2000);
+      this._qdReloadTimer = setTimeout(() => { this._qd?.reloadConfig?.(); this._refreshDonoAvailability(); }, Math.random() * 2000);
       this._ucLog('QrDono', 'donate-config-change → reload');
     };   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
@@ -2726,6 +2741,7 @@ class UnityChat {
     this._loadUcCommands().catch(() => {});
     this._loadSoundboard();
     this._loadBlacklist().catch(() => {});
+    this._refreshDonoAvailability();
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -4460,6 +4476,8 @@ class UnityChat {
     this._renderComposer();
     this._loadSoundboard();
     this._qd?.refreshIdentity?.();
+    // E-mail v nastavení patří k účtu → bez přihlášení skrytý.
+    document.body.classList.toggle('uc-signed-out', !linked.length);
     this._emailSettings?.refresh?.();
   }
 
