@@ -139,8 +139,9 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-reply', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcReply) this.onUcReply(d); } catch {}
       });
-      // Moderace: smazaná zpráva (mod v UnityChatu / na platformě), skrytá / znovu zobrazená jen v UnityChatu.
-      for (const type of ['message-deleted', 'message-hidden', 'message-unhidden']) {
+      // Moderace: smazaná zpráva (mod v UnityChatu / na platformě / filtr odkazů), skrytá / znovu zobrazená jen
+      // v UnityChatu, obnovená permitem (zpráva smazaná filtrem odkazů, část 3).
+      for (const type of ['message-deleted', 'message-hidden', 'message-unhidden', 'message-restored']) {
         this._eventSource.addEventListener(type, (e) => {
           try { const d = JSON.parse(e.data); if (this.onModeration) this.onModeration(type, d); } catch {}
         });
@@ -4491,23 +4492,34 @@ class UnityChat {
     }
     else if (type === 'message-hidden') n = this._applyDeleted(d.platform, d.messageId, { hidden: true });
     else if (type === 'message-unhidden') n = this._unhideMessage(d);
+    else if (type === 'message-restored') n = this._unhideMessage(d, { restore: true });
     this._ucLog('Mod', `${type} ${d.platform}:${d.messageId} by=${d.by || '?'}${d.reason ? ` reason=${d.reason}` : ''} → ${n} el`);
   }
 
-  /** Zrušené skrytí: data ze SSE (celá zpráva) → vykreslit na místě, nebo přidat běžnou cestou. */
-  _unhideMessage(d) {
+  /**
+   * Zrušené skrytí (message-unhidden) nebo obnovení permitem (message-restored — zpráva smazaná filtrem
+   * odkazů): data ze SSE (celá zpráva) → vykreslit na místě, nebo přidat běžnou cestou.
+   * Obnovení ruší smazání; historie ho poslala bez obsahu, takže se z dat převezme celá zpráva.
+   */
+  _unhideMessage(d, { restore = false } = {}) {
     const fresh = d.message && typeof d.message === 'object' ? d.message : null;
     const msg = this.store.get(String(d.messageId));
+    if (restore) this._serverDeleted?.delete(String(d.messageId));
     if (msg) {
-      msg._hidden = false; msg.hidden = false;
-      if (fresh) for (const k of ['message', 'ytRuns', 'kickContent', 'twitchEmotes', 'twitchEmotesOffset']) if (fresh[k] !== undefined) msg[k] = fresh[k];
+      if (restore) {
+        msg._deleted = false; msg.deleted = false; delete msg.deletedReason;
+        if (fresh) for (const [k, v] of Object.entries(fresh)) if (v !== undefined && !['id', 'platform', 'historical', 'deleted', 'deletedReason', 'hidden'].includes(k)) msg[k] = v;
+      } else {
+        msg._hidden = false; msg.hidden = false;
+        if (fresh) for (const k of ['message', 'ytRuns', 'kickContent', 'twitchEmotes', 'twitchEmotesOffset']) if (fresh[k] !== undefined) msg[k] = fresh[k];
+      }
     }
     const els = this._msgEls(d.messageId, d.platform);
     for (const el of els) {
       if (msg && this._isModerated(msg)) this._paintDeleted(el, msg);
       else this._restoreMessage(el, msg || fresh);
     }
-    if (!els.length && !msg && fresh) this._addMessage({ ...fresh, hidden: false });
+    if (!els.length && !msg && fresh) this._addMessage({ ...fresh, hidden: false, deleted: false });
     return els.length;
   }
 

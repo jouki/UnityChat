@@ -66,6 +66,7 @@ Promise.all([
   check('unban body', mm.buildModRequest('unban', t).body.action === 'unban');
   check('warn body', eq(mm.buildModRequest('warn', t, { reason: 'Nespamuj' }), { path: '/moderation/warn', method: 'POST', body: { channel: 'robdiesalot', platform: 'twitch', userId: '123', login: 'spammer', reason: 'Nespamuj' } }));
   check('permit body', eq(mm.buildModRequest('permit', t, { durationSec: 120 }).body, { channel: 'robdiesalot', platform: 'twitch', userId: '123', login: 'spammer', durationSec: 120 }));
+  check('permit body s messageId (obnovení zprávy smazané filtrem)', eq(mm.buildModRequest('permit', { ...t, messageId: 'm9' }, { durationSec: 60 }).body, { channel: 'robdiesalot', platform: 'twitch', userId: '123', login: 'spammer', durationSec: 60, messageId: 'm9' }));
   check('rename PUT', eq(mm.buildModRequest('rename', t, { nickname: 'Pan Spam', color: '#ff8800' }), { path: '/moderation/nickname', method: 'PUT', body: { channel: 'robdiesalot', platform: 'twitch', login: 'spammer', nickname: 'Pan Spam', color: '#ff8800' } }));
   check('rename smazání → nickname null, color null', eq(mm.buildModRequest('rename', t, { nickname: null, color: '#ff8800' }).body, { channel: 'robdiesalot', platform: 'twitch', login: 'spammer', nickname: null, color: null }));
 
@@ -82,6 +83,8 @@ Promise.all([
   // --- summarize ---
   check('summarize timeout', mm.summarizeModResult('timeout', { login: 'spammer', displayName: 'Spammer', platform: 'twitch' }, { results: { twitch: 'ok' } }, { durationSec: 300 }) === 'Timeout 5 min pro Spammer: Twitch ✓');
   check('summarize permit', mm.summarizeModResult('permit', { login: 'x', platform: 'kick' }, { results: { permit: 'ok', chat: 'bot' } }, { durationSec: 60 }) === 'Permit 1 min pro x: !permit v chatu (Kick) ✓ (bot) · UnityChat ✓');
+  check('summarize permit + obnovená zpráva', mm.summarizeModResult('permit', { login: 'x', platform: 'kick' }, { results: { permit: 'ok', chat: 'bot', restore: 'ok' } }, { durationSec: 60 }) === 'Permit 1 min pro x: !permit v chatu (Kick) ✓ (bot) · UnityChat ✓ · zpráva obnovena');
+  check('summarize permit, zpráva nebyla smazaná filtrem', mm.summarizeModResult('permit', { login: 'x', platform: 'kick' }, { results: { permit: 'ok', chat: 'bot', restore: 'not_found' } }, { durationSec: 60 }) === 'Permit 1 min pro x: !permit v chatu (Kick) ✓ (bot) · UnityChat ✓');
   check('summarize rename smazání', mm.summarizeModResult('rename', { login: 'x' }, { nickname: null }) === 'Přezdívka uživatele x smazána.');
 
   // --- ModMenu.run s mock api (bez DOM) ---

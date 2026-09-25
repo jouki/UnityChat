@@ -99,7 +99,7 @@ export function validateWarnReason(value) {
 /**
  * Požadavek na backend pro akci z nabídky (čistá funkce, testovaná).
  * @param {'state'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
- * @param {{channel?: string, platform: string, userId?: string, login: string}} t  cíl
+ * @param {{channel?: string, platform: string, userId?: string, login: string, messageId?: string|null}} t  cíl
  * @param {{durationSec?: number, reason?: string, nickname?: string|null, color?: string|null}} [x]
  * @returns {{path: string, method: string, body?: object}}
  */
@@ -117,7 +117,8 @@ export function buildModRequest(kind, t, x = {}) {
     case 'warn':
       return { path: '/moderation/warn', method: 'POST', body: { ...base, reason: x.reason } };
     case 'permit':
-      return { path: '/moderation/permit', method: 'POST', body: { ...base, durationSec: x.durationSec } };
+      // messageId: permit na zprávě smazané filtrem odkazů ji v UnityChatu obnoví (část 3).
+      return { path: '/moderation/permit', method: 'POST', body: { ...base, durationSec: x.durationSec, ...(t.messageId ? { messageId: String(t.messageId) } : {}) } };
     case 'rename': {
       const nickname = x.nickname || null;
       return { path: '/moderation/nickname', method: 'PUT', body: { ...ch, platform: t.platform, login: t.login, nickname, color: nickname ? (x.color || null) : null } };
@@ -154,7 +155,12 @@ export function summarizeModResult(kind, target, res = {}, x = {}) {
     case 'ban': return `Ban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'unban': return `Unban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'warn': return `Varování pro ${who}: ${formatResults(res.results)}`;
-    case 'permit': return `Permit ${fmtDuration(x.durationSec)} pro ${who}: ${formatResults(res.results, { labels: { chat: `!permit v chatu (${PLATFORM_NAMES[target.platform] || target.platform})` } })}`;
+    case 'permit': {
+      // results.restore (část 3): 'ok' = zpráva smazaná filtrem odkazů se v UnityChatu obnovila; jinak nic neříkat.
+      const { restore, ...rest } = res.results || {};
+      const text = `Permit ${fmtDuration(x.durationSec)} pro ${who}: ${formatResults(rest, { labels: { chat: `!permit v chatu (${PLATFORM_NAMES[target.platform] || target.platform})` } })}`;
+      return restore === 'ok' ? `${text} · zpráva obnovena` : text;
+    }
     case 'rename': return res.nickname ? `${who} má teď přezdívku „${res.nickname}".` : `Přezdívka uživatele ${who} smazána.`;
     default: return `${kind}: hotovo`;
   }
