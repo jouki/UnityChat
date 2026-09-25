@@ -200,7 +200,7 @@ function restoreDeps(state: RestoreState | null, over: Partial<RestoreDeps> = {}
   return { d, calls };
 }
 const G = { channel: 'robdiesalot', accountId: 7, by: 'twitch:modik' };
-const st = (o: Partial<RestoreState>): RestoreState => ({ channel: 'robdiesalot', deletedAt: null, deletedReason: null, hiddenAt: null, ...o });
+const st = (o: Partial<RestoreState>): RestoreState => dRow({ deletedAt: null, deletedReason: null, hiddenAt: null, ...o });
 
 test('RestoreBody: platforma + messageId povinné', () => {
   assert.equal(RestoreBody.safeParse({ platform: 'twitch', messageId: 'm1' }).success, true);
@@ -213,7 +213,9 @@ test('runRestore: smazaná modem / platformou / filtrem → publishRestored se s
     const { d, calls } = restoreDeps(st({ deletedAt: new Date(), deletedReason: reason }));
     const out = await runRestore(G, { platform: 'twitch', messageId: 'm1' }, d);
     assert.equal(out.status, 200);
-    assert.deepEqual(out.body, { ok: true, result: 'ok' });
+    assert.equal(out.body.result, 'ok');
+    assert.equal((out.body.message as { message: string; deleted?: boolean }).message, 'tst', 'odpověď nese celou zprávu');
+    assert.equal((out.body.message as { deleted?: boolean }).deleted, undefined);
     assert.deepEqual(calls[0], ['restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', platformChannel: 'robdiesalot', by: 'twitch:modik', reason }]);
     const rec = calls[1][1] as { action: string; params: { reason: string }; actor: string; accountId: number; targetMessageId: string };
     assert.equal(rec.action, 'restore');
@@ -237,12 +239,19 @@ test('runRestore: gif_request → 409 gif_pending, neznámý důvod → 409 not_
 
 test('runRestore: skrytá → publishUnhidden + záznam unhide; smazaná i skrytá → obojí', async () => {
   const a = restoreDeps(st({ hiddenAt: new Date() }));
-  assert.deepEqual((await runRestore(G, { platform: 'twitch', messageId: 'h1' }, a.d)).body, { ok: true, result: 'ok' });
+  const ha = await runRestore(G, { platform: 'twitch', messageId: 'h1' }, a.d);
+  assert.equal(ha.body.result, 'ok');
+  assert.equal((ha.body.message as { hidden?: boolean }).hidden, undefined);
   assert.deepEqual(a.calls.map((c) => c[0]), ['unhidden', 'record']);
   assert.equal((a.calls[1][1] as { action: string }).action, 'unhide');
   const b = restoreDeps(st({ hiddenAt: new Date(), deletedAt: new Date(), deletedReason: 'mod' }));
   await runRestore(G, { platform: 'twitch', messageId: 'h1' }, b.d);
   assert.deepEqual(b.calls.map((c) => c[0]), ['restored', 'record', 'unhidden', 'record']);
+  // Odkrytí skrytí selhalo (not_found) → výsledek ok (smazání zrušeno), ale bez message (pořád skrytá).
+  const c = restoreDeps(st({ hiddenAt: new Date(), deletedAt: new Date(), deletedReason: 'mod' }), { publishUnhidden: async () => 'not_found' });
+  const oc = await runRestore(G, { platform: 'twitch', messageId: 'h1' }, c.d);
+  assert.equal(oc.body.result, 'ok');
+  assert.equal(oc.body.message, undefined);
 });
 
 test('runRestore: nesmazaná → not_deleted; cizí kanál / není v archivu / platforma mimo registr → 404, nic se neposílá', async () => {

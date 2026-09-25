@@ -402,6 +402,9 @@ nemod → 403 `not_mod`), tělo špatně → 400 `body`. Zpráva musí být v ar
 | smazaná i skrytá | obojí v tomto pořadí | `200 { ok:true, result:'ok' }` |
 | ani jedno (nebo mezitím odkryl jiný mod) | nic | `200 { ok:true, result:'not_deleted' }` |
 
+Když je zpráva po akci celá vidět, odpověď `result:'ok'` nese navíc `message` (tvar `/chat/history`, s textem) —
+Profil (bez SSE) z ní řádek vykreslí; chat stejně dostane `message-restored` / `message-unhidden`.
+
 **Ozvěna smazání z platformy.** Po odkrytí server zprávu na **30 min** (`RESTORED_MS`) označí (`rememberRestored`,
 `lib/messageDeletes.ts`); `publishDeleted` s `reason:'platform'` (Twitch CLEARMSG, Kick, YouTube) ji v té době
 ignoruje — zpráva je na platformě smazaná, další smazání je jen ozvěna. Samotný 60s dedup `publishDeleted` nestačí:

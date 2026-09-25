@@ -45,7 +45,7 @@ import { NicknameField, ColorField, upsertNickname, deleteNickname } from './nic
 import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
-import { RateLimiter, toModeratedContent, type ClientRow, type ClientMessage } from './chat.js';
+import { RateLimiter, toModeratedContent, toClientMessage, type ClientRow, type ClientMessage } from './chat.js';
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
@@ -274,7 +274,8 @@ export const RestoreBody = z.object({
 /** Důvody smazání, které smí mod v UnityChatu odkrýt. gif_request rozhoduje karta GIFu, jiné/null nic. */
 export const RESTORABLE_REASONS = ['mod', 'platform', 'link_filter'] as const;
 
-export type RestoreState = { channel: string; deletedAt: Date | null; deletedReason: string | null; hiddenAt: Date | null };
+/** Řádek archivu (klientský tvar + kanál) — po odkrytí z něj jde `message` v odpovědi (Profil ho vykreslí). */
+export type RestoreState = DeletedContentRow;
 
 export interface RestoreDeps {
   /** Platformní kanál UC kanálu (registr). */
@@ -294,6 +295,7 @@ export type RestoreOutcome = 'ok' | 'not_deleted' | 'not_found';
  * Smazaná (mod | platform | link_filter) → publishRestored (SSE message-restored + chat.restored,
  * značka proti ozvěně smazání z platformy), záznam `restore` s původním důvodem; skrytá → publishUnhidden,
  * záznam `unhide`. gif_request → 409 gif_pending, jiný důvod → 409 not_restorable.
+ * Po úplném odkrytí odpověď nese i `message` (tvar /chat/history) — Profil ji vykreslí bez SSE.
  */
 export async function runRestore(
   g: Pick<Gate, 'channel' | 'accountId' | 'by'>,
@@ -313,6 +315,7 @@ export async function runRestore(
   };
 
   let done = false;
+  let whole = true;   // zpráva je po akci celá vidět (nic nezůstalo smazané / skryté)
   if (state.deletedAt) {
     const reason = state.deletedReason;
     if (reason === 'gif_request') return { status: 409, body: { ok: false, error: 'gif_pending' } };
@@ -320,20 +323,24 @@ export async function runRestore(
     const r = await deps.publishRestored({ channel: g.channel, platform, messageId, platformChannel: want, by: g.by, reason: reason as DeleteReason });
     await record('restore', { reason }, { restore: r });
     done = r === 'ok';
+    whole = done;
   }
   if (state.hiddenAt) {
     const r = await deps.publishUnhidden({ channel: g.channel, platform, messageId, by: g.by });
     await record('unhide', {}, { unhide: r });
     done = done || r === 'ok';
+    whole = whole && r === 'ok';
   }
   const result: RestoreOutcome = done ? 'ok' : 'not_deleted';
-  return { status: 200, body: { ok: true, result } };
+  const body: Record<string, unknown> = { ok: true, result };
+  if (done && whole) body.message = toClientMessage({ ...state, deletedAt: null, deletedReason: null, hiddenAt: null }, true);
+  return { status: 200, body };
 }
 
 const restoreStateDeps = {
   messageState: async (platform: Platform, messageId: string): Promise<RestoreState | null> => {
     const rows = await db
-      .select({ channel: messages.channel, deletedAt: messages.deletedAt, deletedReason: messages.deletedReason, hiddenAt: messages.hiddenAt })
+      .select()
       .from(messages)
       .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId)))
       .limit(1);
