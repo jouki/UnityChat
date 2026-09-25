@@ -5,6 +5,10 @@
 //   POST /integrations/:slug/moderation/delete { platform, messageId, actor }
 //   POST /integrations/:slug/moderation/hide   { platform, messageId, actor }
 //   POST /integrations/:slug/moderation/unhide { platform, messageId, actor }
+//   POST /integrations/:slug/moderation/timeout { platform, userId, durationSec, reason?, actor }   (část 2)
+//   POST /integrations/:slug/moderation/ban     { platform, userId, reason?, actor }
+//   POST /integrations/:slug/moderation/unban   { platform, userId, actor }
+//   (timeout/ban/unban jen botem workspace, na všech platformách workspace, kde uživatele známe)
 //
 // Auth: inboundAuthorized (X-Api-Key + HMAC, lib/inboundAuth.ts). Kanál se odvozuje JEN ze slugu
 // (ws.channels.twitch = UC kanál) a zpráva musí patřit kanálu workspace na své platformě —
@@ -17,19 +21,37 @@ import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { workspaceBySlug, type Platform, type WorkspaceInfo } from '../lib/zidolista.js';
 import { publishDeleted, archivedMessageChannel, channelMatches, type PublishDeletedParams } from '../lib/messageDeletes.js';
 import { publishHidden, publishUnhidden, type HideParams, type HideResult } from '../lib/messageHides.js';
-import { deletePlatformMessage, type ModResult } from '../lib/modActions.js';
+import { deletePlatformMessage, banPlatformUser, unbanUser, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resultRecord } from './moderation.js';
+import { runUserAction, type UserActionDeps } from '../lib/userModActions.js';
+import { resolveUserTargets, dbTargetDeps } from '../lib/moderationTargets.js';
+import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
+import type { Ingest } from '../ingest/index.js';
 import { RateLimiter } from './chat.js';
+
+export const ActorSchema = z.object({
+  source: z.literal('zidolista'),
+  userId: z.string().min(1).max(64),
+  name: z.string().min(1).max(80),
+  role: z.string().min(1).max(40),
+});
 
 export const IntegrationModBody = z.object({
   platform: z.enum(['twitch', 'kick', 'youtube']),
   messageId: z.string().min(1).max(128),
-  actor: z.object({
-    source: z.literal('zidolista'),
-    userId: z.string().min(1).max(64),
-    name: z.string().min(1).max(80),
-    role: z.string().min(1).max(40),
-  }),
+  actor: ActorSchema,
+});
+
+/** Max délka timeoutu z Chat Logu = Twitch limit 14 dní (Kick se zaokrouhlí na minuty). */
+export const MAX_TIMEOUT_SEC = 1_209_600;
+
+export const IntegrationUserModBody = z.object({
+  platform: z.enum(['twitch', 'kick', 'youtube']),
+  userId: z.string().min(1).max(64),
+  login: z.string().max(60).optional(),
+  durationSec: z.number().int().min(1).max(MAX_TIMEOUT_SEC).optional(),
+  reason: z.string().trim().max(500).optional(),
+  actor: ActorSchema,
 });
 
 export type IntegrationModAction = 'delete' | 'hide' | 'unhide';
@@ -98,7 +120,39 @@ export async function runIntegrationModeration(action: IntegrationModAction, slu
   return { status: 200, body: { ok: true, result } };
 }
 
-export default async function integrationModerationRoutes(app: FastifyInstance) {
+export type IntegrationUserModAction = 'timeout' | 'ban' | 'unban';
+
+export interface IntegrationUserModDeps {
+  workspaceBySlug: (slug: string) => Promise<WorkspaceInfo | null>;
+  /** Deps akce vázané na workspace (kanály platforem i bot JEN z tohoto workspace). */
+  userActionDeps: (ws: WorkspaceInfo) => UserActionDeps;
+}
+
+/**
+ * Timeout / ban / unban z Chat Logu Židolišty. Kanál JEN ze slugu (ws.channels.twitch = UC kanál),
+ * cíl musí být v archivu platformního kanálu workspace, akce jen botem workspace (accountId null).
+ */
+export async function runIntegrationUserModeration(action: IntegrationUserModAction, slug: string, rawBody: unknown, deps: IntegrationUserModDeps): Promise<Out> {
+  const parsed = IntegrationUserModBody.safeParse(rawBody);
+  if (!parsed.success) return { status: 400, body: { ok: false, error: 'body' } };
+  const b = parsed.data;
+  if (action === 'timeout' && !b.durationSec) return { status: 400, body: { ok: false, error: 'durationSec' } };
+
+  const ws = await deps.workspaceBySlug(slug.toLowerCase());
+  if (!ws) return { status: 404, body: { ok: false, error: 'unknown_workspace' } };
+  const channel = ws.channels.twitch;
+  if (!channel) return { status: 404, body: { ok: false, error: 'no_channel' } };
+
+  const out = await runUserAction({
+    channel, accountId: null, by: `zidolista:${b.actor.userId}`, platform: b.platform, userId: b.userId,
+    action, durationSec: action === 'timeout' ? b.durationSec! : null, reason: b.reason || null,
+  }, deps.userActionDeps(ws));
+  // Stejně jako mazání (část 1): uživatel mimo kanál workspace = 200 s výsledkem, ne chyba.
+  if (out.status === 404) return { status: 200, body: { ok: true, result: 'not_found' } };
+  return out;
+}
+
+export default async function integrationModerationRoutes(app: FastifyInstance, opts: { ingest?: Ingest } = {}) {
   const limiter = new RateLimiter(20, 5); // per workspace — Chat Log může mazat dávkou, ale ne bez konce
   const deps: IntegrationModDeps = {
     workspaceBySlug,
@@ -110,6 +164,37 @@ export default async function integrationModerationRoutes(app: FastifyInstance) 
     recordAction: async (v) => { await db.insert(moderationActions).values(v); },
     log: app.log,
   };
+
+  const recordAction = async (v: NewModerationAction) => { await db.insert(moderationActions).values(v); };
+  const userDeps: IntegrationUserModDeps = {
+    workspaceBySlug,
+    userActionDeps: (ws) => {
+      // Workspace pevně ze slugu: kanály (cíl, akce) i bot — nikdy podle kanálu z požadavku.
+      const modDeps: ModDeps = { log: app.log, workspace: async () => ws, youtubeVideoId: (pch) => opts.ingest?.videoIdFor('youtube', pch) ?? null };
+      const targets = dbTargetDeps(async (_channel, platform) => ws.channels[platform]);
+      return {
+        resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
+        publish: (p) => publishUserModerated(p),
+        ban: (p) => banPlatformUser({ ...p, accountId: null }, modDeps),
+        unban: (p) => unbanUser({ ...p, accountId: null }, modDeps),
+        activeBan: (channel, platform, userId) => activeBan(channel, platform, userId),
+        recordBan, clearBan, recordAction,
+        now: Date.now,
+        log: app.log,
+      };
+    },
+  };
+
+  for (const action of ['timeout', 'ban', 'unban'] as const) {
+    app.post<{ Params: { slug: string } }>(`/integrations/:slug/moderation/${action}`, async (req, reply) => {
+      if (!inboundAuthorized(req, reply)) return reply;
+      const slug = String(req.params.slug || '').toLowerCase();
+      if (!limiter.allow(slug)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+      const out = await runIntegrationUserModeration(action, slug, req.body, userDeps);
+      if (out.status === 200) req.log.info({ workspace: slug, action, platform: (req.body as { platform?: string })?.platform, results: out.body.results ?? out.body.result }, 'integration user moderation');
+      return reply.code(out.status).send(out.body);
+    });
+  }
 
   for (const action of ['delete', 'hide', 'unhide'] as const) {
     app.post<{ Params: { slug: string } }>(`/integrations/:slug/moderation/${action}`, async (req, reply) => {

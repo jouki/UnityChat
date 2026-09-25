@@ -1,6 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, type DeleteTargetDeps } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, type DeleteTargetDeps } from './moderation.js';
+
+test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotazu na role), mod → by + platformy', async () => {
+  let asked = 0;
+  const ids = async (_a: number, channel: string) => { asked++; return channel === 'robdiesalot' ? [{ platform: 'kick' as const, login: 'modik' }, { platform: 'twitch' as const, login: 'modik' }] : []; };
+  assert.deepEqual(await resolveModGate(1, 'x!', 'robdiesalot', ids), { error: 'channel' });
+  assert.equal(asked, 0);
+  assert.deepEqual(await resolveModGate(1, 'jouki', 'robdiesalot', ids), { error: 'not_mod' });
+  assert.deepEqual(await resolveModGate(1, 'RobDiesALot', 'x', ids), { channel: 'robdiesalot', accountId: 1, by: 'kick:modik', modPlatforms: ['kick', 'twitch'] });
+});
+
+test('UserActionBody: timeout jen s povolenou délkou, ban/unban bez ní', () => {
+  const b = { platform: 'twitch', userId: '1' };
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 300 }).success, true);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 301 }).success, false);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout' }).success, false);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'ban' }).success, true);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'kill' }).success, false);
+});
+
+test('PermitBody / WarnBody / RenameBody: délky permitu, povinný důvod, null přezdívka = smazat', () => {
+  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 120 }).success, true);
+  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 90 }).success, false);
+  assert.equal(WarnBody.safeParse({ platform: 'kick', userId: '1', reason: '   ' }).success, false);
+  assert.equal(WarnBody.safeParse({ platform: 'kick', userId: '1', reason: 'x'.repeat(501) }).success, false);
+  const r = RenameBody.safeParse({ platform: 'twitch', login: '@Spammer', nickname: null });
+  assert.equal(r.success && r.data.login, 'spammer');
+  assert.equal(RenameBody.safeParse({ platform: 'twitch', login: 's', nickname: 'x'.repeat(31) }).success, false);
+  assert.equal(RenameBody.safeParse({ platform: 'twitch', login: 's', nickname: 'Pan', color: 'red' }).success, false);
+});
 
 test('DeleteBody: platný požadavek projde', () => {
   const r = DeleteBody.safeParse({ platform: 'twitch', messageId: 'abc-123' });

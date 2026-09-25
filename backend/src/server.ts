@@ -25,6 +25,9 @@ import chatLogRoutes from './routes/chatLog.js';
 import reactionRoutes from './routes/reactions.js';
 import moderationRoutes from './routes/moderation.js';
 import integrationModerationRoutes from './routes/integrationModeration.js';
+import accountWarningRoutes from './routes/accountWarnings.js';
+import { disconnectAllAccountStreams } from './lib/accountWarnings.js';
+import { publishUserModerated, recordBan } from './lib/userModeration.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
 import { loadBotLogins } from './lib/botIdentities.js';
@@ -95,6 +98,18 @@ const ingest = createIngest({
       .then((channel) => publishDeleted({ channel, platform: d.platform, messageId: d.messageId, by: null, reason: 'platform' }))
       .catch((err) => app.log.warn({ err: (err as Error)?.message, platform: d.platform }, 'chat ingest: onDelete (mazání z platformy) selhalo'));
   },
+  // Timeout/ban odjinud (Twitch CLEARCHAT) — moderace část 2: stejné SSE user-moderated (by null)
+  // + evidence banu (Unban v nabídce). Echo vlastní akce z UnityChatu publishUserModerated přeskočí.
+  onUserModerated: (d) => {
+    ucChannelFor(d.platform, d.channel)
+      .then(async (channel) => {
+        const action = d.durationSec ? 'timeout' as const : 'ban' as const;
+        const ev = await publishUserModerated({ channel, platform: d.platform, userId: d.userId, login: d.login, action, durationSec: d.durationSec, by: null, source: 'platform' });
+        if (!ev) return;
+        await recordBan({ channel, platform: d.platform, userId: d.userId, login: d.login, until: ev.until ? new Date(ev.until) : null });
+      })
+      .catch((err) => app.log.warn({ err: (err as Error)?.message, platform: d.platform }, 'chat ingest: onUserModerated (CLEARCHAT) selhalo'));
+  },
 });
 app.addHook('onReady', async () => {
   ingest.start();
@@ -110,7 +125,7 @@ app.addHook('onReady', async () => {
   startWorkspaceRefresh(app.log);
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
-app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); });
+app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
@@ -147,8 +162,9 @@ await app.register(webAuthRoutes, { ingest });
 await app.register(integrationRoutes, { ingest });
 await app.register(rawProfileRoutes);
 await app.register(reactionRoutes);
-await app.register(moderationRoutes);
-await app.register(integrationModerationRoutes);
+await app.register(moderationRoutes, { ingest });
+await app.register(integrationModerationRoutes, { ingest });
+await app.register(accountWarningRoutes);
 await app.register(soundboardRoutes);
 await app.register(sfxRequestRoutes);
 await app.register(donateRoutes);

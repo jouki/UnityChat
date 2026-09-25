@@ -5,19 +5,35 @@
 //
 //   GET  /moderation/me?channel=                          (stav pro tlačítko + nabídku scopes)
 //   POST /moderation/delete { channel, platform, messageId }
+//   POST /moderation/user   { channel, platform, userId, action: timeout|ban|unban, durationSec?, reason? }   (část 2)
+//   POST /moderation/warn   { channel, platform, userId, reason }
+//   POST /moderation/permit { channel, platform, userId, durationSec }
+//   PUT  /moderation/nickname { channel, platform, login, nickname|null, color? }
+//   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
+//   Kontrakt: docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md
 //
 // Kdo smí mazat: účet, jehož NĚKTERÁ propojená identita je mod/broadcaster kanálu na SVÉ
 // platformě (accountModIdentities, chatRole.ts) — mod aspoň na jedné platformě smí mazat na
 // všech (deletePlatformMessage/bot to zvládne i bez vlastních scopes dané platformy).
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { moderationActions } from '../db/schema.js';
+import { moderationActions, linkPermits, type NewModerationAction } from '../db/schema.js';
 import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
 import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
-import { deletePlatformMessage, type ModResult } from '../lib/modActions.js';
+import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, TIMEOUT_DURATIONS, type ModResult, type ModDeps } from '../lib/modActions.js';
+import { resolveUserTargets, dbTargetDeps, archivedUserByLogin } from '../lib/moderationTargets.js';
+import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
+import { runUserAction, runWarn, runPermit, runRename, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
+import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
+import { sendAsAccount } from '../lib/accountSend.js';
+import { sendAsBot, BotSendError } from '../lib/botSend.js';
+import { outgoingText } from '../lib/webSend.js';
+import { defaultWorkspace } from '../lib/platformChannels.js';
+import { NicknameField, ColorField, upsertNickname, deleteNickname } from './nicknames.js';
+import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
@@ -94,9 +110,106 @@ const targetDeps: DeleteTargetDeps = {
   messageChannel: archivedMessageChannel,
 };
 
-export default async function moderationRoutes(app: FastifyInstance) {
+// ---- část 2: kontextová nabídka na jméno ----
+const PlatformEnum = z.enum(['twitch', 'kick', 'youtube']);
+const UserIdField = z.string().min(1).max(64);
+const ReasonField = z.string().trim().max(REASON_MAX);
+
+export const UserActionBody = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  userId: UserIdField,
+  /** Klient ho posílá pro čitelnost; server bere login z archivu. */
+  login: z.string().max(60).optional(),
+  action: z.enum(['timeout', 'ban', 'unban']),
+  durationSec: z.number().int().optional(),
+  reason: ReasonField.optional(),
+}).refine((b) => b.action !== 'timeout' || (TIMEOUT_DURATIONS as readonly number[]).includes(b.durationSec ?? -1), { message: 'durationSec', path: ['durationSec'] });
+
+export const WarnBody = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  userId: UserIdField,
+  login: z.string().max(60).optional(),
+  reason: ReasonField.min(1),
+});
+
+export const PermitBody = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  userId: UserIdField,
+  login: z.string().max(60).optional(),
+  durationSec: z.number().int().refine((d) => (PERMIT_DURATIONS as readonly number[]).includes(d)),
+});
+
+export const RenameBody = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  login: z.string().min(1).max(60).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
+  nickname: NicknameField.nullable(),
+  color: ColorField,
+});
+
+export const UserStateQuery = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  userId: UserIdField,
+});
+
+export type Gate = { channel: string; accountId: number; by: string; modPlatforms: Platform[] };
+
+/**
+ * Ověření moda pro routy části 2 (bez HTTP): kanál → lowercase + formát, pak accountModIdentities.
+ * Mod = některá identita účtu je mod/broadcaster kanálu na své platformě; broadcaster jen
+ * vlastního kanálu (login == kanál). Cizí kanál práva nedá — a cíl akce musí být navíc v archivu
+ * kanálu (moderationTargets), takže vlastní neregistrovaný kanál nic nezmůže.
+ */
+export async function resolveModGate(
+  accountId: number,
+  rawChannel: string | undefined,
+  fallback: string,
+  modIdentities: (accountId: number, channel: string) => Promise<Array<{ platform: Platform; login: string }>>,
+): Promise<Gate | { error: 'channel' | 'not_mod' }> {
+  const channel = parseChannel(rawChannel, fallback);
+  if (!channel) return { error: 'channel' };
+  const mods = await modIdentities(accountId, channel);
+  if (mods.length === 0) return { error: 'not_mod' };
+  return { channel, accountId, by: `${mods[0].platform}:${mods[0].login}`, modPlatforms: mods.map((m) => m.platform) };
+}
+
+export default async function moderationRoutes(app: FastifyInstance, opts: { ingest?: Ingest } = {}) {
   const limiter = new RateLimiter(10, 2);
   const DEFAULT_CHANNEL = (config.CHAT_INGEST_CHANNELS.split(',').find((c) => c.startsWith('twitch:'))?.split(':')[1] || 'robdiesalot').toLowerCase();
+
+  /**
+   * Společná brána rout části 2: rate limit, kanál, ověření moda (resolveModGate) PŘED čímkoli
+   * dalším (SSE, platforma, DB). null = odpověď už odeslaná.
+   */
+  const modGate = async (req: FastifyRequest, reply: FastifyReply, rawChannel: string | undefined, rateLimit = true): Promise<Gate | null> => {
+    const accountId = req.webAccountId!;
+    if (rateLimit && !limiter.allow(String(accountId))) { reply.code(429).send({ ok: false, error: 'rate_limited' }); return null; }
+    const g = await resolveModGate(accountId, rawChannel, DEFAULT_CHANNEL, accountModIdentities);
+    if ('error' in g) {
+      if (g.error === 'not_mod') req.log.info({ accountId, route: req.routeOptions.url }, 'moderation: not_mod');
+      reply.code(g.error === 'channel' ? 400 : 403).send({ ok: false, error: g.error });
+      return null;
+    }
+    return g;
+  };
+
+  const modDeps: ModDeps = { log: app.log, youtubeVideoId: (pch) => opts.ingest?.videoIdFor('youtube', pch) ?? null };
+  const targets = dbTargetDeps((channel, platform) => registryPlatformChannel(channel, platform));
+  const recordAction = async (v: NewModerationAction) => { await db.insert(moderationActions).values(v); };
+  const userActionDeps: UserActionDeps = {
+    resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
+    publish: (p) => publishUserModerated(p),
+    ban: (p) => banPlatformUser(p, modDeps),
+    unban: (p) => unbanUser(p, modDeps),
+    activeBan: (channel, platform, userId) => activeBan(channel, platform, userId),
+    recordBan, clearBan, recordAction,
+    now: Date.now,
+    log: app.log,
+  };
 
   app.get<{ Querystring: { channel?: string } }>('/moderation/me', { preHandler: requireWebSession }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -165,5 +278,88 @@ export default async function moderationRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ ok: true, result });
+  });
+
+  // ---- část 2: timeout / ban / unban na všech platformách, kde člověka známe ----
+  app.post('/moderation/user', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = UserActionBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const g = await modGate(req, reply, body.data.channel);
+    if (!g) return reply;
+    const out = await runUserAction({
+      channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId,
+      action: body.data.action, durationSec: body.data.action === 'timeout' ? body.data.durationSec! : null, reason: body.data.reason || null,
+    }, userActionDeps);
+    if (out.status === 200) req.log.info({ accountId: g.accountId, channel: g.channel, action: body.data.action, results: out.body.results }, 'moderation user');
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- varování (Twitch nativně + uživatel UnityChatu napříč platformami) ----
+  app.post('/moderation/warn', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = WarnBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const g = await modGate(req, reply, body.data.channel);
+    if (!g) return reply;
+    const out = await runWarn({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId, reason: body.data.reason }, {
+      resolveTargets: userActionDeps.resolveTargets,
+      warnTwitch: (p) => warnUser(p, modDeps),
+      createWarning, sendToAccount, recordAction,
+      log: app.log,
+    });
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- permit: !permit <login> do chatu + náš permit (část 3) ----
+  app.post('/moderation/permit', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = PermitBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const g = await modGate(req, reply, body.data.channel);
+    if (!g) return reply;
+    const out = await runPermit({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId, durationSec: body.data.durationSec, modPlatforms: g.modPlatforms }, {
+      resolveTargets: userActionDeps.resolveTargets,
+      insertPermits: async (rows) => { if (rows.length) await db.insert(linkPermits).values(rows); },
+      sendAsMod: async (platform, text) => { await sendAsAccount({ accountId: g.accountId, platform, channel: g.channel, text: outgoingText(text), ingest: opts.ingest, log: req.log }); },
+      sendAsBot: async (platform, text) => {
+        const ws = await defaultWorkspace(g.channel);
+        if (!ws) throw new BotSendError('no workspace', 404, 'no_actor');
+        await sendAsBot({ workspace: ws.slug, platform, text }, { ingest: opts.ingest, log: req.log });
+      },
+      recordAction,
+      now: Date.now,
+      log: req.log,
+    });
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- přejmenování: mod nastaví/smaže divákovi přezdívku (bez 10s limitu /nicknames) ----
+  app.put('/moderation/nickname', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = RenameBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const g = await modGate(req, reply, body.data.channel);
+    if (!g) return reply;
+    const out = await runRename({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, login: body.data.login, nickname: body.data.nickname, color: body.data.color ?? null }, {
+      findUser: async (channel, platform, login) => {
+        const pch = await registryPlatformChannel(channel, platform);
+        return pch ? archivedUserByLogin(platform, pch, login) : null;
+      },
+      upsert: upsertNickname,
+      remove: deleteNickname,
+      recordAction,
+      log: req.log,
+    });
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- stav banu pro nabídku (Unban místo Timeout/Zabanovat) ----
+  app.get('/moderation/user-state', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const q = UserStateQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
+    const g = await modGate(req, reply, q.data.channel, false);
+    if (!g) return reply;
+    let ban: Awaited<ReturnType<typeof activeBan>> = null;
+    try { ban = await activeBan(g.channel, q.data.platform, q.data.userId); }
+    catch (e) { req.log.warn({ err: (e as Error).message }, 'moderation user-state: dotaz selhal'); }
+    return { ok: true, banned: !!ban, until: ban?.until ? ban.until.getTime() : null };
   });
 }
