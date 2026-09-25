@@ -1126,9 +1126,15 @@ class UnityChat {
     const un = document.getElementById('input-username');
     if (un) un.readOnly = !on;
     document.body.classList.toggle('uc-dev', on);
-    const dono = document.body.classList.contains('uc-dono');
-    this._qdDock?.setAvailable(on || dono);
-    if (!on && !dono) this._qd?.close?.();
+    this._updateQrAvailability();
+  }
+
+  /** QR dono jen pro přihlášené, u kanálu s dary (body.uc-dono) nebo v Dev mode. */
+  _updateQrAvailability() {
+    const b = document.body.classList;
+    const on = this._signedIn === true && (b.contains('uc-dono') || b.contains('uc-dev'));
+    this._qdDock?.setAvailable(on);
+    if (!on) this._qd?.close?.();
   }
 
   /** QR dono tlačítko jen u kanálu, kde má streamer v Židolištce nastavené dary (body.uc-dono). */
@@ -1141,9 +1147,7 @@ class UnityChat {
     } catch (e) { this._ucLog('QrDono', `dostupnost fail ${e?.error || e}`); }
     if (ch !== (this.config.channel || '').toLowerCase()) return; // mezitím přepnutý kanál
     document.body.classList.toggle('uc-dono', on);
-    const dev = document.body.classList.contains('uc-dev');
-    this._qdDock?.setAvailable(on || dev);
-    if (!on && !dev) this._qd?.close?.();
+    this._updateQrAvailability();
     this._ucLog('QrDono', `${ch}: ${on ? 'dary zapnuté' : 'bez darů'}`);
   }
 
@@ -1211,7 +1215,7 @@ class UnityChat {
       });
       // Pill bodů/bitů se objeví nebo zmizí → řádek otevřít/zavřít.
       new MutationObserver(() => this._qdDock.update()).observe(row, { subtree: true, attributes: true, attributeFilter: ['class'] });
-      this._qdDock.setAvailable(this.config.devMode === true);
+      this._updateQrAvailability();
     }
     this._ucLog('QrDono', 'zapnuto');
     this._refreshDonoAvailability();
@@ -4496,6 +4500,8 @@ class UnityChat {
     this._qd?.refreshIdentity?.();
     // E-mail v nastavení patří k účtu → bez přihlášení skrytý.
     document.body.classList.toggle('uc-signed-out', !linked.length);
+    this._signedIn = linked.length > 0;
+    this._updateQrAvailability();
     this._emailSettings?.refresh?.();
   }
 
