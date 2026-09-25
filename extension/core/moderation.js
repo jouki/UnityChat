@@ -3,24 +3,27 @@
 // nebo CLEARMSG), „skryto" = UnityChat zprávu jen lokálně schová bez zásahu
 // na platformě („Jen UC skrýt" — divák jinde v chatu zprávu dál vidí).
 //
-// Styly pro smazané zprávy (konfigurovatelné, `style` param):
-//   'label'  — text zmizí, zůstane kurzívní poznámka (výchozí)
-//   'dim'    — text zůstane, jen ztlumený + malý štítek
-//   'strike' — text zůstane přeškrtnutý + štítek
-//   'hide'   — zpráva úplně zmizí z DOM
+// Režimy (`mode`): 'label' = „Zpráva smazána" místo textu, 'dim' = původní text + štítek „Smazáno",
+// 'strike' = přeškrtnutý text + štítek, 'hide' = zpráva zmizí.
 //
-// Divák: styl podle nastavení; skrytou zprávu nevidí vůbec ('hide'); bez obsahu (historie a stream
-// obsah smazané zprávy neposílají) vždy „Zpráva smazána".
-// Moderátor (rozhodnutí usera 2026-09-25): smazaná i skrytá zpráva je VŽDY ztlumená a VŽDY má štítek
-// („Smazáno" / „Skryto v UnityChatu"); nastavení volí jen přeškrtnutý text ('strike'), ztlumený text
-// ('dim') nebo „Zpráva smazána" místo textu ('label'; 'hide' se u moda chová jako 'label' — mod zprávu
-// vždy vidí). Text smazané zprávy si mod dotáhne přes `GET /moderation/deleted-content` (DeletedContentLoader).
-// `raw` (neanonymizovaný log/audit pohled) = u smazané zprávy vždy 'label' bez ohledu na roli.
+// Rozhodnutí usera 2026-09-25 (verze 2):
+// - Divák nemá na výběr: smazaná zpráva = zašedlé „Zpráva smazána" (bez přeškrtnutí a bez štítku),
+//   skrytou zprávu nevidí vůbec ('hide').
+// - Mod volí v nastavení (MOD_DELETED_STYLES) — vždy zašedlé: 'label' („Zpráva smazána", bez štítku),
+//   'dim' (text + štítek), 'strike' (přeškrtnutý text + štítek); uložené 'hide' / neznámé = 'label'.
+//   Text smazané zprávy si mod dotáhne přes `GET /moderation/deleted-content` (DeletedContentLoader).
+// - OBS (`raw`): smazané i skryté zprávy se skryjí ('hide'). Volba „Skryté" je jen pro OBS.
 //
 // Žádné chrome.*, žádný globální DOM — vše se předává přes parametry.
 
 export const DELETED_STYLES = ['label', 'dim', 'strike', 'hide'];
 export const DEFAULT_DELETED_STYLE = 'label';
+/** Volby nastavení „Smazané zprávy" (jen mod; 'hide' je jen pro OBS a lidem se nenabízí). */
+export const MOD_DELETED_STYLES = [
+  { id: 'label', label: 'Zpráva smazána' },
+  { id: 'dim', label: 'Zašedlé' },
+  { id: 'strike', label: 'Přeškrtnuté' },
+];
 
 /** Ikona „Odkrýt zprávu (jen v UnityChatu)“ — oko ve stylu ostatních ikon akcí (hover akce chatu, Profil). */
 export const EYE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -31,16 +34,16 @@ export const RESTORE_TITLE = 'Odkrýt zprávu (jen v UnityChatu)';
  * Vzhled smazané/skryté zprávy pro daného diváka.
  * @param {{style?: string, isMod?: boolean, raw?: boolean, hidden?: boolean}} opts
  * @returns {{mode: 'label'|'dim'|'strike'|'hide', dimmed: boolean, tag: boolean}}
- *   dimmed = ztlumit zprávu i v režimu 'label', tag = štítek i v režimu 'label' (obojí jen mod)
+ *   dimmed = zašednout zprávu, tag = štítek „Smazáno" / „Skryto v UnityChatu" (jen mod u 'dim' / 'strike')
  */
 export function deletedView({ style, isMod, raw, hidden } = {}) {
-  if (isMod && (hidden || !raw)) {
-    const mode = style === 'strike' || style === 'dim' ? style : 'label';
-    return { mode, dimmed: true, tag: true };
+  if (raw) return { mode: 'hide', dimmed: false, tag: false };
+  if (isMod) {
+    if (style === 'strike' || style === 'dim') return { mode: style, dimmed: true, tag: true };
+    return { mode: 'label', dimmed: true, tag: false };
   }
   if (hidden) return { mode: 'hide', dimmed: false, tag: false };
-  if (raw) return { mode: 'label', dimmed: false, tag: false };
-  return { mode: DELETED_STYLES.includes(style) ? style : DEFAULT_DELETED_STYLE, dimmed: false, tag: false };
+  return { mode: 'label', dimmed: true, tag: false };
 }
 
 /**
@@ -56,12 +59,14 @@ export function deletedMode(opts = {}) {
  * opakované volání se stejnými (nebo jinými) opts nezdvojí štítky ani labely.
  * Nikdy nepoužívá innerHTML s nedůvěryhodným textem (jen textContent).
  * @param {HTMLElement} el       kořenový element zprávy (`.msg`)
- * @param {{mode: string, label?: string, hasContent?: boolean, hidden?: boolean, dimmed?: boolean, tag?: boolean}} opts
- *   dimmed/tag = z deletedView (mod: ztlumení + štítek i u „Zpráva smazána")
+ * @param {{mode: string, label?: string, hasContent?: boolean, hidden?: boolean, dimmed?: boolean, tag?: boolean, restorable?: boolean}} opts
+ *   dimmed/tag = z deletedView; restorable = zprávu smazal / skryl server (SSE message-deleted / -hidden,
+ *   historie) → třída `uc-deleted--restorable` (mod u ní místo koše vidí oko „Odkrýt zprávu").
+ *   Zprávy ztlumené jen kvůli timeoutu / banu (user-moderated) ji nedostanou — server je smazané nemá.
  */
 export function applyDeleted(el, opts = {}) {
   if (!el) return;
-  const { mode: rawMode, hasContent = true, hidden = false, dimmed = false, tag: forceTag = false } = opts;
+  const { mode: rawMode, hasContent = true, hidden = false, dimmed = false, tag: forceTag = false, restorable = false } = opts;
   const label = opts.label || (hidden ? 'Zpráva skryta' : 'Zpráva smazána');
   const wanted = DELETED_STYLES.includes(rawMode) ? rawMode : DEFAULT_DELETED_STYLE;
   // Bez textu (divák / nepřihlášený u zprávy smazané dřív) není co přeškrtnout ani ztlumit → „Zpráva smazána“
@@ -72,11 +77,14 @@ export function applyDeleted(el, opts = {}) {
     // Nejdřív smazat případný předchozí stav (tag/jiné mode třídy, obal emotů), pak schovat.
     clearDeleted(el);
     el.classList.add('uc-deleted', 'uc-deleted--hide');
+    if (restorable) el.classList.add('uc-deleted--restorable');
     el.hidden = true;
     return;
   }
 
   el.hidden = false;
+  if (restorable) el.classList.add('uc-deleted--restorable');
+  else el.classList.remove('uc-deleted--restorable');
   for (const m of DELETED_STYLES) el.classList.remove(`uc-deleted--${m}`);
   el.classList.add('uc-deleted', `uc-deleted--${mode}`);
   if (dimmed) el.classList.add('uc-deleted--dimmed');
@@ -155,7 +163,7 @@ function unwrapStrikeEmotes(tx) {
  */
 export function clearDeleted(el) {
   if (!el) return;
-  el.classList.remove('uc-deleted', 'uc-deleted--dimmed');
+  el.classList.remove('uc-deleted', 'uc-deleted--dimmed', 'uc-deleted--restorable');
   for (const m of DELETED_STYLES) el.classList.remove(`uc-deleted--${m}`);
   const tag = typeof el.querySelector === 'function' ? el.querySelector('.uc-deleted-tag') : null;
   if (tag && typeof tag.remove === 'function') tag.remove();

@@ -35,7 +35,7 @@ const DEFAULTS = {
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
   acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
   mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
-  deletedStyle: 'label', // vzhled smazané zprávy pro diváka: label | dim | strike | hide (core/moderation.js)
+  deletedStyle: 'label', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js; divák nemá volbu)
 };
 
 // =============================================================
@@ -1666,7 +1666,8 @@ class UnityChat {
     // Vzhled smazaných zpráv (core/moderation.js) — změna se hned promítne do vykreslených zpráv
     const delSel = $('input-deleted-style');
     if (delSel) {
-      const styles = window.UC_CORE?.DELETED_STYLES || ['label', 'dim', 'strike', 'hide'];
+      // Jen 3 volby pro moda (MOD_DELETED_STYLES); uložené 'hide' se ukáže jako „Zpráva smazána“.
+      const styles = (window.UC_CORE?.MOD_DELETED_STYLES || []).map((o) => o.id);
       delSel.value = styles.includes(this.config.deletedStyle) ? this.config.deletedStyle : 'label';
       delSel.addEventListener('change', () => {
         this.config.deletedStyle = delSel.value;
@@ -4477,7 +4478,7 @@ class UnityChat {
       if (n) this._ucLog('Gif', `smazaný GIF ${msg.platform}:${el.dataset.msgId} → médium pryč`);
     }
     const hasContent = this._msgHasContent(msg);
-    // Mod: vždy ztlumené + štítek, nastavení volí přeškrtnutí / „Zpráva smazána" (core deletedView).
+    // Divák: vždy zašedlé „Zpráva smazána"; mod volí label / zašedlé / přeškrtnuté (core deletedView).
     const view = core.deletedView({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
     // Přechod z „Zpráva smazána" na styl s textem → text zpátky z dat.
     const tx = el.querySelector('.tx');
@@ -4485,7 +4486,10 @@ class UnityChat {
       tx.innerHTML = this._renderMsgBody(msg);
       this._processMentions(tx, msg.platform);
     }
-    core.applyDeleted(el, { ...view, hidden, hasContent });
+    // Smazal / skryl ji server (historie, SSE message-deleted / -hidden) → mod může odkrýt (oko).
+    // Ztlumení jen po timeoutu / banu (user-moderated) ne — server ji smazanou nemá.
+    const restorable = !!(msg.deleted || msg.hidden || msg._srvDeleted || msg._srvHidden);
+    core.applyDeleted(el, { ...view, hidden, hasContent, restorable });
     // Historie/stream posílají smazanou zprávu bez obsahu — mod si text dotáhne (dávkově, jednou).
     const id = msg?.id != null ? String(msg.id) : '';
     if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && this.store.get(msg.id) === msg) {
@@ -4566,9 +4570,11 @@ class UnityChat {
     if (!id) return 0;
     const cached = this.store.get(String(id)) || this.store.get(id);
     const msg = cached && (!platform || cached.platform === platform) ? cached : null;
-    if (msg) { if (hidden) msg._hidden = true; else msg._deleted = true; }
+    if (msg) { if (hidden) { msg._hidden = true; msg._srvHidden = true; } else { msg._deleted = true; msg._srvDeleted = true; } }
     const els = this._msgEls(id, platform);
-    for (const el of els) this._paintDeleted(el, msg || { platform, [hidden ? '_hidden' : '_deleted']: true, message: el.querySelector('.tx')?.textContent || '' });
+    const key = hidden ? '_hidden' : '_deleted';
+    const srv = hidden ? '_srvHidden' : '_srvDeleted';
+    for (const el of els) this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, message: el.querySelector('.tx')?.textContent || '' });
     return els.length;
   }
 
@@ -4576,7 +4582,7 @@ class UnityChat {
   _undoDeleted(platform, id) {
     if (this._serverDeleted?.has(String(id))) { this._ucLog('Mod', `undo ${platform}:${id} přeskočeno — smazání potvrdil server`); return; }
     const msg = this.store.get(String(id));
-    if (msg) msg._deleted = false;
+    if (msg) { msg._deleted = false; msg._srvDeleted = false; }
     for (const el of this._msgEls(id, platform)) {
       if (msg && this._isModerated({ ...msg, deleted: false })) this._paintDeleted(el, msg);
       else this._restoreMessage(el, msg);
@@ -4628,10 +4634,10 @@ class UnityChat {
     }
     if (msg) {
       if (restore) {
-        msg._deleted = false; msg.deleted = false; delete msg.deletedReason;
+        msg._deleted = false; msg.deleted = false; msg._srvDeleted = false; delete msg.deletedReason;
         if (fresh) for (const [k, v] of Object.entries(fresh)) if (v !== undefined && !['id', 'platform', 'historical', 'deleted', 'deletedReason', 'hidden'].includes(k)) msg[k] = v;
       } else {
-        msg._hidden = false; msg.hidden = false;
+        msg._hidden = false; msg.hidden = false; msg._srvHidden = false;
         if (fresh) for (const k of ['message', 'ytRuns', 'kickContent', 'twitchEmotes', 'twitchEmotesOffset']) if (fresh[k] !== undefined) msg[k] = fresh[k];
       }
     }
@@ -4695,6 +4701,9 @@ class UnityChat {
     const changed = can !== !!this._canModerate;
     this._canModerate = can;
     document.body.classList.toggle('uc-can-moderate', can);
+    // Volba vzhledu smazaných zpráv jen pro moda (divák má vždy zašedlé „Zpráva smazána“).
+    const delRow = document.getElementById('row-deleted-style');
+    if (delRow) delRow.hidden = !can;
     // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu) a dotažený se zahodí.
     if (!can) { this._deletedLoaderInst?.reset(); this._dropModContent(); }
     // Chybějící mod scopes účtu (core ModMenu: po 'bot' / 'error:no_actor' nabídne přihlášení s moderací).
@@ -4842,8 +4851,8 @@ class UnityChat {
       messageId: confirmed ? id : null,
       nickname: nick?.nickname || null,
       color: nick?.color || null,
-      // Smazaná / skrytá zpráva → v nabídce „Odkrýt zprávu“ místo „Smazat zprávu“.
-      deleted: !!el?.classList.contains('uc-deleted'),
+      // Zprávu smazal / skryl server → v nabídce „Odkrýt zprávu“ místo „Smazat zprávu“ (ne po timeoutu / banu).
+      deleted: !!el?.classList.contains('uc-deleted--restorable'),
     };
   }
 
@@ -4865,7 +4874,7 @@ class UnityChat {
   _applyRestored(t, res) {
     if (res?.result !== 'ok' || !t?.messageId || !res.message) return;
     const msg = this.store.get(String(t.messageId));
-    if (msg) { msg._hidden = false; msg.hidden = false; }
+    if (msg) { msg._hidden = false; msg.hidden = false; msg._srvHidden = false; }
     const n = this._unhideMessage({ platform: t.platform, messageId: t.messageId, message: res.message }, { restore: true });
     this._ucLog('Mod', `restore → ${t.platform}:${t.messageId} (${n} el)`);
   }

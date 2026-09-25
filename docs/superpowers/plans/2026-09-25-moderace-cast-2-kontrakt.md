@@ -380,8 +380,11 @@ Bearer + mod `channel` (`resolveModGate`, nemod → `403 not_mod`, DB se nečte)
 - Klient (sdílený core `extension/core/moderation.js`): `DeletedContentLoader({ api, channel, onContent })`
   sbírá požadavky 250 ms, dedup, po 100 klíčích; `request(platform, id)` volat u moda pro každou vykreslenou
   smazanou/skrytou zprávu bez obsahu, `reset()` při přepnutí kanálu. Vzhled: `deletedView({ style, isMod, raw, hidden })`
-  → `{ mode, dimmed, tag }` pro `applyDeleted(el, { mode, dimmed, tag, hasContent, hidden })` — mod má vždy ztlumení
-  + štítek, nastavení volí přeškrtnutí (`strike`) / ztlumený text (`dim`) / „Zpráva smazána“ (`label`, i `hide`).
+  → `{ mode, dimmed, tag }` pro `applyDeleted(el, { mode, dimmed, tag, hasContent, hidden, restorable })`.
+  Vzhled (user 2026-09-25 v2): **divák** vždy zašedlé „Zpráva smazána“ bez štítku a bez přeškrtnutí (skrytou nevidí);
+  **mod** volí (`MOD_DELETED_STYLES`, řádek nastavení jen pro moda) `label` (zašedlé „Zpráva smazána“, bez štítku) /
+  `dim` (zašedlý text + štítek) / `strike` (zašedlý přeškrtnutý text + štítek), uložené `hide` = `label`;
+  **OBS (`raw`)** smazané i skryté zprávy skryje (`hide`). Bez textu se `dim`/`strike` kreslí jako label.
 
 ## Odkrytí zprávy jen v UnityChatu (2026-09-25)
 Mod u **smazané** nebo **skryté** zprávy místo „Smazat zprávu“ vidí „Odkrýt zprávu“ (nabídka) a ikonu oka
@@ -410,9 +413,13 @@ Profil (bez SSE) z ní řádek vykreslí; chat stejně dostane `message-restored
 ignoruje — zpráva je na platformě smazaná, další smazání je jen ozvěna. Samotný 60s dedup `publishDeleted` nestačí:
 obnovení ho maže (`forgetPublished`) a ozvěna po vlastním smazání modem může přijít až po odkrytí. Smazání modem
 nebo filtrem značku zruší (nové rozhodnutí). Stejnou značku dává i obnovení permitem; obnovení po neúspěšném
-převodu GIFu ne (tam se na platformě nic nesmazalo). Značka je jen v paměti procesu (restart ji zapomene).
+převodu GIFu ne (tam se na platformě nic nesmazalo). Značka je jen v paměti procesu (restart ji zapomene),
+tvrdý strop `RESTORED_MAX` = 2000 značek (nejstarší se zahodí).
 
-Klient: `menuModel({ …, deleted: true })` → bez „Smazat zprávu“, s „Odkrýt zprávu“ (`buildModRequest('restore')`);
+Klient: `menuModel({ …, deleted: true })` → bez „Smazat zprávu“, s „Odkrýt zprávu“ (`buildModRequest('restore')`).
+Oko / „Odkrýt“ jen u zpráv, které smazal nebo skryl server (historie `deleted`/`hidden`, SSE `message-deleted` /
+`message-hidden`) — `applyDeleted(…, { restorable: true })` → třída `uc-deleted--restorable`. Zprávy ztlumené jen
+po timeoutu / banu (`user-moderated`) ji nemají (server je smazané nemá), koš u nich zůstává;
 po `message-restored` / `message-unhidden` (i od jiného moda) klient zprávu vykreslí zpět a v hover akcích
 se vrátí koš.
 

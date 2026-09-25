@@ -823,15 +823,16 @@ export class UserHistoryPanel {
   }
 
   /** Smazaná / skrytá zpráva stejně jako v chatu (core deletedView + applyDeleted; Profil vidí jen mod). */
-  _paintGone(row, { deleted = true, hidden = false, hasContent = true } = {}) {
+  /** restorable = zprávu smazal / skryl server (ne jen ztlumení po timeoutu / banu) → oko místo koše. */
+  _paintGone(row, { deleted = true, hidden = false, hasContent = true, restorable = true } = {}) {
     let style = 'label';
     try { style = this.deletedStyle() || 'label'; } catch {}
     const view = deletedView({ style, isMod: true, hidden: !deleted && hidden });
-    applyDeleted(row, { ...view, hidden: !deleted && hidden, hasContent });
+    applyDeleted(row, { ...view, hidden: !deleted && hidden, hasContent, restorable });
     row.classList.add('uc-uh-msg--gone');
-    // Koš → oko (Odkrýt zprávu jen v UnityChatu).
     const del = row.querySelector('.uc-uh-act[data-act="delete"]');
-    if (del && row._uhMsg) del.replaceWith(this._actBtn('restore', row._uhMsg));
+    // Koš → oko (Odkrýt zprávu jen v UnityChatu); po timeoutu / banu jen schovat koš jako dřív.
+    if (del && restorable && row._uhMsg) del.replaceWith(this._actBtn('restore', row._uhMsg));
     else del?.remove();
   }
 
@@ -942,7 +943,9 @@ export class UserHistoryPanel {
       const tag = modTagText({ action: kind, durationSec: x.durationSec ?? null });
       for (const row of this._rows()) {
         if (!row.classList.contains('uc-uh-msg') || row.dataset.platform !== t.platform || row.dataset.userId !== String(t.userId)) continue;
-        this._paintGone(row, { deleted: true, hasContent: !!row.querySelector('.tx')?.textContent });
+        // Timeout / ban zprávy v archivu nesmaže — jen ztlumení, bez oka (není co odkrýt).
+        const restorable = row.classList.contains('uc-deleted--restorable');
+        this._paintGone(row, { deleted: true, hasContent: !!row.querySelector('.tx')?.textContent, restorable });
         applyModTag(row, tag);
         n++;
       }

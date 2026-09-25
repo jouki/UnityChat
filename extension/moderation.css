@@ -68,11 +68,14 @@
 .msg-action-btn[data-act="delete"] { display: none; }
 body.uc-can-moderate .msg-action-btn[data-act="delete"] { display: flex; }
 body.uc-can-moderate .msg-action-btn[data-act="delete"]:hover { color: #ff9a9d; }
-/* Smazaná / skrytá zpráva: místo koše oko „Odkrýt zprávu (jen v UnityChatu)“ — přepíná se jen třídou
-   .uc-deleted (applyDeleted / clearDeleted), takže po odkrytí (i přes SSE od jiného moda) se vrátí koš. */
+/* Zpráva smazaná / skrytá serverem: místo koše oko „Odkrýt zprávu (jen v UnityChatu)“ — přepíná se jen třídou
+   .uc-deleted--restorable (applyDeleted / clearDeleted), takže po odkrytí (i přes SSE od jiného moda) se vrátí
+   koš. Zprávy ztlumené jen po timeoutu / banu tu třídu nemají (server je smazané nemá) → koš zůstává. */
 .msg-action-btn[data-act="restore"] { display: none; }
-body.uc-can-moderate .msg.uc-deleted .msg-action-btn[data-act="delete"] { display: none; }
-body.uc-can-moderate .msg.uc-deleted .msg-action-btn[data-act="restore"] { display: flex; }
+/* Řádek nastavení „Smazané zprávy" jen pro moda (`.setting-row { display: flex }` by přebilo atribut hidden). */
+#row-deleted-style[hidden] { display: none; }
+body.uc-can-moderate .msg.uc-deleted--restorable .msg-action-btn[data-act="delete"] { display: none; }
+body.uc-can-moderate .msg.uc-deleted--restorable .msg-action-btn[data-act="restore"] { display: flex; }
 body.uc-can-moderate .msg-action-btn[data-act="restore"]:hover { color: #7fd0ff; }
 
 /* Systémový řádek s akcí (např. „Povolit moderaci účtem"). */

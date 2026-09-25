@@ -359,7 +359,7 @@ check('H 9 ikony akcí u zprávy: smazat / timeout / ban / permit', acts === 'de
 mock.deleteResult = 'error:no_actor';
 await ev(`document.querySelector('.uc-uh-msg[data-id="e2e-a1"] .uc-uh-act[data-act="delete"]').click()`);
 check('H 9 smazání z Profilu → POST /moderation/delete', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20 && !posts.del.length; i++) await sleep(150); return posts.del[0]?.messageId === 'e2e-a1' && posts.del[0]?.platform === 'twitch' && posts.del[0]?.channel === 'robdiesalot'; })(), JSON.stringify(posts.del[0]));
-check('H 9 řádek po smazání = styl smazané zprávy (mod: štítek + ztlumení), oko místo koše', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return r.classList.contains('uc-deleted') && r.classList.contains('uc-deleted--dimmed') && !!r.querySelector('.uc-deleted-tag') && !r.querySelector('.uc-uh-act[data-act="delete"]') && r.querySelector('.uc-uh-act')?.dataset.act === 'restore'; })()`, 3000));
+check('H 9 řádek po smazání = styl smazané zprávy (mod „Zpráva smazána": zašedlé, bez štítku), oko místo koše', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return r.classList.contains('uc-deleted') && r.classList.contains('uc-deleted--dimmed') && !r.querySelector('.uc-deleted-tag') && r.classList.contains('uc-deleted--restorable') && !r.querySelector('.uc-uh-act[data-act="delete"]') && r.querySelector('.uc-uh-act')?.dataset.act === 'restore'; })()`, 3000));
 const sysDel = await ev(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; const s = a[a.length - 1]; return s ? s.textContent + '|' + (s.querySelector('.sys-action')?.textContent || '-') : null; })()`);
 check('H 6 no_actor + chybějící scopes → „Obnovit přihlášení (moderace)" (Twitch)', sysDel === 'Na Twitchi se akce nepovedla — tvůj účet nemá oprávnění moderovat. Obnovit přihlášení (moderace)|Obnovit přihlášení (moderace)', sysDel);
 // Oko v Profilu → POST restore → řádek znovu s textem a košem (odpověď nese celou zprávu).
@@ -374,6 +374,7 @@ check('H 9 ikona timeoutu → nabídka rovnou s délkami', await until(`!!docume
 await ev(`document.querySelector('.uc-mod-menu [data-id="timeout:300"]').click()`);
 check('H 9 timeout z Profilu → POST s userId a délkou', await until(`!document.querySelector('.uc-mod-menu')`, 2000) && await (async () => { for (let i = 0; i < 20 && posts.user.length === nUser2; i++) await sleep(150); const b = posts.user.at(-1); return b?.action === 'timeout' && b.userId === 'u1' && b.durationSec === 300; })(), JSON.stringify(posts.user.at(-1)));
 check('H 9 po timeoutu: zprávy uživatele v Profilu smazané + štítek „Timeout (5 min)"', await until(`[...document.querySelectorAll('.uc-uh-msg')].every(r => r.classList.contains('uc-deleted') && r.querySelector('.uc-mod-tag')?.textContent === 'Timeout (5 min)')`, 3000));
+check('H 9 po timeoutu: bez koše i bez oka (server zprávy nesmazal)', await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="h-rep"]'); return !r.querySelector('.uc-uh-act[data-act="delete"]') && !r.querySelector('.uc-uh-act[data-act="restore"]') && !r.classList.contains('uc-deleted--restorable'); })()`) === true);
 check('H 6 timeout no_actor → nabídka přihlášení i u akce z nabídky', await until(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; return a.some(s => s.textContent.startsWith('Na Twitchi se akce nepovedla') && s !== a[0]) && a.filter(s => s.querySelector('.sys-action')).length >= 2; })()`, 3000));
 mock.userResults = { twitch: 'ok', kick: 'bot' }; mock.deleteResult = 'ok';
 await ev(`document.querySelector('.uc-uh-tab[data-channel="arcadebulls"]').click()`);
@@ -388,7 +389,7 @@ await ev(`document.querySelector('.uc-uh-retry').click()`);
 check('H Zkusit znovu → starší zprávy nahoře, hláška pryč', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 4 && document.querySelector('.uc-uh-list .uc-uh-msg').dataset.id === 'h-b0' && !document.querySelector('.uc-uh-older-fail')`, 3000),
   await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`));
 check('H aktivní záložka přepnutá', await ev(`document.querySelector('.uc-uh-tab--on')?.dataset.channel`) === 'arcadebulls');
-check('H smazaná zpráva bez obsahu (styl smazané zprávy, štítek)', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent === 'Zpráva smazána' && !!document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-deleted-tag')`) === true);
+check('H smazaná zpráva bez obsahu (zašedlé „Zpráva smazána", bez štítku)', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent === 'Zpráva smazána' && !document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-deleted-tag') && document.querySelector('.uc-uh-msg[data-id="h-b3"]').classList.contains('uc-deleted--dimmed')`) === true);
 await ev(`document.querySelector('.uc-uh-tab[data-channel="tensterakdary"]').click()`);
 check('H prázdná záložka → „V tomto kanálu nic nenapsal."', await until(`document.querySelector('.uc-uh-status')?.textContent === 'V tomto kanálu nic nenapsal.'`, 3000));
 // 4: klik na jméno autora citace → potvrzení → Profil autora (jen podle loginu)
@@ -425,6 +426,8 @@ mock.sse.push(['user-moderated', { channel: 'robdiesalot', platform: 'twitch', u
 check('A SSE user-moderated → předchozí zprávy uživatele smazané', await until(`document.querySelector('.msg[data-msg-id="e2e-a2"]')?.classList.contains('uc-deleted')`, 6000));
 const a1 = await msgState('e2e-a1'), a2 = await msgState('e2e-a2'), b1 = await msgState('e2e-b1');
 check('A obě zprávy Testera: mod vidí ztlumené + štítek „Timeout (5 min)"', a1?.cls.includes('uc-deleted--dimmed') && a1.modTag === 'Timeout (5 min)' && a2?.modTag === 'Timeout (5 min)', JSON.stringify([a1, a2]));
+check('A po timeoutu: oko ne (server zprávu nesmazal), koš zůstává; v nabídce Smazat', !a2.cls.includes('uc-deleted--restorable') && await actDisp('e2e-a2', 'restore') === 'none' && await actDisp('e2e-a2', 'delete') === 'flex'
+  && await (async () => { await rightClick('e2e-a2'); const it = await menuItems(); await key('Escape'); return it.includes('Smazat zprávu') && !it.includes('Odkrýt zprávu'); })(), JSON.stringify(a2));
 check('A štítek „Smazáno" se se štítkem timeoutu nezdvojí', a1?.delTagVisible === false, JSON.stringify(a1));
 check('A zpráva jiného uživatele beze změny', b1?.cls === '' && !b1.modTag, JSON.stringify(b1));
 mock.sse.push(['user-moderated', { channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester', action: 'timeout', until: at + 300000, by: null, at }]);

@@ -7,45 +7,31 @@ import('../extension/core/moderation.js').then((m) => {
   check('DELETED_STYLES obsahuje všechny 4 styly', JSON.stringify(m.DELETED_STYLES) === JSON.stringify(['label', 'dim', 'strike', 'hide']));
   check('DEFAULT_DELETED_STYLE = label', m.DEFAULT_DELETED_STYLE === 'label');
 
-  // --- deletedMode: tabulka případů ---------------------------------------
-  const cases = [
-    // [popis, input, expected]
-    ['raw vyhrává nad isMod i style', { style: 'dim', isMod: true, raw: true }, 'label'],
-    ['raw samotné → label', { raw: true }, 'label'],
-    ['mod + strike → strike (volba moda)', { style: 'strike', isMod: true }, 'strike'],
-    ['mod + dim → dim', { style: 'dim', isMod: true }, 'dim'],
-    ['mod + label → label', { style: 'label', isMod: true }, 'label'],
-    ['mod + hide → label (mod zprávu vždy vidí)', { style: 'hide', isMod: true }, 'label'],
-    ['mod bez style → label', { isMod: true }, 'label'],
-    ['obyčejný divák → style dim', { style: 'dim' }, 'dim'],
-    ['obyčejný divák → style strike', { style: 'strike' }, 'strike'],
-    ['obyčejný divák → style hide', { style: 'hide' }, 'hide'],
-    ['obyčejný divák → style label', { style: 'label' }, 'label'],
-    ['neznámý style → label (fallback)', { style: 'nonsense' }, 'label'],
-    ['chybějící style → label (fallback)', {}, 'label'],
-    // --- hidden ("Jen UC skrýt") — controller ruling ----------------------
-    ['hidden + raw (ne mod) → hide', { hidden: true, raw: true }, 'hide'],
-    ['hidden + obyčejný divák → hide', { hidden: true }, 'hide'],
-    ['hidden + mod → label (výchozí styl)', { hidden: true, isMod: true }, 'label'],
-    ['hidden + mod + strike → strike', { hidden: true, isMod: true, style: 'strike' }, 'strike'],
-    ['hidden + mod + raw → label (mod má přednost před hide)', { hidden: true, isMod: true, raw: true }, 'label'],
-    ['hidden + style ignorován (style by jinak dal strike)', { hidden: true, style: 'strike' }, 'hide'],
-  ];
-  for (const [desc, input, expected] of cases) {
-    const got = m.deletedMode(input);
-    check(`deletedMode: ${desc} (got ${got})`, got === expected);
-  }
+  check('MOD_DELETED_STYLES = 3 volby pro moda (bez „Skryté")', JSON.stringify(m.MOD_DELETED_STYLES.map((o) => o.id + ':' + o.label)) === JSON.stringify(['label:Zpráva smazána', 'dim:Zašedlé', 'strike:Přeškrtnuté']));
 
-  // --- deletedView: mod má vždy ztlumení + štítek, divák ne ------------------
-  {
-    const v = m.deletedView({ style: 'strike', isMod: true });
-    check('deletedView mod strike → { strike, dimmed, tag }', v.mode === 'strike' && v.dimmed && v.tag);
-    const l = m.deletedView({ style: 'label', isMod: true, hidden: true });
-    check('deletedView mod skrytá → label + dimmed + tag', l.mode === 'label' && l.dimmed && l.tag);
-    const d = m.deletedView({ style: 'strike' });
-    check('deletedView divák strike → bez vynuceného ztlumení/štítku', d.mode === 'strike' && !d.dimmed && !d.tag);
-    check('deletedView mod + raw (smazaná) → label', m.deletedView({ isMod: true, raw: true, style: 'strike' }).mode === 'label');
-  }
+  // --- deletedView (rozhodnutí usera 2026-09-25 v2) -------------------------
+  const V = (o) => JSON.stringify(m.deletedView(o));
+  const view = (mode, dimmed, tag) => JSON.stringify({ mode, dimmed, tag });
+  const cases = [
+    // [popis, input, očekávaný view]
+    ['divák: vždy zašedlé „Zpráva smazána" bez štítku (style ignorován: strike)', { style: 'strike' }, view('label', true, false)],
+    ['divák: style dim ignorován', { style: 'dim' }, view('label', true, false)],
+    ['divák: style hide ignorován', { style: 'hide' }, view('label', true, false)],
+    ['divák bez style', {}, view('label', true, false)],
+    ['divák: skrytá → hide', { hidden: true, style: 'strike' }, view('hide', false, false)],
+    ['mod label → zašedlé, bez štítku', { isMod: true, style: 'label' }, view('label', true, false)],
+    ['mod dim → zašedlý text + štítek', { isMod: true, style: 'dim' }, view('dim', true, true)],
+    ['mod strike → přeškrtnutý + štítek', { isMod: true, style: 'strike' }, view('strike', true, true)],
+    ['mod uložené hide → label', { isMod: true, style: 'hide' }, view('label', true, false)],
+    ['mod neznámý style → label', { isMod: true, style: 'x' }, view('label', true, false)],
+    ['mod skrytá + strike → strike (mod skrytou vidí)', { isMod: true, hidden: true, style: 'strike' }, view('strike', true, true)],
+    ['mod skrytá výchozí → label', { isMod: true, hidden: true }, view('label', true, false)],
+    ['OBS (raw) smazaná → hide', { raw: true }, view('hide', false, false)],
+    ['OBS (raw) skrytá → hide', { raw: true, hidden: true }, view('hide', false, false)],
+    ['OBS (raw) i s modem → hide', { raw: true, isMod: true, style: 'strike' }, view('hide', false, false)],
+  ];
+  for (const [desc, input, expected] of cases) check(`deletedView: ${desc} (got ${V(input)})`, V(input) === expected);
+  check('deletedMode = deletedView().mode', m.deletedMode({ isMod: true, style: 'dim' }) === 'dim' && m.deletedMode({ style: 'dim' }) === 'label');
 
   // --- applyDeleted / clearDeleted: minimální fake DOM element ------------
   // Fake element/document dost bohaté na classList, querySelector, appendChild,
@@ -182,20 +168,33 @@ import('../extension/core/moderation.js').then((m) => {
     check('clearDeleted: unhide po hide módu', el.hidden === false && !el.classList.contains('uc-deleted--hide'));
   }
 
-  // mod label: „Zpráva smazána" + štítek + ztlumení
+  // mod label: „Zpráva smazána" zašedlé, bez štítku
   {
     const { el } = makeMsgEl();
     m.applyDeleted(el, { ...m.deletedView({ isMod: true, style: 'label' }), hasContent: true });
     check('applyDeleted mod label: label místo textu', el.querySelector('.uc-deleted-label')?.textContent === 'Zpráva smazána');
-    check('applyDeleted mod label: štítek Smazáno', el.querySelector('.uc-deleted-tag')?.textContent === 'Smazáno');
-    check('applyDeleted mod label: ztlumeno (uc-deleted--dimmed)', el.classList.contains('uc-deleted--dimmed'));
+    check('applyDeleted mod label: bez štítku', !el.querySelector('.uc-deleted-tag'));
+    check('applyDeleted mod label: zašedlé (uc-deleted--dimmed), nepřeškrtnuté', el.classList.contains('uc-deleted--dimmed') && !el.classList.contains('uc-deleted--strike'));
   }
-  // mod skrytá (label): „Zpráva skryta" + štítek „Skryto v UnityChatu"
+  // mod skrytá (label): „Zpráva skryta" bez štítku; dim → štítek „Skryto v UnityChatu"
   {
     const { el } = makeMsgEl();
     m.applyDeleted(el, { ...m.deletedView({ isMod: true, hidden: true }), hidden: true });
-    check('applyDeleted mod skrytá: label „Zpráva skryta"', el.querySelector('.uc-deleted-label')?.textContent === 'Zpráva skryta');
-    check('applyDeleted mod skrytá: štítek „Skryto v UnityChatu"', el.querySelector('.uc-deleted-tag')?.textContent === 'Skryto v UnityChatu');
+    check('applyDeleted mod skrytá: label „Zpráva skryta"', el.querySelector('.uc-deleted-label')?.textContent === 'Zpráva skryta' && !el.querySelector('.uc-deleted-tag'));
+    const b = makeMsgEl();
+    m.applyDeleted(b.el, { ...m.deletedView({ isMod: true, hidden: true, style: 'dim' }), hidden: true });
+    check('applyDeleted mod skrytá dim: štítek „Skryto v UnityChatu"', b.el.querySelector('.uc-deleted-tag')?.textContent === 'Skryto v UnityChatu');
+  }
+  // restorable: třída jen když ji chce volající (smazáno serverem), clearDeleted ji sundá
+  {
+    const { el } = makeMsgEl();
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true }), restorable: true });
+    check('applyDeleted restorable → uc-deleted--restorable', el.classList.contains('uc-deleted--restorable'));
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true }) });
+    check('applyDeleted bez restorable → třída pryč (ztlumení po timeoutu)', !el.classList.contains('uc-deleted--restorable'));
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true }), restorable: true });
+    m.clearDeleted(el);
+    check('clearDeleted sundá uc-deleted--restorable', !el.classList.contains('uc-deleted--restorable'));
   }
   // mod strike bez obsahu: label + štítek + ztlumení; pak s obsahem: strike + emote obalený
   {
@@ -220,13 +219,18 @@ import('../extension/core/moderation.js').then((m) => {
     check('clearDeleted: sundá uc-deleted--dimmed', !el.classList.contains('uc-deleted--dimmed'));
     check('clearDeleted: rozbalí .uc-strike-emote (emote zpátky v .tx)', img.parentNode === tx && tx.children.filter((c) => c.tag === 'img').length === 1 && !tx.children.some((c) => c.classList.contains('uc-strike-emote')));
   }
-  // divák: bez štítku u labelu a bez ztlumení (beze změny)
+  // divák: vždy zašedlé „Zpráva smazána", bez štítku, bez přeškrtnutí (i s textem a style strike)
   {
     const { el } = makeMsgEl();
-    m.applyDeleted(el, { ...m.deletedView({ style: 'label' }) });
-    check('applyDeleted divák label: bez štítku, bez dimmed', !el.querySelector('.uc-deleted-tag') && !el.classList.contains('uc-deleted--dimmed'));
-    m.applyDeleted(el, { ...m.deletedView({ style: 'strike' }), hasContent: false });
-    check('applyDeleted divák strike bez obsahu: label bez štítku', !!el.querySelector('.uc-deleted-label') && !el.querySelector('.uc-deleted-tag'));
+    m.applyDeleted(el, { ...m.deletedView({ style: 'strike' }), hasContent: true });
+    check('applyDeleted divák: label + zašedlé, bez štítku a bez přeškrtnutí', !!el.querySelector('.uc-deleted-label') && !el.querySelector('.uc-deleted-tag')
+      && el.classList.contains('uc-deleted--dimmed') && el.classList.contains('uc-deleted--label') && !el.classList.contains('uc-deleted--strike'));
+  }
+  // bez textu (dev: „bez textu → label") — mod strike bez obsahu = label (štítek zůstává, mod zvolil strike)
+  {
+    const { el } = makeMsgEl();
+    m.applyDeleted(el, { mode: 'strike', hasContent: false });
+    check('applyDeleted strike bez obsahu → label, ne přeškrtnutý label', el.classList.contains('uc-deleted--label') && !el.classList.contains('uc-deleted--strike'));
   }
 
   // --- DeletedContentLoader ------------------------------------------------
