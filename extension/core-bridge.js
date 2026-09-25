@@ -25,12 +25,13 @@ import * as sfxRequest from './core/sfx-request.js';
 import * as qrDono from './core/qr-dono.js';
 import * as emailVerify from './core/email-verify.js';
 import * as toolDock from './core/tool-dock.js';
+import * as emoteRetry from './core/emote-retry.js';
 import * as codeInput from './core/code-input.js';
 import * as loginModal from './core/login-modal.js';
 import * as slideIn from './core/slide-in.js';
 import * as ucReply from './core/uc-reply.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...emoteRetry });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

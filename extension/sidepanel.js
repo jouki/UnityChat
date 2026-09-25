@@ -1068,6 +1068,8 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
     this._initEmotePicker();
+    // Emote, který se nenačetl (výpadek sítě/CDN), zkusit znovu — jinak zůstane rozbitý do reloadu.
+    window.UC_CORE?.installEmoteRetry?.(document, { log: (t) => this._ucLog('EmoteRetry', t) });
     this._initSoundboard();
     this._initQrDono();
 
