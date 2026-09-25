@@ -6789,21 +6789,15 @@ class UnityChat {
       }
     }
 
-    // @mention zvýraznění - kontroluje text zprávy i reply-parent
-    // Matchuje jak @username tak @nickname (pokud je nastavený)
-    const myName = this.config.username?.toLowerCase();
-    // Check nickname on the message's platform (not activePlatform —
-    // that may be null when rendering cached messages at startup)
-    const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
+    // @mention zvýraznění — text zprávy i reply-parent. Moje jména napříč VŠEMI platformami
+    // (login z každé platformy + UC přezdívky), ne jen z platformy zprávy: divák z YouTube
+    // píše „@Jouki“ (přezdívka z Twitche / login z Kicku) — stejně jako web (renderCtx.myNames).
+    const myNames = this._myMentionNames();
     const msgLower = msg.message?.toLowerCase() || '';
-    const replyTarget = msg.replyTo?.username?.toLowerCase();
-    const isMentioned = myName && (
-      msgLower.includes(`@${myName}`) ||
-      (myNick && msgLower.includes(`@${myNick}`)) ||
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      // Also match platform-specific username
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
+    const replyTarget = msg.replyTo?.username?.toLowerCase().replace(/^@/, '');
+    const isMentioned = myNames.size > 0 && (
+      (replyTarget && myNames.has(replyTarget)) ||
+      [...myNames].some((n) => this._hasMention(msgLower, n))
     );
 
     const el = document.createElement('div');
@@ -7478,6 +7472,32 @@ class UnityChat {
     if (abs === 1) return `${n} nová zpráva`;
     if (abs >= 2 && abs <= 4) return `${n} nové zprávy`;
     return `${n} nových zpráv`;
+  }
+
+  /** Moje jména pro @zmínky: config.username, loginy ze všech platforem a UC přezdívky k nim. */
+  _myMentionNames() {
+    const names = new Set();
+    const add = (n) => { const v = String(n || '').trim().replace(/^@/, '').toLowerCase(); if (v) names.add(v); };
+    add(this.config.username);
+    for (const p of ['twitch', 'youtube', 'kick']) {
+      const login = this._platformUsernames[p] || (p === 'twitch' ? this.config.username : null);
+      if (!login) continue;
+      add(login);
+      add(this.nicknames.getNickname(p, login));
+    }
+    return names;
+  }
+
+  /** „@jméno“ jako celé slovo (ne @joukibot pro jouki), text i jméno malými písmeny. */
+  _hasMention(text, name) {
+    const word = /[\p{L}\p{N}_]/u;
+    const needle = '@' + name;
+    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
+      const before = text[i - 1];
+      const after = text[i + needle.length];
+      if ((!before || !word.test(before)) && (!after || !word.test(after))) return true;
+    }
+    return false;
   }
 
   _scroll(slideEl = null) {
