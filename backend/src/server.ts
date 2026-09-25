@@ -41,6 +41,14 @@ import { createIngest } from './ingest/index.js';
 import { startMailKeepalive } from './lib/mailKeepalive.js';
 import { publishDeleted } from './lib/messageDeletes.js';
 import { ucChannelFor } from './lib/ucChannel.js';
+import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
+import { isBotAuthor } from './lib/botIdentities.js';
+import { workspaceForChannelSync } from './lib/zidolista.js';
+import { deletePlatformMessage } from './lib/modActions.js';
+import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
+import { registryPlatformChannel } from './lib/platformChannels.js';
+import { db } from './db/index.js';
+import { moderationActions } from './db/schema.js';
 
 const startedAt = Date.now();
 
@@ -73,6 +81,27 @@ await app.register(cors, {
   credentials: true,
 });
 
+// Filtr odkazů + `!permit` z chatu (moderace část 3, lib/linkFilter.ts). Zapíná ho jen Židolišta
+// (`enabled` v nastavení workspace, výchozí vypnuto); bez odpovědi Židolišty se nic nemaže.
+const linkTargets = dbTargetDeps((channel, platform) => registryPlatformChannel(channel, platform));
+const linkFilter = createLinkFilter({
+  workspaceFor: workspaceForChannelSync,
+  settingsFor: (slug) => linkFilterSync(slug, app.log),
+  isBotAuthor,
+  permits,
+  publishDeleted: (p) => publishDeleted(p),
+  deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
+  resolvePermitTarget: async (ucChannel, platform, platformChannel, login) => {
+    const u = await archivedUserByLogin(platform, platformChannel, login);
+    if (!u) return [];
+    return (await resolveUserTargets(ucChannel, platform, u.userId, linkTargets))?.all ?? [u];
+  },
+  storePermits: (rows) => storePermits(rows),
+  recordAction: async (v) => { await db.insert(moderationActions).values(v); },
+  now: Date.now,
+  log: app.log,
+});
+
 // Server-side chat log: poslouchá platformy podle CHAT_INGEST_CHANNELS a
 // plní tabulku messages; /chat/history z ní čte. Prázdná konfigurace =
 // vše 'off', start() nic nespustí.
@@ -82,6 +111,8 @@ const ingest = createIngest({
   log: app.log,
   // GET /chat/stream: rozeslat hned po přijetí (před DB dávkou), stejný tvar jako /chat/history.
   onLive: (m) => {
+    // Filtr odkazů PŘED rozesláním i zápisem: smazaná zpráva jde dál jen jako `deleted` (bez obsahu).
+    linkFilter.check(m);
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).
     if (ucSends.match(m)) markUc(m, app.log);
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
@@ -121,8 +152,11 @@ app.addHook('onReady', async () => {
       const ch = w.channels[p];
       if (ch && ingest.ensureChannel({ platform: p, channel: ch })) app.log.info({ workspace: w.slug, platform: p, channel: ch }, 'chat ingest: kanál přidán z registru Židolišty');
     }
+    // Nastavení filtru odkazů workspaců dopředu (onLive čte jen cache).
+    for (const w of list) void refreshLinkFilter(w.slug, { log: app.log });
   });
   startWorkspaceRefresh(app.log);
+  loadActivePermits().then((n) => app.log.info({ n }, 'link filter: aktivní permity načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'link filter: načtení permitů selhalo'));
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
 app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });

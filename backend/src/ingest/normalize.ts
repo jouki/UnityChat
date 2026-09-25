@@ -241,5 +241,6 @@ export function toRow(m: IngestMessage): NewMessage {
     isReply: m.isReply,
     replyToMessageId: m.replyToMessageId,
     sentAt: m.sentAt,
+    ...(m.deleted ? { deletedAt: new Date(), deletedBy: m.deleted.by, deletedReason: m.deleted.reason } : {}),
   };
 }

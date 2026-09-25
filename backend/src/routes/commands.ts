@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
-import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel, workspaceBySlug } from '../lib/zidolista.js';
+import { invalidateLinkFilter } from '../lib/linkFilter.js';
 import { invalidateBlacklist } from './blacklist.js';
 import { handleSfxWebhook } from './soundboard.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
@@ -161,6 +162,14 @@ export default async function commandRoutes(app: FastifyInstance) {
       for (const channel of channels) broadcast('donate-config-change', { channel });
       app.log.info({ slug, channels }, 'donate: config change broadcast');
       return { ok: true, channels };
+    }
+    // Nastavení filtru odkazů (moderace část 3) → zahodit cache + ETag a načíst znovu (onLive čte jen cache).
+    if (reason === 'link-filter') {
+      const ws = await workspaceBySlug(slug);
+      if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+      const settings = await invalidateLinkFilter(ws.slug, app.log);
+      app.log.info({ slug: ws.slug, enabled: settings.enabled, version: settings.version }, 'link filter: invalidated');
+      return { ok: true, workspace: ws.slug, enabled: settings.enabled, version: settings.version };
     }
     if (reason === 'workspaces') { invalidateWorkspaces(); await getWorkspaces({ force: true, log: app.log }); }
     const channels = await twitchChannelsOf(slug);
