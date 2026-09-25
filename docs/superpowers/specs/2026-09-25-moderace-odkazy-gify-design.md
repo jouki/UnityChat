@@ -141,6 +141,23 @@ Pravé tlačítko na jméno → vlastní nabídka (divákům zůstává nativní
 3. Část 4: typ odměny „GIF" v Levels (doba, cooldown), API „má uživatel odemčené GIFy",
    webhook při udělení/vypršení; doba propadnutí žádosti v nastavení.
 
+### Dohodnutý kontrakt se Židolištou (2026-09-25, session robjewsalot)
+- Bot: Nastavení → Chat bot ukáže `missingScopes` per platforma z `GET /integrations/bot/status`
+  (UnityChat pole doplní v části 1) + výzvu „napojit znovu".
+- `GET /integrations/:slug/link-filter` (X-Api-Key, ETag/304) →
+  `{ ok, workspace, enabled, allowDomains[], extraBots[], version }` (version = ISO updated_at;
+  výchozí enabled false, allowDomains [youtube.com, youtu.be, open.spotify.com]). Role
+  mod/streamer/VIP/známí boti mají výjimku vždy (Židolišta je neukládá). Webhook
+  `POST /commands/invalidate { workspace, reason:"link-filter", data:{ version } }`.
+- GIF = **nový typ akce v labelu** („Posílání GIFů" vedle „Sound Efekt"): doba = časovač
+  labelu (sčítání, zmrazení, zrušení, obnova), „Pro koho" (role jako SE), cooldown s/uživatel;
+  doba propadnutí žádosti = nastavení workspace (výchozí 300 s).
+  `GET /integrations/:slug/gif-access?platform=&userId=&login=&role=` (role = ověřená nejvyšší
+  z badge, chybí = viewer) → `{ ok, serverNow, allowed, until|null, cooldownUntil|null,
+  cooldownSec, requestTtlSec }`; zmrazená = allowed:false.
+  `POST /integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }`.
+  Webhook `reason:"gif-access" { data:{ etag } }` při každé změně.
+
 ## Mimo rozsah
 - Přehled moderačního logu v UI (data se sbírají, UI později).
 - Hromadné akce, automoderace obsahu, zpomalený režim, emote-only.
