@@ -24,6 +24,8 @@ export interface RestoreParams {
   /** Platformní kanál (registr) — zpráva musí patřit kanálu moda. */
   platformChannel: string;
   by: string;
+  /** Důvod smazání, který se ruší: výchozí link_filter (permit); gif_request = převod GIFu selhal (část 4). */
+  reason?: 'link_filter' | 'gif_request';
 }
 
 export type RestoreResult = 'ok' | 'not_found';
@@ -31,7 +33,7 @@ export type RestoreResult = 'ok' | 'not_found';
 export interface RestoredEvent { channel: string; platform: Platform; messageId: string; by: string; at: number; message: ClientMessage | Record<string, unknown> }
 
 /** Zruší smazání filtrem odkazů; vrací celý řádek, nebo null (jiná zpráva / jiný důvod / není smazaná). */
-export async function markRestored(p: { platform: Platform; messageId: string; userId: string; platformChannel: string }): Promise<Message | null> {
+export async function markRestored(p: { platform: Platform; messageId: string; userId: string; platformChannel: string; reason?: 'link_filter' | 'gif_request' }): Promise<Message | null> {
   const n = normPlatformChannel(p.platformChannel);
   const rows = await db
     .update(messages)
@@ -40,7 +42,7 @@ export async function markRestored(p: { platform: Platform; messageId: string; u
       eq(messages.platform, p.platform),
       eq(messages.platformMessageId, p.messageId),
       eq(messages.platformUserId, p.userId),
-      eq(messages.deletedReason, 'link_filter'),
+      eq(messages.deletedReason, p.reason ?? 'link_filter'),
       inArray(messages.channel, [n, `@${n}`]),
     ))
     .returning();
@@ -65,7 +67,7 @@ const defaultDeps: PublishRestoredDeps = {
 
 /** markRestored → SSE message-restored s celou zprávou → chat.restored. Nic k obnovení = not_found, nic se neposílá. */
 export async function publishRestored(p: RestoreParams, deps: PublishRestoredDeps = defaultDeps): Promise<RestoreResult> {
-  const row = await deps.markRestored({ platform: p.platform, messageId: p.messageId, userId: p.userId, platformChannel: p.platformChannel });
+  const row = await deps.markRestored({ platform: p.platform, messageId: p.messageId, userId: p.userId, platformChannel: p.platformChannel, ...(p.reason ? { reason: p.reason } : {}) });
   if (!row) return 'not_found';
   deps.forget(p.platform, p.messageId);
   const ev: RestoredEvent = { channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, at: deps.now(), message: toClientMessage(row, true) };

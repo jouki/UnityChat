@@ -106,6 +106,11 @@ export function sendToAccount(accountId: number, event: string, data: object): n
   return set.size;
 }
 
+/** Účty s otevřeným /account/stream (soukromé doručení žádostí o GIF modům, část 4). */
+export function connectedAccountIds(): number[] {
+  return [...streams.keys()];
+}
+
 export function disconnectAllAccountStreams(): void {
   for (const s of streams.values()) for (const r of s) { try { r.raw.end(); } catch { /* ignore */ } }
   streams.clear();

@@ -10,6 +10,7 @@ import { missingModScopes } from './modScopes.js';
 import { refreshTokens } from './platformTokens.js';
 import { twitchUserId, kickUserId } from './botSend.js';
 import { youtubeLiveChatId } from './webSend.js';
+import { isGifMessageId } from './gifIds.js';
 
 export type ModResult = 'ok' | 'bot' | `error:${string}`;
 
@@ -215,6 +216,8 @@ export async function deletePlatformMessage(
   p: { accountId: number | null; channel: string; platform: Platform; messageId: string },
   deps: ModDeps = {},
 ): Promise<ModResult> {
+  // Schválený GIF (část 4) je syntetická zpráva jen v UnityChatu — na platformě není co mazat.
+  if (isGifMessageId(p.messageId)) return 'ok';
   const { result } = await withModActor(p, deps, 'mod delete', async (ctx) => {
     let url: string;
     if (p.platform === 'twitch') {

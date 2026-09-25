@@ -49,6 +49,17 @@ import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/mod
 import { registryPlatformChannel } from './lib/platformChannels.js';
 import { db } from './db/index.js';
 import { moderationActions } from './db/schema.js';
+import gifRoutes, { MediaCache } from './routes/gif.js';
+import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
+import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
+import { resolveGif } from './lib/gifMedia.js';
+import { isGifMessageId } from './lib/gifIds.js';
+import { accountModIdentities } from './lib/chatRole.js';
+import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
+import { publishRestored } from './lib/linkRestore.js';
+import { onMessageDeleted } from './lib/messageDeletes.js';
+import { broadcast } from './sse/bus.js';
+import { publishIntegrationEvent } from './sse/integrationStream.js';
 
 const startedAt = Date.now();
 
@@ -81,6 +92,40 @@ await app.register(cors, {
   credentials: true,
 });
 
+// Odměna „Posílání GIFů" (moderace část 4, lib/gifRequests.ts): žádosti čekají na mody, soukromě přes /account/stream.
+const gifNotifier = createGifNotifier({
+  connected: connectedAccountIds,
+  isMod: async (accountId, channel) => (await accountModIdentities(accountId, channel)).length > 0,
+  senderAccount: (platform, userId) => senderAccount(platform, userId),
+  send: sendToAccount,
+});
+const gifMediaCache = new MediaCache();
+const gifFlow = createGifFlow({
+  store: dbGifStore,
+  resolve: (src) => resolveGif(src),
+  access: (q) => gifAccess(q, { log: app.log }),
+  used: (p) => gifUsed(p, { log: app.log }),
+  publishDeleted: (p) => publishDeleted(p),
+  deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
+  restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),
+  broadcast,
+  publishChat: (platformChannel, platform, msg) => publishChat(platformChannel, platform, msg),
+  notify: (r, event, data) => gifNotifier.notify(r, event, data),
+  integration: (ev) => { publishIntegrationEvent(ev); },
+  recordAction: async (v) => { await db.insert(moderationActions).values(v); },
+  now: Date.now,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  mediaDeleted: (id) => gifMediaCache.delete(id),
+  log: app.log,
+});
+// Smazání schváleného GIFu modem (část 1, id `gif-…`) → žádost `deleted`, médium se přestane servírovat.
+onMessageDeleted(async ({ messageId }) => {
+  if (!isGifMessageId(messageId)) return;
+  const r = await dbGifStore.get(Number(messageId.slice(4)));
+  await gifFlow.onMessageDeleted(messageId);
+  if (r?.mediaId) gifMediaCache.delete(r.mediaId);
+});
+
 // Filtr odkazů + `!permit` z chatu (moderace část 3, lib/linkFilter.ts). Zapíná ho jen Židolišta
 // (`enabled` v nastavení workspace, výchozí vypnuto); bez odpovědi Židolišty se nic nemaže.
 const linkTargets = dbTargetDeps((channel, platform) => registryPlatformChannel(channel, platform));
@@ -100,6 +145,11 @@ const linkFilter = createLinkFilter({
   recordAction: async (v) => { await db.insert(moderationActions).values(v); },
   now: Date.now,
   log: app.log,
+  gif: {
+    accessSync: (q) => gifAccessSync(q, { log: app.log }),
+    tryReserve: (channel, platform, userId) => gifFlow.tryReserve(channel, platform, userId),
+    intercept: (p) => gifFlow.intercept(p),
+  },
 });
 
 // Server-side chat log: poslouchá platformy podle CHAT_INGEST_CHANNELS a
@@ -156,10 +206,14 @@ app.addHook('onReady', async () => {
     for (const w of list) void refreshLinkFilter(w.slug, { log: app.log });
   });
   startWorkspaceRefresh(app.log);
+  gifFlow.loadPending().then((n) => app.log.info({ n }, 'gif: čekající žádosti načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: načtení žádostí selhalo (tabulka chybí?)'));
+  gifExpiryTimer = setInterval(() => { void gifFlow.expireTick(); }, 10_000);
+  gifExpiryTimer.unref?.();
   loadActivePermits().then((n) => app.log.info({ n }, 'link filter: aktivní permity načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'link filter: načtení permitů selhalo'));
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
-app.addHook('onClose', async () => { await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
+let gifExpiryTimer: ReturnType<typeof setInterval> | null = null;
+app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
@@ -198,7 +252,11 @@ await app.register(rawProfileRoutes);
 await app.register(reactionRoutes);
 await app.register(moderationRoutes, { ingest });
 await app.register(integrationModerationRoutes, { ingest });
-await app.register(accountWarningRoutes);
+await app.register(accountWarningRoutes, {
+  // Čekající žádosti o GIF, které účet smí vidět (mod kanálu / odesílatel), hned po připojení.
+  onOpen: async (accountId: number) => (await gifNotifier.visibleTo(accountId, await dbGifStore.listPending(new Date()))).map((data) => ({ event: 'gif-pending', data })),
+});
+await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: servableMedia, cache: gifMediaCache });
 await app.register(soundboardRoutes);
 await app.register(sfxRequestRoutes);
 await app.register(donateRoutes);

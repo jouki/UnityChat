@@ -19,6 +19,10 @@ import type { IngestMessage } from '../ingest/types.js';
 import { rolesFromBadges, type Roles } from '../sse/integrationStream.js';
 import { hostAllowed, linkHosts, normalizeDomain } from './links.js';
 import { zidolistaBase, type Platform, type WorkspaceInfo } from './zidolista.js';
+import { gifCandidate, type GifCandidate } from './gifMedia.js';
+import { highestRole } from './chatRole.js';
+import type { GifAccessQuery } from './gifAccess.js';
+import type { GifInterceptParams } from './gifRequests.js';
 
 type Log = { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
 
@@ -266,9 +270,22 @@ export interface LinkFilterDeps {
   recordAction?: (v: { channel: string; accountId: null; actor: string; action: string; platform: Platform; targetLogin: string | null; targetMessageId?: string | null; params: object; result: object }) => Promise<void>;
   now: () => number;
   log: Log;
+  /** Odměna „Posílání GIFů" (část 4); chybí = bez GIFů. */
+  gif?: GifHook;
 }
 
-export interface LinkVerdict { host: string; channel: string }
+export interface GifHook {
+  /** První odkaz na GIF ve zprávě (lib/gifMedia.ts gifCandidate). */
+  candidate?: (text: string) => GifCandidate | null;
+  /** Synchronně z cache (gifAccessSync): unknown spustí načtení na pozadí. */
+  accessSync: (q: GifAccessQuery) => 'allowed' | 'denied' | 'unknown';
+  /** Rezervace (jedna žádost na uživatele současně); false = GIF cesta se nepoužije. */
+  tryReserve: (channel: string, platform: string, userId: string) => boolean;
+  /** Převod + žádost na pozadí (lib/gifRequests.ts createGifFlow().intercept). */
+  intercept: (p: GifInterceptParams) => Promise<unknown>;
+}
+
+export interface LinkVerdict { host: string; channel: string; gif?: boolean }
 
 /** Starší zprávy (YouTube po reconnectu přehrává historii) filtr ani `!permit` neřeší. */
 export const MAX_MESSAGE_AGE_MS = 60_000;
@@ -312,6 +329,29 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     } catch (e) { deps.log.warn({ err: (e as Error).message }, 'link filter: zápis do moderation_actions selhal'); }
   };
 
+  /**
+   * GIF cesta: přístup z cache 'allowed' → zprávu schovat hned (deleted_reason gif_request) a převést na pozadí;
+   * 'unknown' → běžné rozhodnutí filtru a ověření + převod na pozadí (zobrazenou zprávu pak smaže zpětně);
+   * 'denied' → běžný odkaz. Jedna žádost na uživatele současně (tryReserve).
+   */
+  const checkGif = (m: IngestMessage, ucChannel: string, ws: WorkspaceInfo, roles: Roles, host: string | null): LinkVerdict | null => {
+    const gif = deps.gif!;
+    const candidate = (gif.candidate ?? gifCandidate)(m.content);
+    if (!candidate) return null;
+    const query: GifAccessQuery = { workspace: ws.slug, platform: m.platform, userId: m.platformUserId, login: m.username.toLowerCase(), role: highestRole(roles) };
+    const access = gif.accessSync(query);
+    if (access === 'denied' || !gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
+    const filterAct = host ? () => act(m, ucChannel, host) : null;
+    if (access === 'allowed') {
+      m.deleted = { by: 'filter', reason: 'gif_request' };
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct }).catch(() => {});
+      return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
+    }
+    // unknown: filtr rozhodne jako vždy; GIF se ověří a případně zachytí zpětně.
+    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null }).catch(() => {});
+    return null;
+  };
+
   return {
     check(m: IngestMessage): LinkVerdict | null {
       try {
@@ -336,11 +376,16 @@ export function createLinkFilter(deps: LinkFilterDeps) {
           return null;
         }
 
-        if (!settings.enabled) return null;
         const hosts = linkHosts(m.content);
         if (!hosts.length) return null;
         const permit = deps.permits.active({ channel: ucChannel, platform: m.platform, userId: m.platformUserId, login: m.username }, now);
-        const host = shouldFilter({ roles, hosts, allow: settings.allowDomains, permit, bot });
+        const host = settings.enabled ? shouldFilter({ roles, hosts, allow: settings.allowDomains, permit, bot }) : null;
+
+        // Část 4: odkaz na GIF od uživatele s odemčenými GIFy → žádost o schválení místo (nebo vedle) filtru.
+        // Platí nezávisle na zapnutí filtru a výjimkách (odemčení řídí Židolišta); boti nikdy.
+        const gifVerdict = !bot && deps.gif && m.platformUserId ? checkGif(m, ucChannel, ws, roles, host) : null;
+        if (gifVerdict) return gifVerdict;
+
         if (!host) return null;
         m.deleted = { by: 'filter', reason: 'link_filter' };
         void act(m, ucChannel, host).catch(() => {});

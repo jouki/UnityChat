@@ -3,7 +3,8 @@
 //   GET  /account/warnings                  (Bearer) → { ok, warnings: [{ id, channel, reason, createdAt }] }  nepotvrzená
 //   POST /account/warnings/:id/ack          (Bearer) → { ok }  (cizí / neexistující / už potvrzené → 404)
 //   POST /account/stream-ticket             (Bearer) → { ok, ticket, expiresInMs }  jednorázový, 60 s
-//   GET  /account/stream?ticket=…           SSE jen pro tento účet: account-warning, account-warning-ack
+//   GET  /account/stream?ticket=…           SSE jen pro tento účet: account-warning, account-warning-ack,
+//                                           gif-pending / gif-decided (moderace část 4: mod kanálu nebo odesílatel)
 //
 // Proč ticket: EventSource neposílá Authorization; session token do URL (access log) nepatří.
 // Potvrzení se rozešle ostatním spojením téhož účtu (account-warning-ack), aby okno zmizelo všude.
@@ -15,7 +16,12 @@ import { RateLimiter } from './chat.js';
 
 const IdParam = z.object({ id: z.coerce.number().int().positive() });
 
-export default async function accountWarningRoutes(app: FastifyInstance) {
+export interface AccountStreamOpts {
+  /** Po připojení: další soukromé události pro účet (čekající GIFy modům/odesílateli, část 4). */
+  onOpen?: (accountId: number) => Promise<Array<{ event: string; data: object }>>;
+}
+
+export default async function accountWarningRoutes(app: FastifyInstance, opts: AccountStreamOpts = {}) {
   const ticketLimiter = new RateLimiter(10, 0.5);
 
   app.get('/account/warnings', { preHandler: requireWebSession }, async (req, reply) => {
@@ -62,5 +68,12 @@ export default async function accountWarningRoutes(app: FastifyInstance) {
     try {
       for (const w of await pendingWarnings(accountId)) raw.write(`event: account-warning\ndata: ${JSON.stringify(w)}\n\n`);
     } catch (e) { req.log.warn({ err: (e as Error).message }, 'account stream: varování nenačtena'); }
+    if (opts.onOpen) {
+      try { for (const ev of await opts.onOpen(accountId)) raw.write(`event: ${ev.event}
+data: ${JSON.stringify(ev.data)}
+
+`); }
+      catch (e) { req.log.warn({ err: (e as Error).message }, 'account stream: čekající události nenačteny'); }
+    }
   });
 }

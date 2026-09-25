@@ -124,7 +124,12 @@ export interface UserModIntegrationEvent {
   by: string | null;
 }
 
-type IntegrationEvent = ChatEvent | ModIntegrationEvent | UserModIntegrationEvent;
+// ---- odměna GIF (moderace část 4): žádost čeká / rozhodnuto (Chat Log Židolišty) ----
+export type GifIntegrationEvent =
+  | { type: 'gif.pending'; workspace: string; requestId: number; platform: string; userId: string; login: string; messageId: string; text: string; media: { url: string; kind: string; width: number | null; height: number | null }; expiresAt: string }
+  | { type: 'gif.decided'; workspace: string; requestId: number; platform: string; userId: string; login: string; status: 'approved' | 'rejected' | 'expired' | 'pending' | 'deleted'; by: string | null };
+
+type IntegrationEvent = ChatEvent | ModIntegrationEvent | UserModIntegrationEvent | GifIntegrationEvent;
 
 function frameOf(id: number, ev: IntegrationEvent): string {
   return `id: ${id}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`;

@@ -149,6 +149,50 @@ export const accountWarnings = pgTable('account_warnings', {
   acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
 });
 
+// Moderace část 4 — odměna „Posílání GIFů" (backend/sql/2026-09-25-gif-requests.sql, ručně SQL).
+// Médium stažené serverem (≤ 10 MB) drží DB (bytea): kontejner backendu nemá trvalý svazek.
+export const gifMedia = pgTable('gif_media', {
+  id: text('id').primaryKey(),                       // náhodných 16 B hex (neuhodnutelné, /media/gif/:id)
+  kind: text('kind').notNull(),                      // gif | webp | mp4
+  contentType: text('content_type').notNull(),
+  bytes: bytea('bytes').notNull(),
+  size: integer('size').notNull(),
+  sha256: text('sha256').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const gifRequests = pgTable(
+  'gif_requests',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),              // UC kanál (Twitch login streamera)
+    workspace: text('workspace').notNull(),
+    platform: text('platform').notNull(),
+    platformChannel: text('platform_channel').notNull(), // messages.channel původní zprávy
+    userId: text('user_id').notNull(),
+    login: text('login').notNull(),
+    messageId: text('message_id').notNull(),         // původní zpráva s odkazem (smazaná)
+    textWithoutLink: text('text_without_link').notNull().default(''),
+    mediaId: text('media_id'),
+    kind: text('kind').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    meta: jsonb('meta').notNull().default({}),       // { color, badges } z původní zprávy (vykreslení jména)
+    status: text('status').notNull().default('pending'), // pending | approved | rejected | expired | deleted
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    pendingIdx: index('gif_requests_pending_idx').on(t.status, t.expiresAt),
+    channelIdx: index('gif_requests_channel_idx').on(t.channel, t.createdAt),
+  }),
+);
+export type GifRequest = typeof gifRequests.$inferSelect;
+
 export const events = pgTable(
   'events',
   {

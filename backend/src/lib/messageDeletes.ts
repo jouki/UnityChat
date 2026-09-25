@@ -10,7 +10,14 @@ import { publishModIntegration } from '../sse/integrationStream.js';
 import type { Platform } from './zidolista.js';
 import { normPlatformChannel } from './ucChannel.js';
 
-export type DeleteReason = 'mod' | 'platform' | 'link_filter';
+export type DeleteReason = 'mod' | 'platform' | 'link_filter' | 'gif_request';
+
+/**
+ * Po každém smazání (i duplicitním) — odměna GIF (část 4) si tu označí smazaný schválený GIF (`gif-…`).
+ * Registruje server; chyba hooku se ignoruje.
+ */
+const afterDeleteHooks: Array<(p: { platform: Platform; messageId: string }) => unknown> = [];
+export function onMessageDeleted(fn: (p: { platform: Platform; messageId: string }) => unknown): void { afterDeleteHooks.push(fn); }
 
 export interface MarkDeletedParams {
   platform: Platform;
@@ -108,6 +115,7 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
   // Dedup se zapíše až po úspěšném zápisu — když DB selže, opakování do 60 s musí projít.
   await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, expectedChannel: p.expectedChannel });
   recentlyPublished.set(key, t);
+  for (const h of afterDeleteHooks) { try { await h({ platform: p.platform, messageId: p.messageId }); } catch { /* ignore */ } }
   if (recentlyPublished.size > 1000) {
     for (const [k, at] of recentlyPublished) if (t - at >= DEDUP_MS) recentlyPublished.delete(k);
   }

@@ -8,6 +8,7 @@ import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/
 import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
+import { gifFromRaw, type GifMediaView } from '../lib/gifIds.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -43,6 +44,8 @@ export interface ClientMessage {
   /** „Jen UC skrýt“ (lib/messageHides.ts) — na platformě zpráva zůstává, UC ji nevykreslí; obsah se neposílá. */
   hidden?: boolean;
   segments?: unknown[];
+  /** Schválený GIF (moderace část 4): syntetická zpráva `gif-<id>`, médium z našeho serveru. */
+  gif?: GifMediaView;
 }
 
 /**
@@ -80,6 +83,9 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
   if (ur && ur.id && !out.replyTo) {
     out.replyTo = { username: String(ur.username || ''), message: String(ur.message || ''), id: String(ur.id), platform: String(ur.platform || ''), uc: true, ...(ur.authorUc ? { authorUc: true } : {}) };
   }
+  // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
+  const gif = gifFromRaw(row.contentRaw);
+  if (gif) out.gif = gif;
   return out;
 }
 
