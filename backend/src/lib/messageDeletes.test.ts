@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deletedEvent, publishDeleted, channelMatches, rememberRestored, RESTORED_MS, type PublishDeletedDeps, type MarkDeletedParams } from './messageDeletes.js';
+import { deletedEvent, publishDeleted, channelMatches, rememberRestored, restoredCount, RESTORED_MS, RESTORED_MAX, type PublishDeletedDeps, type MarkDeletedParams } from './messageDeletes.js';
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -119,6 +119,19 @@ test('publishDeleted: po odkrytí modem se smazání z platformy (ozvěna) ignor
   t += RESTORED_MS;
   await publishDeleted({ channel: 'robdiesalot', platform: 'kick', messageId: 'rr-2', by: null, reason: 'platform' }, deps);
   assert.equal(broadcasts, 2);
+});
+
+test('rememberRestored: tvrdý strop RESTORED_MAX, zahazují se nejstarší (i v okně 30 min)', async () => {
+  const t = 1_900_000_000_000;
+  for (let i = 0; i < RESTORED_MAX + 50; i++) rememberRestored('youtube', `cap-${i}`, t + i);
+  assert.ok(restoredCount() <= RESTORED_MAX);
+  let broadcasts = 0;
+  const deps: PublishDeletedDeps = { markDeleted: async () => ({ channel: null, login: null }), broadcast: () => { broadcasts++; }, now: () => t + 5000 };
+  // Nejstarší značka vypadla → smazání z platformy projde; nejnovější drží.
+  await publishDeleted({ channel: 'robdiesalot', platform: 'youtube', messageId: 'cap-0', by: null, reason: 'platform' }, deps);
+  assert.equal(broadcasts, 1);
+  await publishDeleted({ channel: 'robdiesalot', platform: 'youtube', messageId: `cap-${RESTORED_MAX + 49}`, by: null, reason: 'platform' }, deps);
+  assert.equal(broadcasts, 1);
 });
 
 test('markDeleted: nastaví deleted_* jen když ještě není smazaná; vrátí channel+login', { skip: !url && 'TEST_DATABASE_URL není nastavené' }, async () => {

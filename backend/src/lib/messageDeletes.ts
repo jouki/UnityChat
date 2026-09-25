@@ -141,6 +141,8 @@ export function forgetPublished(platform: Platform, messageId: string): void {
 
 /** Jak dlouho se po odkrytí ignoruje smazání téže zprávy z platformy (ozvěna CLEARMSG / Kick / YouTube). */
 export const RESTORED_MS = 30 * 60_000;
+/** Tvrdý strop počtu značek (paměť procesu). */
+export const RESTORED_MAX = 2000;
 const restoredByMod = new Map<string, number>();
 
 /**
@@ -149,11 +151,23 @@ const restoredByMod = new Map<string, number>();
  * platformě nic nesmazalo, pozdější smazání z platformy je skutečné).
  */
 export function rememberRestored(platform: Platform, messageId: string, now: number = Date.now()): void {
-  restoredByMod.set(`${platform}:${messageId}`, now);
-  if (restoredByMod.size > 1000) {
+  const key = `${platform}:${messageId}`;
+  // Znovu vložit na konec — Map drží pořadí vložení, nejstarší je vždy první.
+  restoredByMod.delete(key);
+  restoredByMod.set(key, now);
+  if (restoredByMod.size > RESTORED_MAX) {
     for (const [k, at] of restoredByMod) if (now - at >= RESTORED_MS) restoredByMod.delete(k);
   }
+  // Tvrdý strop: zahodit nejstarší záznamy (i když ještě neprošly oknem).
+  while (restoredByMod.size > RESTORED_MAX) {
+    const oldest = restoredByMod.keys().next().value;
+    if (oldest === undefined) break;
+    restoredByMod.delete(oldest);
+  }
 }
+
+/** Počet značek „odkryto“ (test stropu). */
+export function restoredCount(): number { return restoredByMod.size; }
 
 /** messages.channel zprávy (platformní kanál, jak ho uložil ingest); null = v archivu není. */
 export async function archivedMessageChannel(platform: Platform, messageId: string): Promise<string | null> {
