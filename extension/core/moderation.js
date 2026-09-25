@@ -61,7 +61,7 @@ export function applyDeleted(el, opts = {}) {
   const mode = DELETED_STYLES.includes(rawMode) ? rawMode : DEFAULT_DELETED_STYLE;
 
   if (mode === 'hide') {
-    // Nejdřív smazat případný předchozí stav (tag/jiné mode třídy), pak schovat.
+    // Nejdřív smazat případný předchozí stav (tag/jiné mode třídy, obal emotů), pak schovat.
     clearDeleted(el);
     el.classList.add('uc-deleted', 'uc-deleted--hide');
     el.hidden = true;
@@ -91,6 +91,9 @@ export function applyDeleted(el, opts = {}) {
     }
   } else if (mode === 'strike') {
     wrapStrikeEmotes(q('.tx'), doc);
+  } else {
+    // Přepnutí stylu ze „strike“ na „dim“: obal emotů už není potřeba.
+    unwrapStrikeEmotes(q('.tx'));
   }
 
   let tagEl = q('.uc-deleted-tag');
@@ -124,8 +127,19 @@ function wrapStrikeEmotes(tx, doc) {
   }
 }
 
+/** Opak wrapStrikeEmotes: emote zpátky na místo obalu `.uc-strike-emote`, obal pryč. Idempotentní. */
+function unwrapStrikeEmotes(tx) {
+  if (!tx || typeof tx.querySelectorAll !== 'function') return;
+  for (const wrap of tx.querySelectorAll('.uc-strike-emote')) {
+    const parent = wrap.parentNode;
+    if (!parent) continue;
+    while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
+    wrap.remove();
+  }
+}
+
 /**
- * Vrátí element do stavu před `applyDeleted` — odstraní `uc-deleted*` třídy,
+ * Vrátí element do stavu před `applyDeleted` — odstraní `uc-deleted*` třídy, obal emotů `.uc-strike-emote`,
  * štítek a `hidden`. Obnovu původního obsahu `.tx` (odstraněného v 'label'
  * režimu) NEDĚLÁ — to je na hostu, který zprávu znovu vykreslí z dat (stejný
  * princip jako u ChatStore: DOM se nepatchuje, znovu se vyrenderuje).
@@ -137,6 +151,7 @@ export function clearDeleted(el) {
   for (const m of DELETED_STYLES) el.classList.remove(`uc-deleted--${m}`);
   const tag = typeof el.querySelector === 'function' ? el.querySelector('.uc-deleted-tag') : null;
   if (tag && typeof tag.remove === 'function') tag.remove();
+  unwrapStrikeEmotes(typeof el.querySelector === 'function' ? el.querySelector('.tx') : null);
   el.hidden = false;
 }
 

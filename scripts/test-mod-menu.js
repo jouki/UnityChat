@@ -107,7 +107,44 @@ Promise.all([
     menu.target = ht;
     check('ModMenu model s onHistory má položku', menu._model().some((i) => i.id === 'history') && !new mm.ModMenu({ doc: {}, api: async () => ({}) })._model.call({ target: ht, _state: {}, onHistory: undefined }).some((i) => i.id === 'history'));
     menu._activate({ id: 'history' });
-    check('ModMenu „Chat historie" → onHistory(target)', opened[0] === ht);
+    check('ModMenu „Profil" → onHistory(target)', opened[0] === ht);
+    check('menuModel: položka se jmenuje „Profil"', mm.menuModel({ history: true }).find((i) => i.id === 'history').label === 'Profil');
+
+    // --- Profil: formáty, požadavky, dona ---
+    const NB = '\u00a0';
+    check('fmtNumber / fmtAmount / fmtMoney', uh.fmtNumber(1250) === `1${NB}250` && uh.fmtNumber(12.5) === '12,5' && uh.fmtAmount(1250, 'CZK') === `1${NB}250${NB}Kč`
+      && uh.fmtMoney({ czk: 1750, byCurrency: { EUR: 20, CZK: 1250 } }) === `1${NB}250${NB}Kč + 20${NB}€` && uh.fmtMoney({ czk: 150, byCurrency: {} }) === `150${NB}Kč`);
+    check('fmtDay / fmtTime (oddělovač dnů + čas u zprávy)', uh.fmtDay(new Date(2026, 8, 24, 10, 0).getTime()) === 'čtvrtek 24. 9. 2026' && uh.fmtTime(at) === '14:05');
+    check('dayKey stejný den / jiný den', uh.dayKey(new Date(2026, 8, 24, 0, 1).getTime()) === uh.dayKey(new Date(2026, 8, 24, 23, 59).getTime()) && uh.dayKey(new Date(2026, 8, 24).getTime()) !== uh.dayKey(new Date(2026, 8, 25).getTime()));
+    const dm = uh.donationsSummary({ total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } });
+    check('donationsSummary mod: celkem + „z toho … jen podle jména"', dm.main === `Celkem darováno 1${NB}250${NB}Kč + 20${NB}€` && dm.sub === `z toho 250${NB}Kč jen podle jména`, JSON.stringify(dm));
+    check('donationsSummary divák: jen ucNamed', uh.donationsSummary({ ucNamed: { czk: 1000, count: 1 } }).main === `Celkem darováno 1${NB}000${NB}Kč` && uh.donationsSummary({ ucNamed: { czk: 0, count: 0 } }) === null && uh.donationsSummary(undefined) === null && uh.donationsSummary({ count: 0, total: { czk: 0 } }) === null);
+    check('donationLine', uh.donationLine({ amount: 150, currency: 'CZK', via: 'qr' }) === `poslal QR dono 150${NB}Kč` && uh.donationLine({ amount: 20, currency: 'EUR', via: 'fourthwall' }) === `poslal dono přes Fourthwall 20${NB}€`);
+    check('statsText jen aktuální kanál (veřejný Profil)', uh.statsText({ firstSeen: at, lastSeen: at, total: 1 }, { channelOnly: true }) === 'V tomto kanálu: poprvé viděn 25. 9. 2026 · naposledy 25. 9. 2026 14:05 · celkem 1 zpráva');
+    check('history summary jen podle loginu (bez userId)', uh.buildHistoryRequest('summary', { channel: 'robdiesalot', platform: 'kick', userId: null, login: 'Spam' }).path === '/moderation/user-history/summary?channel=robdiesalot&platform=kick&login=Spam');
+    check('history donations GET', uh.buildHistoryRequest('donations', ht).path === '/moderation/user-history/donations?channel=robdiesalot&platform=twitch&userId=123&login=spammer');
+    check('messageTarget z řádku Profilu', eq(uh.messageTarget({ platform: 'kick', id: 'm1', userId: 7, username: 'Spam' }, { channel: 'robdiesalot', login: 'x' }), { channel: 'robdiesalot', platform: 'kick', userId: '7', login: 'Spam', displayName: 'Spam', messageId: 'm1' }));
+  }
+
+  // --- moderace účtem: akce botem / no_actor + chybějící scopes → nabídka přihlášení ---
+  check('modScopePlatforms: bot / no_actor jen s chybějícími scopes', eq(mm.modScopePlatforms({ twitch: 'error:no_actor', kick: 'bot', youtube: 'error:no_actor' }, { twitch: ['moderator:manage:chat_messages'], kick: [] }), ['twitch']));
+  check('modScopePlatforms: ok / bez scopes info → nic', mm.modScopePlatforms({ twitch: 'ok' }, { twitch: ['x'] }).length === 0 && mm.modScopePlatforms({ twitch: 'bot' }, {}).length === 0);
+  check('modScopePrompt Twitch = obnovení přihlášení, Kick = povolit moderaci', mm.modScopePrompt('twitch', 'error:no_actor').action === 'Obnovit přihlášení (moderace)' && mm.modScopePrompt('kick', 'bot').action === 'Povolit moderaci účtem'
+    && mm.modScopePrompt('twitch', 'error:no_actor').text === 'Na Twitchi se akce nepovedla — tvůj účet nemá oprávnění moderovat.' && mm.modScopePrompt('kick', 'bot').text === 'Na Kicku akci provedl bot — tvůj účet nemá oprávnění moderovat.');
+  check('buildModRequest delete', eq(mm.buildModRequest('delete', { channel: 'Rob', platform: 'twitch', messageId: 'abc', login: 'x' }), { path: '/moderation/delete', method: 'POST', body: { channel: 'rob', platform: 'twitch', messageId: 'abc' } }));
+  check('summarize delete', mm.summarizeModResult('delete', { login: 'x', displayName: 'X', platform: 'twitch' }, { result: 'bot' }) === 'Zpráva od X smazána: Twitch ✓ (bot)');
+  {
+    const scopes = [], results = [];
+    const menu = new mm.ModMenu({ doc: {}, api: async (path) => (path === '/moderation/delete' ? { ok: true, result: 'error:no_actor' } : { ok: true, results: { twitch: 'error:no_actor', kick: 'ok' } }),
+      missingScopes: () => ({ twitch: ['moderator:manage:banned_users'] }), onModScopes: (p, prompt, info) => scopes.push(`${p}:${info.kind}:${prompt.action}`) });
+    const off = menu.onResult((kind, tt) => results.push(`${kind}:${tt.messageId || tt.userId}`));
+    await menu.run('timeout', { channel: 'rob', platform: 'twitch', userId: 'u1', login: 'x' }, { durationSec: 60 });
+    await menu.run('delete', { channel: 'rob', platform: 'twitch', messageId: 'm9', login: 'x' });
+    check('ModMenu: no_actor + chybějící scopes → onModScopes (timeout i mazání)', eq(scopes, ['twitch:timeout:Obnovit přihlášení (moderace)', 'twitch:delete:Obnovit přihlášení (moderace)']), JSON.stringify(scopes));
+    check('ModMenu.onResult: odběratelé dostanou úspěšné akce', eq(results, ['timeout:u1', 'delete:m9']));
+    off();
+    await menu.run('timeout', { channel: 'rob', platform: 'twitch', userId: 'u2', login: 'y' }, { durationSec: 60 });
+    check('ModMenu.onResult: odhlášení', results.length === 2);
   }
 
   // --- summarize ---

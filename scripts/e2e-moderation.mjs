@@ -54,7 +54,8 @@ const mock = {
   history: () => [H('e2e-m1', 'první zpráva'), H('e2e-m2', '', { deleted: true }), H('e2e-m3', 'třetí zpráva')],
   sse: [],   // fronta událostí pro /nicknames/stream
   // GET /moderation/deleted-content — obsah smazané zprávy jen pro moda (Kappa = Twitch emote 25).
-  deletedContent: { 'twitch:e2e-m2': H('e2e-m2', 'tst Kappa', { twitchEmotes: '25:4-8', deleted: true, deletedReason: 'mod' }) },
+  // Smazaná zpráva byla odpověď → po dotažení se doplní i citace ↩ (review 2026-09-25).
+  deletedContent: { 'twitch:e2e-m2': H('e2e-m2', 'tst Kappa', { twitchEmotes: '25:4-8', deleted: true, deletedReason: 'mod', replyTo: { username: 'Jiny', message: 'původní otázka', id: 'e2e-x0' } }) },
 };
 const posts = [];
 const contentCalls = [];
@@ -70,7 +71,8 @@ s.onevent = async (d) => {
     return call('Fetch.fulfillRequest', { requestId: rid, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/event-stream' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, d.sessionId);
   }
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null } });
-  if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
+  // Účtu moda chybí Twitch mod scopes (starý token jen s user:write:chat) → po smazání botem nabídka přihlášení.
+  if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: { twitch: ['moderator:manage:chat_messages'] } } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   // GIFy ke schválení (část 4) — tady žádné; nesmí odejít na produkci.
   if (u.includes('/moderation/gif/pending')) return json({ ok: true, requests: [] });
   if (u.includes('/moderation/deleted-content')) {
@@ -116,6 +118,7 @@ check('A mod: obsah smazané zprávy z historie dotažen přes /moderation/delet
 check('A mod: dotaz s kanálem a id smazané zprávy (jeden dotaz)', contentCalls.length === 1 && /channel=robdiesalot/.test(contentCalls[0]) && new URL(contentCalls[0]).searchParams.get('ids') === 'twitch:e2e-m2', contentCalls.join(' | '));
 await sleep(400);
 const m2mod = await msgState('e2e-m2');
+check('A mod: po dotažení obsahu i citace odpovědi (↩ @Jiny)', await ev(`document.querySelector('.msg[data-msg-id="e2e-m2"] > .reply-ctx .rctx-user')?.textContent`) === '@Jiny', await ev(`document.querySelector('.msg[data-msg-id="e2e-m2"]')?.outerHTML?.slice(0, 300)`));
 check('A mod + label: „Zpráva smazána" + štítek Smazáno + ztlumeno', m2mod?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--label' && m2mod.text.startsWith('Zpráva smazána') && m2mod.tag === 'Smazáno' && m2mod.label, JSON.stringify(m2mod));
 // Mod přepne na Přeškrtnuté → dotažený text přeškrtnutý (i přes emote), ztlumený, se štítkem.
 await setStyle('strike');
@@ -135,10 +138,10 @@ mock.sse.push(['message-hidden', { channel: 'robdiesalot', platform: 'twitch', m
 check('A mod: skrytá zpráva zůstane vidět', await until(`document.querySelector('.msg[data-msg-id="e2e-m3"]')?.classList.contains('uc-deleted--label')`, 6000));
 const m3mod = await msgState('e2e-m3');
 check('A mod: skrytá = „Zpráva skryta" + štítek „Skryto v UnityChatu" + ztlumeno', m3mod?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--label' && m3mod.text.startsWith('Zpráva skryta') && m3mod.tag === 'Skryto v UnityChatu' && m3mod.display !== 'none', JSON.stringify(m3mod));
-await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('botem'))`, 4000);
+await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('provedl bot'))`, 4000);
 check('A POST /moderation/delete s kanálem, platformou a id', posts.length === 1 && posts[0]?.platform === 'twitch' && posts[0]?.messageId === 'e2e-m1' && posts[0]?.channel === 'robdiesalot', JSON.stringify(posts));
 const sysBot = await lastSys();
-check('A výsledek „bot" → hláška + tlačítko „Povolit moderaci účtem"', sysBot?.text.includes('Smazáno botem') && sysBot.action === 'Povolit moderaci účtem', JSON.stringify(sysBot));
+check('A výsledek „bot" + chybějící scopes → hláška + „Obnovit přihlášení (moderace)" (Twitch, stejné jako akce z nabídky)', sysBot?.text.startsWith('Na Twitchi akci provedl bot — tvůj účet nemá oprávnění moderovat.') && sysBot.action === 'Obnovit přihlášení (moderace)', JSON.stringify(sysBot));
 
 // ---- fáze B: divák (ne mod) ----
 mock.mod = false;

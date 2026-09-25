@@ -71,13 +71,15 @@ import('../extension/core/moderation.js').then((m) => {
       appendChild(child) { if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child); child.parent = el; el.children.push(child); return child; },
       insertBefore(child, ref) { if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child); child.parent = el; const i = el.children.indexOf(ref); el.children.splice(i < 0 ? el.children.length : i, 0, child); return child; },
       get parentNode() { return el.parent || null; },
-      querySelectorAll() {
-        // jen 'img.emote' (wrapStrikeEmotes)
+      querySelectorAll(sel) {
+        // 'img.emote' (wrapStrikeEmotes) nebo '.třída' (unwrapStrikeEmotes)
         const out = [];
-        const walk = (node) => { for (const c of node.children) { if (c.tag === 'img' && c.classList.contains('emote')) out.push(c); walk(c); } };
+        const hit = sel === 'img.emote' ? (c) => c.tag === 'img' && c.classList.contains('emote') : (c) => c.classList.contains(sel.replace(/^\./, ''));
+        const walk = (node) => { for (const c of node.children) { if (hit(c)) out.push(c); walk(c); } };
         walk(el);
         return out;
       },
+      get firstChild() { return el.children[0] || null; },
       querySelector(sel) {
         const cls = sel.replace(/^\./, '');
         const walk = (node) => {
@@ -210,8 +212,13 @@ import('../extension/core/moderation.js').then((m) => {
     check('applyDeleted strike: emote ve stacku neobalený', img2.parentNode === stack);
     m.applyDeleted(el, { ...m.deletedView({ isMod: true, style: 'strike' }), hasContent: true });
     check('applyDeleted strike: obal idempotentní', img.parentNode.parentNode === tx);
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true, style: 'dim' }), hasContent: true });
+    check('přepnutí strike → dim: obal .uc-strike-emote rozbalený', img.parentNode === tx && !tx.children.some((c) => c.classList.contains('uc-strike-emote')));
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true, style: 'strike' }), hasContent: true });
+    check('zpátky strike → emote znovu obalený', !!img.parentNode?.classList.contains('uc-strike-emote'));
     m.clearDeleted(el);
     check('clearDeleted: sundá uc-deleted--dimmed', !el.classList.contains('uc-deleted--dimmed'));
+    check('clearDeleted: rozbalí .uc-strike-emote (emote zpátky v .tx)', img.parentNode === tx && tx.children.filter((c) => c.tag === 'img').length === 1 && !tx.children.some((c) => c.classList.contains('uc-strike-emote')));
   }
   // divák: bez štítku u labelu a bez ztlumení (beze změny)
   {

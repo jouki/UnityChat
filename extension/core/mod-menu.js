@@ -1,6 +1,6 @@
 // Kontextová nabídka moderátora na jméno (moderace část 2) — sdílená addonem i webem.
 // Pravé tlačítko na jméno (jen mod; divák má nativní menu prohlížeče) → Smazat zprávu,
-// Timeout ▸, Zabanovat / Unban, Přejmenovat…, Chat historie, Varovat…, Permit ▸. Kontrakt backendu:
+// Timeout ▸, Zabanovat / Unban, Přejmenovat…, Profil, Varovat…, Permit ▸. Kontrakt backendu:
 // docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md.
 //
 // Host dodá DOM (`doc`) a `api(path, { method, body })` → JSON, při chybě throw { error, status }
@@ -108,9 +108,37 @@ export function validateWarnReason(value) {
   return { reason };
 }
 
+/** Místo „na Twitchi / na Kicku / na YouTube“. */
+export const PLATFORM_LOC = { twitch: 'Twitchi', kick: 'Kicku', youtube: 'YouTube' };
+
+/**
+ * Výsledek akce → platformy, kde akci neprovedl účet moda, protože mu chybí moderátorská oprávnění
+ * (výsledek 'bot' = provedl bot místo něj, 'error:no_actor' = nikdo) a `/moderation/me` u té platformy hlásí
+ * chybějící scopes. Jen tam má smysl nabídnout přihlášení s moderací (čistá funkce).
+ * @param {Record<string,string>} results  { twitch: 'ok'|'bot'|'error:…' } (u mazání { [platform]: result })
+ * @param {Record<string,string[]>} [missingScopes]  z /moderation/me
+ */
+export function modScopePlatforms(results, missingScopes = {}) {
+  return Object.entries(results || {})
+    .filter(([p, r]) => PLATFORM_LOC[p] && (r === 'bot' || r === 'error:no_actor') && Array.isArray(missingScopes?.[p]) && missingScopes[p].length > 0)
+    .map(([p]) => p);
+}
+
+/**
+ * Hláška + tlačítko pro platformu z modScopePlatforms. Twitch žádá mod scopes už při každém přihlášení
+ * (backend 2026-09-25) → jde jen o jednorázové obnovení starého tokenu; Kick mod scopes jen na vyžádání.
+ */
+export function modScopePrompt(platform, result) {
+  const where = PLATFORM_LOC[platform] || platform;
+  const text = result === 'bot'
+    ? `Na ${where} akci provedl bot — tvůj účet nemá oprávnění moderovat.`
+    : `Na ${where} se akce nepovedla — tvůj účet nemá oprávnění moderovat.`;
+  return { text, action: platform === 'twitch' ? 'Obnovit přihlášení (moderace)' : 'Povolit moderaci účtem' };
+}
+
 /**
  * Požadavek na backend pro akci z nabídky (čistá funkce, testovaná).
- * @param {'state'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
+ * @param {'state'|'delete'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
  * @param {{channel?: string, platform: string, userId?: string, login: string, messageId?: string|null}} t  cíl
  * @param {{durationSec?: number, reason?: string, nickname?: string|null, color?: string|null}} [x]
  * @returns {{path: string, method: string, body?: object}}
@@ -121,6 +149,8 @@ export function buildModRequest(kind, t, x = {}) {
   switch (kind) {
     case 'state':
       return { path: `/moderation/user-state?${t.channel ? `channel=${enc(String(t.channel).toLowerCase())}&` : ''}platform=${enc(t.platform)}&userId=${enc(String(t.userId ?? ''))}`, method: 'GET' };
+    case 'delete':
+      return { path: '/moderation/delete', method: 'POST', body: { ...ch, platform: t.platform, messageId: String(t.messageId ?? '') } };
     case 'timeout':
       return { path: '/moderation/user', method: 'POST', body: { ...base, action: 'timeout', durationSec: x.durationSec } };
     case 'ban':
@@ -143,7 +173,7 @@ export function buildModRequest(kind, t, x = {}) {
 /**
  * Položky nabídky (čistá funkce). `banned` → Unban místo Timeout/Zabanovat.
  * Bez userId jde jen Přejmenovat (a Smazat zprávu, pokud je zpráva potvrzená).
- * `history` = hostitel umí otevřít Chat historii (core/user-history.js) → položka za Přejmenovat.
+ * `history` = hostitel umí otevřít Profil (core/user-history.js) → položka za Přejmenovat.
  */
 export function menuModel({ banned = false, canDelete = true, hasUserId = true, history = false } = {}) {
   const noId = !hasUserId;
@@ -155,7 +185,7 @@ export function menuModel({ banned = false, canDelete = true, hasUserId = true, 
     items.push({ id: 'ban', label: 'Zabanovat…', danger: true, disabled: noId });
   }
   items.push({ id: 'rename', label: 'Přejmenovat…' });
-  if (history) items.push({ id: 'history', label: 'Chat historie', disabled: noId });
+  if (history) items.push({ id: 'history', label: 'Profil', disabled: noId });
   items.push({ id: 'warn', label: 'Varovat…', disabled: noId });
   items.push({ id: 'permit', label: 'Permit', disabled: noId, sub: PERMIT_OPTIONS.map((s) => ({ id: `permit:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_PERMIT_SEC } });
   return items;
@@ -165,6 +195,7 @@ export function menuModel({ banned = false, canDelete = true, hasUserId = true, 
 export function summarizeModResult(kind, target, res = {}, x = {}) {
   const who = target.displayName || target.login;
   switch (kind) {
+    case 'delete': return `Zpráva od ${who} smazána: ${formatResults({ [target.platform]: res.result })}`;
     case 'timeout': return `Timeout ${fmtDuration(x.durationSec)} pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'ban': return `Ban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'unban': return `Unban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
@@ -304,16 +335,22 @@ export class ModMenu {
    * @param {Document} [o.doc]
    * @param {(path: string, opts: {method?: string, body?: object}) => Promise<any>} o.api
    * @param {(target: object) => void} [o.onDelete]  „Smazat zprávu" (část 1, host)
-   * @param {(target: object) => void} [o.onHistory]  „Chat historie" (host otevře UserHistoryPanel); bez něj položka není
+   * @param {(target: object) => void} [o.onHistory]  „Profil" (host otevře UserHistoryPanel); bez něj položka není
    * @param {(text: string, info: {ok: boolean, kind: string, target: object, res?: object, error?: object}) => void} [o.notify]
+   * @param {() => Record<string,string[]>} [o.missingScopes]  chybějící mod scopes účtu (/moderation/me)
+   * @param {(platform: string, prompt: {text: string, action: string}, info: {kind: string, target: object, res: object}) => void} [o.onModScopes]
+   *   akci provedl bot / neprovedl nikdo, protože účtu chybí mod scopes → host nabídne přihlášení s moderací
    * @param {(tag: string, text: string) => void} [o.log]
    */
-  constructor({ doc = globalThis.document, api, onDelete, onHistory, notify, log } = {}) {
+  constructor({ doc = globalThis.document, api, onDelete, onHistory, notify, missingScopes, onModScopes, log } = {}) {
     this.doc = doc;
     this.api = api;
     this.onDelete = onDelete;
     this.onHistory = onHistory;
     this.notify = notify || (() => {});
+    this.missingScopes = missingScopes || (() => ({}));
+    this.onModScopes = onModScopes;
+    this._resultFns = new Set();
     this.log = log || (() => {});
     this.el = null;
     this.target = null;
@@ -326,6 +363,33 @@ export class ModMenu {
   }
 
   get isOpen() { return !!this.el; }
+
+  /**
+   * Odběr úspěšných akcí (Profil si podle nich přebarví řádky). Vrací funkci pro odhlášení.
+   * @param {(kind: string, target: object, res: object, x: object) => void} fn
+   */
+  onResult(fn) {
+    this._resultFns.add(fn);
+    return () => this._resultFns.delete(fn);
+  }
+
+  /**
+   * Akce rovnou bez hlavní nabídky (ikony u zprávy v Profilu): delete = hned, ban = potvrzení,
+   * timeout / permit = nabídka otevřená rovnou v podnabídce délek (u místa kliknutí).
+   * @param {'delete'|'timeout'|'ban'|'permit'} kind
+   */
+  openAction(kind, target, at = {}) {
+    this.log('ModMenu', `akce z Profilu ${kind} → ${target.platform}:${target.userId || '?'} ${target.login}`);
+    if (kind === 'delete') return this.run('delete', target);
+    if (kind === 'ban') return this._confirmBan(target);
+    if (kind === 'timeout' || kind === 'permit') {
+      this.open(target, at);
+      if (!this.el) return;
+      this._view = kind;
+      this._render();
+      this._focus(1);
+    }
+  }
 
   /**
    * @param {{channel?: string, platform: string, userId?: string|null, login: string, displayName?: string,
@@ -684,10 +748,23 @@ export class ModMenu {
     try {
       const res = await this.call(kind, t, x);
       this.notify(summarizeModResult(kind, t, res, x), { ok: true, kind, target: t, res });
+      this._afterResult(kind, t, res, x);
       return res;
     } catch (e) {
       this.notify(e.message, { ok: false, kind, target: t, error: { error: e.code, status: e.status } });
       return null;
+    }
+  }
+
+  /** Po úspěšné akci: odběratelé (Profil) + nabídka přihlášení s moderací, když akci neprovedl účet moda. */
+  _afterResult(kind, t, res, x = {}) {
+    for (const fn of this._resultFns) { try { fn(kind, t, res, x); } catch (e) { this.log('ModMenu', `onResult: ${e?.message || e}`); } }
+    const results = kind === 'delete' ? { [t.platform]: res?.result } : (res?.results || {});
+    let missing = {};
+    try { missing = this.missingScopes() || {}; } catch {}
+    for (const p of modScopePlatforms(results, missing)) {
+      this.log('ModMenu', `${kind}: ${p} → ${results[p]}, účtu chybí mod scopes → nabídka přihlášení`);
+      this.onModScopes?.(p, modScopePrompt(p, results[p]), { kind, target: t, res });
     }
   }
 
@@ -721,6 +798,7 @@ export class ModMenu {
         const x = { nickname, color: v.color };
         const res = await this.call('rename', t, x);
         this.notify(summarizeModResult('rename', t, res, x), { ok: true, kind: 'rename', target: t, res });
+        this._afterResult('rename', t, res, x);
       },
       onClose: () => { this.dialog = null; },
     });
@@ -739,6 +817,7 @@ export class ModMenu {
         if (error) throw new Error(error);
         const res = await this.call('warn', t, { reason });
         this.notify(summarizeModResult('warn', t, res), { ok: true, kind: 'warn', target: t, res });
+        this._afterResult('warn', t, res, { reason });
       },
       onClose: () => { this.dialog = null; },
     });

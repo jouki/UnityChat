@@ -272,7 +272,7 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
 .uc-mm-custom--bad .uc-mm-custom-num { border-color: #e5484d; animation: uc-mm-shake 0.3s; }
 @keyframes uc-mm-shake { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 
-/* ---- Chat historie uživatele (core/user-history.js) — panel přes chat ---- */
+/* ---- Profil uživatele (core/user-history.js, dřív „Chat historie“) — panel přes chat ---- */
 .uc-uh {
   position: absolute;
   top: 0; right: 0; bottom: 0;
@@ -300,7 +300,25 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
 .uc-uh-top { display: flex; align-items: flex-start; gap: 8px; }
 .uc-uh-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .uc-uh-cap { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent, #ff8c00); }
-.uc-uh-name { margin: 1px 0 0; font-size: 16px; font-weight: 700; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uc-uh-namerow { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.uc-uh-name { margin: 1px 0 0; min-width: 0; max-width: 100%; font-size: 16px; font-weight: 700; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Badge z poslední zprávy (render chatu: .bdg / .bdg-img), víc platforem = skupina s logem. */
+.uc-uh-badges { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.uc-uh-badges:empty { display: none; }
+.uc-uh-badge-group { display: inline-flex; align-items: center; gap: 3px; }
+.uc-uh-badges .bdg { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
+.uc-uh-badges .bdg-img { width: 18px; height: 18px; display: block; }
+/* Suma darů: velkým písmem (velikost nadpisu), odhad podle jména menší pod tím. */
+.uc-uh-donsum { margin-top: 6px; }
+.uc-uh-donsum-main { font-size: 16px; font-weight: 700; line-height: 1.3; color: #ffd27a; }
+.uc-uh-donsum-sub { font-size: 11px; color: var(--text-secondary, #adadb8); }
+.uc-uh-links { margin-top: 6px; }
+.uc-uh-card {
+  padding: 3px 10px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  color: var(--text-primary, #efeff1); background: var(--bg-tertiary, #1f1f23);
+  border: 1px solid var(--border, #2f2f35); border-radius: 6px;
+}
+.uc-uh-card:hover, .uc-uh-card:focus-visible { border-color: var(--accent, #ff8c00); outline: none; }
 .uc-uh-sub { font-size: 11px; color: var(--text-secondary, #adadb8); }
 .uc-uh-sub:empty { display: none; }
 .uc-uh-close {
@@ -354,8 +372,46 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
 .uc-uh-tab-count { font-size: 10px; padding: 0 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); }
 .uc-uh-tab--on .uc-uh-tab-count { background: rgba(0, 0, 0, 0.18); }
 .uc-uh-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; scrollbar-width: thin; }
-.uc-uh-msg { display: flex; align-items: baseline; gap: 6px; padding: 3px 12px; line-height: 1.45; }
-.uc-uh-msg:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.04)); }
+.uc-uh-msg, .uc-uh-don { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; padding: 3px 12px; line-height: 1.45; }
+.uc-uh-msg:hover, .uc-uh-don:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.04)); }
+/* Oddělovač dnů. */
+.uc-uh-day {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 12px 2px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+  color: var(--text-secondary, #adadb8);
+}
+.uc-uh-day::before, .uc-uh-day::after { content: ''; flex: 1; height: 1px; background: var(--border, #2f2f35); }
+/* Citace odpovědi (render chatu .reply-ctx): jeden řádek, klik = celý text. */
+.uc-uh-reply { flex: 0 0 100%; order: -1; min-width: 0; cursor: pointer; }
+.uc-uh-reply, .uc-uh-reply > *, .uc-uh-reply .reply-ctx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uc-uh-reply .reply-ctx { padding-left: 0; }
+.uc-uh-reply--wrap, .uc-uh-reply--wrap > *, .uc-uh-reply--wrap .reply-ctx { white-space: normal; overflow: visible; }
+.uc-uh-reply .rctx-user { cursor: pointer; }
+.uc-uh-reply .rctx-user:hover { text-decoration: underline; }
+/* Ikony akcí moda u zprávy (jako hover akce v chatu). */
+.uc-uh-acts {
+  position: absolute; top: 1px; right: 8px;
+  display: none; gap: 2px; padding: 2px;
+  background: var(--bg-secondary, #18181b); border: 1px solid var(--border, #2f2f35); border-radius: 6px;
+}
+.uc-uh-msg:hover .uc-uh-acts, .uc-uh-acts:focus-within { display: inline-flex; }
+.uc-uh-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  color: var(--text-secondary, #adadb8); background: none; border: 0; border-radius: 4px; cursor: pointer;
+}
+.uc-uh-act:hover, .uc-uh-act:focus-visible { color: var(--text-primary, #efeff1); background: var(--bg-hover, #26262c); outline: none; }
+.uc-uh-act--delete:hover, .uc-uh-act--ban:hover { color: #ff9a9d; }
+@media (hover: none) { .uc-uh-acts { display: inline-flex; position: static; margin-left: auto; } }
+/* Řádek QR dona (ve stylu announcementu, zařazený mezi zprávy podle času). */
+.uc-uh-don { margin: 2px 8px; padding: 4px 8px; border-radius: 6px; background: linear-gradient(90deg, rgba(255, 200, 0, 0.12), rgba(255, 140, 0, 0.04)); border-left: 2px solid #ffc800; }
+.uc-uh-don-icon { flex: none; }
+.uc-uh-don-body { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; overflow-wrap: anywhere; }
+.uc-uh-don-line { font-weight: 700; color: #ffd27a; }
+.uc-uh-don-guess { font-size: 10px; color: var(--text-secondary, #adadb8); font-style: italic; }
+.uc-uh-don-msg { flex-basis: 100%; color: var(--text-primary, #efeff1); }
+.uc-uh-don--guess { border-left-color: var(--border, #2f2f35); background: rgba(255, 255, 255, 0.03); }
 .uc-uh-time { flex: none; font-size: 10px; color: var(--text-secondary, #adadb8); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .uc-uh-tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .uc-uh-tx .emote { vertical-align: middle; max-height: 28px; }

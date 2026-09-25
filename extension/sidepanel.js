@@ -1019,26 +1019,52 @@ async function _7tvFetchPaint(paintId) {
   return _7TV_PAINTS.get(paintId) || null;
 }
 
+// 7TV badge (Profil 2026-09-25: „všechny badge včetně 7TV“) — stejně jako painty jen hromadně přes GQL
+// (`cosmetics { badges }`, ověřeno curl 2026-09-25: host.url = //cdn.7tv.app/badge/<id>, soubory 1x–4x.webp).
+const _7TV_BADGES = new Map();
+let _7TV_BADGES_LOADING = null;
+async function _7tvFetchBadge(badgeId) {
+  if (!badgeId) return null;
+  if (!_7TV_BADGES.size) {
+    if (!_7TV_BADGES_LOADING) {
+      _7TV_BADGES_LOADING = fetch('https://7tv.io/v3/gql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: '{ cosmetics { badges { id tooltip host { url } } } }' }),
+        signal: AbortSignal.timeout(8000),
+      }).then((r) => r.json()).then((json) => {
+        for (const b of json?.data?.cosmetics?.badges || []) {
+          const host = String(b?.host?.url || '');
+          if (b?.id && /^\/\/cdn\.7tv\.app\//.test(host)) _7TV_BADGES.set(b.id, { url: `https:${host}/1x.webp`, title: String(b.tooltip || '7TV') });
+        }
+      }).catch(() => {}).finally(() => { _7TV_BADGES_LOADING = null; });
+    }
+    await _7TV_BADGES_LOADING;
+  }
+  return _7TV_BADGES.get(badgeId) || null;
+}
+
 // Resolve the 7TV cosmetics + emote-set assigned to a Twitch user (by their
 // Twitch numeric ID). Returns { paint, emoteSet } where paint is the full
 // definition or null, emoteSet is the raw 7TV emote-set object (with .emotes
 // array) or null. The user's emote set is what they "carry" to other
 // channels — typing their own emote there is still valid.
 async function _7tvFetchUserData(twitchUserId) {
-  if (!twitchUserId) return { paint: null, emoteSet: null };
+  if (!twitchUserId) return { paint: null, emoteSet: null, badge: null };
   try {
     const r = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
-    if (!r.ok) return { paint: null, emoteSet: null };
+    if (!r.ok) return { paint: null, emoteSet: null, badge: null };
     const data = await r.json();
     const user = data?.user || data;
     const paintId = user?.style?.paint_id;
     const paint = paintId ? await _7tvFetchPaint(paintId) : null;
+    const badge = user?.style?.badge_id ? await _7tvFetchBadge(user.style.badge_id) : null;
     // Top-level `emote_set` on the platform-binding response is the channel
     // emote set the user has assigned for Twitch (their personal "loadout").
     const emoteSet = data?.emote_set || null;
-    return { paint, emoteSet };
+    return { paint, emoteSet, badge };
   } catch {
-    return { paint: null, emoteSet: null };
+    return { paint: null, emoteSet: null, badge: null };
   }
 }
 
@@ -3948,13 +3974,16 @@ class UnityChat {
     })).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
   }
 
-  /** ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami). */
-  _buildReplyCtx(msg) {
+  /**
+   * ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami).
+   * `interactive: false` = bez klik handleru (Profil má vlastní: zalomení / profil autora).
+   */
+  _buildReplyCtx(msg, { interactive = true } = {}) {
     const rt = msg.replyTo;
     const rp = rt.platform || msg.platform;
     const ctx = document.createElement('div');
     ctx.className = 'reply-ctx';
-    if (rt.id) ctx.classList.add('clickable');
+    if (rt.id && interactive) ctx.classList.add('clickable');
     // Show nickname if available, otherwise platform username
     const replyRawName = (rt.username || '').replace(/^@/, '');
     const replyProfile = this.nicknames.get(rp, replyRawName);
@@ -3975,7 +4004,7 @@ class UnityChat {
     const pBadge = rt.platform && rt.platform !== msg.platform
       ? `<span class="badge ${({ twitch: 'tw', kick: 'ki', youtube: 'yt' })[rt.platform] || ''} rctx-pi${authorUc ? ' uc' : ''}">${this.emotes._eh(rt.platform)}</span> ` : '';
     ctx.innerHTML = `&#8617; ${pBadge}<span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` + replyBodyHtml;
-    if (rt.id) {
+    if (rt.id && interactive) {
       ctx.addEventListener('click', (e) => {
         e.stopPropagation();
         this._scrollToMessage(rt.id);
@@ -4482,15 +4511,47 @@ class UnityChat {
     const msg = fresh?.id != null ? (this.store.get(String(fresh.id)) || this.store.get(Number(fresh.id))) : null;
     if (!msg || msg.platform !== fresh.platform || !this._isModerated(msg)) return;
     const SKIP = ['id', 'platform', 'historical', 'timestamp', 'deleted', 'deletedReason', 'hidden', 'gif', 'segments'];
-    for (const [k, v] of Object.entries(fresh)) if (v !== undefined && !SKIP.includes(k)) msg[k] = v;
+    // Původní hodnoty přepsaných polí — po ztrátě role moda se obsah zase zahodí (_dropModContent).
+    const orig = msg._modOrig || {};
+    for (const [k, v] of Object.entries(fresh)) {
+      if (v === undefined || SKIP.includes(k)) continue;
+      if (!(k in orig)) orig[k] = msg[k];
+      msg[k] = v;
+    }
+    msg._modOrig = orig;
     msg._modContent = true;
     const els = this._msgEls(msg.id, msg.platform);
     for (const el of els) {
       const tx = el.querySelector('.tx');
       if (tx) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+      // Odpověď přišla bez obsahu → citace ↩ až teď (existující nahradit, ať sedí s daty).
+      if (msg.replyTo && !msg.isRaid && !msg.isAnnouncement) {
+        const ctx = this._buildReplyCtx(msg);
+        const old = el.querySelector(':scope > .reply-ctx');
+        if (old) old.replaceWith(ctx);
+        else el.insertBefore(ctx, el.querySelector(':scope > .msg-tag-line, :scope > .pi') || el.firstChild);
+      }
       this._paintDeleted(el, msg);
     }
     this._ucLog('Mod', `deleted-content → ${msg.platform}:${msg.id} (${els.length} el)`);
+  }
+
+  /**
+   * Ztráta role moda: obsah smazaných zpráv dotažený jako mod zahodit i z dat ve store (jinak by skončil
+   * v DIAG dumpu) a vrátit původní pole; citace dotažená s obsahem pryč i z DOM. Vrací počet zpráv.
+   */
+  _dropModContent() {
+    let n = 0;
+    for (const m of this.store.slice()) {
+      if (!m?._modContent) continue;
+      for (const [k, v] of Object.entries(m._modOrig || {})) { if (v === undefined) delete m[k]; else m[k] = v; }
+      delete m._modOrig;
+      m._modContent = false;
+      if (!m.replyTo) for (const el of this._msgEls(m.id, m.platform)) el.querySelector(':scope > .reply-ctx')?.remove();
+      n++;
+    }
+    if (n) this._ucLog('Mod', `ztráta role → obsah ${n} smazaných zpráv zahozen`);
+    return n;
   }
 
   /** Zrušit vzhled smazání/skrytí a vykreslit text znovu z dat. */
@@ -4600,10 +4661,10 @@ class UnityChat {
     }
     const result = String(res?.result || '');
     this._ucLog('Mod', `delete ${platform}:${id} → ${result}`);
-    if (result === 'bot') {
-      this._sysAction('Smazáno botem — tvůj účet nemá oprávnění moderovat', 'Povolit moderaci účtem',
-        () => this._loginPlatform(platform, { mod: true }));
-    } else if (result.startsWith('error')) {
+    const core = window.UC_CORE;
+    const needScopes = core.modScopePlatforms({ [platform]: result }, this._modMissingScopes || {});
+    if (needScopes.length) this._offerModLogin(platform, core.modScopePrompt(platform, result), 'delete');
+    else if (result.startsWith('error')) {
       this._sys(`V UnityChatu smazáno, na ${NAMES[platform] || platform} se smazat nepodařilo`);
     }
   }
@@ -4614,11 +4675,13 @@ class UnityChat {
     const seq = (this._modSeq = (this._modSeq || 0) + 1);
     let can = false;
     let platforms = [];
+    let missingScopes = {};
     if (this._signedIn && channel) {
       try {
         const j = await this._ucApi(`/moderation/me?channel=${encodeURIComponent(channel)}`);
         can = !!j.mod;
         platforms = j.platforms || [];
+        missingScopes = j.missingScopes || {};
         const missing = Object.entries(j.missingScopes || {}).filter(([, s]) => s?.length).map(([p]) => p);
         if (missing.length) this._ucLog('Mod', `chybí mod scopes: ${missing.join(',')}`);
       } catch (e) { this._ucLog('Mod', `me FAIL ${e.status || 0} ${e.error || e.message || e}`); }
@@ -4627,8 +4690,10 @@ class UnityChat {
     const changed = can !== !!this._canModerate;
     this._canModerate = can;
     document.body.classList.toggle('uc-can-moderate', can);
-    // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu).
-    if (!can) this._deletedLoaderInst?.reset();
+    // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu) a dotažený se zahodí.
+    if (!can) { this._deletedLoaderInst?.reset(); this._dropModContent(); }
+    // Chybějící mod scopes účtu (core ModMenu: po 'bot' / 'error:no_actor' nabídne přihlášení s moderací).
+    this._modMissingScopes = can ? missingScopes : {};
     // Změna role → přebarvit smazané (mod: ztlumení + štítek + dotažení textu, divák: podle nastavení).
     if (changed) this._reapplyDeleted();
     // GIFy ke schválení (část 4): mod si dotáhne čekající žádosti kanálu, karty přebarví tlačítka podle role.
@@ -4659,13 +4724,27 @@ class UnityChat {
           if (info?.error?.status === 403 && info.error.error === 'not_mod') this._loadModState();
           this._sys(text);
         },
+        missingScopes: () => this._modMissingScopes || {},
+        onModScopes: (platform, prompt, info) => this._offerModLogin(platform, prompt, info.kind),
         log: (tag, text) => this._ucLog(tag, text),
       });
     }
     return this._modMenuInst;
   }
 
-  /** Panel „Chat historie" (core/user-history.js) přes chat — položka v nabídce moda. */
+  /**
+   * Akci provedl bot / neprovedl nikdo, protože účtu chybí mod scopes (core modScopePrompt): hláška
+   * s tlačítkem na přihlášení s moderací (Twitch = jednorázové obnovení starého tokenu).
+   */
+  _offerModLogin(platform, prompt, kind) {
+    this._ucLog('Mod', `${kind}: ${platform} bez mod scopes účtu → „${prompt.action}“`);
+    this._sysAction(prompt.text, prompt.action, () => this._loginPlatform(platform, { mod: true }));
+  }
+
+  /**
+   * Panel „Profil" (core/user-history.js) přes chat — levý klik na jméno (všichni) a položka v nabídce moda.
+   * Render těla, badge, citace i barvy jména jsou tytéž funkce jako v chatu.
+   */
   _userHistory() {
     if (!this._userHistoryInst) {
       this._userHistoryInst = new window.UC_CORE.UserHistoryPanel({
@@ -4674,11 +4753,36 @@ class UnityChat {
         container: document.getElementById('chat-wrapper'),
         // Stejný render těla jako chat (emoty, odkazy, cenzura z blacklistu).
         renderMessage: (m) => this._renderMsgBody(m),
+        renderBadges: (m) => this._badgesEl(m),
+        paintName: (el, info) => this._styleName(el, info.platform, info.login, info.color || info.msg?.color || null),
+        renderReply: (m) => this._buildReplyCtx(m, { interactive: false }),
+        modMenu: this._modMenu(),
+        deletedStyle: () => this.config.deletedStyle,
+        onPlatformCard: (t) => this._openUserCard(t.platform, t.login),
         platformIcon: (p, uc) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}${uc ? '-gold' : ''}.svg` : null),
         log: (tag, text) => this._ucLog(tag, text),
       });
     }
     return this._userHistoryInst;
+  }
+
+  /** Levý klik na jméno (všichni, rozhodnutí usera 2026-09-25): Profil autora zprávy; pravý klik u moda dál nabídka. */
+  _openProfile(msg, un) {
+    const platform = msg?.platform;
+    const login = msg?.username || un?.dataset?.username || '';
+    if (!platform || !login) return;
+    const userId = this._msgUserId(msg);
+    // 7TV badge / paint do hlavičky Profilu (dotáhne se jednou za session, Profil se pak překreslí).
+    if (platform === 'twitch' && userId) this._enqueue7tvPaintLookup(userId, login);
+    this._ucLog('Profile', `klik na jméno ${platform}:${userId || '?'} ${login}`);
+    this._userHistory().open({
+      channel: (this.config.channel || '').toLowerCase(),
+      platform,
+      userId,
+      login,
+      displayName: un?.textContent || login,
+      nameColor: un?.style?.color || null,
+    });
   }
 
   /** GIFy ke schválení (core/gif.js): karty modům + stav odesílateli u spodku chatu. */
@@ -4706,11 +4810,11 @@ class UnityChat {
     this._addMessage({ ...m, historical: false });
   }
 
-  /** Zavře Chat historii (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
+  /** Zavře Profil (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
   _closeUserHistory(why) {
     if (!this._userHistoryInst?.isOpen) return;
     this._userHistoryInst.close();
-    this._ucLog('History', `zavřeno: ${why}`);
+    this._ucLog('Profile', `zavřeno: ${why}`);
   }
 
   /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
@@ -5295,6 +5399,7 @@ class UnityChat {
         badgesRaw: prev?.badgesRaw || '',
         userId: prev?.userId || null,
         _paint: prev?._paint,
+        _badge7tv: prev?._badge7tv,
         _paintChecked: prev?._paintChecked || false,
         _fromGQL: true,
       };
@@ -5360,6 +5465,7 @@ class UnityChat {
         badgesRaw: prev?.badgesRaw || '',
         userId: userId || prev?.userId || null,
         _paint: prev?._paint,
+        _badge7tv: prev?._badge7tv,
         _paintChecked: prev?._paintChecked || false,
         _fromGQL: !!color,
       };
@@ -5429,7 +5535,7 @@ class UnityChat {
     await Promise.allSettled(batch.map(async ({ userId, username }) => {
       const key = `twitch:${username}`;
       const prev = this._chatUsers.get(key) || { name: username, platform: 'twitch' };
-      const { paint, emoteSet } = await _7tvFetchUserData(userId);
+      const { paint, emoteSet, badge } = await _7tvFetchUserData(userId);
       const entry = { ...prev, _paintChecked: true };
       if (paint) {
         entry._paint = paint;
@@ -5438,6 +5544,8 @@ class UnityChat {
         // Negative result still stored so we skip re-query next time.
         entry._paint = null;
       }
+      // 7TV badge: do dat uživatele (render badge v chatu i v Profilu, _badgesEl) + dopsat k vykresleným zprávám.
+      entry._badge7tv = badge || null;
       // Personal emote loadout: register so the user's emotes resolve in any
       // channel, not just their own. e.g. KombatWombatt typing kombatwDefeated
       // outside his channel still renders the emote. Re-render any of their
@@ -5448,6 +5556,8 @@ class UnityChat {
       }
       this._chatUsers.set(key, entry);
       this._chatUsers.set(username, entry);
+      if (badge) this._apply7tvBadgeToRenderedMessages(username);
+      if (paint || badge) this._userHistoryInst?.isOpen && this._userHistoryInst.refreshBadges();
     }));
 
     if (!this._userColorTimer) {
@@ -6581,7 +6691,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6642,7 +6752,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6712,7 +6822,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6782,7 +6892,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -7094,6 +7204,78 @@ class UnityChat {
       // @mention spans need re-applying since innerHTML wiped them.
       this._processMentions(tx, platform);
       if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);
+    }
+  }
+
+  /**
+   * Badge zprávy (Twitch/Kick podle badgesRaw + 7TV badge uživatele) → <span class="bdg"> nebo null.
+   * Jediný render badge: chat (_renderMessage) i Profil (core/user-history.js renderBadges).
+   */
+  _badgesEl(msg) {
+    const bdg = document.createElement('span');
+    bdg.className = 'bdg';
+    const badgeCount = Object.keys(this._twitchBadges).length;
+    for (const badge of String(msg?.badgesRaw || '').split(',')) {
+      if (!badge) continue;
+      const entry = this._badgeEntry(msg.platform, badge);
+      const url = entry && typeof entry === 'object' ? entry.url : entry;
+      if (!url && msg.platform !== 'kick' && badgeCount > 0) {
+        console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
+      }
+      if (url) {
+        const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
+        const img = document.createElement('img');
+        img.className = 'bdg-img';
+        img.src = url;
+        img.alt = title;
+        img.setAttribute('data-tooltip', title);
+        bdg.appendChild(img);
+      }
+    }
+    const b7 = msg?.platform === 'twitch' && msg.username ? this._chatUsers.get(`twitch:${String(msg.username).toLowerCase()}`)?._badge7tv : null;
+    if (b7?.url) bdg.appendChild(this._badge7tvImg(b7));
+    return bdg.children.length ? bdg : null;
+  }
+
+  _badge7tvImg(b7) {
+    const img = document.createElement('img');
+    img.className = 'bdg-img bdg-7tv';
+    img.src = b7.url;
+    img.alt = b7.title;
+    img.setAttribute('data-tooltip', b7.title);
+    return img;
+  }
+
+  /** 7TV badge dorazil po vykreslení → dopsat k zprávám uživatele (jako paint). */
+  _apply7tvBadgeToRenderedMessages(username) {
+    const b7 = this._chatUsers.get(`twitch:${username}`)?._badge7tv;
+    if (!b7?.url) return;
+    let n = 0;
+    for (const un of this.chatEl.querySelectorAll(`.un[data-platform="twitch"][data-username="${CSS.escape(username)}"]`)) {
+      const msgEl = un.closest('.msg');
+      if (!msgEl || msgEl.querySelector('.bdg-7tv')) continue;
+      let bdg = msgEl.querySelector(':scope > .bdg');
+      if (!bdg) { bdg = document.createElement('span'); bdg.className = 'bdg'; msgEl.insertBefore(bdg, un); }
+      bdg.appendChild(this._badge7tvImg(b7));
+      n++;
+    }
+    if (n) this._ucLog('7TV', `badge ${username} → ${n} zpráv`);
+  }
+
+  /**
+   * Barva jména jako v chatu: přezdívka UC → barva z chatu (platform:login) → barva zprávy, + 7TV paint
+   * (jen bez vlastní barvy UC). Sdílí render chatu i Profil (paintName).
+   */
+  _styleName(un, platform, username, color) {
+    const ucProfile = this.nicknames.get(platform, username);
+    const chatUserEntry = this._chatUsers.get(`${platform}:${String(username || '').toLowerCase()}`);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || color);
+    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
+    // user intent), and we have a paint for this Twitch user. Paint replaces
+    // the solid color with a gradient/image + background-clip on the glyphs.
+    if (platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
+      const css = _7tvPaintToCss(chatUserEntry._paint);
+      if (css) _7tvApplyPaintStyles(un, css);
     }
   }
 
@@ -7469,50 +7651,20 @@ class UnityChat {
     ts.textContent = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
     el.appendChild(ts);
 
-    // Badges
-    if (msg.badgesRaw) {
-      const bdg = document.createElement('span');
-      bdg.className = 'bdg';
-      const badgeCount = Object.keys(this._twitchBadges).length;
-      for (const badge of msg.badgesRaw.split(',')) {
-        if (!badge) continue;
-        const entry = this._badgeEntry(msg.platform, badge);
-        const url = entry && typeof entry === 'object' ? entry.url : entry;
-        if (!url && msg.platform !== 'kick' && badgeCount > 0) {
-          console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
-        }
-        if (url) {
-          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
-          const img = document.createElement('img');
-          img.className = 'bdg-img';
-          img.src = url;
-          img.alt = title;
-          img.setAttribute('data-tooltip', title);
-          bdg.appendChild(img);
-        }
-      }
-      if (bdg.children.length) el.appendChild(bdg);
-    }
+    // Badges (platforma + 7TV) — stejná funkce kreslí badge v Profilu.
+    const bdg = this._badgesEl(msg);
+    if (bdg) el.appendChild(bdg);
 
-    // Username (klik → otevře user card na platformě)
+    // Username (klik → Profil uživatele, v něm tlačítko na původní kartu platformy)
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
-    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
-    // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
-    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
-    // user intent), and we have a paint for this Twitch user. Paint replaces
-    // the solid color with a gradient/image + background-clip on the glyphs.
-    if (msg.platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
-      const css = _7tvPaintToCss(chatUserEntry._paint);
-      if (css) _7tvApplyPaintStyles(un, css);
-    }
+    this._styleName(un, msg.platform, msg.username, msg.color);
     un.textContent = this._censorName(ucProfile?.nickname || msg.username);
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     el.appendChild(un);
     el.appendChild(document.createTextNode(' '));
 

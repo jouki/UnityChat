@@ -2,7 +2,9 @@
 // timeout (tělo POST /moderation/user), Unban podle /moderation/user-state, target_protected,
 // SSE user-moderated (styl + štítek na předchozích zprávách, unban štítek sundá), divák má nativní menu,
 // varování účtu (okno z /auth/me i z /account/stream, blokace psaní do potvrzení, 403 warning_pending),
-// Chat historie (panel přes chat: hlavička, záložky kanálů ze summary, přepnutí záložky, starší stránka, Esc).
+// Profil (dřív Chat historie; panel přes chat: hlavička s badge vč. 7TV, identity, suma donů, záložky kanálů,
+// oddělovače dnů, řádky donů, citace odpovědí + profil autora, ikony akcí moda a přihlášení s moderací po no_actor,
+// přepnutí záložky, starší stránka, Esc; divák: levý klik → veřejný Profil jen s hlavičkou).
 //
 // Backend je mockovaný přes Fetch.requestPaused (api.jouki.cz). /nicknames/stream = SSE s frontou
 // (EventSource se po konci odpovědi sám znovu připojí, retry 300 ms). /account/stream = požadavek se
@@ -58,11 +60,33 @@ const mock = {
   sse: [],               // /nicknames/stream
   acc: [],               // /account/stream
   heldAcc: null,         // podržený požadavek /account/stream
-  older429: 1,           // Chat historie: starší stránka robdiesalot → jednou 429 (klient sám zopakuje za 1 s)
-  olderFail: 1,          // Chat historie: starší stránka arcadebulls → jednou 500 (klient čeká na „Zkusit znovu“)
+  older429: 1,           // Profil: starší stránka robdiesalot → jednou 429 (klient sám zopakuje za 1 s)
+  olderFail: 1,          // Profil: starší stránka arcadebulls → jednou 500 (klient čeká na „Zkusit znovu“)
+  missing: { twitch: ['moderator:manage:banned_users'] },   // /moderation/me missingScopes (mod)
+  userResults: { twitch: 'ok', kick: 'bot' },               // /moderation/user results
+  deleteResult: 'ok',                                       // /moderation/delete result
 };
 const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera', 3)];
-const posts = { user: [], ack: [], send: [], tickets: 0, hist: [] };
+const posts = { user: [], ack: [], send: [], tickets: 0, hist: [], del: [], seventv: 0 };
+const DAY = 86400000;
+// Profil: dona (d1 mezi dvěma zprávami, d2 před dvěma dny = jen podle jména), odpověď na zprávu jiného uživatele.
+const DONS = [
+  { id: 'd1', amount: 150, currency: 'CZK', amountCzk: 150, paidAt: now - 60000 + 2000, via: 'qr', matchedBy: 'uc', nickname: 'Tester', message: 'díky za stream' },
+  { id: 'd2', amount: 250, currency: 'CZK', amountCzk: 250, paidAt: now - 2 * DAY, via: 'qr', matchedBy: 'nickname', nickname: 'tester', message: null },
+];
+const HREP = { ...H('h-rep', 'Tester', 'u1', 'souhlas', 4), replyTo: { username: 'Other', message: 'původní zpráva jiného uživatele, která je dost dlouhá na to, aby se v Profilu nevešla na jeden řádek ani omylem', id: 'e2e-b1' } };
+const summaryMod = (who) => who === 'other'
+  ? { ok: true, view: 'mod', user: { platform: 'twitch', userId: 'u2', login: 'other', displayName: 'Other', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'other', userId: 'u2', displayName: 'Other' }], firstSeen: now - 60000, lastSeen: now, total: 1 },
+    channels: [{ channel: 'robdiesalot', count: 1, firstAt: now - 60000, lastAt: now }], moderation: [], latest: { twitch: { platform: 'twitch', id: 'e2e-b1', username: 'Other', userId: 'u2', timestamp: now, color: null, badgesRaw: '' } } }
+  : { ok: true, view: 'mod',
+    user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'tester', userId: 'u1', displayName: 'Tester' }, { platform: 'kick', login: 'tester_k', userId: 'k1', displayName: 'Tester K' }], firstSeen: now - 86400000, lastSeen: now, total: 6 },
+    channels: [{ channel: 'robdiesalot', count: 2, firstAt: now - 60000, lastAt: now }, { channel: 'arcadebulls', count: 3, firstAt: now - 86400000, lastAt: now - 3600000 }, { channel: 'tensterakdary', count: 1, firstAt: now - 7200000, lastAt: now - 7200000 }],
+    moderation: [{ action: 'timeout', at: now - 1000, by: 'twitch:modik', platform: 'twitch', params: { durationSec: 600, reason: 'spam' } }],
+    latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '' }, kick: { platform: 'kick', id: 'k-1', username: 'tester_k', userId: 'k1', timestamp: now, color: null, badgesRaw: 'moderator' } },
+    donations: { total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } } };
+// Veřejný tvar (divák): jen tahle pole — stejně jako server (buildPublicSummary).
+const summaryPublic = { ok: true, view: 'public', user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, firstSeen: now - 86400000, lastSeen: now, total: 2 },
+  latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '' } }, donations: { ucNamed: { czk: 1000, count: 1 } } };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 const pushAcc = (type, data) => {
@@ -87,15 +111,20 @@ s.onevent = async (d) => {
   if (/\/account\/warnings\/[^/]+\/ack/.test(u)) { const id = u.match(/warnings\/([^/]+)\/ack/)[1]; posts.ack.push(id); mock.warnings = mock.warnings.filter((w) => w.id !== id); return json({ ok: true }); }
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: mock.warnings });
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, warnings: mock.warnings });
-  if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
-  // Chat historie (před /moderation/user — ten by ji pohltil).
+  if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: mock.missing } : { ok: true, mod: false, platforms: [], missingScopes: {} });
+  // Profil (před /moderation/user — ten by ho pohltil).
   if (u.includes('/moderation/user-history/summary')) {
     posts.hist.push(u);
-    return json({ ok: true,
-      user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'tester', userId: 'u1' }, { platform: 'kick', login: 'tester_k', userId: 'k1' }], firstSeen: now - 86400000, lastSeen: now, total: 6 },
-      channels: [{ channel: 'robdiesalot', count: 2, firstAt: now - 60000, lastAt: now }, { channel: 'arcadebulls', count: 3, firstAt: now - 86400000, lastAt: now - 3600000 }, { channel: 'tensterakdary', count: 1, firstAt: now - 7200000, lastAt: now - 7200000 }],
-      moderation: [{ action: 'timeout', at: now - 1000, by: 'twitch:modik', platform: 'twitch', params: { durationSec: 600, reason: 'spam' } }] });
+    const sp = new URL(u).searchParams;
+    if (!mock.mod) return json(summaryPublic);
+    return json(summaryMod(!sp.get('userId') && sp.get('login') === 'Other' ? 'other' : 'tester'));
   }
+  if (u.includes('/moderation/user-history/donations')) {
+    posts.hist.push(u);
+    if (!mock.mod) return json({ ok: false, error: 'not_mod' }, 403);
+    return json({ ok: true, available: true, items: [...DONS].reverse() });
+  }
+  if (u.includes('/moderation/delete')) { posts.del.push(body); return json({ ok: true, result: mock.deleteResult }); }
   if (u.includes('/moderation/user-history/messages')) {
     posts.hist.push(u);
     const inCh = new URL(u).searchParams.get('inChannel');
@@ -110,7 +139,7 @@ s.onevent = async (d) => {
     // Dvě stránky: první nezaplní panel → klient sám dotáhne starší (before=c1).
     if (inCh === 'robdiesalot') return json(u.includes('before=c1')
       ? { ok: true, messages: [H('h-old', 'Tester', 'u1', 'nejstarší zpráva', -50)], nextBefore: null }
-      : { ok: true, messages: [H1[0], H1[2]], nextBefore: 'c1' });
+      : { ok: true, messages: [H1[0], H1[2], HREP], nextBefore: 'c1' });
     return json({ ok: true, messages: [], nextBefore: null });
   }
   // GIFy ke schválení (část 4, mod dotáhne čekající po /moderation/me) — tady žádné; nesmí odejít na produkci.
@@ -121,7 +150,7 @@ s.onevent = async (d) => {
   if (u.includes('/moderation/user')) {
     posts.user.push(body);
     if (mock.userStatus !== 200) return json({ ok: false, error: mock.userError }, mock.userStatus);
-    return json({ ok: true, action: body.action, until: null, results: { twitch: 'ok', kick: 'bot' }, targets: [], notes: {} });
+    return json({ ok: true, action: body.action, until: null, results: mock.userResults, targets: [], notes: {} });
   }
   if (u.includes('/chat/send')) {
     posts.send.push(body);
@@ -129,9 +158,15 @@ s.onevent = async (d) => {
     return json({ ok: true, id: 'x' });
   }
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : H1, nextBefore: null });
+  // 7TV: Tester (u1) má 7TV badge B1 (badge i paint hromadně přes GQL, uživatel přes /v3/users/twitch/<id>).
+  if (u.includes('7tv.io/v3/users/twitch/')) { posts.seventv++; return json(u.endsWith('/u1') ? { user: { style: { badge_id: 'B1' } }, emote_set: null } : { user: { style: {} } }); }
+  if (u.includes('7tv.io/v3/gql')) return json(String(q.postData || '').includes('badges')
+    ? { data: { cosmetics: { badges: [{ id: 'B1', tooltip: '7TV Test', host: { url: '//cdn.7tv.app/badge/B1' } }] } } }
+    : { data: { cosmetics: { paints: [] } } });
   return call('Fetch.continueRequest', { requestId: rid }, sid);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/chat/send', '/nicknames/stream', '/account/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: [...['/auth/me', '/moderation/', '/chat/history', '/chat/send', '/nicknames/stream', '/account/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })),
+  { urlPattern: '*7tv.io/v3/users/twitch/*' }, { urlPattern: '*7tv.io/v3/gql*' }] }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -160,7 +195,7 @@ const head = await ev(`document.querySelector('.uc-mod-menu .uc-mm-head')?.textC
 check('A hlavička: jméno + platforma', /Tester/.test(head || '') && /Twitch/.test(head || ''), head);
 await until(`!!document.querySelector('.uc-mod-menu')`, 1000);
 const items = await menuItems();
-check('A položky nabídky', JSON.stringify(items) === JSON.stringify(['Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Chat historie', 'Varovat…', 'Permit']), JSON.stringify(items));
+check('A položky nabídky (1: „Profil“ místo „Chat historie“)', JSON.stringify(items) === JSON.stringify(['Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Profil', 'Varovat…', 'Permit']), JSON.stringify(items));
 check('A fokus na první položce', await ev(`document.activeElement?.dataset?.id === 'delete'`) === true);
 await key('ArrowDown');
 check('A šipka dolů → Timeout', await ev(`document.activeElement?.dataset?.id === 'timeout'`) === true);
@@ -237,32 +272,72 @@ check('A varování bez důvodu → chyba v dialogu', await until(`document.quer
 await ev(`document.querySelector('.uc-mod-dialog button[type=button]').click()`);
 check('A Zrušit zavře dialog', await ev(`!document.querySelector('.uc-mod-dialog')`) === true);
 
-// ---- Chat historie ----
+// ---- Profil (mod) ----
+check('H 7TV badge Testera i u zprávy v chatu (stejný render badge)', await until(`!!document.querySelector('.msg[data-msg-id="e2e-a1"] .bdg .bdg-7tv')`, 8000), `7tv dotazů=${posts.seventv}`);
 await rightClick('e2e-a1');
 const nameColor = await ev(`document.querySelector('.msg[data-msg-id="e2e-a1"] .un').style.color`);
 await ev(`document.querySelector('.uc-mod-menu [data-id="history"]').click()`);
-check('H „Chat historie" → panel přes chat, nabídka zavřená', await until(`!!document.querySelector('#chat-wrapper > .uc-uh') && !document.querySelector('.uc-mod-menu')`, 3000));
+check('H „Profil" → panel přes chat, nabídka zavřená', await until(`!!document.querySelector('#chat-wrapper > .uc-uh') && !document.querySelector('.uc-mod-menu')`, 3000));
+check('H 1 nadpis panelu „Profil" (CSS velkými)', await ev(`document.querySelector('.uc-uh-cap').textContent === 'Profil' && getComputedStyle(document.querySelector('.uc-uh-cap')).textTransform === 'uppercase' && document.querySelector('.uc-uh').getAttribute('aria-label').startsWith('Profil: ')`) === true);
 await until(`document.querySelectorAll('.uc-uh-tab').length > 0`, 4000);
 check('H summary GET s kanálem a cílem', /summary\?channel=robdiesalot&platform=twitch&userId=u1/.test(posts.hist[0] || ''), posts.hist[0]);
 check('H hlavička: jméno v barvě uživatele', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Tester'`, 3000)
   && !!nameColor && (await ev(`document.querySelector('.uc-uh-name').style.color`)) === nameColor, String(nameColor));
-const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img')).join(',')`);
-check('H propojené identity s logy', idsTxt === 'tester:true,tester_k:true', idsTxt);
+const badgesH = await ev(`[...document.querySelectorAll('.uc-uh-badge-group')].map(g => g.dataset.platform + ':' + [...g.querySelectorAll('img.bdg-img')].map(i => i.alt).join('+') + ':' + !!g.querySelector('.uc-uh-pi')).join(',')`);
+check('H 2 badge u jména: Twitch vč. 7TV + Kick moderator, skupiny s logem platformy', badgesH === 'twitch:7TV Test:true,kick:Moderator:true', badgesH);
+const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img') + ':' + e.title).join(',')`);
+check('H 5 chipy identit = zobrazované jméno, login v title', idsTxt === 'Tester:true:Twitch: tester,Tester K:true:Kick: tester_k', idsTxt);
+const donSum = await ev(`[...document.querySelectorAll('.uc-uh-donsum > div')].map(d => d.className + '=' + d.textContent).join('|')`);
+check('H 8 suma darů velkým písmem + odhad podle jména menší', donSum === 'uc-uh-donsum-main=Celkem darováno 1\u00a0250\u00a0Kč + 20\u00a0€|uc-uh-donsum-sub=z toho 250\u00a0Kč jen podle jména'
+  && await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-uh-donsum-main')).fontSize) >= parseFloat(getComputedStyle(document.querySelector('.uc-uh-name')).fontSize)`) === true, donSum);
 const statsTxt = await ev(`document.querySelector('.uc-uh-stats').textContent`);
 check('H statistika česky (3 tvary)', /^Poprvé viděn .+ · naposledy .+ · celkem 6 zpráv$/.test(statsTxt || ''), statsTxt);
 const modTxt = await ev(`document.querySelector('.uc-uh-mod').textContent`);
 check('H moderace: timeout 10 min + důvod + kdo', /Timeout 10 min/.test(modTxt || '') && /spam/.test(modTxt) && /modik \(Twitch\)/.test(modTxt), modTxt);
+check('H tlačítko na původní kartu platformy', await ev(`document.querySelector('.uc-uh-card')?.textContent`) === 'Karta na Twitchi');
 const tabsTxt = await ev(`[...document.querySelectorAll('.uc-uh-tab')].map(b => b.dataset.channel + ':' + b.querySelector('.uc-uh-tab-count').textContent).join(',')`);
 check('H záložky = kanály ze summary s počty, aktuální první', tabsTxt === 'robdiesalot:2,arcadebulls:3,tensterakdary:1', tabsTxt);
-check('H výchozí záložka = aktuální kanál, zprávy načtené', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3`, 3000) && posts.hist.some((x) => /inChannel=robdiesalot&limit=50$/.test(x)), posts.hist.join(' | '));
-const order = await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`);
+check('H výchozí záložka = aktuální kanál, zprávy načtené + dona', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 4 && document.querySelectorAll('.uc-uh-list .uc-uh-don').length === 2`, 4000)
+  && posts.hist.some((x) => /inChannel=robdiesalot&limit=50$/.test(x)) && posts.hist.some((x) => /donations\?channel=robdiesalot&platform=twitch&userId=u1/.test(x)), posts.hist.join(' | '));
+const rowsOrder = await ev(`[...document.querySelectorAll('.uc-uh-list > .uc-uh-msg, .uc-uh-list > .uc-uh-don')].map(r => r.dataset.id).join(',')`);
 const c1 = posts.hist.filter((x) => /before=c1/.test(x)).length;
 check('H 429 u starší stránky → jedno opakování za 1 s', c1 === 2, String(c1));
-check('H starší stránka (nextBefore) doplněná nahoru + konec historie', order === 'h-old,e2e-a1,e2e-a2' && /before=c1/.test(posts.hist.at(-1) || '') && await ev(`document.querySelector('.uc-uh-list').firstElementChild.classList.contains('uc-uh-edge')`) === true, order);
-const row0 = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return { time: r.querySelector('.uc-uh-time').textContent, logo: !!r.querySelector('.uc-uh-pi img'), text: r.querySelector('.uc-uh-tx').textContent }; })()`);
-check('H řádek: datum + čas, logo, text', /^\d{1,2}\. \d{1,2}\. \d{4} \d{2}:\d{2}$/.test(row0?.time || '') && row0.logo && row0.text === 'první zpráva testera', JSON.stringify(row0));
+check('H 7 dona zařazená mezi zprávy podle času (staré až po konci historie)', rowsOrder === 'd2,h-old,e2e-a1,d1,e2e-a2,h-rep', rowsOrder);
+check('H konec historie nahoře', await ev(`document.querySelector('.uc-uh-list').firstElementChild.classList.contains('uc-uh-edge')`) === true);
+const days = await ev(`[...document.querySelectorAll('.uc-uh-list > .uc-uh-day')].map(d => d.textContent + '>' + d.nextElementSibling.dataset.id).join('|')`);
+check('H 3 oddělovače dnů („čtvrtek 25. 9. 2026") před prvním řádkem každého dne', /^(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>d2\|(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>h-old$/.test(days || ''), days);
+const row0 = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return { time: r.querySelector('.uc-uh-time').textContent, title: r.querySelector('.uc-uh-time').title, logo: !!r.querySelector('.uc-uh-pi img'), text: r.querySelector('.uc-uh-tx').textContent }; })()`);
+check('H 3 řádek: jen čas HH:MM (datum v title), logo, text', /^\d{2}:\d{2}$/.test(row0?.time || '') && /^\d{1,2}\. \d{1,2}\. \d{4} \d{2}:\d{2}$/.test(row0?.title || '') && row0.logo && row0.text === 'první zpráva testera', JSON.stringify(row0));
+const donRows = await ev(`[...document.querySelectorAll('.uc-uh-don')].map(r => r.querySelector('.uc-uh-don-icon').textContent + r.querySelector('.uc-uh-don-line').textContent + '|' + (r.querySelector('.uc-uh-don-msg')?.textContent || '-') + '|' + (r.querySelector('.uc-uh-don-guess')?.textContent || '-')).join(' / ')`);
+check('H 7 řádek dona: „💸 poslal QR dono 150 Kč" + zpráva; odhad šedě „podle jména"', donRows === '💸poslal QR dono 250\u00a0Kč|-|podle jména / 💸poslal QR dono 150\u00a0Kč|díky za stream|-', donRows);
+// 4: citace odpovědi na jeden řádek, klik = celý text
+const rep = await ev(`(() => { const w = document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply'); if (!w) return null; return { user: w.querySelector('.rctx-user')?.textContent, ws: getComputedStyle(w).whiteSpace, oneLine: w.getBoundingClientRect().height < 24, clickable: !w.querySelector('.reply-ctx.clickable') }; })()`);
+check('H 4 citace odpovědi (render chatu) na jeden řádek', rep?.user === '@Other' && rep.ws === 'nowrap' && rep.oneLine && rep.clickable, JSON.stringify(rep));
+await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply .rctx-body').click()`);
+const repOpen = await ev(`(() => { const w = document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply'); return { wrap: w.classList.contains('uc-uh-reply--wrap'), h: w.getBoundingClientRect().height }; })()`);
+check('H 4 klik na citaci → celý text (zalomení)', repOpen?.wrap === true && repOpen.h > 24 && !(await ev(`!!document.querySelector('.uc-mod-dialog')`)), JSON.stringify(repOpen));
+await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply .rctx-body').click()`);
+check('H 4 další klik → zpět na jeden řádek', await ev(`!document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply').classList.contains('uc-uh-reply--wrap')`) === true);
+// 9: ikony akcí u zprávy + 6: no_actor → přihlášení s moderací
+const acts = await ev(`[...document.querySelectorAll('.uc-uh-msg[data-id="e2e-a1"] .uc-uh-act')].map(b => b.dataset.act).join(',')`);
+check('H 9 ikony akcí u zprávy: smazat / timeout / ban / permit', acts === 'delete,timeout,ban,permit', acts);
+mock.deleteResult = 'error:no_actor';
+await ev(`document.querySelector('.uc-uh-msg[data-id="e2e-a1"] .uc-uh-act[data-act="delete"]').click()`);
+check('H 9 smazání z Profilu → POST /moderation/delete', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20 && !posts.del.length; i++) await sleep(150); return posts.del[0]?.messageId === 'e2e-a1' && posts.del[0]?.platform === 'twitch' && posts.del[0]?.channel === 'robdiesalot'; })(), JSON.stringify(posts.del[0]));
+check('H 9 řádek po smazání = styl smazané zprávy (mod: štítek + ztlumení)', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return r.classList.contains('uc-deleted') && r.classList.contains('uc-deleted--dimmed') && !!r.querySelector('.uc-deleted-tag') && !r.querySelector('.uc-uh-act[data-act="delete"]'); })()`, 3000));
+const sysDel = await ev(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; const s = a[a.length - 1]; return s ? s.textContent + '|' + (s.querySelector('.sys-action')?.textContent || '-') : null; })()`);
+check('H 6 no_actor + chybějící scopes → „Obnovit přihlášení (moderace)" (Twitch)', sysDel === 'Na Twitchi se akce nepovedla — tvůj účet nemá oprávnění moderovat. Obnovit přihlášení (moderace)|Obnovit přihlášení (moderace)', sysDel);
+mock.userResults = { twitch: 'error:no_actor' };
+const nUser2 = posts.user.length;
+await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-act[data-act="timeout"]').click()`);
+check('H 9 ikona timeoutu → nabídka rovnou s délkami', await until(`!!document.querySelector('.uc-mod-menu [data-id="timeout:300"]')`, 2000));
+await ev(`document.querySelector('.uc-mod-menu [data-id="timeout:300"]').click()`);
+check('H 9 timeout z Profilu → POST s userId a délkou', await until(`!document.querySelector('.uc-mod-menu')`, 2000) && await (async () => { for (let i = 0; i < 20 && posts.user.length === nUser2; i++) await sleep(150); const b = posts.user.at(-1); return b?.action === 'timeout' && b.userId === 'u1' && b.durationSec === 300; })(), JSON.stringify(posts.user.at(-1)));
+check('H 9 po timeoutu: zprávy uživatele v Profilu smazané + štítek „Timeout (5 min)"', await until(`[...document.querySelectorAll('.uc-uh-msg')].every(r => r.classList.contains('uc-deleted') && r.querySelector('.uc-mod-tag')?.textContent === 'Timeout (5 min)')`, 3000));
+check('H 6 timeout no_actor → nabídka přihlášení i u akce z nabídky', await until(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; return a.some(s => s.textContent.startsWith('Na Twitchi se akce nepovedla') && s !== a[0]) && a.filter(s => s.querySelector('.sys-action')).length >= 2; })()`, 3000));
+mock.userResults = { twitch: 'ok', kick: 'bot' }; mock.deleteResult = 'ok';
 await ev(`document.querySelector('.uc-uh-tab[data-channel="arcadebulls"]').click()`);
-check('H přepnutí záložky načte zprávy kanálu', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3 && document.querySelector('.uc-uh-list .uc-uh-msg .uc-uh-tx').textContent === 'zpráva u Bulls 1'`, 3000) && /inChannel=arcadebulls/.test(posts.hist.at(-1) || ''), posts.hist.at(-1));
+check('H přepnutí záložky načte zprávy kanálu (bez donů — patří jen aktuálnímu kanálu)', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3 && document.querySelector('.uc-uh-list .uc-uh-msg .uc-uh-tx').textContent === 'zpráva u Bulls 1'`, 3000) && /inChannel=arcadebulls/.test(posts.hist.at(-1) || '') && await ev(`!document.querySelector('.uc-uh-don')`) === true, posts.hist.at(-1));
 check('H chyba starší stránky → hláška nahoře + Zkusit znovu', await until(`document.querySelector('.uc-uh-list').firstElementChild?.classList.contains('uc-uh-older-fail') && !!document.querySelector('.uc-uh-older-fail .uc-uh-retry')`, 3000)
   && (await ev(`document.querySelector('.uc-uh-older-fail span').textContent`)) === 'Starší zprávy se nepodařilo načíst', await ev(`document.querySelector('.uc-uh-older-fail')?.textContent`));
 await sleep(1800);
@@ -272,9 +347,19 @@ await ev(`document.querySelector('.uc-uh-retry').click()`);
 check('H Zkusit znovu → starší zprávy nahoře, hláška pryč', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 4 && document.querySelector('.uc-uh-list .uc-uh-msg').dataset.id === 'h-b0' && !document.querySelector('.uc-uh-older-fail')`, 3000),
   await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`));
 check('H aktivní záložka přepnutá', await ev(`document.querySelector('.uc-uh-tab--on')?.dataset.channel`) === 'arcadebulls');
-check('H smazaná zpráva bez obsahu', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent`) === 'Zpráva smazána');
+check('H smazaná zpráva bez obsahu (styl smazané zprávy, štítek)', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent === 'Zpráva smazána' && !!document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-deleted-tag')`) === true);
 await ev(`document.querySelector('.uc-uh-tab[data-channel="tensterakdary"]').click()`);
 check('H prázdná záložka → „V tomto kanálu nic nenapsal."', await until(`document.querySelector('.uc-uh-status')?.textContent === 'V tomto kanálu nic nenapsal.'`, 3000));
+// 4: klik na jméno autora citace → potvrzení → Profil autora (jen podle loginu)
+await ev(`document.querySelector('.uc-uh-tab[data-channel="robdiesalot"]').click()`);
+await until(`!!document.querySelector('.uc-uh-msg[data-id="h-rep"] .rctx-user')`, 4000);
+await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .rctx-user').click()`);
+check('H 4 klik na jméno v citaci → „Otevřít profil uživatele Other?"', await until(`document.querySelector('.uc-mod-dialog h2')?.textContent === 'Otevřít profil uživatele Other?'`, 2000));
+const nHist = posts.hist.length;
+await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`);
+check('H 4 Ano → Profil autora citace (dotaz jen podle loginu)', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Other'`, 3000)
+  && await (async () => { for (let i = 0; i < 30 && !posts.hist.slice(nHist).length; i++) await sleep(100); return true; })() && posts.hist.slice(nHist).some((x) => /summary\?channel=robdiesalot&platform=twitch&login=Other$/.test(x)), posts.hist.slice(nHist).join(" | ") + " name=" + await ev(`document.querySelector(".uc-uh-name")?.textContent`));
+check('H 4 další dotazy už s userId ze summary', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20; i++) { if (posts.hist.slice(nHist).some((x) => /messages\?.*userId=u2/.test(x))) return true; await sleep(150); } return false; })(), posts.hist.slice(nHist).join(' | '));
 await ev(`(() => { const i = document.getElementById('msg-input'); i.disabled = false; i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
 await sleep(300);
 check('H Esc mimo panel (pole pro psaní) panel nezavře', await ev(`!!document.querySelector('.uc-uh')`) === true);
@@ -284,6 +369,10 @@ check('H Esc zavře panel', await until(`!document.querySelector('.uc-uh')`, 200
 // Fokus se po zavření vrací tam, kde byl před otevřením.
 const focusBack = await ev(`(() => { const i = document.getElementById('msg-input'); i.focus(); const p = new window.UC_CORE.UserHistoryPanel({ doc: document, api: () => new Promise(() => {}), container: document.getElementById('chat-wrapper') }); p.open({ channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester' }); const inPanel = document.activeElement === p.el; p.el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return { inPanel, closed: !p.isOpen, back: document.activeElement === i }; })()`);
 check('H fokus do panelu a po zavření zpět na původní prvek', focusBack?.inPanel && focusBack.closed && focusBack.back, JSON.stringify(focusBack));
+// 10: levý klik na jméno otevře Profil (mod i divák); pravý klik u moda dál nabídka (fáze A výše).
+await ev(`document.querySelector('.msg[data-msg-id="e2e-a1"] .un').click()`);
+check('H 10 levý klik na jméno (mod) → Profil', await until(`document.querySelector('.uc-uh .uc-uh-name')?.textContent === 'Tester' && !document.querySelector('.uc-mod-menu')`, 3000));
+await ev(`document.querySelector('.uc-uh-close').click()`);
 
 // ---- SSE user-moderated ----
 const at = Date.now();
@@ -313,6 +402,16 @@ mock.sse.push(['user-moderated', { channel: 'robdiesalot', platform: 'twitch', u
 check('B divák: ban → „Zpráva smazána" + štítek „Zabanován"', await until(`document.querySelector('.msg[data-msg-id="e2e-b1"] .uc-mod-tag')?.textContent === 'Zabanován'`, 6000));
 const b1v = await msgState('e2e-b1');
 check('B divák: výchozí styl label (text pryč)', b1v?.cls.includes('uc-deleted--label') && b1v.text === 'Zpráva smazána', JSON.stringify(b1v));
+// Veřejný Profil: levý klik na jméno i pro diváka, jen hlavička (bez logu, záložek, identit a moderace).
+const nHistB = posts.hist.length;
+await ev(`document.querySelector('.msg[data-msg-id="e2e-a1"] .un').click()`);
+check('B 10 divák: levý klik na jméno → Profil', await until(`document.querySelector('.uc-uh.uc-uh--public .uc-uh-name')?.textContent === 'Tester'`, 4000));
+const pub = await ev(`(() => { const q = (s) => document.querySelector(s); return { stats: q('.uc-uh-stats').textContent, don: q('.uc-uh-donsum-main')?.textContent, sub: !!q('.uc-uh-donsum-sub'), list: q('.uc-uh-list').hidden, tabs: q('.uc-uh-tabs').hidden, ids: q('.uc-uh-ids').children.length, mod: q('.uc-uh-mod').hidden, card: q('.uc-uh-card')?.textContent, b7: !!q('.uc-uh-badges .bdg-7tv') }; })()`);
+check('B divák: jen hlavička — statistika kanálu, suma jen ucNamed, karta platformy', pub?.stats.startsWith('V tomto kanálu: poprvé viděn ') && /celkem 2 zprávy$/.test(pub.stats) && pub.don === 'Celkem darováno 1 000 Kč' && !pub.sub
+  && pub.list && pub.tabs && pub.ids === 0 && pub.mod && pub.card === 'Karta na Twitchi' && pub.b7, JSON.stringify(pub));
+await sleep(600);
+check('B divák: žádný dotaz na zprávy ani dona', posts.hist.slice(nHistB).every((x) => /\/summary\?/.test(x)) && posts.hist.slice(nHistB).length === 1, posts.hist.slice(nHistB).join(' | '));
+await ev(`document.querySelector('.uc-uh-close').click()`);
 
 // ---- fáze C: varování účtu ----
 mock.warnings = [{ id: 'w1', channel: 'robdiesalot', reason: 'Nespamuj odkazy', createdAt: new Date().toISOString() }];
