@@ -12,6 +12,7 @@
 //   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
 //   GET  /moderation/user-history/summary?channel&platform&userId            (Chat historie: identity, záložky kanálů, moderace)
 //   GET  /moderation/user-history/messages?channel&platform&userId&inChannel&before&limit
+//   GET  /moderation/deleted-content?channel&ids=<platform>:<id>,…   (obsah smazaných/skrytých zpráv jen pro moda)
 //   Kontrakt: docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md
 //
 // Kdo smí mazat: účet, jehož NĚKTERÁ propojená identita je mod/broadcaster kanálu na SVÉ
@@ -20,7 +21,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { moderationActions, type NewModerationAction } from '../db/schema.js';
+import { moderationActions, messages, type NewModerationAction } from '../db/schema.js';
+import { and, eq, inArray } from 'drizzle-orm';
 import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
 import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
@@ -42,7 +44,7 @@ import { NicknameField, ColorField, upsertNickname, deleteNickname } from './nic
 import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
-import { RateLimiter } from './chat.js';
+import { RateLimiter, toModeratedContent, type ClientRow, type ClientMessage } from './chat.js';
 import { decodeCursor } from '../lib/cursor.js';
 import { buildSummary, buildMessages, clampHistoryLimit, dbHistoryDeps, HistoryTabsCache } from '../lib/userHistory.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
@@ -209,6 +211,84 @@ export async function resolveModGate(
   return { channel, accountId, by: `${mods[0].platform}:${mods[0].login}`, modPlatforms: mods.map((m) => m.platform), isBroadcaster: mods.some((m) => m.role === 'broadcaster') };
 }
 
+// ---- Obsah smazaných / skrytých zpráv pro moda (historie a stream ho neposílají nikomu) ----
+export const DELETED_CONTENT_MAX = 100;
+
+export const DeletedContentQuery = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  // <platform>:<id> čárkou; max 100 × (7 + 1 + 128) + čárky.
+  ids: z.string().min(1).max(DELETED_CONTENT_MAX * 137),
+});
+
+export type DeletedKey = { platform: Platform; id: string };
+
+/** `twitch:abc,kick:123` → klíče (dedup). null = prázdné, neplatné nebo víc než DELETED_CONTENT_MAX. */
+export function parseDeletedKeys(raw: string): DeletedKey[] | null {
+  const seen = new Set<string>();
+  const out: DeletedKey[] = [];
+  for (const part of raw.split(',')) {
+    const s = part.trim();
+    if (!s) continue;
+    const i = s.indexOf(':');
+    if (i <= 0) return null;
+    const platform = s.slice(0, i);
+    const id = s.slice(i + 1);
+    if (!PlatformEnum.safeParse(platform).success || !id || id.length > 128) return null;
+    const key = `${platform}:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ platform: platform as Platform, id });
+  }
+  return out.length && out.length <= DELETED_CONTENT_MAX ? out : null;
+}
+
+export type DeletedContentRow = ClientRow & { channel: string };
+
+export interface DeletedContentDeps {
+  /** Platformní kanál UC kanálu (registr). */
+  platformChannel: (channel: string, platform: Platform) => Promise<string | null>;
+  /** Řádky archivu podle platformy a id zpráv. */
+  rows: (platform: Platform, ids: string[]) => Promise<DeletedContentRow[]>;
+}
+
+/**
+ * Plný tvar smazaných/skrytých zpráv kanálu `channel` (mod už ověřený). Zprávy z cizího kanálu
+ * a nesmazané/neskryté zprávy se vynechají (neskrytou zprávu klient má z historie/streamu).
+ */
+export async function buildDeletedContent(channel: string, keys: DeletedKey[], deps: DeletedContentDeps): Promise<Record<string, ClientMessage>> {
+  const byPlatform = new Map<Platform, string[]>();
+  for (const k of keys) byPlatform.set(k.platform, [...(byPlatform.get(k.platform) ?? []), k.id]);
+  const out: Record<string, ClientMessage> = {};
+  for (const [platform, ids] of byPlatform) {
+    const want = await deps.platformChannel(channel, platform);
+    if (!want) continue;
+    for (const row of await deps.rows(platform, ids)) {
+      if (row.platform !== platform || !ids.includes(row.platformMessageId)) continue;
+      if (!channelMatches(row.channel, want)) continue;
+      if (!row.deletedAt && !row.hiddenAt) continue;
+      out[`${platform}:${row.platformMessageId}`] = toModeratedContent(row);
+    }
+  }
+  return out;
+}
+
+/** Celá obsluha `GET /moderation/deleted-content` bez HTTP: ids → brána moda → obsah. */
+export async function runDeletedContent(
+  q: { accountId: number; channel?: string; ids: string; fallback: string },
+  deps: DeletedContentDeps & { modIdentities: Parameters<typeof resolveModGate>[3] },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const keys = parseDeletedKeys(q.ids);
+  if (!keys) return { status: 400, body: { ok: false, error: 'ids' } };
+  const g = await resolveModGate(q.accountId, q.channel, q.fallback, deps.modIdentities);
+  if ('error' in g) return { status: g.error === 'channel' ? 400 : 403, body: { ok: false, error: g.error } };
+  return { status: 200, body: { ok: true, messages: await buildDeletedContent(g.channel, keys, deps) } };
+}
+
+const deletedContentDeps: DeletedContentDeps = {
+  platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
+  rows: (platform, ids) => db.select().from(messages).where(and(eq(messages.platform, platform), inArray(messages.platformMessageId, ids))),
+};
+
 export default async function moderationRoutes(app: FastifyInstance, opts: { ingest?: Ingest } = {}) {
   const limiter = new RateLimiter(10, 2);
   const DEFAULT_CHANNEL = (config.CHAT_INGEST_CHANNELS.split(',').find((c) => c.startsWith('twitch:'))?.split(':')[1] || 'robdiesalot').toLowerCase();
@@ -278,6 +358,20 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     const inChannel = parseInChannel(q.data.inChannel, g.channel);
     if (!inChannel) return reply.code(400).send({ ok: false, error: 'in_channel' });
     const out = await buildMessages({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId, inChannel, cursor, limit: clampHistoryLimit(q.data.limit) }, historyDeps, historyTabs);
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- obsah smazaných / skrytých zpráv (mod vidí text, divák nikdy) ----
+  const deletedLimiter = new RateLimiter(10, 2);
+  app.get('/moderation/deleted-content', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const q = DeletedContentQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
+    const accountId = req.webAccountId!;
+    if (!deletedLimiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const out = await runDeletedContent({ accountId, channel: q.data.channel, ids: q.data.ids, fallback: DEFAULT_CHANNEL }, { ...deletedContentDeps, modIdentities: accountModIdentities });
+    if (out.status === 403) req.log.info({ accountId, route: req.routeOptions.url }, 'moderation: not_mod');
+    else if (out.status === 200) req.log.info({ accountId, asked: q.data.ids.split(',').length, got: Object.keys(out.body.messages as object).length }, 'moderation deleted-content');
     return reply.code(out.status).send(out.body);
   });
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClientMessage, RateLimiter } from './chat.js';
+import { toClientMessage, toModeratedContent, RateLimiter } from './chat.js';
 import type { Message } from '../db/schema.js';
 
 const base: Message = {
@@ -86,4 +86,19 @@ test('toClientMessage: smazaná i skrytá → deleted má přednost', () => {
   const m = toClientMessage({ ...base, deletedAt: new Date(), deletedReason: 'mod', hiddenAt: new Date() } as any);
   assert.equal(m.deleted, true);
   assert.equal(m.hidden, undefined);
+});
+
+test('toModeratedContent: smazaná i skrytá zpráva s plným obsahem (jen pro moda), bez GIFu', () => {
+  const del = toModeratedContent({ ...base, content: 'tst', deletedAt: new Date(), deletedReason: 'mod', contentRaw: { ...(base.contentRaw as object), gif: { id: 'x' } } } as any);
+  assert.equal(del.message, 'tst');
+  assert.equal(del.deleted, true);
+  assert.equal(del.deletedReason, 'mod');
+  assert.equal(del.gif, undefined);
+  assert.equal(del.twitchEmotes, toClientMessage(base).twitchEmotes, 'emoty jako u nesmazané zprávy');
+  const hid = toModeratedContent({ ...base, content: 'tajne', hiddenAt: new Date() } as any);
+  assert.equal(hid.message, 'tajne');
+  assert.equal(hid.hidden, true);
+  assert.equal(hid.deleted, undefined);
+  // Stejný řádek přes veřejnou cestu obsah nenese.
+  assert.equal(toClientMessage({ ...base, content: 'tst', deletedAt: new Date(), deletedReason: 'mod' } as any).message, '');
 });

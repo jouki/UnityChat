@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, UserHistoryMessagesQuery, parseInChannel, type DeleteTargetDeps } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, UserHistoryMessagesQuery, parseInChannel, parseDeletedKeys, buildDeletedContent, runDeletedContent, DELETED_CONTENT_MAX, type DeleteTargetDeps, type DeletedContentRow } from './moderation.js';
 
 test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotazu na role), mod → by + platformy', async () => {
   let asked = 0;
@@ -134,4 +134,63 @@ test('Chat historie: query + záložka (UC kanál i nenamapovaný Kick slug s po
   assert.equal(parseInChannel('@TenSterakDary', 'x'), 'tensterakdary');
   assert.equal(parseInChannel('some-slug.x', 'x'), 'some-slug.x');
   assert.equal(parseInChannel('a b', 'x'), null);
+});
+
+// ---- GET /moderation/deleted-content ----
+test('parseDeletedKeys: platforma:id, dedup, id s dvojtečkou; neplatné / prázdné / nad limit → null', () => {
+  assert.deepEqual(parseDeletedKeys('twitch:a, kick:b,twitch:a,youtube:Ch:x=='), [{ platform: 'twitch', id: 'a' }, { platform: 'kick', id: 'b' }, { platform: 'youtube', id: 'Ch:x==' }]);
+  assert.equal(parseDeletedKeys(''), null);
+  assert.equal(parseDeletedKeys('discord:a'), null);
+  assert.equal(parseDeletedKeys('twitch:'), null);
+  assert.equal(parseDeletedKeys('abc'), null);
+  assert.equal(parseDeletedKeys(`twitch:${'x'.repeat(129)}`), null);
+  assert.equal(parseDeletedKeys(Array.from({ length: DELETED_CONTENT_MAX }, (_, i) => `twitch:${i}`).join(','))?.length, DELETED_CONTENT_MAX);
+  assert.equal(parseDeletedKeys(Array.from({ length: DELETED_CONTENT_MAX + 1 }, (_, i) => `twitch:${i}`).join(',')), null);
+});
+
+const dRow = (o: Partial<DeletedContentRow>): DeletedContentRow => ({
+  platform: 'twitch', platformMessageId: 'm1', platformUserId: '1', platformUsername: 'tester', content: 'tst', sentAt: new Date(1000),
+  contentRaw: { color: '#fff', badges: '', emotes: null }, isReply: false, replyToMessageId: null, channel: 'robdiesalot', deletedAt: new Date(2000), deletedReason: 'mod', hiddenAt: null, ...o,
+});
+
+const deletedDeps = (rows: DeletedContentRow[], calls: string[] = []) => ({
+  platformChannel: async (_c: string, p: 'twitch' | 'kick' | 'youtube') => (p === 'twitch' ? 'robdiesalot' : p === 'kick' ? 'rob-kick' : null),
+  rows: async (p: 'twitch' | 'kick' | 'youtube', ids: string[]) => { calls.push(`${p}:${ids.join('|')}`); return rows.filter((r) => r.platform === p && ids.includes(r.platformMessageId)); },
+});
+
+test('buildDeletedContent: smazaná i skrytá zpráva vlastního kanálu s textem; cizí kanál, nesmazaná a platforma mimo registr vynechané', async () => {
+  const calls: string[] = [];
+  const rows = [
+    dRow({}),
+    dRow({ platformMessageId: 'm2', deletedAt: null, hiddenAt: new Date(3000), content: 'skryte' }),
+    dRow({ platformMessageId: 'm3', deletedAt: null, content: 'normalni' }),
+    dRow({ platformMessageId: 'm4', channel: 'cizi_kanal', content: 'cizi' }),
+    dRow({ platform: 'kick', platformMessageId: 'k1', channel: 'Rob-Kick', content: 'kick smazana', contentRaw: { content: 'kick smazana' } }),
+    dRow({ platform: 'youtube', platformMessageId: 'y1', channel: 'robyt', content: 'yt' }),
+  ];
+  const keys = parseDeletedKeys('twitch:m1,twitch:m2,twitch:m3,twitch:m4,twitch:chybi,kick:k1,youtube:y1')!;
+  const out = await buildDeletedContent('robdiesalot', keys, deletedDeps(rows, calls));
+  assert.deepEqual(Object.keys(out).sort(), ['kick:k1', 'twitch:m1', 'twitch:m2']);
+  assert.equal(out['twitch:m1'].message, 'tst');
+  assert.equal(out['twitch:m1'].deleted, true);
+  assert.equal(out['twitch:m2'].message, 'skryte');
+  assert.equal(out['twitch:m2'].hidden, true);
+  assert.equal(out['kick:k1'].kickContent, 'kick smazana');
+  assert.deepEqual(calls, ['twitch:m1|m2|m3|m4|chybi', 'kick:k1'], 'YouTube bez registru → žádný dotaz do DB');
+});
+
+test('runDeletedContent: nemod → 403 not_mod a DB se nedotkne; neplatné ids → 400; mod → 200 s obsahem', async () => {
+  const calls: string[] = [];
+  const noMod = async () => [];
+  const mod = async () => [{ platform: 'twitch' as const, login: 'modik', role: 'moderator' as const }];
+  const viewer = await runDeletedContent({ accountId: 1, channel: 'robdiesalot', ids: 'twitch:m1', fallback: 'robdiesalot' }, { ...deletedDeps([dRow({})], calls), modIdentities: noMod });
+  assert.equal(viewer.status, 403);
+  assert.deepEqual(viewer.body, { ok: false, error: 'not_mod' });
+  assert.equal(JSON.stringify(viewer.body).includes('tst'), false);
+  assert.deepEqual(calls, [], 'nemod nevyvolá čtení archivu');
+  assert.equal((await runDeletedContent({ accountId: 1, ids: 'x', fallback: 'robdiesalot' }, { ...deletedDeps([]), modIdentities: mod })).status, 400);
+  assert.equal((await runDeletedContent({ accountId: 1, channel: 'x!', ids: 'twitch:m1', fallback: 'robdiesalot' }, { ...deletedDeps([]), modIdentities: mod })).status, 400);
+  const ok = await runDeletedContent({ accountId: 1, channel: 'RobDiesALot', ids: 'twitch:m1', fallback: 'x' }, { ...deletedDeps([dRow({})]), modIdentities: mod });
+  assert.equal(ok.status, 200);
+  assert.equal((ok.body.messages as Record<string, { message: string }>)['twitch:m1'].message, 'tst');
 });

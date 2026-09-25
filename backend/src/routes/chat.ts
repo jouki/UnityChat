@@ -77,15 +77,36 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
   };
   if (row.deletedAt) return { ...meta, deleted: true, deletedReason: row.deletedReason };
   if (row.hiddenAt) return { ...meta, hidden: true, segments: [] };
+  const out = toClientContent(row, historical);
+  // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
+  const gif = gifFromRaw(row.contentRaw);
+  if (gif) out.gif = gif;
+  return out;
+}
+
+/**
+ * Obsah zprávy v tvaru pro klienta (text, emoty, reply včetně odpovědi napříč platformami) BEZ
+ * kontroly smazání/skrytí a bez GIFu. Volá ho toClientMessage (nesmazaná zpráva) a jen pro mody
+ * `GET /moderation/deleted-content` (toModeratedContent) — nikdy ho neposílat nemodovi u smazané zprávy.
+ */
+export function toClientContent(row: ClientRow, historical = true): ClientMessage {
   const out = toClientMessageBase(row, historical);
   // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
   const ur = ((row.contentRaw || {}) as Record<string, unknown>).ucReply as Record<string, unknown> | undefined;
   if (ur && ur.id && !out.replyTo) {
     out.replyTo = { username: String(ur.username || ''), message: String(ur.message || ''), id: String(ur.id), platform: String(ur.platform || ''), uc: true, ...(ur.authorUc ? { authorUc: true } : {}) };
   }
-  // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
-  const gif = gifFromRaw(row.contentRaw);
-  if (gif) out.gif = gif;
+  return out;
+}
+
+/**
+ * Smazaná / skrytá zpráva i s obsahem — JEN pro moda kanálu (`GET /moderation/deleted-content`).
+ * GIF se neposílá: smazaný GIF server přestane servírovat a mod ho v chatu stejně nevidí.
+ */
+export function toModeratedContent(row: ClientRow): ClientMessage {
+  const out = toClientContent(row, true);
+  if (row.deletedAt) { out.deleted = true; out.deletedReason = row.deletedReason ?? null; }
+  else if (row.hiddenAt) out.hidden = true;
   return out;
 }
 

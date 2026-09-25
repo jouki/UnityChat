@@ -284,6 +284,28 @@ Pořadí **stejné jako `/chat/history`**: v rámci stránky nejstarší → nej
 Záložka, kde uživatel nic nenapsal → `{ ok: true, messages: [], nextBefore: null }`.
 Chyby: 400 `query` | `before` | `in_channel` | `channel`, 403 `not_mod`, 404 `not_found`, 429 `rate_limited`.
 
+## Obsah smazaných / skrytých zpráv pro moda (2026-09-25)
+`/chat/history`, `/chat/stream` i `/moderation/user-history/messages` posílají smazané a skryté zprávy
+**bez obsahu** všem (i modům). Mod si text dotáhne zvlášť:
+
+### `GET /moderation/deleted-content?channel=&ids=<platform>:<id>,…`
+Bearer + mod `channel` (`resolveModGate`, nemod → `403 not_mod`, DB se nečte), vlastní rate limit per účet
+**10 + 2/s** (429 `rate_limited`), `Cache-Control: no-store`. `ids` = nejvýš **100** klíčů `platform:id`
+(čárkou, dedup; id smí obsahovat `:`), jinak `400 ids`.
+```json
+{ "ok": true, "messages": { "twitch:3fcf0d19-…": { "/* tvar /chat/history (toClientMessage) i s textem, emoty, replyTo */": 0,
+                                                  "deleted": true, "deletedReason": "mod" },
+                            "kick:k1": { "…": 0, "hidden": true } } }
+```
+- Vrací jen zprávy, které jsou v archivu, patří **platformnímu kanálu** `channel` (registr, `channelMatches`)
+  a jsou smazané nebo skryté. Ostatní klíče v odpovědi chybí (nesmazaná zpráva → klient ji má z historie).
+- GIF (`gif`) se neposílá (smazaný GIF server neservíruje).
+- Klient (sdílený core `extension/core/moderation.js`): `DeletedContentLoader({ api, channel, onContent })`
+  sbírá požadavky 250 ms, dedup, po 100 klíčích; `request(platform, id)` volat u moda pro každou vykreslenou
+  smazanou/skrytou zprávu bez obsahu, `reset()` při přepnutí kanálu. Vzhled: `deletedView({ style, isMod, raw, hidden })`
+  → `{ mode, dimmed, tag }` pro `applyDeleted(el, { mode, dimmed, tag, hasContent, hidden })` — mod má vždy ztlumení
+  + štítek, nastavení volí přeškrtnutí (`strike`) / ztlumený text (`dim`) / „Zpráva smazána“ (`label`, i `hide`).
+
 ## Část 4 — odměna „Posílání GIFů" (backend `lib/gifMedia.ts`, `lib/gifAccess.ts`, `lib/gifRequests.ts`, `routes/gif.ts`)
 
 **SQL `backend/sql/2026-09-25-gif-requests.sql` se musí spustit PŘED nasazením backendu** (idempotentní):
