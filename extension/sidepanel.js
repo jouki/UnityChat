@@ -33,6 +33,7 @@ const DEFAULTS = {
   sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
   reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
+  acUserFulltext: false, // Fulltext v našeptávači `/user` (mod; vlastní stav — hledání lidí ≠ hledání emotů)
   acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
   mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
   deletedStyle: 'label', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js; divák nemá volbu)
@@ -1224,10 +1225,13 @@ class UnityChat {
   }
 
   /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
-  async _ucApi(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
+  async _ucApi(path, { method = 'GET', body, timeoutMs = 15000, signal } = {}) {
     const token = await this._ucSessionToken();
     const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    // `signal` = zrušení volajícím (našeptávač /user ruší starý dotaz), timeout platí vždy.
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const sig = signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout;
+    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: sig });
     let j = {};
     try { j = await r.json(); } catch {}
     // `status` = HTTP status; tělo zvlášť (`body.status` u 409 already_decided nese stav žádosti).
@@ -1743,7 +1747,16 @@ class UnityChat {
       let ws = pos;
       while (ws > 0 && text[ws - 1] !== ' ') ws--;
       const partial = text.substring(ws, pos);
-      if (partial.startsWith('@') && partial.length >= 2) {
+      // `/user <jméno>` (jen mod): našeptávač všech uživatelů kanálu (archiv serveru), výběr = Profil.
+      const userCmd = this._canModerate ? window.UC_CORE.parseUserCommand(text) : null;
+      if (userCmd) {
+        if (userCmd.query) this._userSearch().query(userCmd.query, this.config.acUserFulltext === true);
+        else { this._userSearchInst?.cancel(); this._acHide(); }
+      } else if (this._canModerate && text.length >= 2 && !text.includes(' ') && '/user'.startsWith(text.toLowerCase())) {
+        // Napovědět příkaz `/user` (jen modům): Tab doplní „/user “.
+        this._ac = { start: 0, end: pos, index: 0, matches: ['/user'], _type: 'usercmd' };
+        this._acRender();
+      } else if (partial.startsWith('@') && partial.length >= 2) {
         const matches = this._acUserMatches(partial.substring(1).toLowerCase());
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
@@ -1803,7 +1816,7 @@ class UnityChat {
         }
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
-        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
+        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc' || this._ac._type === 'usercmd' || this._ac.kind === 'userSearch')) this._acHide();
       }
     });
 
@@ -2069,6 +2082,20 @@ class UnityChat {
     // Odesílání zpráv + Tab autocomplete
     this._ac = null;
     this.msgInput.addEventListener('keydown', (e) => {
+      // `/user` našeptávač (mod): ↑/↓ a Shift+Tab posouvají výběr, Tab / Enter / → otevře Profil vybraného.
+      if (this._ac?.kind === 'userSearch') {
+        const n = this._ac.users.length;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
+          e.preventDefault();
+          if (n) { this._ac.index = (this._ac.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; this._acRender(); }
+          return;
+        }
+        if ((e.key === 'Tab' || e.key === 'Enter' || e.key === 'ArrowRight') && !e.shiftKey) {
+          e.preventDefault();
+          if (n) this._acPickUser(this._ac.index);
+          return;
+        }
+      }
       // Tab / Shift+Tab - cykluje seznamem
       if (e.key === 'Tab') {
         e.preventDefault();
@@ -2101,7 +2128,7 @@ class UnityChat {
           // Pro Tab-triggered emote / !cmd / /uc autocomplete propadne dolů
           // na _sendMessage (původní funkcionalita — Tab/ArrowRight už emote
           // vložilo, Enter logicky odešle zprávu).
-          if (this._ac.trigger === 'colon') {
+          if (this._ac.trigger === 'colon' || this._ac._type === 'usercmd') {
             e.preventDefault();
             this._acApply();
             this._acHide();
@@ -2158,7 +2185,7 @@ class UnityChat {
         return;
       }
       if (e.key === 'Escape') {
-        if (this._ac) { this._acHide(); return; }
+        if (this._ac) { if (this._ac.kind === 'userSearch') this._userSearchInst?.cancel(); this._acHide(); return; }
         if (this._reply) { this._clearReply(); return; }
         return;
       }
@@ -2321,6 +2348,7 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
+    if (name === '/user') return 'Profil';
     if (name.startsWith('!')) return this._bangSources(name).join(' · ') || 'SE';
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
@@ -2364,16 +2392,29 @@ class UnityChat {
     // Fulltext-search toggle row (only for emote completion, not @user) —
     // when checked, future findCompletions() calls match by `includes`
     // rather than `startsWith`, so middle-of-name matches show up too.
-    if (ac.kind === 'emote') {
-      const checked = this.config.acFulltext === true ? ' checked' : '';
+    const isUserSearch = ac.kind === 'userSearch';
+    if (ac.kind === 'emote' || isUserSearch) {
+      const checked = (isUserSearch ? this.config.acUserFulltext : this.config.acFulltext) === true ? ' checked' : '';
       html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
     }
     for (let i = winStart; i < winEnd; i++) {
       const name = ac.matches[i];
       const sel = i === idx ? ' selected' : '';
-      html += `<div class="es-item${sel}" data-idx="${i}">`;
+      html += `<div class="es-item${isUserSearch ? ' es-user' : ''}${sel}" data-idx="${i}">`;
 
-      if (name.startsWith('!')) {
+      if (isUserSearch) {
+        // `/user`: tečka v barvě jména, logo platformy, přezdívka + šedě login (core userSearchItemHtml)
+        html += window.UC_CORE.userSearchItemHtml(ac.users[i], {
+          esc: (t) => this.emotes._eh(t),
+          escAttr: (t) => this.emotes._ea(t),
+          platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
+          color: (h) => this.emotes._sc(this.nicknames?.getColor(h.platform, h.login) || h.color),
+        });
+        html += '</div>';
+        continue;
+      } else if (name === '/user') {
+        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+      } else if (name.startsWith('!')) {
         // Chat command: loga všech zdrojů, kde spouštěč je (Židolišta první, pak StreamElements)
         html += '<span class="es-logos">' + this._bangSources(name).map((src) => {
           const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
@@ -2401,6 +2442,9 @@ class UnityChat {
       html += '</div>';
     }
 
+    if (isUserSearch && !total) {
+      html += `<div class="es-status">${ac.loading ? 'Hledám…' : ac.error ? 'Hledání se nepovedlo.' : 'Nikdo takový v tomhle kanálu nepsal.'}</div>`;
+    }
     if (total > VISIBLE) {
       html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
     }
@@ -2416,9 +2460,11 @@ class UnityChat {
     if (ftBox) {
       ftBox.addEventListener('change', (e) => {
         e.stopPropagation();
-        this.config.acFulltext = ftBox.checked;
+        if (isUserSearch) this.config.acUserFulltext = ftBox.checked;
+        else this.config.acFulltext = ftBox.checked;
         this._saveConfig();
-        this._acRefilter();
+        if (isUserSearch) this._userSearchRequery();
+        else this._acRefilter();
         this.msgInput.focus();
       });
       // Don't let mousedown on the label steal focus from the textarea.
@@ -2439,6 +2485,7 @@ class UnityChat {
       }
       item.addEventListener('click', () => {
         const i = parseInt(item.dataset.idx, 10);
+        if (this._ac?.kind === 'userSearch') { this._acPickUser(i); return; }
         this._ac.index = i;
         this._acApply();
         this.msgInput.focus();
@@ -2479,6 +2526,78 @@ class UnityChat {
     this._ac = null;
     const el = document.getElementById('emote-suggest');
     if (el) el.classList.add('hidden');
+  }
+
+  // ---- `/user <jméno>` (mod): našeptávač uživatelů kanálu → Profil (core/user-search.js) ----
+
+  _userSearch() {
+    if (!this._userSearchInst) {
+      this._userSearchInst = new window.UC_CORE.UserSearch({
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        local: (q, fulltext) => window.UC_CORE.localUserHits(this._sessionUsers(), q, {
+          fulltext,
+          nickname: (p, login) => this.nicknames?.getNickname(p, login) || null,
+        }),
+        onResults: (st) => this._onUserSearchResults(st),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._userSearchInst;
+  }
+
+  /** Uživatelé, kteří v této session psali (_chatUsers drží každého i pod `platform:login`). */
+  _sessionUsers() {
+    const out = [];
+    for (const [key, u] of this._chatUsers) {
+      const i = key.indexOf(':');
+      if (i <= 0 || !u?.platform) continue;
+      out.push({ platform: u.platform, login: key.slice(i + 1), displayName: (u.name || '').replace(/^@/, ''), userId: u.userId || null, color: u.color || null });
+    }
+    return out;
+  }
+
+  /** Výsledky hledání (lokální hned, server po debounce) → seznam; výběr zůstává na stejném uživateli. */
+  _onUserSearchResults(st) {
+    const core = window.UC_CORE;
+    const cmd = this._canModerate ? core.parseUserCommand(this.msgInput.value) : null;
+    // Pole se mezitím změnilo (jiný text, odesláno, Esc) → pozdní odpověď nic neotevře.
+    if (!cmd || core.foldName(cmd.query) !== core.foldName(st.query)) return;
+    const prev = this._ac?.kind === 'userSearch' ? this._ac : null;
+    const sel = prev?.users[prev.index];
+    const keys = st.users.map((u) => `${u.platform}:${u.login}`);
+    const keep = sel ? keys.indexOf(`${sel.platform}:${sel.login}`) : -1;
+    this._ac = {
+      start: 0, end: this.msgInput.value.length, index: keep >= 0 ? keep : 0,
+      matches: keys, users: st.users, kind: 'userSearch', loading: !!st.loading, error: !!st.error, _winStart: prev?._winStart || 0,
+    };
+    this._acRender();
+  }
+
+  _userSearchRequery() {
+    const cmd = this._canModerate ? window.UC_CORE.parseUserCommand(this.msgInput.value) : null;
+    if (cmd?.query) this._userSearch().query(cmd.query, this.config.acUserFulltext === true);
+    this.msgInput.focus();
+  }
+
+  /** Výběr v `/user` našeptávači: pole se vyprázdní, nic se neodesílá, otevře se Profil. */
+  _acPickUser(i) {
+    const u = this._ac?.users?.[i];
+    if (!u) return;
+    this._userSearchInst?.cancel();
+    this._acHide();
+    this.msgInput.value = '';
+    this._autoResizeInput();
+    this._ucLog('Profile', `/user → ${u.platform}:${u.userId || '?'} ${u.login}`);
+    if (u.platform === 'twitch' && u.userId) this._enqueue7tvPaintLookup(u.userId, u.login);
+    this._userHistory().open({
+      channel: (this.config.channel || '').toLowerCase(),
+      platform: u.platform,
+      userId: u.userId || null,
+      login: u.login,
+      displayName: u.displayName || u.login,
+      nameColor: this.nicknames?.getColor(u.platform, u.login) || u.color || null,
+    });
   }
 
   // ---- Cursor line detection ----
@@ -3701,6 +3820,14 @@ class UnityChat {
     const external = typeof opts.text === 'string';
     const text = (external ? opts.text : this.msgInput.value).trim();
     if (!text || !this.activePlatform) return;
+
+    // `/user <jméno>` (mod): nikdy do chatu — Enter bez otevřeného seznamu jen poradí.
+    const userCmd = !external && this._canModerate ? window.UC_CORE.parseUserCommand(text) : null;
+    if (userCmd) {
+      if (this._ac?.kind === 'userSearch' && this._ac.users.length) this._acPickUser(this._ac.index);
+      else this._sys(userCmd.query ? `/user: „${userCmd.query}“ — vyber jméno ze seznamu.` : '/user <jméno> — najde uživatele kanálu a otevře jeho Profil.');
+      return;
+    }
 
     // /uc commands — local mock messages for testing (mod/broadcaster only)
     if (!external && text.startsWith('/uc ')) {
