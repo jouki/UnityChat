@@ -1,0 +1,33 @@
+/* Moderace — smazané a skryté zprávy (extension/core/moderation.js).
+   Styl navazuje na starší .cleared/.cleared-note (sidepanel.css ~687-707);
+   nové .uc-deleted* třídy jsou nezávislé, aby je mohl používat i web/OBS. */
+
+.uc-deleted--dim .tx {
+  opacity: .5;
+}
+
+.uc-deleted--strike .tx {
+  text-decoration: line-through;
+  opacity: .6;
+}
+
+.uc-deleted-label {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.uc-deleted-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: rgba(229, 72, 77, 0.15);
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  color: #ff9a9d;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
