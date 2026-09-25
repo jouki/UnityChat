@@ -101,10 +101,16 @@ export function fmtMoney(total) {
  */
 export function donationsSummary(don) {
   if (!don || typeof don !== 'object') return null;
-  if (don.ucNamed) return don.ucNamed.count > 0 ? { main: `Celkem darováno ${fmtAmount(don.ucNamed.czk, 'CZK')}`, sub: null } : null;
+  // V hlavičce jen částka (vpravo, gradient jako QR dono); popis a odhad podle jména do tooltipu.
+  if (don.ucNamed) {
+    if (!(don.ucNamed.count > 0)) return null;
+    const amount = fmtAmount(don.ucNamed.czk, 'CZK');
+    return { amount, title: `Celkem darováno ${amount}` };
+  }
   if (!(don.count > 0) || !don.total) return null;
-  const sub = don.guess?.count > 0 ? `z toho ${fmtMoney(don.guess)} jen podle jména` : null;
-  return { main: `Celkem darováno ${fmtMoney(don.total)}`, sub };
+  const amount = fmtMoney(don.total);
+  const guess = don.guess?.count > 0 ? ` (z toho ${fmtMoney(don.guess)} jen podle jména)` : '';
+  return { amount, title: `Celkem darováno ${amount}${guess}`, guess: !!guess };
 }
 
 /** Řádek dona v logu: „poslal QR dono 150 Kč“ / „poslal dono přes Fourthwall 20 €“. */
@@ -323,6 +329,10 @@ export class UserHistoryPanel {
     x.title = 'Zavřít (Esc)';
     x.textContent = '×';
     x.addEventListener('click', () => this.close());
+    // Suma darů: vpravo nahoře vedle křížku, jen částka.
+    const donSum = doc.createElement('div');
+    donSum.className = 'uc-uh-donsum';
+    donSum.hidden = true;
     const prev = this._history[this._history.length - 1];
     if (prev) {
       const bk = doc.createElement('button');
@@ -333,13 +343,11 @@ export class UserHistoryPanel {
       bk.title = `Zpět na profil ${prevWho}`;
       bk.textContent = '‹';
       bk.addEventListener('click', () => this.goBack());
-      top.append(bk, titles, x);
+      top.append(bk, titles, donSum, x);
     } else {
-      top.append(titles, x);
+      top.append(titles, donSum, x);
     }
-    const donSum = doc.createElement('div');
-    donSum.className = 'uc-uh-donsum';
-    donSum.hidden = true;
+
     const ids = doc.createElement('div');
     ids.className = 'uc-uh-ids';
     const stats = doc.createElement('div');
@@ -360,7 +368,7 @@ export class UserHistoryPanel {
     const mod = doc.createElement('div');
     mod.className = 'uc-uh-mod';
     mod.hidden = true;
-    head.append(top, donSum, ids, stats, links, mod);
+    head.append(top, ids, stats, links, mod);
 
     const tabs = doc.createElement('div');
     tabs.className = 'uc-uh-tabs';
@@ -517,17 +525,14 @@ export class UserHistoryPanel {
     const don = donationsSummary(j?.donations);
     this._donSum.replaceChildren();
     this._donSum.hidden = !don;
+    this._donSum.title = don?.title || '';
+    this._donSum.classList.toggle('uc-uh-donsum--guess', !!don?.guess);
     if (don) {
       const main = doc.createElement('div');
       main.className = 'uc-uh-donsum-main';
-      main.textContent = don.main;
+      main.textContent = don.amount;
+      this._donSum.setAttribute('aria-label', don.title);
       this._donSum.appendChild(main);
-      if (don.sub) {
-        const s = doc.createElement('div');
-        s.className = 'uc-uh-donsum-sub';
-        s.textContent = don.sub;
-        this._donSum.appendChild(s);
-      }
     }
 
     // Propojené platformy (jen mod — divákovi je server nepošle).

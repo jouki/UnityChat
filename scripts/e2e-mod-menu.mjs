@@ -322,9 +322,9 @@ const badgesH = await ev(`[...document.querySelectorAll('.uc-uh-badge-group')].m
 check('H 2 badge u jména: Twitch vč. 7TV + Kick moderator, skupiny s logem platformy', badgesH === 'twitch:7TV Test:true,kick:Moderator:true', badgesH);
 const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img') + ':' + e.title).join(',')`);
 check('H 5 chipy identit = zobrazované jméno, login v title', idsTxt === 'Tester:true:Twitch: tester,Tester K:true:Kick: tester_k', idsTxt);
-const donSum = await ev(`[...document.querySelectorAll('.uc-uh-donsum > div')].map(d => d.className + '=' + d.textContent).join('|')`);
-check('H 8 suma darů velkým písmem + odhad podle jména menší', donSum === 'uc-uh-donsum-main=Celkem darováno 1\u00a0250\u00a0Kč + 20\u00a0€|uc-uh-donsum-sub=z toho 250\u00a0Kč jen podle jména'
-  && await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-uh-donsum-main')).fontSize) >= parseFloat(getComputedStyle(document.querySelector('.uc-uh-name')).fontSize)`) === true, donSum);
+const donSum = await ev(`(() => { const d = document.querySelector('.uc-uh-donsum'); return d && { amt: d.textContent, title: d.title, inTop: d.parentElement.classList.contains('uc-uh-top'), next: d.nextElementSibling?.className }; })()`);
+check('H 8 suma darů vpravo nahoře (jen částka, odhad v tooltipu)', donSum?.amt === '1\u00a0250\u00a0Kč + 20\u00a0€' && donSum.title === 'Celkem darováno 1\u00a0250\u00a0Kč + 20\u00a0€ (z toho 250\u00a0Kč jen podle jména)' && donSum.inTop && donSum.next === 'uc-uh-close'
+  && await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-uh-donsum-main')).fontSize) >= parseFloat(getComputedStyle(document.querySelector('.uc-uh-name')).fontSize)`) === true, JSON.stringify(donSum));
 const statsTxt = await ev(`document.querySelector('.uc-uh-stats').textContent`);
 check('H statistika česky (3 tvary)', /^Poprvé viděn .+ · naposledy .+ · celkem 6 zpráv$/.test(statsTxt || ''), statsTxt);
 const modTxt = await ev(`document.querySelector('.uc-uh-mod').textContent`);
@@ -455,7 +455,7 @@ const nHistB = posts.hist.length;
 await ev(`document.querySelector('.msg[data-msg-id="e2e-a1"] .un').click()`);
 check('B 10 divák: levý klik na jméno → Profil', await until(`document.querySelector('.uc-uh.uc-uh--public .uc-uh-name')?.textContent === 'Tester'`, 4000));
 const pub = await ev(`(() => { const q = (s) => document.querySelector(s); return { stats: q('.uc-uh-stats').textContent, don: q('.uc-uh-donsum-main')?.textContent, sub: !!q('.uc-uh-donsum-sub'), list: q('.uc-uh-list').hidden, tabs: q('.uc-uh-tabs').hidden, ids: q('.uc-uh-ids').children.length, mod: q('.uc-uh-mod').hidden, card: q('.uc-uh-card')?.textContent, b7: !!q('.uc-uh-badges .bdg-7tv') }; })()`);
-check('B divák: jen hlavička — statistika kanálu, suma jen ucNamed, karta platformy', pub?.stats.startsWith('V tomto kanálu: poprvé viděn ') && /celkem 2 zprávy$/.test(pub.stats) && pub.don === 'Celkem darováno 1 000 Kč' && !pub.sub
+check('B divák: jen hlavička — statistika kanálu, suma jen ucNamed, karta platformy', pub?.stats.startsWith('V tomto kanálu: poprvé viděn ') && /celkem 2 zprávy$/.test(pub.stats) && pub.don === '1 000 Kč' && !pub.sub
   && pub.list && pub.tabs && pub.ids === 0 && pub.mod && pub.card === 'Karta na Twitchi' && pub.b7, JSON.stringify(pub));
 await sleep(600);
 check('B divák: žádný dotaz na zprávy ani dona', posts.hist.slice(nHistB).every((x) => /\/summary\?/.test(x)) && posts.hist.slice(nHistB).length === 1, posts.hist.slice(nHistB).join(' | '));

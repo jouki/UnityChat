@@ -318,9 +318,16 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
 .uc-uh-badges .bdg { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
 .uc-uh-badges .bdg-img { width: 18px; height: 18px; display: block; }
 /* Suma darů: velkým písmem (velikost nadpisu), odhad podle jména menší pod tím. */
-.uc-uh-donsum { margin-top: 6px; }
-.uc-uh-donsum-main { font-size: 16px; font-weight: 700; line-height: 1.3; color: #ffd27a; }
-.uc-uh-donsum-sub { font-size: 11px; color: var(--text-secondary, #adadb8); }
+/* Suma darů vpravo nahoře — gradient jako částka v QR donu (qr-dono.css .uc-qd-amount). */
+.uc-uh-donsum { flex: none; align-self: center; cursor: default; }
+.uc-uh-donsum-main {
+  font-size: 22px; line-height: 1.15; font-weight: 800; letter-spacing: 0.3px; white-space: nowrap;
+  background: linear-gradient(160deg, #ffe08a 0%, #ffc800 40%, #ff8c00 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 6px rgba(255, 170, 30, 0.5)) drop-shadow(0 0 14px rgba(255, 120, 0, 0.3));
+}
+/* Část jen podle jména (odhad) → hvězdička; přesně v tooltipu. */
+.uc-uh-donsum--guess .uc-uh-donsum-main::after { content: '*'; font-size: 14px; vertical-align: super; }
 .uc-uh-links { margin-top: 6px; }
 .uc-uh-card {
   padding: 3px 10px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
