@@ -14,6 +14,7 @@ function memStore(now: () => number) {
   const media = new Set<string>();
   const log: string[] = [];
   let seq = 0;
+  let retagOk = true;
   const store: GifStore = {
     async saveMedia() { media.add(MEDIA); return MEDIA; },
     async deleteMedia(id) { media.delete(id); log.push(`deleteMedia:${id}`); },
@@ -37,9 +38,9 @@ function memStore(now: () => number) {
     async listPending(at) { return [...reqs.values()].filter((r) => r.status === 'pending' && r.expiresAt > at); },
     async markDeletedByMessage(messageId) { const r = reqs.get(Number(messageId.slice(4))); if (r?.status === 'approved') { r.status = 'deleted'; return r; } return null; },
     async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); return toClientMessage(approvedMessageRow(r, at), false); },
-    async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); },
+    async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); return retagOk; },
   };
-  return { store, reqs, media, log };
+  return { store, reqs, media, log, setRetag: (v: boolean) => { retagOk = v; } };
 }
 
 const resolved: ResolvedGif = { bytes: Buffer.from('GIF89a'), kind: 'gif', contentType: 'image/gif', width: 320, height: 240, sourceUrl: 'https://media.tenor.com/x.gif' };
@@ -202,4 +203,63 @@ test('notifier: odesílatel (own) + jen mody kanálu mezi připojenými účty, 
   assert.deepEqual(sent, [[7, 'gif-pending', { requestId: 1, own: true }], [2, 'gif-pending', { requestId: 1 }]]);
   await n.notify(r, 'gif-decided', { requestId: 1 });
   assert.equal(modChecks, 3, 'mod stav z cache (účty 1, 2, 3)');
+});
+
+test('intercept: mod rozhodne dřív, než se nastaví zámek (bod 2) → zámek nevisí a gif-pending se nepošle', async () => {
+  const s = setup();
+  const orig = s.mem.store.insertRequest.bind(s.mem.store);
+  s.mem.store.insertRequest = async (v) => {
+    const r = await orig(v);
+    // Mod žádost uvidí v GET /moderation/gif/pending hned po insertu a zamítne ji dřív, než intercept pokračuje.
+    await s.flow.decide({ requestId: r.id, approve: false, by: 'twitch:moda', accountId: 1 });
+    return r;
+  };
+  assert.equal(await s.flow.intercept(params()), 'requested');
+  assert.equal(s.flow._pendingSize(), 0);
+  assert.equal(s.flow.tryReserve('robdiesalot', 'twitch', '42'), true, 'uživatel může poslat další GIF');
+  assert.equal(names(s.calls).includes('notify:gif-pending'), false);
+  assert.equal(names(s.calls).includes('notify:gif-decided'), true);
+});
+
+test('intercept: zámek platí hned po vzniku žádosti, ještě během mazání na platformě (bod 2)', async () => {
+  let lockedDuringDelete: boolean | null = null;
+  const s = setup({ deletePlatform: async () => { lockedDuringDelete = s.flow._pendingSize() === 1; return 'bot'; } });
+  await s.flow.intercept(params());
+  assert.equal(lockedDuringDelete, true);
+});
+
+test('intercept: zprávu smazanou filtrem mezitím obnovil permit (bod 6) → žádost ani médium nevzniknou', async () => {
+  const s = setup();
+  s.mem.setRetag(false);
+  assert.equal(await s.flow.intercept(params({ preDeleted: 'link_filter', needAccess: true })), 'cancelled');
+  assert.equal(s.mem.reqs.size, 0);
+  assert.equal(s.mem.media.size, 0);
+  assert.equal(names(s.calls).some((n) => n === 'notify:gif-pending' || n === 'deletePlatform'), false);
+  assert.equal(s.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
+});
+
+test('intercept: text nad GIFem bez odkazů, které by filtr zablokoval (bod 5)', async () => {
+  const s = setup();
+  await s.flow.intercept(params({ m: msg({ content: 'hele https://tenor.com/view/cat-gif-1 a evil.cz/x a youtu.be/abc' }), linkBlocked: (h: string) => h !== 'youtu.be' }));
+  assert.equal(s.mem.reqs.get(1)!.textWithoutLink, 'hele a a youtu.be/abc');
+});
+
+test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, cooldown ano (bod 8); médium se předehřeje před rozesláním', async () => {
+  const s = setup({ mediaApproved: async () => { s.calls.push(['warm', null]); } });
+  await s.flow.intercept(params());
+  let tries = 0;
+  s.mem.store.insertApprovedMessage = async () => { tries++; throw new Error('db down'); };
+  s.calls.length = 0;
+  const out = await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(out.body, { ok: true, requestId: 1, status: 'approved', published: false });
+  assert.equal(tries, 2);
+  assert.equal(names(s.calls).some((n) => n === 'broadcast:gif-message' || n === 'publishChat' || n === 'warm'), false);
+  assert.equal(names(s.calls).includes('used'), true);
+
+  const ok = setup({ mediaApproved: async () => { ok.calls.push(['warm', null]); } });
+  await ok.flow.intercept(params());
+  ok.calls.length = 0;
+  await ok.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  const n = names(ok.calls);
+  assert.ok(n.indexOf('warm') >= 0 && n.indexOf('warm') < n.indexOf('broadcast:gif-message'), 'předehřátí před rozesláním');
 });

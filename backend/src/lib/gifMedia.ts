@@ -96,9 +96,14 @@ export function gifCandidate(text: string): GifCandidate | null {
   return null;
 }
 
-/** Text zprávy bez odkazu na GIF (zobrazí se nad GIFem). */
-export function textWithoutLink(text: string, token: string): string {
-  return String(text || '').split(/\s+/).filter((t) => t && t !== token).join(' ').trim().slice(0, 500);
+/**
+ * Text zprávy bez odkazu na GIF (zobrazí se nad GIFem). `blocked(host)` = filtr odkazů by host zablokoval →
+ * takový token se z publikovaného textu vyřadí taky (jinak by schválený GIF propašoval zakázaný odkaz).
+ */
+export function textWithoutLink(text: string, token: string, blocked?: (host: string) => boolean): string {
+  return String(text || '').split(/\s+/)
+    .filter((t) => t && t !== token && !(blocked && findLinks(t).some((l) => blocked(l.host))))
+    .join(' ').trim().slice(0, 500);
 }
 
 // ---------------------------------------------------------------------------

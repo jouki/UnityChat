@@ -293,7 +293,8 @@ docker exec -i <postgres> psql -U postgres -d unitychat < backend/sql/2026-09-25
 Tabulky `gif_media` (id = 32 hex, `bytes` bytea ≤ 10 MB, kind, content_type, size, sha256, width, height) a
 `gif_requests` (id, channel = UC kanál, workspace, platform, platform_channel, user_id, login, message_id původní
 zprávy, text_without_link, media_id, kind, width, height, meta `{displayName, color, badges}`, status
-`pending|approved|rejected|expired|deleted`, decided_by, decided_at, created_at, expires_at).
+`pending|approved|rejected|expired|deleted`, decided_by, decided_at, created_at, expires_at); indexy `(status, expires_at)`,
+`(channel, created_at)`, `(media_id)`.
 **Úložiště = DB (bytea):** kontejner backendu nemá trvalý svazek; zamítnuté a propadlé médium se maže hned,
 schválené zůstává (retence archivu).
 
@@ -302,7 +303,9 @@ schválené zůstává (retence archivu).
   nejvyšší ověřená z badge zprávy (`broadcaster|moderator|vip|sub|viewer`). Odpověď
   `{ ok, serverNow, allowed, until|null, cooldownUntil|null, cooldownSec, requestTtlSec }` (čas ISO nebo ms; přepočet
   přes `serverNow`). Cache 60 s per (workspace, platforma, uživatel, role). Chyba / bez klíče = neodemčeno.
-- Po schválení `POST …/integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }` (cache hned v cooldownu).
+- Po schválení `POST …/integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }`. Uživatel je v cooldownu
+  **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access`, výchozí 60 s); selhání `gif-used` = jeden
+  opakovaný pokus po 2 s, bez potvrzení platí lokální cooldown do vypršení. Potvrzení ho nahradí cooldownem Židolišty.
 - Webhook `POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } }` → cache workspace pryč;
   odpověď `{ ok, workspace }`, neznámý workspace `404 unknown_workspace`.
 
@@ -327,6 +330,11 @@ schválené zůstává (retence archivu).
   filtr by ho pustil → v UC obnovení (`message-restored`, jako u permitu). Na platformě se nic nesmazalo.
 - **Převod OK** → původní zpráva smazaná na platformě **botem workspace** (`deleted_reason` zůstává `gif_request`,
   permit ji neobnoví), médium do `gif_media`, žádost `pending`, `expires_at = now + requestTtlSec` (výchozí 300 s).
+  Zámek „jedna žádost na uživatele“ platí hned po vzniku žádosti; když ji mod stihne rozhodnout dřív, než se ohlásí,
+  `gif-pending` se už nepošle.
+- Zprávu smazanou filtrem (`link_filter`) mohl během převodu obnovit permit → žádost ani médium nevzniknou.
+- Text nad GIFem = zpráva bez odkazu na GIF **a bez dalších odkazů, které by filtr autorovi zablokoval** (povolené
+  domény a odkazy autora s výjimkou zůstávají).
   Audit `moderation_actions` (`actor: "filter"`, `action: "gif_request"`; rozhodnutí `gif_approve` / `gif_reject`).
 
 ### Soukromé doručení — `/account/stream` (ticket, část 2)
@@ -351,13 +359,18 @@ data: { "requestId": 12, "channel": "robdiesalot", "approved": false, "status": 
 - `POST /moderation/gif/:requestId/decide { "approve": true }` — mod kanálu **žádosti** (kanál z DB, ne od klienta),
   rate limit per účet. `200 { ok, requestId, status }`; `404 not_found`; `403 not_mod`; už rozhodnuto nebo propadlo
   `409 { ok:false, error:'already_decided', status }` (první rozhodnutí vyhrává, podmíněný UPDATE); `400 body`.
+  Schválení, jehož syntetickou zprávu se nepodaří zapsat do archivu ani napodruhé, se nerozešle (`gif-message` ani
+  `/chat/stream`) a odpověď nese `published: false` (log `gif: schválený GIF se nezapsal do archivu`).
 - `GET /moderation/gif/pending?channel=` — mod; `{ ok, requests: [<tvar gif-pending bez own>] }`.
 
 ### Médium
 `GET /media/gif/:id` (bez auth, id 32 hex neuhodnutelné) — jen když patří žádosti `pending` nebo `approved`, jinak
-`404`. Hlavičky: `Content-Type` podle ověřeného druhu, `Cache-Control: public, max-age=31536000, immutable`,
-`Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`,
-`Cross-Origin-Resource-Policy: cross-origin`. Rate limit per IP (60, 10/s), paměťová LRU cache 64 MB.
+`404`. Hlavičky: `Content-Type` podle ověřeného druhu, `Cache-Control` čekající `private, no-store`, schválené
+`public, max-age=3600` (bez `immutable`, schválený GIF může mod smazat), `Content-Security-Policy: default-src 'none'; sandbox`,
+`X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: cross-origin`. Rate limit per IP (60, 10/s).
+Paměťová LRU cache 64 MB se stavem; souběžná čtení téhož média sdílí jedno načtení z DB; schválené médium se do cache
+načte **před** rozesláním `gif-message`. Zamítnuté, propadlé i smazané médium dostane tombstone a už se nevrátí
+(ani z načtení, které běželo souběžně se smazáním).
 
 ### Po schválení — všem
 - Archiv: syntetická zpráva `messages` s `platform_message_id = "gif-<requestId>"` (platforma a autor původní

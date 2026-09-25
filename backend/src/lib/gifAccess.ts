@@ -65,10 +65,36 @@ const cache = new Map<string, Entry>();
 const keyOf = (q: GifAccessQuery): string => `${q.workspace.toLowerCase()}|${q.platform}|${q.userId || `login:${q.login.toLowerCase()}`}|${q.role}`;
 
 type Log = { warn: (o: object, m: string) => void };
-export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; log?: Log }
+export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; log?: Log; sleep?: (ms: number) => Promise<void> }
 
-/** Načte stav odemčení (cache 60 s); chyba → null (= neodemčeno). */
+/**
+ * Lokální cooldown (uživatel bez role): od schválení GIFu, dokud Židolišta `gif-used` nepotvrdí (a když ho
+ * nepotvrdí vůbec, po dobu cooldownSec). Jinak by mezi schválením a odpovědí Židolišty prošel další GIF.
+ */
+const localCooldown = new Map<string, number>();
+const userPrefix = (workspace: string, platform: string, userId: string) => `${workspace.toLowerCase()}|${platform}|${userId}|`;
+const DEFAULT_COOLDOWN_SEC = 60;
+
+function localUntil(q: GifAccessQuery, now: number): number | null {
+  const k = userPrefix(q.workspace, q.platform, q.userId);
+  const u = localCooldown.get(k);
+  if (u === undefined) return null;
+  if (u <= now) { localCooldown.delete(k); return null; }
+  return u;
+}
+
+function applyLocal(q: GifAccessQuery, a: GifAccess | null, now: number): GifAccess | null {
+  const u = localUntil(q, now);
+  if (!a || u === null) return a;
+  return { ...a, cooldownUntil: Math.max(a.cooldownUntil ?? 0, u) };
+}
+
+/** Načte stav odemčení (cache 60 s); chyba → null (= neodemčeno). Lokální cooldown má přednost. */
 export async function gifAccess(q: GifAccessQuery, deps: GifAccessDeps = {}): Promise<GifAccess | null> {
+  return applyLocal(q, await fetchAccess(q, deps), (deps.now ?? Date.now)());
+}
+
+async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifAccess | null> {
   const now = deps.now ?? Date.now;
   const k = keyOf(q);
   const hit = cache.get(k);
@@ -110,16 +136,30 @@ export function gifAccessSync(q: GifAccessQuery, deps: GifAccessDeps = {}): 'all
   const now = (deps.now ?? Date.now)();
   const hit = cache.get(keyOf(q));
   if (!hit || (!hit.inflight && now - hit.at >= CACHE_MS)) void gifAccess(q, deps).catch(() => {});
+  if (localUntil(q, now) !== null) return 'denied';
   if (!hit || (hit.inflight && hit.at === 0)) return 'unknown';
   return gifUsable(hit.value, now) ? 'allowed' : 'denied';
 }
 
-/** Po schválení GIFu: Židolišta zapne cooldown; cache se hned aktualizuje, ať další GIF neprojde. */
+export const GIF_USED_RETRY_MS = 2000;
+
+/**
+ * Po schválení GIFu: Židolišta zapne cooldown. Hned (synchronně) lokální cooldown podle cooldownSec z cache
+ * (výchozí 60 s), pak `gif-used`; selhání = jeden opakovaný pokus po 2 s. Potvrzení Židolišty lokální
+ * cooldown nahradí jejím; bez potvrzení platí lokální do vypršení. Vrací potvrzený konec cooldownu nebo null.
+ */
 export async function gifUsed(p: { workspace: string; platform: Platform; userId: string }, deps: GifAccessDeps = {}): Promise<number | null> {
   const now = deps.now ?? Date.now;
   const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
+  const prefix = userPrefix(p.workspace, p.platform, p.userId);
+  let cdSec = 0;
+  for (const [k, e] of cache) if (k.startsWith(prefix) && e.value) cdSec = Math.max(cdSec, e.value.cooldownSec);
+  localCooldown.set(prefix, now() + (cdSec || DEFAULT_COOLDOWN_SEC) * 1000);
+  if (localCooldown.size > 5000) for (const [k, u] of localCooldown) if (u <= now()) localCooldown.delete(k);
   let until: number | null = null;
-  if (apiKey) {
+  let confirmed = false;
+  for (let attempt = 0; apiKey && attempt < 2 && !confirmed; attempt++) {
+    if (attempt) await (deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(GIF_USED_RETRY_MS);
     try {
       const r = await (deps.fetch ?? fetch)(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(p.workspace.toLowerCase())}/gif-used`, {
         method: 'POST',
@@ -132,12 +172,14 @@ export async function gifUsed(p: { workspace: string; platform: Platform; userId
       const cd = toMs(j?.cooldownUntil);
       const sn = toMs(j?.serverNow);
       until = cd === null ? null : cd - (sn ?? now()) + now();
+      confirmed = true;
     } catch (e) {
-      deps.log?.warn({ workspace: p.workspace, platform: p.platform, err: (e as Error).message }, 'gif: gif-used selhalo');
+      deps.log?.warn({ workspace: p.workspace, platform: p.platform, attempt: attempt + 1, err: (e as Error).message }, 'gif: gif-used selhalo');
     }
   }
-  // Cache všech rolí uživatele: cooldown podle odpovědi, bez odpovědi zahodit (další zpráva načte znovu).
-  const prefix = `${p.workspace.toLowerCase()}|${p.platform}|${p.userId}|`;
+  if (!confirmed) return null; // lokální cooldown zůstává do vypršení
+  localCooldown.delete(prefix);
+  // Potvrzeno: cooldown Židolišty do cache všech rolí uživatele; bez cooldownu cache zahodit (načte se znovu).
   for (const [k, e] of cache) {
     if (!k.startsWith(prefix)) continue;
     if (until !== null && e.value) e.value = { ...e.value, cooldownUntil: until };
@@ -155,4 +197,4 @@ export function invalidateGifAccess(workspace: string): number {
 }
 
 /** Jen pro testy. */
-export function _resetGifAccessCache(): void { cache.clear(); }
+export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); }

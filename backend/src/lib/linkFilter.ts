@@ -334,7 +334,7 @@ export function createLinkFilter(deps: LinkFilterDeps) {
    * 'unknown' → běžné rozhodnutí filtru a ověření + převod na pozadí (zobrazenou zprávu pak smaže zpětně);
    * 'denied' → běžný odkaz. Jedna žádost na uživatele současně (tryReserve).
    */
-  const checkGif = (m: IngestMessage, ucChannel: string, ws: WorkspaceInfo, roles: Roles, host: string | null): LinkVerdict | null => {
+  const checkGif = (m: IngestMessage, ucChannel: string, ws: WorkspaceInfo, roles: Roles, host: string | null, linkBlocked: (h: string) => boolean): LinkVerdict | null => {
     const gif = deps.gif!;
     const candidate = (gif.candidate ?? gifCandidate)(m.content);
     if (!candidate) return null;
@@ -344,11 +344,11 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const filterAct = host ? () => act(m, ucChannel, host) : null;
     if (access === 'allowed') {
       m.deleted = { by: 'filter', reason: 'gif_request' };
-      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct }).catch(() => {});
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct, linkBlocked }).catch(() => {});
       return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
     }
     // unknown: filtr rozhodne jako vždy; GIF se ověří a případně zachytí zpětně.
-    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null }).catch(() => {});
+    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null, linkBlocked }).catch(() => {});
     return null;
   };
 
@@ -383,7 +383,7 @@ export function createLinkFilter(deps: LinkFilterDeps) {
 
         // Část 4: odkaz na GIF od uživatele s odemčenými GIFy → žádost o schválení místo (nebo vedle) filtru.
         // Platí nezávisle na zapnutí filtru a výjimkách (odemčení řídí Židolišta); boti nikdy.
-        const gifVerdict = !bot && deps.gif && m.platformUserId ? checkGif(m, ucChannel, ws, roles, host) : null;
+        const gifVerdict = !bot && deps.gif && m.platformUserId ? checkGif(m, ucChannel, ws, roles, host, (h) => settings.enabled && !!shouldFilter({ roles, hosts: [h], allow: settings.allowDomains, permit, bot })) : null;
         if (gifVerdict) return gifVerdict;
 
         if (!host) return null;

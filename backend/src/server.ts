@@ -49,7 +49,7 @@ import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/mod
 import { registryPlatformChannel } from './lib/platformChannels.js';
 import { db } from './db/index.js';
 import { moderationActions } from './db/schema.js';
-import gifRoutes, { MediaCache } from './routes/gif.js';
+import gifRoutes, { MediaServer } from './routes/gif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
 import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
@@ -99,7 +99,7 @@ const gifNotifier = createGifNotifier({
   senderAccount: (platform, userId) => senderAccount(platform, userId),
   send: sendToAccount,
 });
-const gifMediaCache = new MediaCache();
+const gifMedia = new MediaServer(servableMedia);
 const gifFlow = createGifFlow({
   store: dbGifStore,
   resolve: (src) => resolveGif(src),
@@ -115,7 +115,8 @@ const gifFlow = createGifFlow({
   recordAction: async (v) => { await db.insert(moderationActions).values(v); },
   now: Date.now,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-  mediaDeleted: (id) => gifMediaCache.delete(id),
+  mediaDeleted: (id) => gifMedia.forget(id),
+  mediaApproved: (id) => gifMedia.prewarm(id),
   log: app.log,
 });
 // Smazání schváleného GIFu modem (část 1, id `gif-…`) → žádost `deleted`, médium se přestane servírovat.
@@ -123,7 +124,7 @@ onMessageDeleted(async ({ messageId }) => {
   if (!isGifMessageId(messageId)) return;
   const r = await dbGifStore.get(Number(messageId.slice(4)));
   await gifFlow.onMessageDeleted(messageId);
-  if (r?.mediaId) gifMediaCache.delete(r.mediaId);
+  if (r?.mediaId) gifMedia.forget(r.mediaId);
 });
 
 // Filtr odkazů + `!permit` z chatu (moderace část 3, lib/linkFilter.ts). Zapíná ho jen Židolišta
@@ -256,7 +257,7 @@ await app.register(accountWarningRoutes, {
   // Čekající žádosti o GIF, které účet smí vidět (mod kanálu / odesílatel), hned po připojení.
   onOpen: async (accountId: number) => (await gifNotifier.visibleTo(accountId, await dbGifStore.listPending(new Date()))).map((data) => ({ event: 'gif-pending', data })),
 });
-await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: servableMedia, cache: gifMediaCache });
+await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: gifMedia });
 await app.register(soundboardRoutes);
 await app.register(sfxRequestRoutes);
 await app.register(donateRoutes);

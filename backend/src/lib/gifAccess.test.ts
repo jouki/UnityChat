@@ -69,3 +69,25 @@ test('gifUsed: POST {platform, userId}, cooldown se hned propíše do cache', as
   assert.deepEqual(bodies, [{ platform: 'twitch', userId: '42' }]);
   assert.equal(gifAccessSync(Q, deps), 'denied');
 });
+
+test('gifUsed: selhání → jeden opakovaný pokus; do potvrzení lokální cooldown podle cooldownSec (bod 7)', async () => {
+  _resetGifAccessCache();
+  let now = 1_000;
+  let usedCalls = 0;
+  const slept: number[] = [];
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) { usedCalls++; return new Response('x', { status: 503 }); }
+    return new Response(JSON.stringify({ ok: true, serverNow: now, allowed: true, until: null, cooldownUntil: null, cooldownSec: 30, requestTtlSec: 300 }), { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet, sleep: async (ms: number) => { slept.push(ms); } };
+  await gifAccess(Q, deps);
+  const p = gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42' }, deps);
+  assert.equal(gifAccessSync(Q, deps), 'denied', 'cooldown platí hned po schválení, ještě před odpovědí Židolišty');
+  assert.equal(await p, null);
+  assert.equal(usedCalls, 2);
+  assert.deepEqual(slept, [2000]);
+  assert.equal(gifAccessSync(Q, deps), 'denied');
+  assert.ok((await gifAccess(Q, deps))!.cooldownUntil! >= now + 29_000);
+  now += 31_000;
+  assert.equal((await gifAccess(Q, deps))!.cooldownUntil, null, 'lokální cooldown vypršel');
+});

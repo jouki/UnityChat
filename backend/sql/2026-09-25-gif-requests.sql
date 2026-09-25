@@ -41,3 +41,5 @@ CREATE TABLE IF NOT EXISTS gif_requests (
 );
 CREATE INDEX IF NOT EXISTS gif_requests_pending_idx ON gif_requests (status, expires_at);
 CREATE INDEX IF NOT EXISTS gif_requests_channel_idx ON gif_requests (channel, created_at);
+-- GET /media/gif/:id hledá žádost podle média.
+CREATE INDEX IF NOT EXISTS gif_requests_media_idx ON gif_requests (media_id);

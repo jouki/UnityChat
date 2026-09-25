@@ -189,6 +189,7 @@ export const gifRequests = pgTable(
   (t) => ({
     pendingIdx: index('gif_requests_pending_idx').on(t.status, t.expiresAt),
     channelIdx: index('gif_requests_channel_idx').on(t.channel, t.createdAt),
+    mediaIdx: index('gif_requests_media_idx').on(t.mediaId),
   }),
 );
 export type GifRequest = typeof gifRequests.$inferSelect;
