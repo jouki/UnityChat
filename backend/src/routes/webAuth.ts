@@ -100,7 +100,9 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const wantMod = body.data?.mod === true;
     if (platform === 'twitch') {
       if (!twitch.twitchConfigured()) { reply.code(503); return { ok: false, error: 'Twitch OAuth not configured' }; }
-      const scopes = wantMod ? [...twitch.WEB_SCOPES, ...twitch.MOD_SCOPES] : twitch.WEB_SCOPES;
+      // Twitch: jedno přihlášení žádá rovnou i moderátorské scopes (pokyn usera 2026-09-25 — žádné druhé
+      // přihlášení pro mody). Kick zatím jen s `mod: true`, dokud nejsou scopes povolené v Kick dev app.
+      const scopes = [...twitch.WEB_SCOPES, ...twitch.MOD_SCOPES];
       return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (platform === 'youtube') {
