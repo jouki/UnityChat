@@ -82,8 +82,11 @@ export class TwitchListener implements IngestListener {
       for (const line of data.split('\r\n')) {
         if (!line) continue;
         if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
-        if (line.includes('CLEARMSG')) {
-          const id = parseIrcLine(line)?.tags['target-msg-id'];
+        // Příkaz z parsovaných IRC dat, ne podřetězcem — PRIVMSG s textem obsahujícím
+        // "CLEARMSG" by se jinak tiše zahodila (viz code review 2026-09-25).
+        const clearmsg = parseIrcLine(line);
+        if (clearmsg?.command === 'CLEARMSG') {
+          const id = clearmsg.tags['target-msg-id'];
           if (id && this.onDelete) {
             try { this.onDelete({ platform: 'twitch', channel: this.channel, messageId: id }); } catch (err) { this.log.error({ err }, 'twitch ingest: onDelete threw'); }
           }

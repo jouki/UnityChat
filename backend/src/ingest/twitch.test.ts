@@ -76,3 +76,22 @@ test('TwitchListener: CLEARMSG → onDelete, nejde do onMessage', () => {
   assert.deepEqual(deleted, [{ platform: 'twitch', channel: 'robdiesalot', messageId: 'abc-123' }]);
   l.stop();
 });
+
+test('TwitchListener: PRIVMSG s textem obsahujícím "CLEARMSG" se pořád ingestuje, žádný onDelete (regrese na substring match)', () => {
+  FakeWs.instances = [];
+  const got: IngestMessage[] = [];
+  const deleted: { platform: string; channel: string; messageId: string }[] = [];
+  const l = new TwitchListener('robdiesalot', (m) => got.push(m), {
+    WebSocketCtor: FakeWs as unknown as typeof WebSocket,
+    log: silent,
+    onDelete: (d) => deleted.push(d),
+  });
+  l.start();
+  const ws = FakeWs.instances[0];
+  ws.open();
+  ws.recv('@id=m1;display-name=A;tmi-sent-ts=1700000000000;user-id=1 :a!a@a PRIVMSG #robdiesalot :dej mi ten CLEARMSG prosím\r\n');
+  assert.equal(got.length, 1);
+  assert.equal(got[0].content, 'dej mi ten CLEARMSG prosím');
+  assert.deepEqual(deleted, []);
+  l.stop();
+});
