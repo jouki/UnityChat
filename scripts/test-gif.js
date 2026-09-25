@@ -170,6 +170,58 @@ Promise.all([
   const nBefore = calls.length; off.onInput('https://giphy.com/gifs/x-1');
   check('GifCooldown: nepřihlášený → žádný dotaz', calls.length === nBefore && off.checkSend('https://giphy.com/gifs/x-1') === true);
 
+  // --- pojistka GifHoldWatch (zpráva schovaná jako gif_request bez rozhodnutí → GET /gif/held) ---
+  {
+    let now = 0; const timers = []; const api = []; const results = [];
+    let reply = null;
+    const W = new g.GifHoldWatch({
+      api: async (p) => { api.push(p); if (reply instanceof Error) throw reply; return reply; },
+      channel: () => 'RobDiesALot', onResult: (r) => results.push(r), delayMs: 30_000, maxChecks: 3,
+      setTimeout: (fn, ms) => { timers.push({ fn, at: now + ms }); return timers.length; }, clearTimeout: () => {}, now: () => now,
+    });
+    const fire = async (ms) => {
+      now += ms;
+      const due = timers.filter((t) => t.at <= now);
+      timers.splice(0, timers.length, ...timers.filter((t) => t.at > now));
+      for (const t of due) t.fn();
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    W.hold('twitch', 'f6'); W.hold('twitch', 'f6'); W.hold('kick', 'k1');
+    W.hold('twitch', 'gif-3'); W.hold('twitch', 'sent-1');
+    check('GifHoldWatch: hold idempotentní, gif-/sent- se nehlídají', W.size === 2);
+    await fire(29_000);
+    check('GifHoldWatch: před 30 s žádný dotaz', api.length === 0);
+    reply = { ok: true, messages: [{ platform: 'twitch', messageId: 'f6', state: 'visible', message: { id: 'f6', message: 'x' } }, { platform: 'kick', messageId: 'k1', state: 'held' }] };
+    await fire(30_000);
+    check('GifHoldWatch: po 30 s jeden dávkový dotaz s kanálem', api.length === 1 && api[0] === '/gif/held?channel=robdiesalot&ids=twitch%3Af6%2Ckick%3Ak1', api[0]);
+    check('GifHoldWatch: visible → onResult, held → hlídat dál', results.length === 1 && results[0].state === 'visible' && !W.has('twitch', 'f6') && W.has('kick', 'k1'));
+    reply = new Error('offline');
+    await fire(30_000);
+    check('GifHoldWatch: chyba serveru → zkusit znovu', api.length === 2 && W.has('kick', 'k1'));
+    await fire(30_000);
+    check('GifHoldWatch: po maxChecks vzdát (zůstane schovaná)', api.length === 3 && !W.has('kick', 'k1') && results.length === 1);
+    W.hold('twitch', 'a'); W.release('twitch', 'a');
+    await fire(60_000);
+    check('GifHoldWatch: release → žádný dotaz', api.length === 3);
+    W.hold('twitch', 'b'); W.clear();
+    check('GifHoldWatch: clear', W.size === 0);
+    // Nová zpráva s dřívějším termínem (kratší delayMs) přeplánuje běžící časovač.
+    W.hold('twitch', 'late'); W.delayMs = 1000; W.hold('twitch', 'early');
+    reply = { ok: true, messages: [] };
+    const nApi = api.length;
+    await fire(1000);
+    check('GifHoldWatch: dřívější termín přeplánuje časovač', api.length === nApi + 1 && api.at(-1).includes('twitch%3Aearly') && !api.at(-1).includes('late'), api.at(-1));
+  }
+
+  // --- clearDeleted odstraní i uc-gif-held (obnovená zpráva nesmí zůstat neviditelná) ---
+  {
+    const mod = await import('../extension/core/moderation.js');
+    const cls = new Set(['msg', 'uc-gif-held', 'uc-deleted']);
+    const el = { hidden: true, classList: { remove: (...a) => a.forEach((c) => cls.delete(c)), add: (c) => cls.add(c), contains: (c) => cls.has(c) }, querySelector: () => null };
+    mod.clearDeleted(el);
+    check('clearDeleted: pryč uc-gif-held i uc-deleted, hidden false', !cls.has('uc-gif-held') && !cls.has('uc-deleted') && el.hidden === false);
+  }
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

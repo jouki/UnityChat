@@ -11,7 +11,8 @@
 //  UX 2026-09-25 (brief gif-ux):
 //  A2 (mod): původní zpráva gif_request se nevykreslí (historie i živě, ozvěna z platformy ji neodkryje), schválený GIF
 //     s `replaces` ji nahradí na jejím místě (historie i živě), gif_rejected = běžně smazaná; mod posílá GIF bez
-//     bubliny cooldownu a bez gifReview.
+//     bubliny cooldownu a bez gifReview. Selhání převodu (2026-09-26): schovaná gif_request → message-restored → vidět;
+//     pojistka: bez rozhodnutí → GET /gif/held → visible → vidět.
 //  D (divák): GIF odkaz v poli + cooldown → bublina s kolečkem a sekundami (GET /gif/state), odpočet, odeslání
 //     GIFu během cooldownu zablokované (červený okraj, „Můžeš až za:"), bez GIF odkazu se posílá, po doběhnutí zmizí.
 //  E (mod + Dev mód): GET /gif/state s review=1, POST /chat/send s gifReview: true.
@@ -73,8 +74,8 @@ const H1 = [
   H('e2e-wait', 'Divak', 'u9', '', 6, { deleted: true, deletedReason: 'gif_request' }),
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
-const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {} };   // decide[id] = { code, body }
-const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [] };
+const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {} };   // decide[id] = { code, body }; held[id] = odpověď /gif/held
+const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [] };
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
@@ -123,10 +124,15 @@ s.onevent = async (d) => {
   }
   if (u.includes('/chat/send')) { posts.send.push(body); return json({ ok: true, id: 'x' }); }
   if (u.includes('/gif/state')) { posts.state.push(u); return json(typeof mock.gifState === 'function' ? mock.gifState() : mock.gifState); }
+  if (u.includes('/gif/held')) {
+    posts.held.push(u);
+    const ids = decodeURIComponent(new URL(u).searchParams.get('ids') || '').split(',').filter(Boolean);
+    return json({ ok: true, messages: ids.map((k) => { const [platform, messageId] = k.split(':'); return mock.held[messageId] ? { platform, messageId, ...mock.held[messageId] } : { platform, messageId, state: 'held' }; }) });
+  }
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : H1, nextBefore: null });
   return call('Fetch.continueRequest', { requestId: rid }, sid);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/chat/send', '/nicknames/stream', '/account/', '/media/gif/', '/gif/state'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/chat/send', '/nicknames/stream', '/account/', '/media/gif/', '/gif/state', '/gif/held'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -298,6 +304,26 @@ check('A2 živě: message-deleted gif_request → zpráva schovaná (ne „smaza
 mock.sse.push(DEL('e2e-live1', 'platform'));
 await sleep(1500);
 check('A2 živě: ozvěna smazání z platformy schovanou zprávu neodkryje', await ev(isShown('e2e-live1')) === false);
+// Převod selhal (živě 2026-09-26, 4chan CDN 403): schovaná gif_request → message-restored s celou zprávou → vidět s textem.
+const URL4 = 'https://i.4pcdn.org/pol/1562850136932.gif';
+mock.sse.push(LIVE('e2e-live3', URL4, LT + 2));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-live3"]')`, 8000);
+mock.sse.push(DEL('e2e-live3', 'gif_request'));
+check('A2 selhání převodu: gif_request → schovaná', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live3"]'); return !!m && getComputedStyle(m).display === 'none'; })()`, 8000));
+mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-live3', by: 'filter', message: { platform: 'twitch', id: 'e2e-live3', username: 'Jouki', userId: 'u5', message: URL4, timestamp: LT + 2, color: '#1e90ff', historical: true } }]);
+check('A2 selhání převodu: message-restored → zpráva vidět s odkazem (bez uc-gif-held / uc-deleted)', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live3"]'); return !!m && getComputedStyle(m).display !== 'none' && !m.classList.contains('uc-gif-held') && !m.classList.contains('uc-deleted') && m.querySelector('.tx').textContent.includes('4pcdn.org'); })()`, 8000),
+  await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live3"]'); return m ? m.className + ' | ' + m.querySelector('.tx')?.textContent : null; })()`));
+// Pojistka: rozhodnutí serveru nedorazí → po delayMs GET /gif/held → visible → zpráva vidět.
+await ev(`(() => { window.ucGifHold().delayMs = 700; return true; })()`);
+mock.held['e2e-live4'] = { state: 'visible', message: { platform: 'twitch', id: 'e2e-live4', username: 'Jouki', userId: 'u5', message: `zase ${URL4}`, timestamp: LT + 3, color: '#1e90ff', historical: true } };
+mock.sse.push(LIVE('e2e-live4', `zase ${URL4}`, LT + 3));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-live4"]')`, 8000);
+const heldBefore = posts.held.length;
+mock.sse.push(DEL('e2e-live4', 'gif_request'));
+check('A2 pojistka: gif_request → schovaná', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live4"]'); return !!m && getComputedStyle(m).display === 'none'; })()`, 8000));
+check('A2 pojistka: schovaná bez rozhodnutí → GET /gif/held s kanálem a id', await waitFor(() => posts.held.slice(heldBefore).some((u) => /channel=robdiesalot/.test(u) && decodeURIComponent(u).includes('twitch:e2e-live4')), 8000), posts.held.slice(heldBefore).join(' | '));
+check('A2 pojistka: /gif/held visible → zpráva vidět s textem', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live4"]'); return !!m && getComputedStyle(m).display !== 'none' && m.querySelector('.tx').textContent.includes('4pcdn.org'); })()`, 8000));
+await ev(`(() => { window.ucGifHold().delayMs = 30000; return true; })()`);
 mock.sse.push(['gif-message', { channel: 'robdiesalot', requestId: 50, message: { platform: 'twitch', id: 'gif-50', username: 'Divak', userId: 'u9', message: 'hele', timestamp: LT, historical: false, color: '#1e90ff', gif: { url: murl(MEDIA.ok), kind: 'gif', width: 60, height: 40 }, replaces: 'twitch:e2e-live1' } }]);
 check('A2 živě: schválený GIF nahradí původní zprávu na jejím místě', await until(`!!document.querySelector('.msg[data-msg-id="gif-50"]') && !document.querySelector('.msg[data-msg-id="e2e-live1"]')`, 8000)
   && await ev(`document.querySelector('.msg[data-msg-id="gif-50"]').previousElementSibling?.dataset.msgId || null`) === prevLive1

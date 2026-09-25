@@ -1150,6 +1150,8 @@ class UnityChat {
     // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
     // force a log dump without needing the 💾 button to respond.
     try { window.ucDump = () => this._dumpLogs(); } catch {}
+    // Ladění / e2e: pojistka schovaných GIF zpráv (delayMs, size).
+    try { window.ucGifHold = () => this._gifHold(); } catch {}
 
     this._init();
   }
@@ -4615,7 +4617,11 @@ class UnityChat {
     // má kartu, po schválení ji nahradí GIF (replaces), po zamítnutí přijde gif_rejected = běžně smazaná.
     const held = deleted && core.isGifHeldReason?.(msg.deletedReason);
     el.classList.toggle('uc-gif-held', !!held);
-    if (held) return;
+    // Pojistka: schovaná bez rozhodnutí serveru → po 30 s se zeptat GET /gif/held (core GifHoldWatch).
+    const holdId = msg?.id != null ? String(msg.id) : el.dataset?.msgId;
+    const holdPl = msg?.platform || el.dataset?.platform;
+    if (held) { this._gifHold().hold(holdPl, holdId); return; }
+    this._gifHoldInst?.release(holdPl, holdId);
     // Smazaný GIF (část 1 + 4): server médium přestane servírovat → pryč z dat i z DOM (skrytí jen přes CSS).
     if (deleted) {
       if (msg.gif) delete msg.gif;
@@ -4640,6 +4646,33 @@ class UnityChat {
     const id = msg?.id != null ? String(msg.id) : '';
     if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && this.store.get(msg.id) === msg) {
       if (this._deletedLoader().request(msg.platform, id)) this._ucLog('Mod', `deleted-content ← ${msg.platform}:${id}`);
+    }
+  }
+
+  /** Pojistka pro zprávy schované jako gif_request bez rozhodnutí serveru (core GifHoldWatch → GET /gif/held). */
+  _gifHold() {
+    if (!this._gifHoldInst) {
+      this._gifHoldInst = new window.UC_CORE.GifHoldWatch({
+        api: (path) => this._ucApi(path),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        onResult: (r) => this._onGifHoldResult(r),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifHoldInst;
+  }
+
+  /** Odpověď GET /gif/held: visible → odkrýt s daty ze serveru, deleted → běžně smazaná, jinak nechat schovanou. */
+  _onGifHoldResult(r) {
+    if (!r?.messageId) return;
+    const id = String(r.messageId);
+    if (r.state === 'visible' && r.message) {
+      this._unhideMessage({ platform: r.platform, messageId: id, message: r.message }, { restore: true });
+    } else if (r.state === 'deleted') {
+      this._heldReasons?.delete(id);
+      const msg = this.store.get(id);
+      if (msg && msg.platform === r.platform) delete msg.deletedReason;
+      this._applyDeleted(r.platform, id, { reason: r.reason || null });
     }
   }
 
@@ -4707,6 +4740,7 @@ class UnityChat {
   /** Zrušit vzhled smazání/skrytí a vykreslit text znovu z dat. */
   _restoreMessage(el, msg) {
     window.UC_CORE?.clearDeleted?.(el);
+    this._gifHoldInst?.release(msg?.platform || el.dataset?.platform, msg?.id != null ? String(msg.id) : el.dataset?.msgId);
     const tx = el.querySelector('.tx');
     if (tx && msg) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
   }
@@ -4782,7 +4816,12 @@ class UnityChat {
   _unhideMessage(d, { restore = false } = {}) {
     const fresh = d.message && typeof d.message === 'object' ? d.message : null;
     const msg = this.store.get(String(d.messageId));
-    if (restore) this._serverDeleted?.delete(String(d.messageId));
+    if (restore) {
+      this._serverDeleted?.delete(String(d.messageId));
+      // Obnovená (i dosud schovaná gif_request) zpráva: pozdější příchod z IRC ji už nesmí schovat.
+      this._heldReasons?.delete(String(d.messageId));
+      this._gifHoldInst?.release(d.platform, String(d.messageId));
+    }
     if (msg && fresh) {
       // Obsah je teď veřejný (přišel se zprávou) — ne jen dotažený jako mod, po ztrátě role ho nezahazovat.
       delete msg._modOrig;
@@ -8246,6 +8285,8 @@ class UnityChat {
     this._gifCdInst?.reset();
     // Obsah smazaných zpráv pro moda patří kanálu — rozpracované dotazy zahodit.
     this._deletedLoaderInst?.reset();
+    this._gifHoldInst?.clear();
+    this._heldReasons?.clear();
     this.store = new ChatStore();
     this.chatEl.innerHTML = '';
     this._parkedTop = [];

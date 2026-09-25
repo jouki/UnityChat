@@ -68,6 +68,93 @@ export function gifHeldAfter(prevReason, nextReason) {
   return !nextReason || nextReason === 'platform' || isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason;
 }
 
+/** Za jak dlouho se klient zeptá serveru na zprávu schovanou jako gif_request bez rozhodnutí. */
+export const GIF_HOLD_CHECK_MS = 30_000;
+/** Kolikrát nejvýš (žádost diváka čeká na moda až requestTtlSec = 300 s → 12 × 30 s pokryje i s rezervou). */
+export const GIF_HOLD_MAX_CHECKS = 12;
+/** Max klíčů v jednom GET /gif/held (stejně jako server). */
+export const GIF_HOLD_BATCH = 50;
+
+/**
+ * Pojistka: zpráva schovaná jako gif_request nesmí zůstat schovaná navždy, když rozhodnutí serveru
+ * (message-restored / message-deleted / gif-message) nedorazí — výpadek SSE, restart serveru, chyba.
+ * Po `delayMs` od schování se zeptá `GET /gif/held?channel=&ids=<platform>:<id>,…` (veřejné, i pro diváka):
+ *   held → zeptat se znovu (nejvýš maxChecks krát), visible → `onResult` (klient zprávu odkryje s daty ze serveru),
+ *   deleted → běžně smazaná s důvodem, replaced / unknown → nechat schovanou a přestat.
+ * Neptá se po každém vykreslení: `hold` je idempotentní, `release` ruší (rozhodnutí přišlo samo).
+ * Server se ptá, NE čas → čekající žádost diváka (až 5 min) se nikdy neodkryje předčasně.
+ */
+export class GifHoldWatch {
+  constructor({ api, channel, onResult, log = () => {}, delayMs = GIF_HOLD_CHECK_MS, maxChecks = GIF_HOLD_MAX_CHECKS, setTimeout: st = globalThis.setTimeout.bind(globalThis), clearTimeout: ct = globalThis.clearTimeout.bind(globalThis), now = Date.now } = {}) {
+    Object.assign(this, { api, channel, onResult, log, delayMs, maxChecks, _st: st, _ct: ct, _now: now });
+    this._items = new Map();   // "platform:id" → { platform, id, due, checks }
+    this._timer = null;
+    this._busy = false;
+  }
+
+  /** Zpráva je (znovu) schovaná jako gif_request — hlídat. Opakované volání termín neposouvá. */
+  hold(platform, id) {
+    if (!platform || id == null || isGifMessageId(id) || String(id).startsWith('sent-')) return;
+    const k = `${platform}:${id}`;
+    if (this._items.has(k)) return;
+    this._items.set(k, { platform, id: String(id), due: this._now() + this.delayMs, checks: 0 });
+    if (this._items.size > 300) this._items.delete(this._items.keys().next().value);
+    this._arm();
+  }
+
+  /** Rozhodnutí přišlo (odkryta, smazána jinak, nahrazena) — nehlídat. */
+  release(platform, id) {
+    this._items.delete(`${platform}:${id}`);
+    if (!this._items.size && this._timer) { this._ct(this._timer); this._timer = null; }
+  }
+
+  has(platform, id) { return this._items.has(`${platform}:${id}`); }
+  get size() { return this._items.size; }
+
+  /** Přepnutí kanálu / odhlášení. */
+  clear() { this._items.clear(); if (this._timer) this._ct(this._timer); this._timer = null; }
+
+  _arm() {
+    if (!this._items.size) return;
+    const next = Math.min(...[...this._items.values()].map((x) => x.due));
+    // Běžící časovač na dřívější (nebo stejný) termín stačí; na pozdější se přeplánuje.
+    if (this._timer && this._timerAt <= next) return;
+    if (this._timer) this._ct(this._timer);
+    this._timerAt = next;
+    this._timer = this._st(() => { this._timer = null; void this._check(); }, Math.max(0, next - this._now()));
+  }
+
+  async _check() {
+    if (this._busy) return;
+    const now = this._now();
+    const due = [...this._items.values()].filter((x) => x.due <= now).slice(0, GIF_HOLD_BATCH);
+    if (!due.length) { this._arm(); return; }
+    this._busy = true;
+    const ch = typeof this.channel === 'function' ? this.channel() : this.channel;
+    const ids = due.map((x) => `${x.platform}:${x.id}`).join(',');
+    let res = null;
+    try { res = await this.api(`/gif/held?channel=${encodeURIComponent(String(ch || '').toLowerCase())}&ids=${encodeURIComponent(ids)}`); }
+    catch (e) { this.log('Gif', `hold: /gif/held selhalo (${e?.error || e?.message || e})`); }
+    const got = new Map((Array.isArray(res?.messages) ? res.messages : []).map((r) => [`${r.platform}:${r.messageId}`, r]));
+    for (const x of due) {
+      const k = `${x.platform}:${x.id}`;
+      if (!this._items.has(k)) continue;   // mezitím rozhodnuto
+      const r = got.get(k);
+      if (!r || r.state === 'held') {
+        // Čeká (nebo server neodpověděl) → znovu později; po maxChecks vzdát (zůstane schovaná).
+        if (++x.checks >= this.maxChecks) { this._items.delete(k); this.log('Gif', `hold ${k}: bez rozhodnutí po ${x.checks} dotazech`); continue; }
+        x.due = this._now() + this.delayMs;
+        continue;
+      }
+      this._items.delete(k);
+      this.log('Gif', `hold ${k} → ${r.state}${r.reason ? ` (${r.reason})` : ''}`);
+      try { this.onResult?.(r); } catch { /* ignore */ }
+    }
+    this._busy = false;
+    this._arm();
+  }
+}
+
 /** Schválený GIF → `{ platform, id }` původní zprávy, kterou nahrazuje (`replaces: "<platform>:<id>"`), nebo null. */
 export function gifReplacedTarget(msg) {
   const m = /^(twitch|kick|youtube):(.{1,200})$/.exec(String(msg?.replaces ?? ''));
