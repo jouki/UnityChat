@@ -23,8 +23,10 @@ export function dockState({ available, wide, rowHasOther }) {
  * @param {HTMLElement} o.container     měřený kontejner (šířka chatu)
  * @param {number} [o.breakpoint=500]
  * @param {() => boolean} [o.rowHasOther] řádek má i jiný viditelný obsah
+ * @param {() => boolean} [o.inlineVisible] pole pro psaní je vidět (výchozí: inlineParent má rozměry)
  */
-export function createToolDock({ button, row, inlineParent, inlineBefore = null, container, breakpoint = 500, rowHasOther = () => false }) {
+export function createToolDock({ button, row, inlineParent, inlineBefore = null, container, breakpoint = 500, rowHasOther = () => false,
+  inlineVisible = () => inlineParent.getClientRects().length > 0 }) {
   const win = container.ownerDocument.defaultView;
   let available = false;
   let lastPlace = null;
@@ -32,8 +34,7 @@ export function createToolDock({ button, row, inlineParent, inlineBefore = null,
 
   function update() {
     // Skryté pole pro psaní (nepřihlášený → výzva k přihlášení) = tlačítko zůstává v řádku.
-    const inlineShown = inlineParent.getClientRects().length > 0;
-    const wide = inlineShown && isWide(container.getBoundingClientRect().width, breakpoint);
+    const wide = inlineVisible() && isWide(container.getBoundingClientRect().width, breakpoint);
     const s = dockState({ available, wide, rowHasOther: rowHasOther() });
     button.hidden = s.place === 'none';
     if (s.place === 'inline' && button.parentNode !== inlineParent) {
