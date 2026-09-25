@@ -55,3 +55,7 @@ body.uc-can-moderate .msg-action-btn[data-act="delete"]:hover { color: #ff9a9d; 
   cursor: pointer;
 }
 .sys .sys-action:hover { background: rgba(255, 140, 0, 0.25); }
+
+/* „Zpráva smazána" — text je pryč, takže ani kopírovat/odpovídat s citací (pojistka i v JS: _textSuppressed). */
+.msg.uc-deleted--label .msg-action-btn[data-act="copy"],
+.msg.uc-deleted--label .msg-action-btn[data-act="reply"] { display: none; }

@@ -3881,8 +3881,7 @@ class UnityChat {
     if (this._ucMarkedIds.size > 500) this._ucMarkedIds.delete(this._ucMarkedIds.values().next().value);
     const cached = this.store.get(id);
     if (cached) cached._uc = true;
-    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
-    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    const els = this._msgNodes(`.msg[data-msg-id="${CSS.escape(String(id))}"]`);
     for (const el of els) {
       const pi = el.querySelector('.pi');
       if (pi && (!platform || el.dataset.platform === platform || !el.dataset.platform)) { pi.classList.add('uc'); pi.setAttribute('data-tooltip', 'UnityChat User'); }
@@ -4276,10 +4275,14 @@ class UnityChat {
 
   // ---- Moderace: smazané / skryté zprávy (core/moderation.js, backend /moderation/*) ----
 
-  /** Uzly zprávy v DOM i zaparkované mimo okno. */
+  /** Uzly odpovídající selektoru v DOM i zaparkované mimo okno (_parkedTop/_parkedBottom). */
+  _msgNodes(sel = '.msg[data-msg-id]') {
+    return [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+  }
+
+  /** Uzly jedné zprávy (DOM + zaparkované), volitelně jen dané platformy. */
   _msgEls(id, platform = null) {
-    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
-    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    const els = this._msgNodes(`.msg[data-msg-id="${CSS.escape(String(id))}"]`);
     return platform ? els.filter((el) => !el.dataset.platform || el.dataset.platform === platform) : els;
   }
 
@@ -4287,6 +4290,14 @@ class UnityChat {
   _msgHasContent(msg) {
     const probe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
     return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
+  }
+
+  /** Zobrazuje se divákovi místo textu „Zpráva smazána" / nic? Pak kopírovat ani citovat nejde. */
+  _textSuppressed(msg) {
+    if (!this._isModerated(msg)) return false;
+    const deleted = !!(msg._deleted || msg.deleted);
+    const mode = window.UC_CORE.deletedMode({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden: !deleted && !!(msg._hidden || msg.hidden) });
+    return mode === 'label' || mode === 'hide' || !this._msgHasContent(msg);
   }
 
   _isModerated(msg) {
@@ -4330,6 +4341,7 @@ class UnityChat {
 
   /** Vrátit lokální smazání (odmítnuté optimistické smazání). */
   _undoDeleted(platform, id) {
+    if (this._serverDeleted?.has(String(id))) { this._ucLog('Mod', `undo ${platform}:${id} přeskočeno — smazání potvrdil server`); return; }
     const msg = this.store.get(String(id));
     if (msg) msg._deleted = false;
     for (const el of this._msgEls(id, platform)) {
@@ -4341,7 +4353,7 @@ class UnityChat {
   /** Nastavení stylu nebo role se změnily → přebarvit všechny smazané/skryté zprávy. */
   _reapplyDeleted() {
     let n = 0;
-    for (const el of [...this.chatEl.querySelectorAll('.msg[data-msg-id]'), ...(this._parkedTop || []), ...(this._parkedBottom || [])]) {
+    for (const el of this._msgNodes()) {
       const msg = el.dataset?.msgId ? this.store.get(el.dataset.msgId) : null;
       if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); n++; }
     }
@@ -4351,9 +4363,16 @@ class UnityChat {
   /** SSE message-deleted / message-hidden / message-unhidden z /nicknames/stream. */
   _onModerationEvent(type, d) {
     if (!d?.messageId) return;
-    if (d.channel && d.channel.toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    // Události jsou vázané na kanál — bez kanálu nebo z jiného kanálu zahodit.
+    if (!d.channel || String(d.channel).toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
     let n = 0;
-    if (type === 'message-deleted') n = this._applyDeleted(d.platform, d.messageId);
+    if (type === 'message-deleted') {
+      // Potvrzené serverem → případné odmítnutí vlastního POST už smazání nevrátí (_undoDeleted).
+      if (!this._serverDeleted) this._serverDeleted = new Set();
+      this._serverDeleted.add(String(d.messageId));
+      if (this._serverDeleted.size > 500) this._serverDeleted.delete(this._serverDeleted.values().next().value);
+      n = this._applyDeleted(d.platform, d.messageId);
+    }
     else if (type === 'message-hidden') n = this._applyDeleted(d.platform, d.messageId, { hidden: true });
     else if (type === 'message-unhidden') n = this._unhideMessage(d);
     this._ucLog('Mod', `${type} ${d.platform}:${d.messageId} by=${d.by || '?'}${d.reason ? ` reason=${d.reason}` : ''} → ${n} el`);
@@ -6687,7 +6706,7 @@ class UnityChat {
   /** Po změně blacklistu: přerenderovat text i jméno všech zpráv (i zaparkovaných mimo DOM). */
   _reRenderAllMessages() {
     let n = 0;
-    for (const msgEl of [...this.chatEl.querySelectorAll('.msg[data-msg-id]'), ...(this._parkedTop || []), ...(this._parkedBottom || [])]) {
+    for (const msgEl of this._msgNodes()) {
       const cached = msgEl.dataset?.msgId ? this.store.get(msgEl.dataset.msgId) : null;
       if (!cached) continue;
       const tx = msgEl.querySelector('.tx');
@@ -7218,11 +7237,14 @@ class UnityChat {
     // Copy button
     const copyBtn = document.createElement('button');
     copyBtn.className = 'msg-action-btn';
+    copyBtn.dataset.act = 'copy';
     copyBtn.title = 'Kopírovat zprávu';
     const copySvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
     copyBtn.innerHTML = copySvg;
     copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      // Smazaná/skrytá zpráva v režimu „Zpráva smazána" / „Skryté" — text nevydat (CSS tlačítko schová, tohle je pojistka).
+      if (this._textSuppressed(this.store.get(copyBtn.closest('.msg')?.dataset.msgId) || msg)) return;
       navigator.clipboard.writeText((msg.message || '') + ' ').catch(() => {});
       copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>';
       setTimeout(() => { copyBtn.innerHTML = copySvg; }, 1500);
@@ -7250,10 +7272,12 @@ class UnityChat {
     // Reply button
     const replyBtn = document.createElement('button');
     replyBtn.className = 'msg-action-btn';
+    replyBtn.dataset.act = 'reply';
     replyBtn.title = 'Odpovědět';
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (this._textSuppressed(this.store.get(replyBtn.closest('.msg')?.dataset.msgId) || msg)) return;
       this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);

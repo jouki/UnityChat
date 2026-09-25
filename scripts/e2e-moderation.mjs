@@ -50,6 +50,7 @@ const mock = {
   mod: true,
   deleteStatus: 200,
   deleteResult: 'bot',
+  deleteDelayMs: 0,
   history: () => [H('e2e-m1', 'první zpráva'), H('e2e-m2', '', { deleted: true }), H('e2e-m3', 'třetí zpráva')],
   sse: [],   // fronta událostí pro /nicknames/stream
 };
@@ -69,6 +70,7 @@ s.onevent = async (d) => {
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   if (u.includes('/moderation/delete')) {
     posts.push(q.postData ? JSON.parse(q.postData) : null);
+    if (mock.deleteDelayMs) await sleep(mock.deleteDelayMs);
     return mock.deleteStatus === 200 ? json({ ok: true, result: mock.deleteResult }) : json({ ok: false, error: 'not_mod' }, mock.deleteStatus);
   }
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : mock.history(), nextBefore: null });
@@ -118,9 +120,15 @@ mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', 
 check('B SSE message-deleted → label, text pryč', await until(`document.querySelector('.msg[data-msg-id="e2e-m1"]').classList.contains('uc-deleted--label')`));
 const m1v = await msgState('e2e-m1');
 check('B text smazané zprávy nahrazen', m1v?.text === 'Zpráva smazána', JSON.stringify(m1v));
+const btnVis = (id, act) => ev(`getComputedStyle(document.querySelector('.msg[data-msg-id="${id}"] [data-act=${act}]')).display !== 'none'`);
+check('B label: Kopírovat a Odpovědět u smazané zprávy schované', (await btnVis('e2e-m1', 'copy')) === false && (await btnVis('e2e-m1', 'reply')) === false);
+await ev(`(() => { window.__copied = null; try { navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve(); }; } catch {} document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=copy]').click(); document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=reply]').click(); return true; })()`);
+const leak = await ev(`JSON.stringify({ copied: window.__copied, reply: (() => { const r = document.getElementById('reply-indicator'); return !!r && !r.classList.contains('hidden'); })() })`);
+check('B label: klik na Kopírovat/Odpovědět text nevydá (nic ve schránce, odpověď nezačne)', leak === JSON.stringify({ copied: null, reply: false }), leak);
 await ev(`(() => { const s = document.getElementById('input-deleted-style'); s.value = 'strike'; s.dispatchEvent(new Event('change')); })()`);
 const m1s = await msgState('e2e-m1');
 check('B nastavení Přeškrtnuté → strike + text zpátky z dat', m1s?.cls.includes('uc-deleted--strike') && m1s.text.includes('první zpráva'), JSON.stringify(m1s));
+check('B strike (volba diváka): Kopírovat a Odpovědět jsou vidět', (await btnVis('e2e-m1', 'copy')) === true && (await btnVis('e2e-m1', 'reply')) === true);
 await ev(`(() => { const s = document.getElementById('input-deleted-style'); s.value = 'label'; s.dispatchEvent(new Event('change')); })()`);
 mock.sse.push(['message-hidden', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m3', by: 'twitch:moduser', at: new Date().toISOString() }]);
 check('B SSE message-hidden → divák zprávu nevidí', await until(`getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m3"]')).display === 'none'`));
@@ -128,9 +136,10 @@ mock.sse.push(['message-unhidden', { channel: 'robdiesalot', platform: 'twitch',
 check('B SSE message-unhidden → zpráva zpět', await until(`getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m3"]')).display !== 'none'`));
 const m3 = await msgState('e2e-m3');
 check('B odkrytá zpráva bez uc-deleted a s textem', m3?.cls === '' && m3.text.includes('třetí zpráva'), JSON.stringify(m3));
+mock.sse.push(['message-deleted', { platform: 'twitch', messageId: 'e2e-m3', by: 'x', reason: 'mod', at: new Date().toISOString() }]);
 mock.sse.push(['message-deleted', { channel: 'jiny_kanal', platform: 'twitch', messageId: 'e2e-m3', by: 'x', reason: 'mod', at: new Date().toISOString() }]);
 await sleep(1500);
-check('B událost z cizího kanálu ignorována', (await msgState('e2e-m3'))?.cls === '');
+check('B událost z cizího kanálu / bez kanálu ignorována', (await msgState('e2e-m3'))?.cls === '');
 
 // ---- fáze C: backend odmítne (403) → vrácení ----
 mock.mod = true; mock.deleteStatus = 403;
@@ -141,6 +150,16 @@ await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textConten
 const m3r = await msgState('e2e-m3');
 check('C 403 → optimistické smazání vráceno', m3r?.cls === '' && m3r.text.includes('třetí zpráva'), JSON.stringify(m3r));
 check('C 403 → hláška „Mazat můžou jen modi."', await ev(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent === 'Mazat můžou jen modi.')`) === true);
+
+// ---- fáze D: server potvrdí smazání (SSE) během čekání na POST, POST pak selže → smazání zůstane ----
+mock.deleteStatus = 403; mock.deleteDelayMs = 2000;
+await boot();
+await until(`document.body.classList.contains('uc-can-moderate')`);
+await ev(`document.querySelector('.msg[data-msg-id="e2e-m3"] [data-act=delete]').click()`);
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m3', by: 'twitch:jinymod', reason: 'mod', at: new Date().toISOString() }]);
+await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('Mazat můžou jen modi'))`, 6000);
+const m3d = await msgState('e2e-m3');
+check('D serverové smazání přežije odmítnutý POST', !!m3d?.cls.includes('uc-deleted'), JSON.stringify(m3d));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);
