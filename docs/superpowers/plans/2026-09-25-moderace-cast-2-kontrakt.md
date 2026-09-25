@@ -361,6 +361,44 @@ sečetlo dvakrát; součty (`total`, `uc`, `guess`, veřejné `ucNamed`) počít
 Omezení: u diváka s víc než 1 000 dony na jednu identitu (5 × 200) jsou součty jen z načtených položek (log
 `donations: víc stránek, než se stahuje`).
 
+## Vyhledání uživatele — `/user <jméno>` (2026-09-25)
+Mod napíše do pole pro psaní `/user <text>` a našeptávač nabídne **všechny uživatele kanálu** z archivu
+(i ty, kdo v této session nepsali). Výběr (Tab / Enter / → / klik) otevře Profil (`UserHistoryPanel.open`),
+pole se vyprázdní, do chatu nejde nic. Divákům se `/user` nenabízí a nefunguje (text by odešel jako obyčejná zpráva).
+
+### `GET /moderation/users/search?channel=&q=&fulltext=0|1&limit=`
+`routes/userSearch.ts` + jádro `lib/userSearch.ts`. Pořadí ochrany: `Cache-Control: no-store` v onRequest (i 401/403/429)
+→ `requireWebSession` (401) → validace query (400: `q` 1–40 znaků po odebrání úvodního `@`, `fulltext` jen 0/1,
+`limit` 1–50, výchozí 20) → rate limit na účet 8 + 3/s (429) → `resolveModGate` na kanál (403 `not_mod`) — teprve pak DB.
+
+Rozsah = UC kanál: Twitch = kanál, Kick/YouTube = platformní kanál z registru Židolišty (`registryPlatformChannel`,
+stejně jako Profil a timeout/ban), `messages.channel IN (x, @x)`. Hledá se v `platform_username` (i ve starších
+jménech po přejmenování) a v UC přezdívkách (`nicknames.nickname` → (platform, login) → zprávy s tímto jménem);
+bez diakritiky a velikosti písmen přes `uc_fold()`, `%`/`_`/`\` v textu doslovně (`likePattern` z chatLog.ts).
+`fulltext=0` = začátek jména, `1` = kdekoli. Kandidáti = distinct `(platform, platform_user_id)`, max 100, přesná
+shoda jména v SQL první, pak poslední aktivita; ke každému počet zpráv v kanálu, poslední čas, poslední jméno
+a barva (`content_raw.color`) + přezdívka/barva z `nicknames`. Řazení výsledku: přesná shoda (login, jméno nebo
+přezdívka) → začátek → `lastSeen` → počet zpráv.
+
+Odpověď `200 { ok: true, users: [{ platform, userId, login, displayName, nickname?, color?, lastSeen, count }] }`
+(`login` = poslední jméno malými písmeny — stejná konvence jako Profil; `lastSeen` ms).
+
+SQL `backend/sql/2026-09-25-user-search-index.sql` (**spustit na produkci před nasazením**, předpokládá
+`2026-09-25-chat-log-search.sql` — `uc_fold`, `pg_trgm`, `messages_username_fold_trgm` pro fulltext): btree
+`messages (channel, uc_fold(platform_username) text_pattern_ops)` pro prefix, trigram GIN na `uc_fold(nicknames.nickname)`.
+
+### Klient (core `extension/core/user-search.js`, addon `sidepanel.js`)
+- `parseUserCommand(text)` → `{ query }` / null; `UserSearch({ api, channel, local, onResults })`: lokální uživatelé
+  ze session hned, server po debounce 200 ms, starý požadavek se zruší (`AbortController`), cache 30 posledních dotazů
+  (klíč kanál + fulltext + text bez diakritiky), sloučení session + server (dedup platforma + userId / login).
+- Render položky `userSearchItemHtml` (barevná tečka, logo platformy, přezdívka + šedě login; CSS `.es-plat`,
+  `.es-login`, `.es-status` v `sidepanel.css`). Přepínač **Fulltext** jako u emotů, ale vlastní uložený stav
+  `config.acUserFulltext` (hledání lidí ≠ hledání emotů).
+- Addon: jen když `_canModerate`; `/us…` napoví příkaz `/user`; ↑/↓ a Shift+Tab posouvají výběr, Tab / Enter / → /
+  klik otevře Profil; Esc zavře. Enter s `/user …` bez seznamu nic neodešle (jen nápověda). UC_LOG `UserSearch`, `Profile`.
+- Web: stejný core + `profile.open({ channel, platform, userId, login, displayName, nameColor })`; `api` musí propustit
+  `signal`.
+
 ## Obsah smazaných / skrytých zpráv pro moda (2026-09-25)
 `/chat/history`, `/chat/stream` i `/moderation/user-history/messages` (Profil) posílají smazané a skryté zprávy
 **bez obsahu** všem (i modům). Mod si text dotáhne zvlášť:

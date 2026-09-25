@@ -48,6 +48,8 @@ import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter, toModeratedContent, toClientMessage, type ClientRow, type ClientMessage } from './chat.js';
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
+import { userSearchRoutes } from './userSearch.js';
+import { dbUserSearchDeps } from '../lib/userSearch.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
 import { config } from '../config.js';
 
@@ -405,6 +407,14 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
       },
       app.log,
     ),
+    defaultChannel: DEFAULT_CHANNEL,
+  });
+
+  // ---- `/user <text>`: našeptávač uživatelů kanálu (routes/userSearch.ts), jen mod ----
+  await userSearchRoutes(app, {
+    requireSession: requireWebSession,
+    modIdentities: accountModIdentities,
+    search: dbUserSearchDeps((channel, platform) => registryPlatformChannel(channel, platform)),
     defaultChannel: DEFAULT_CHANNEL,
   });
 
