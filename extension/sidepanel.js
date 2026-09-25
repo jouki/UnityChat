@@ -1133,7 +1133,8 @@ class UnityChat {
   _updateQrAvailability() {
     const b = document.body.classList;
     const on = this._signedIn === true && (b.contains('uc-dono') || b.contains('uc-dev'));
-    this._qdDock?.setAvailable(on);
+    this._qrAvailable = on;
+    this._qdDock?.update();
     if (!on) this._qd?.close?.();
   }
 
@@ -1203,13 +1204,18 @@ class UnityChat {
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
     }
-    // Pozice tlačítka podle šířky chatu: > 500 px v poli vedle noty, jinak v řádku nad polem.
+    // Tlačítka podle šířky pole pro psaní: pod 330 px QR, pod 310 px i nota, pod 290 px i smajlík
+    // do řádku nad polem (pokyn usera 2026-09-25).
     const row = document.getElementById('tw-credits');
     if (row && core.createToolDock) {
       this._qdDock = core.createToolDock({
-        button: btn, row, container: document.body, breakpoint: 500,
+        row,
         inlineParent: document.querySelector('#input-area .msg-input-wrap'),
-        inlineBefore: document.getElementById('btn-sfx'),
+        items: [
+          { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
+          { button: document.getElementById('btn-sfx'), minWidth: 310 },
+          { button: document.getElementById('btn-emotes'), minWidth: 290 },
+        ],
         rowHasOther: () => !document.body.classList.contains('uc-no-twitch-login')
           && [...row.querySelectorAll('.tc-pill')].some((p) => !p.classList.contains('hidden')),
       });
