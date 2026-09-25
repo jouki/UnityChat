@@ -362,6 +362,10 @@ await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`)
 check('H 4 Ano → Profil autora citace (dotaz jen podle loginu)', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Other'`, 3000)
   && await (async () => { for (let i = 0; i < 30 && !posts.hist.slice(nHist).length; i++) await sleep(100); return true; })() && posts.hist.slice(nHist).some((x) => /summary\?channel=robdiesalot&platform=twitch&login=other$/.test(x)), posts.hist.slice(nHist).join(" | ") + " name=" + await ev(`document.querySelector(".uc-uh-name")?.textContent`));
 check('H 4 další dotazy už s userId ze summary', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20; i++) { if (posts.hist.slice(nHist).some((x) => /messages\?.*userId=u2/.test(x))) return true; await sleep(150); } return false; })(), posts.hist.slice(nHist).join(' | '));
+// Tlačítko ‹ zpět: je jen po přepnutí z citace, vrátí na předchozí profil a pak zmizí.
+check('H ‹ zpět se ukáže po přepnutí na profil autora citace', await until(`!!document.querySelector('.uc-uh-back')`, 2000), await ev(`document.querySelector('.uc-uh-back')?.title`));
+await ev(`document.querySelector('.uc-uh-back').click()`);
+check('H ‹ zpět vrátí předchozí profil a tlačítko zmizí', await until(`document.querySelector('.uc-uh-name')?.textContent !== 'Other' && !document.querySelector('.uc-uh-back')`, 3000), await ev(`document.querySelector('.uc-uh-name')?.textContent`));
 await ev(`(() => { const i = document.getElementById('msg-input'); i.disabled = false; i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
 await sleep(300);
 check('H Esc mimo panel (pole pro psaní) panel nezavře', await ev(`!!document.querySelector('.uc-uh')`) === true);

@@ -248,6 +248,8 @@ export class UserHistoryPanel {
     this._serial = 0;
     this._tab = null;
     this._dons = null;
+    /** Předchozí profily při přepnutí z citace (tlačítko ‹ zpět, pokyn usera 2026-09-25). */
+    this._history = [];
     this._onKey = (e) => {
       if (e.key !== 'Escape' || !this.el) return;
       // Esc jinde (pole pro psaní, našeptávač, …) patří tamtomu prvku, ne panelu.
@@ -268,13 +270,18 @@ export class UserHistoryPanel {
   /**
    * @param {{channel: string, platform: string, userId?: string|null, login: string, displayName?: string,
    *          nameColor?: string|null, nickname?: string|null}} target  bez userId = cíl podle loginu
+   * @param {{keepHistory?: boolean}} [opts]  true = přepnutí uvnitř panelu (historie ‹ zpět zůstává)
    */
-  open(target) {
+  open(target, opts = {}) {
+    const keep = !!opts.keepHistory && this.isOpen;
+    const history = keep ? this._history : [];
+    const prevFocus = keep ? this._returnFocus : null;
     this.close();
+    this._history = history;
     const doc = this.doc;
     // Kam vrátit fokus po zavření (nabídka moda už je zavřená → typicky prvek chatu / body).
     const back = doc.activeElement;
-    this._returnFocus = back && back !== doc.body ? back : null;
+    this._returnFocus = keep ? prevFocus : (back && back !== doc.body ? back : null);
     this.target = { ...target };
     this.summary = null;
     this._dons = null;
@@ -315,7 +322,20 @@ export class UserHistoryPanel {
     x.title = 'Zavřít (Esc)';
     x.textContent = '×';
     x.addEventListener('click', () => this.close());
-    top.append(titles, x);
+    const prev = this._history[this._history.length - 1];
+    if (prev) {
+      const bk = doc.createElement('button');
+      bk.type = 'button';
+      bk.className = 'uc-uh-back';
+      const prevWho = prev.displayName || prev.login;
+      bk.setAttribute('aria-label', `Zpět na profil ${prevWho}`);
+      bk.title = `Zpět na profil ${prevWho}`;
+      bk.textContent = '‹';
+      bk.addEventListener('click', () => this.goBack());
+      top.append(bk, titles, x);
+    } else {
+      top.append(titles, x);
+    }
     const donSum = doc.createElement('div');
     donSum.className = 'uc-uh-donsum';
     donSum.hidden = true;
@@ -366,7 +386,16 @@ export class UserHistoryPanel {
     return el;
   }
 
+  /** ‹ zpět na předchozí profil (po přepnutí z citace). */
+  goBack() {
+    const prev = this._history.pop();
+    if (!prev || !this.isOpen) return;
+    this.log('Profile', `zpět na ${prev.platform}:${prev.login}`);
+    this.open(prev, { keepHistory: true });
+  }
+
   close() {
+    this._history = [];
     if (!this.el) return;
     this._serial++;
     this.el.remove();
@@ -849,7 +878,13 @@ export class UserHistoryPanel {
       submitLabel: 'Ano',
       onSubmit: async () => {
         // Bez displayName: hlavička vezme jméno ze serveru (login z citace může mít jiný tvar).
-        this.open({ channel: this.target.channel, platform: info.platform, userId: null, login: info.login });
+        // Aktuální profil (i se jménem ze serveru) jde do historie → v novém se ukáže ‹ zpět.
+        const cur = { ...this.target };
+        const u = this.summary?.user;
+        if (u && !cur.displayName) cur.displayName = u.nickname || u.displayName || cur.login;
+        const hist = this._history.concat([cur]).slice(-20);
+        this._history = hist;
+        this.open({ channel: this.target.channel, platform: info.platform, userId: null, login: info.login }, { keepHistory: true });
       },
     });
   }

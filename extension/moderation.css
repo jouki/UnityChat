@@ -329,6 +329,18 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
   background: none; border: 0; border-radius: 6px; cursor: pointer;
 }
 .uc-uh-close:hover, .uc-uh-close:focus-visible { color: var(--text-primary, #efeff1); background: var(--bg-hover, #26262c); outline: none; }
+/* ‹ zpět na předchozí profil (po přepnutí z citace) — vyjede zleva. */
+.uc-uh-back {
+  flex: none; align-self: center;
+  width: 28px; height: 28px; margin-left: -6px;
+  font: inherit; font-size: 24px; line-height: 1; padding-bottom: 3px;
+  color: var(--accent, #ff8c00);
+  background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+  animation: uc-uh-back-in 0.18s ease-out;
+}
+.uc-uh-back:hover, .uc-uh-back:focus-visible { background: rgba(255, 140, 0, 0.14); border-color: rgba(255, 140, 0, 0.45); outline: none; }
+@keyframes uc-uh-back-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .uc-uh-back { animation: none; } }
 .uc-uh-ids { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
 .uc-uh-ids:empty { display: none; }
 .uc-uh-id {
