@@ -58,6 +58,8 @@ const mock = {
   sse: [],               // /nicknames/stream
   acc: [],               // /account/stream
   heldAcc: null,         // podržený požadavek /account/stream
+  older429: 1,           // Chat historie: starší stránka robdiesalot → jednou 429 (klient sám zopakuje za 1 s)
+  olderFail: 1,          // Chat historie: starší stránka arcadebulls → jednou 500 (klient čeká na „Zkusit znovu“)
 };
 const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera', 3)];
 const posts = { user: [], ack: [], send: [], tickets: 0, hist: [] };
@@ -97,7 +99,14 @@ s.onevent = async (d) => {
   if (u.includes('/moderation/user-history/messages')) {
     posts.hist.push(u);
     const inCh = new URL(u).searchParams.get('inChannel');
-    if (inCh === 'arcadebulls') return json({ ok: true, messages: [H('h-b1', 'Tester', 'u1', 'zpráva u Bulls 1', 1), H('h-b2', 'Tester', 'u1', 'zpráva u Bulls 2', 2), { ...H('h-b3', 'Tester', 'u1', '', 3), deleted: true }], nextBefore: null });
+    if (inCh === 'arcadebulls') {
+      if (u.includes('before=c2')) {
+        if (mock.olderFail > 0) { mock.olderFail--; return json({ ok: false, error: 'boom' }, 500); }
+        return json({ ok: true, messages: [H('h-b0', 'Tester', 'u1', 'nejstarší u Bulls', -40)], nextBefore: null });
+      }
+      return json({ ok: true, messages: [H('h-b1', 'Tester', 'u1', 'zpráva u Bulls 1', 1), H('h-b2', 'Tester', 'u1', 'zpráva u Bulls 2', 2), { ...H('h-b3', 'Tester', 'u1', '', 3), deleted: true }], nextBefore: 'c2' });
+    }
+    if (inCh === 'robdiesalot' && u.includes('before=c1') && mock.older429 > 0) { mock.older429--; return json({ ok: false, error: 'rate_limited' }, 429); }
     // Dvě stránky: první nezaplní panel → klient sám dotáhne starší (before=c1).
     if (inCh === 'robdiesalot') return json(u.includes('before=c1')
       ? { ok: true, messages: [H('h-old', 'Tester', 'u1', 'nejstarší zpráva', -50)], nextBefore: null }
@@ -243,17 +252,34 @@ const tabsTxt = await ev(`[...document.querySelectorAll('.uc-uh-tab')].map(b => 
 check('H záložky = kanály ze summary s počty, aktuální první', tabsTxt === 'robdiesalot:2,arcadebulls:3,tensterakdary:1', tabsTxt);
 check('H výchozí záložka = aktuální kanál, zprávy načtené', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3`, 3000) && posts.hist.some((x) => /inChannel=robdiesalot&limit=50$/.test(x)), posts.hist.join(' | '));
 const order = await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`);
+const c1 = posts.hist.filter((x) => /before=c1/.test(x)).length;
+check('H 429 u starší stránky → jedno opakování za 1 s', c1 === 2, String(c1));
 check('H starší stránka (nextBefore) doplněná nahoru + konec historie', order === 'h-old,e2e-a1,e2e-a2' && /before=c1/.test(posts.hist.at(-1) || '') && await ev(`document.querySelector('.uc-uh-list').firstElementChild.classList.contains('uc-uh-edge')`) === true, order);
 const row0 = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return { time: r.querySelector('.uc-uh-time').textContent, logo: !!r.querySelector('.uc-uh-pi img'), text: r.querySelector('.uc-uh-tx').textContent }; })()`);
 check('H řádek: datum + čas, logo, text', /^\d{1,2}\. \d{1,2}\. \d{4} \d{2}:\d{2}$/.test(row0?.time || '') && row0.logo && row0.text === 'první zpráva testera', JSON.stringify(row0));
 await ev(`document.querySelector('.uc-uh-tab[data-channel="arcadebulls"]').click()`);
 check('H přepnutí záložky načte zprávy kanálu', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3 && document.querySelector('.uc-uh-list .uc-uh-msg .uc-uh-tx').textContent === 'zpráva u Bulls 1'`, 3000) && /inChannel=arcadebulls/.test(posts.hist.at(-1) || ''), posts.hist.at(-1));
+check('H chyba starší stránky → hláška nahoře + Zkusit znovu', await until(`document.querySelector('.uc-uh-list').firstElementChild?.classList.contains('uc-uh-older-fail') && !!document.querySelector('.uc-uh-older-fail .uc-uh-retry')`, 3000)
+  && (await ev(`document.querySelector('.uc-uh-older-fail span').textContent`)) === 'Starší zprávy se nepodařilo načíst', await ev(`document.querySelector('.uc-uh-older-fail')?.textContent`));
+await sleep(1800);
+const c2 = posts.hist.filter((x) => /before=c2/.test(x)).length;
+check('H po chybě žádná smyčka požadavků', c2 === 1, String(c2));
+await ev(`document.querySelector('.uc-uh-retry').click()`);
+check('H Zkusit znovu → starší zprávy nahoře, hláška pryč', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 4 && document.querySelector('.uc-uh-list .uc-uh-msg').dataset.id === 'h-b0' && !document.querySelector('.uc-uh-older-fail')`, 3000),
+  await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`));
 check('H aktivní záložka přepnutá', await ev(`document.querySelector('.uc-uh-tab--on')?.dataset.channel`) === 'arcadebulls');
 check('H smazaná zpráva bez obsahu', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent`) === 'Zpráva smazána');
 await ev(`document.querySelector('.uc-uh-tab[data-channel="tensterakdary"]').click()`);
 check('H prázdná záložka → „V tomto kanálu nic nenapsal."', await until(`document.querySelector('.uc-uh-status')?.textContent === 'V tomto kanálu nic nenapsal.'`, 3000));
+await ev(`(() => { const i = document.getElementById('msg-input'); i.disabled = false; i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
+await sleep(300);
+check('H Esc mimo panel (pole pro psaní) panel nezavře', await ev(`!!document.querySelector('.uc-uh')`) === true);
+await ev(`document.querySelector('.uc-uh').focus()`);
 await key('Escape');
 check('H Esc zavře panel', await until(`!document.querySelector('.uc-uh')`, 2000));
+// Fokus se po zavření vrací tam, kde byl před otevřením.
+const focusBack = await ev(`(() => { const i = document.getElementById('msg-input'); i.focus(); const p = new window.UC_CORE.UserHistoryPanel({ doc: document, api: () => new Promise(() => {}), container: document.getElementById('chat-wrapper') }); p.open({ channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester' }); const inPanel = document.activeElement === p.el; p.el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return { inPanel, closed: !p.isOpen, back: document.activeElement === i }; })()`);
+check('H fokus do panelu a po zavření zpět na původní prvek', focusBack?.inPanel && focusBack.closed && focusBack.back, JSON.stringify(focusBack));
 
 // ---- SSE user-moderated ----
 const at = Date.now();

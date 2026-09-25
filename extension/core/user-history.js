@@ -119,8 +119,9 @@ export class UserHistoryPanel {
    * @param {(channel: string) => string} [o.channelLabel]  název záložky
    * @param {(tag: string, text: string) => void} [o.log]
    * @param {number} [o.pageSize]
+   * @param {(ms: number) => Promise<void>} [o.sleep]  čekání před opakováním po 429 (testy)
    */
-  constructor({ doc = globalThis.document, api, container, renderMessage, platformIcon, channelLabel, log, pageSize = HISTORY_PAGE } = {}) {
+  constructor({ doc = globalThis.document, api, container, renderMessage, platformIcon, channelLabel, log, pageSize = HISTORY_PAGE, sleep } = {}) {
     this.doc = doc;
     this.api = api;
     this.container = container || null;
@@ -129,6 +130,7 @@ export class UserHistoryPanel {
     this.channelLabel = channelLabel || ((c) => c);
     this.log = log || (() => {});
     this.pageSize = pageSize;
+    this._sleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.el = null;
     this.target = null;
     this.summary = null;
@@ -136,6 +138,8 @@ export class UserHistoryPanel {
     this._tab = null;
     this._onKey = (e) => {
       if (e.key !== 'Escape' || !this.el) return;
+      // Esc jinde (pole pro psaní, našeptávač, …) patří tamtomu prvku, ne panelu.
+      if (!(e.target && this.el.contains(e.target))) return;
       // Otevřený dialog / nabídka moda má Esc přednostně.
       if (this.doc.querySelector('.uc-mod-shade, .uc-mod-menu')) return;
       e.preventDefault(); e.stopPropagation(); this.close();
@@ -148,6 +152,9 @@ export class UserHistoryPanel {
   open(target) {
     this.close();
     const doc = this.doc;
+    // Kam vrátit fokus po zavření (nabídka moda už je zavřená → typicky prvek chatu / body).
+    const back = doc.activeElement;
+    this._returnFocus = back && back !== doc.body ? back : null;
     this.target = target;
     this.summary = null;
     const serial = ++this._serial;
@@ -223,6 +230,9 @@ export class UserHistoryPanel {
     this.el = null;
     this._tab = null;
     this.doc.removeEventListener('keydown', this._onKey, true);
+    const back = this._returnFocus;
+    this._returnFocus = null;
+    if (back?.isConnected) { try { back.focus({ preventScroll: true }); } catch {} }
   }
 
   async _loadSummary(serial) {
@@ -366,15 +376,45 @@ export class UserHistoryPanel {
     this._loadPage(this._tab, null);
   }
 
+  /** Další (starší) stránka. Po chybě nic — až „Zkusit znovu“ (`tab.failed`), jinak by scroll / doplnění výšky točily požadavky dokola. */
   async _loadOlder() {
     const tab = this._tab;
-    if (!tab || tab.loading || tab.done || !tab.nextBefore) return;
+    if (!tab || tab.loading || tab.done || tab.failed || !tab.nextBefore) return;
     await this._loadPage(tab, tab.nextBefore);
   }
 
-  async _loadPage(tab, before) {
+  /** „Zkusit znovu“ u starších zpráv. */
+  retryOlder() {
+    const tab = this._tab;
+    if (!tab) return;
+    tab.failed = false;
+    this._list?.querySelector('.uc-uh-older-fail')?.remove();
+    this._loadOlder();
+  }
+
+  /** Nahoře v seznamu: „Starší zprávy se nepodařilo načíst“ + „Zkusit znovu“. */
+  _olderFailed() {
+    const doc = this.doc;
+    const list = this._list;
+    list.querySelector('.uc-uh-older-fail')?.remove();
+    const box = doc.createElement('div');
+    box.className = 'uc-uh-older-fail';
+    box.setAttribute('role', 'alert');
+    const txt = doc.createElement('span');
+    txt.textContent = 'Starší zprávy se nepodařilo načíst';
+    const btn = doc.createElement('button');
+    btn.type = 'button';
+    btn.className = 'uc-uh-retry';
+    btn.textContent = 'Zkusit znovu';
+    btn.addEventListener('click', () => this.retryOlder());
+    box.append(txt, btn);
+    list.insertBefore(box, list.firstChild);
+  }
+
+  async _loadPage(tab, before, retried = false) {
     tab.loading = true;
     const t = this.target;
+    let retry = false;
     try {
       const r = buildHistoryRequest('messages', t, { inChannel: tab.channel, before, limit: this.pageSize });
       const j = await this.api(r.path, { method: r.method });
@@ -400,13 +440,21 @@ export class UserHistoryPanel {
       this._edge(tab);
     } catch (e) {
       if (tab !== this._tab || !this.el) return;
-      this.log('History', `zprávy FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
-      if (!tab.count) this._status(modErrorText(e), 'error');
+      this.log('History', `zprávy FAIL ${e?.status || 0} ${e?.error || e?.message || e}${retried ? ' (po opakování)' : ''}`);
+      // 429: backend má limit 5 + 2/s — jedno opakování za 1 s, pak už chyba.
+      if (e?.status === 429 && !retried) retry = true;
+      else if (before) { tab.failed = true; this._olderFailed(); }
+      else { tab.failed = true; this._status(modErrorText(e), 'error'); }
     } finally {
       tab.loading = false;
     }
+    if (retry) {
+      await this._sleep(1000);
+      if (tab === this._tab && this.el) await this._loadPage(tab, before, true);
+      return;
+    }
     // Stránka nezaplnila výšku panelu → dotáhnout starší hned (scroll by nikdy nenastal).
-    if (tab === this._tab && this.el && tab.nextBefore && this._list.scrollHeight <= this._list.clientHeight + 80) this._loadOlder();
+    if (tab === this._tab && this.el && !tab.failed && tab.nextBefore && this._list.scrollHeight <= this._list.clientHeight + 80) this._loadOlder();
   }
 
   /** Horní okraj seznamu: „Starší zprávy už nejsou“ / nic. */

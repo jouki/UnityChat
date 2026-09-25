@@ -1934,6 +1934,7 @@ class UnityChat {
     // Reload ikona v hlavičce = dřívější „Připojit": uloží kanály z inputů
     // a znovu připojí vše. „Odpojit" a „Vyčistit chat" zrušeny (v3.38.72).
     $('btn-reconnect').addEventListener('click', () => {
+      this._closeUserHistory('reconnect');
       this.config.channel = $('input-channel').value.trim();
       this.config.kickChannel = $('input-kick-channel').value.trim();
       this.config.ytChannel = $('input-yt-channel').value.trim();
@@ -4619,6 +4620,13 @@ class UnityChat {
       });
     }
     return this._userHistoryInst;
+  }
+
+  /** Zavře Chat historii (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
+  _closeUserHistory(why) {
+    if (!this._userHistoryInst?.isOpen) return;
+    this._userHistoryInst.close();
+    this._ucLog('History', `zavřeno: ${why}`);
   }
 
   /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
@@ -7692,6 +7700,8 @@ class UnityChat {
 
   // Vyčistit vše — nový store, prázdný DOM, žádné parky (přepnutí streamera, dev tlačítko).
   _resetChat() {
+    // Přepnutí streamera: Chat historie patří kanálu, ve kterém se otevřela.
+    this._closeUserHistory('reset chatu');
     this.store = new ChatStore();
     this.chatEl.innerHTML = '';
     this._parkedTop = [];
