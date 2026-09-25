@@ -240,31 +240,53 @@ Odpověď jako UC `/moderation/permit`: `{ ok, until, results: { permit, chat, r
 uživatel mimo kanál workspace → `200 { ok:true, result:'not_found' }`; chyby 400 body / bad_login,
 404 unknown_workspace | no_channel, 429 rate_limited.
 
-## Chat historie (nabídka moda, 2026-09-25)
-Položka „Chat historie“ v nabídce moda otevře panel s detailem uživatele (`extension/core/user-history.js`).
-Obě routy: Bearer (`requireWebSession`) + mod aktuálního `channel` (`modGate`, stejně jako akce části 2),
-vlastní rate limit per účet **5 + 2/s** (429 `rate_limited`), `Cache-Control: no-store`.
-Cíl musí mít zprávu v archivu **aktuálního** kanálu (`resolveUserTargets`) — jinak `404 not_found`
-(mod kanálu A si nevyhledá libovolné userId). Identity = cíl + všechny identity jeho UC účtu (i na platformách,
-které kanál nemá). Zprávy = `messages`, kde `(platform, platform_user_id)` ∈ identity
-(index `messages_platform_user_sent_idx` na `(platform, platform_user_id, sent_at DESC) INCLUDE (channel)`,
-SQL `backend/sql/2026-09-25-user-history-index.sql`; stránka zpráv = UNION ALL s LIMIT per identita).
-Záložky (identity + počty po kanálech) se cachují per (účet moda, kanál, cíl) 10 s; summary je vždy přepočítá.
-Kanál záložky = UC kanál (Twitch login streamera): Kick/YouTube kanál → registr Židolišty (Twitch kanál workspace),
-jinak adresář `streamers`, jinak platformní kanál sám.
+## Profil (2026-09-25; dřív „Chat historie“ jen pro moda)
+Levý klik na jméno v chatu otevře Profil **všem**; mod ho má i v nabídce (pravý klik → „Profil“).
+Panel `extension/core/user-history.js`, routy `backend/src/routes/userHistory.ts`, jádro `backend/src/lib/userHistory.ts`.
+
+**Ochrana (pokyn usera — data smí vidět jen oprávnění):**
+- všechny tři routy: `Cache-Control: no-store` už v `onRequest` (i pro 401/403/429), validace query (400),
+- `messages` + `donations` (jen mod): `requireWebSession` (bez / s neplatným tokenem **401**) → rate limit na účet
+  (messages **5 + 2/s**, donations **5 + 1/s** vlastní) → mod AKTUÁLNÍHO `channel` (`resolveModGate` /
+  `accountModIdentities`; nemod **403 `not_mod`**) — teprve potom jakýkoli dotaz na data nebo na Židolištu,
+- `summary` (veřejná): session nepovinná (`optionalWebSession`: bez tokenu / neplatný token = nepřihlášený);
+  rate limit na účet (**5 + 2/s**, společný s messages), bez přihlášení **per IP 10 + 1/s**; nemod / nepřihlášený
+  dostane **veřejný tvar** (`buildPublicSummary`) — výběr polí dělá server,
+- cíl musí mít zprávu v archivu **aktuálního** kanálu (`resolveUserTargets`; podle loginu `archivedUserByLogin`
+  v platformním kanálu z registru) — jinak **404 `not_found`** (ani podle loginu nejde procházet celý archiv),
+- dona jen z workspace kanálu gate (`defaultWorkspace(channel)` z registru Židolišty), slug se od klienta nebere;
+  `ZIDOLISTA_API_KEY` jen na serveru (nikdy do odpovědi ani do logu).
+Testy: `backend/src/routes/userHistory.test.ts` (401 skutečným `requireWebSession`, 403 bez jediného volání dat,
+veřejná pole pro diváka i nepřihlášeného, 404 mimo archiv kanálu, 429 per účet i per IP, no-store).
+
+Cíl: `userId`, nebo **jen `login`** (bez `userId` — otevření z citace v odpovědi); odpověď summary nese `user.userId`,
+klient ho pak posílá u dalších dotazů. Identity (mod) = cíl + všechny identity jeho UC účtu (i na platformách, které
+kanál nemá). Zprávy = `messages`, kde `(platform, platform_user_id)` ∈ identity (index `messages_platform_user_sent_idx`
+na `(platform, platform_user_id, sent_at DESC) INCLUDE (channel)`, SQL `backend/sql/2026-09-25-user-history-index.sql`;
+stránka zpráv = UNION ALL s LIMIT per identita). Záložky (identity + počty po kanálech) se cachují per
+(účet moda, kanál, cíl) 10 s; summary je vždy přepočítá. Kanál záložky = UC kanál (Twitch login streamera):
+Kick/YouTube kanál → registr Židolišty (Twitch kanál workspace), jinak adresář `streamers`, jinak platformní kanál sám.
 
 ### `GET /moderation/user-history/summary?channel=&platform=&userId=&login=`
-`login` jen do logu serveru (moderation user-history); login cíle se bere z archivu.
+S `userId` je `login` jen do logu serveru; bez `userId` se cíl hledá podle `login`.
+
+**Mod aktuálního kanálu** (`view: "mod"`):
 ```json
-{ "ok": true,
+{ "ok": true, "view": "mod",
   "user": { "platform": "twitch", "userId": "1", "login": "spammer", "displayName": "SpAmMeR",
             "nickname": "Pan S", "color": "#ff0000",
-            "identities": [{ "platform": "twitch", "login": "spammer", "userId": "1" }, { "platform": "kick", "login": "spammer", "userId": "7" }],
+            "identities": [{ "platform": "twitch", "login": "spammer", "userId": "1", "displayName": "SpAmMeR" },
+                           { "platform": "youtube", "login": "jouki728", "userId": "UCx", "displayName": "Jouki" }],
             "firstSeen": 1790000000000, "lastSeen": 1790500000000, "total": 11 },
   "channels": [{ "channel": "robdiesalot", "count": 7, "firstAt": 1790000000000, "lastAt": 1790500000000 },
                { "channel": "arcadebulls", "count": 3, "firstAt": 1790100000000, "lastAt": 1790200000000 }],
   "moderation": [{ "action": "timeout", "at": 1790400000000, "by": "twitch:modik", "platform": "twitch",
-                   "params": { "durationSec": 600, "reason": "spam" } }] }
+                   "params": { "durationSec": 600, "reason": "spam" } }],
+  "latest": { "twitch": { "platform": "twitch", "id": "abc", "username": "SpAmMeR", "userId": "1",
+                          "timestamp": 1790500000000, "color": "#1e90ff", "badgesRaw": "moderator/1,subscriber/12" } },
+  "donations": { "total": { "czk": 1750, "byCurrency": { "CZK": 1250, "EUR": 20 } }, "count": 3,
+                 "uc": { "czk": 1500, "count": 2 },
+                 "guess": { "czk": 250, "byCurrency": { "CZK": 250 }, "count": 1 } } }
 ```
 - `channels`: aktuální kanál **vždy první** (i s `count: 0`, pak `firstAt/lastAt: null`), další jen s `count > 0`,
   seřazené od posledně aktivního. `firstSeen/lastSeen/total` = přes všechny kanály (ms).
@@ -272,20 +294,68 @@ jinak adresář `streamers`, jinak platformní kanál sám.
   (shoda `params.userId` + platforma akce, nebo `params.targets` obsahuje identitu). `params` jen `durationSec`,
   `reason`, u `rename` `nickname` (null = smazaná přezdívka). Mazání zpráv (`delete`) se neuvádí.
 - `nickname`/`color` = přezdívka UnityChatu první identity, která ji má (cíl má přednost).
+- `identities[].displayName` = `web_identities.display_name` (identita UC účtu), u cíle bez účtu jméno z poslední
+  zprávy; `null` → klient ukáže login.
+- `latest` = poslední zpráva každé identity v **aktuálním** kanálu (klíč = platforma) jen s poli pro badge
+  (`badgesRaw`, `color`, id, jméno, čas) — **bez textu**, i když je zpráva smazaná. Platforma, kde v kanálu nepsal, chybí.
+- `donations` = dona ve workspace aktuálního kanálu, sečtená z položek přes všechny identity po dedupu podle `id`:
+  `total` všechno, `uc` jistá dona z UC (`matchedBy: 'uc'`), `guess` jen odhad podle jména (`matchedBy: 'nickname'`).
+  **Pole chybí**, když Židolišta neodpoví (výpadek, 404, bez klíče) — panel pak sumu ani řádky neukáže.
 
-### `GET /moderation/user-history/messages?channel=&platform=&userId=&inChannel=&before=&limit=`
-`inChannel` = záložka (UC kanál, výchozí aktuální; smí být jiný), `limit` 1–100 (výchozí 50), `before` = kurzor
-`<sent_at_ms>:<id>` jako `/chat/history`.
+**Divák / nepřihlášený** (`view: "public"`) — jen tahle pole, nic dalšího server nepošle:
+```json
+{ "ok": true, "view": "public",
+  "user": { "platform": "twitch", "userId": "1", "login": "spammer", "displayName": "SpAmMeR",
+            "nickname": "Pan S", "color": "#ff0000", "firstSeen": 1790000000000, "lastSeen": 1790500000000, "total": 5 },
+  "latest": { "twitch": { "platform": "twitch", "id": "abc", "username": "SpAmMeR", "userId": "1",
+                          "timestamp": 1790500000000, "color": "#1e90ff", "badgesRaw": "subscriber/12" } },
+  "donations": { "ucNamed": { "czk": 1000, "count": 1 } } }
+```
+- statistika (`firstSeen/lastSeen/total`) **jen v aktuálním kanálu** a **jen za identitu, na kterou divák klikl**;
+  `latest` také jen ta identita (jiné identity by prozradily propojené účty); přezdívka jen té identity,
+- **chybí**: `identities`, `channels`, `moderation`, `donations.total|uc|guess|count`, položky a texty donů,
+- `donations.ucNamed` = jistá dona z UC (`matchedBy: 'uc'`), u kterých přezdívka dona = login nebo zobrazované jméno
+  kliknuté identity (dárce se neskrýval). Kdo donatoval pod jinou přezdívkou, do veřejné sumy se nepočítá.
+
+### `GET /moderation/user-history/messages?channel=&platform=&userId=&login=&inChannel=&before=&limit=`
+Jen mod. `inChannel` = záložka (UC kanál, výchozí aktuální; smí být jiný), `limit` 1–100 (výchozí 50),
+`before` = kurzor `<sent_at_ms>:<id>` jako `/chat/history`.
 ```json
 { "ok": true, "messages": [ "/* tvar /chat/history (toClientMessage), historical: true */" ], "nextBefore": "1790000000000:123" }
 ```
 Pořadí **stejné jako `/chat/history`**: v rámci stránky nejstarší → nejnovější, `nextBefore` = další (starší) stránka,
 `null` = konec. Smazané / skryté zprávy jdou bez obsahu (`deleted: true` / `hidden: true`) — konzistentní s chatem.
 Záložka, kde uživatel nic nenapsal → `{ ok: true, messages: [], nextBefore: null }`.
-Chyby: 400 `query` | `before` | `in_channel` | `channel`, 403 `not_mod`, 404 `not_found`, 429 `rate_limited`.
+Chyby: 400 `query` | `before` | `in_channel` | `channel`, 401, 403 `not_mod`, 404 `not_found`, 429 `rate_limited`.
+
+### `GET /moderation/user-history/donations?channel=&platform=&userId=&login=`
+Jen mod. Řádky „💸 poslal QR dono …“ v Profilu (jen záložka aktuálního kanálu). Samostatná routa (ne součást stránky
+zpráv): dona se nestránkují spolu se zprávami, panel je zařadí mezi zprávy podle času. Server stáhne všechna dona
+identit (Židolišta, max 5 stránek × 200 na identitu, cache 60 s na identitu — sdílená se summary), dedup podle `id`
+(jistá shoda `uc` má přednost před odhadem), od nejnovějšího.
+```json
+{ "ok": true, "available": true,
+  "items": [{ "id": "d1", "amount": 150, "currency": "CZK", "amountCzk": 150, "paidAt": 1790500000000,
+              "via": "qr", "matchedBy": "uc", "nickname": "Divák", "message": "díky za stream" }] }
+```
+`available: false` (a `items: []`) = Židolišta nedostupná. Chyby jako u messages.
+
+### Zdroj: Židolišta
+`GET <ZIDOLISTA_API_BASE>/integrations/:slug/donations?platform=&userId=&login=&limit=1..200&before=<ISO>`
+→ `{ ok, workspace, total: { czk, byCurrency, uc, ucNamed }, count, items: [{ id, amount, currency, amountCzk,
+paidAt (ISO), via: 'unitychat'|'qr'|'fourthwall'|'qr_old', matchedBy: 'uc'|'nickname', nickname, message? }], nextBefore }`,
+stránkování `nextBefore` → `before`, limit Židolišty 300/min na klíč (proto cache 60 s na identitu).
+Hlavičky: `X-Api-Key: ZIDOLISTA_API_KEY` + `X-UC-Signature: t=<unix s>,v1=<hex HMAC-SHA256(klíč, t + "." + signed)>`,
+`signed` = `"GET " + cesta s query přesně tak, jak se posílá` (bez hostu; `signedGetPath` = pathname + search výsledné
+URL, tj. i s případným prefixem z `ZIDOLISTA_API_BASE`, výchozí base prefix nemá), okno ±300 s; sdílený helper
+`zidolistaSignature` / `zidolistaGetHeaders` v `lib/zidolista.ts` (pro další volání UC → Židolišta).
+`total`/`count` Židolišty se nepoužívají — jsou za jednu identitu, takže by se dono spárované přes víc identit
+sečetlo dvakrát; součty (`total`, `uc`, `guess`, veřejné `ucNamed`) počítá UnityChat z položek po dedupu podle `id`.
+Omezení: u diváka s víc než 1 000 dony na jednu identitu (5 × 200) jsou součty jen z načtených položek (log
+`donations: víc stránek, než se stahuje`).
 
 ## Obsah smazaných / skrytých zpráv pro moda (2026-09-25)
-`/chat/history`, `/chat/stream` i `/moderation/user-history/messages` posílají smazané a skryté zprávy
+`/chat/history`, `/chat/stream` i `/moderation/user-history/messages` (Profil) posílají smazané a skryté zprávy
 **bez obsahu** všem (i modům). Mod si text dotáhne zvlášť:
 
 ### `GET /moderation/deleted-content?channel=&ids=<platform>:<id>,…`

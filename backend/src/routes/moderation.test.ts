@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, UserHistoryMessagesQuery, parseInChannel, parseDeletedKeys, buildDeletedContent, runDeletedContent, DELETED_CONTENT_MAX, type DeleteTargetDeps, type DeletedContentRow } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, parseDeletedKeys, buildDeletedContent, runDeletedContent, DELETED_CONTENT_MAX, type DeleteTargetDeps, type DeletedContentRow } from './moderation.js';
 
 test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotazu na role), mod → by + platformy', async () => {
   let asked = 0;
@@ -124,16 +124,6 @@ test('resolveDeleteTarget: broadcaster vlastního kanálu nesmí smazat zprávu 
 test('resolveDeleteTarget: zpráva není v archivu / kanál nemá platformu v registru → null', async () => {
   assert.equal(await resolveDeleteTarget('robdiesalot', 'twitch', 'neexistuje', targetDeps), null);
   assert.equal(await resolveDeleteTarget('jouki', 'kick', 'k-1', targetDeps), null);
-});
-
-test('Chat historie: query + záložka (UC kanál i nenamapovaný Kick slug s pomlčkou)', () => {
-  assert.equal(UserHistoryMessagesQuery.safeParse({ platform: 'twitch', userId: '1' }).success, true);
-  assert.equal(UserHistoryMessagesQuery.safeParse({ platform: 'discord', userId: '1' }).success, false);
-  assert.equal(UserHistoryMessagesQuery.safeParse({ platform: 'twitch', userId: '' }).success, false);
-  assert.equal(parseInChannel(undefined, 'robdiesalot'), 'robdiesalot');
-  assert.equal(parseInChannel('@TenSterakDary', 'x'), 'tensterakdary');
-  assert.equal(parseInChannel('some-slug.x', 'x'), 'some-slug.x');
-  assert.equal(parseInChannel('a b', 'x'), null);
 });
 
 // ---- GET /moderation/deleted-content ----

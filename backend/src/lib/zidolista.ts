@@ -8,7 +8,30 @@
 // Stream pro integraci (sse/integrationStream.ts) potřebuje mapování synchronně
 // (volá se z ingest onLive), proto `workspaceForChannelSync` čte jen cache,
 // kterou drží čerstvou `startWorkspaceRefresh()` ze serveru.
+import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
+
+// ---- Podpis volání UnityChat → Židolišta (2026-09-25; zatím /donations, časem všechna) ----
+// X-UC-Signature: t=<unix s>,v1=<hex HMAC-SHA256(klíč, t + "." + signed)>, klíč = X-Api-Key (ZIDOLISTA_API_KEY),
+// okno Židolišty ±300 s. U GET je `signed` = "GET " + cesta s query PŘESNĚ tak, jak se posílá (bez hostu) —
+// cesta = pathname + search výsledné URL, tj. i s případným prefixem z ZIDOLISTA_API_BASE (výchozí base prefix
+// nemá; Židolišta vidí cestu tak, jak ji posíláme). Stejný tvar hlavičky jako příchozí podpis (lib/inboundAuth.ts).
+
+/** Hodnota hlavičky X-UC-Signature nad libovolným podepisovaným řetězcem. */
+export function zidolistaSignature(key: string, signed: string, nowS = Math.floor(Date.now() / 1000)): string {
+  return `t=${nowS},v1=${createHmac('sha256', key).update(`${nowS}.${signed}`).digest('hex')}`;
+}
+
+/** Podepisovaný řetězec GET požadavku: "GET /cesta?query" z plné URL. */
+export function signedGetPath(url: string): string {
+  const u = new URL(url);
+  return `GET ${u.pathname}${u.search}`;
+}
+
+/** Hlavičky podepsaného GET na Židolištu (klíč nikdy do logu). */
+export function zidolistaGetHeaders(url: string, key: string, nowS?: number): Record<string, string> {
+  return { 'X-Api-Key': key, 'X-UC-Signature': zidolistaSignature(key, signedGetPath(url), nowS), Accept: 'application/json' };
+}
 
 export type Platform = 'twitch' | 'kick' | 'youtube';
 export const PLATFORMS: Platform[] = ['twitch', 'kick', 'youtube'];
@@ -128,6 +151,120 @@ export async function twitchChannelsOf(slug: string): Promise<string[]> {
   const ws = await workspaceBySlug(slug);
   return ws?.channels.twitch ? [ws.channels.twitch] : [];
 }
+
+// ---- Dona diváka (Profil v nabídce moda, 2026-09-25) ----
+// GET <ZIDOLISTA_API_BASE>/integrations/:slug/donations?platform=&userId=&login=&limit=1..200&before=<ISO>
+//   → { ok, workspace, total: { czk, byCurrency }, count, items: [{ id, amount, currency, amountCzk, paidAt, via,
+//       matchedBy: 'uc'|'nickname', nickname, message? }], nextBefore: ISO|null }
+// Hlavičky X-Api-Key + X-UC-Signature (zidolistaGetHeaders); limit Židolišty 300/min na klíč → cache 60 s na identitu nutná.
+// `total`/`count` jsou za všechna dona diváka, ale jistou a odhadnutou (matchedBy 'nickname') část nerozlišují
+// a víc identit téhož člověka by se sečetlo dvakrát → UnityChat stáhne položky (max DONATIONS_MAX_PAGES stránek)
+// a součty počítá sám po dedupu podle id (lib/userHistory.ts donationTotals).
+
+export interface DonationItem {
+  id: string;
+  amount: number;
+  currency: string;
+  amountCzk: number;
+  /** Čas platby (ms). */
+  paidAt: number;
+  via: string;
+  /** 'uc' = jistá shoda (QR vytvořil tentýž divák v UC), 'nickname' = jen odhad podle jména. */
+  matchedBy: string | null;
+  nickname: string | null;
+  message: string | null;
+}
+
+export const DONATIONS_PAGE = 200;
+export const DONATIONS_MAX_PAGES = 5;
+const DONATIONS_CACHE_MS = 60_000;
+
+const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const str = (v: unknown, max: number): string | null => { const s = typeof v === 'string' ? v.trim() : ''; return s ? s.slice(0, max) : null; };
+
+/** Jedna stránka odpovědi Židolišty → položky + kurzor (čistá funkce). Položka bez id / času se zahodí. */
+export function normalizeDonationsPage(raw: unknown): { items: DonationItem[]; nextBefore: string | null } {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const items: DonationItem[] = [];
+  for (const it of Array.isArray(r.items) ? (r.items as Array<Record<string, unknown>>) : []) {
+    if (!it || typeof it !== 'object') continue;
+    const id = it.id != null ? String(it.id).slice(0, 80) : '';
+    const paidAt = Date.parse(String(it.paidAt ?? ''));
+    if (!id || !Number.isFinite(paidAt)) continue;
+    const currency = (str(it.currency, 8) || 'CZK').toUpperCase();
+    items.push({
+      id, paidAt, currency,
+      amount: num(it.amount),
+      amountCzk: it.amountCzk != null ? num(it.amountCzk) : currency === 'CZK' ? num(it.amount) : 0,
+      via: str(it.via, 20) || 'qr',
+      matchedBy: str(it.matchedBy, 20),
+      nickname: str(it.nickname, 60),
+      message: str(it.message, 500),
+    });
+  }
+  const nb = typeof r.nextBefore === 'string' && Number.isFinite(Date.parse(r.nextBefore)) ? r.nextBefore : null;
+  return { items, nextBefore: nb };
+}
+
+export interface DonationsQuery { workspace: string; platform: Platform; userId: string; login: string }
+type WarnLog = { warn: (o: object, m: string) => void };
+export interface DonationsDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; /** Čas podpisu (unix s) — testy. */ nowS?: () => number; log?: WarnLog }
+
+const donationsCache = new Map<string, { at: number; value: DonationItem[] | null; inflight: Promise<DonationItem[] | null> | null }>();
+
+/**
+ * Všechna dona jedné identity v workspace (cache 60 s). null = Židolišta nedostupná / endpoint chybí (404) /
+ * bez klíče — volající pak dona vůbec neukazuje (žádná chyba pro moda).
+ */
+export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps = {}): Promise<DonationItem[] | null> {
+  const now = deps.now ?? Date.now;
+  const key = `${q.workspace.toLowerCase()}|${q.platform}|${q.userId}|${q.login.toLowerCase()}`;
+  const hit = donationsCache.get(key);
+  if (hit?.inflight) return hit.inflight;
+  if (hit && now() - hit.at < DONATIONS_CACHE_MS) return hit.value;
+  const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
+  if (!apiKey) return null;
+  if (donationsCache.size > 2000) donationsCache.clear();
+  const entry = hit ?? { at: 0, value: null, inflight: null };
+  donationsCache.set(key, entry);
+  const f = deps.fetch ?? fetch;
+  const base = (deps.base ?? zidolistaBase()).replace(/\/$/, '');
+  entry.inflight = (async () => {
+    try {
+      const all: DonationItem[] = [];
+      let before: string | null = null;
+      for (let page = 0; page < DONATIONS_MAX_PAGES; page++) {
+        const qs = new URLSearchParams({ platform: q.platform, userId: q.userId, login: q.login.toLowerCase(), limit: String(DONATIONS_PAGE) });
+        if (before) qs.set('before', before);
+        const url = `${base}/integrations/${encodeURIComponent(q.workspace.toLowerCase())}/donations?${qs}`;
+        const r = await f(url, {
+          headers: zidolistaGetHeaders(url, apiKey, deps.nowS?.()),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { ok?: boolean };
+        if (!j || j.ok === false) throw new Error('not ok');
+        const p = normalizeDonationsPage(j);
+        all.push(...p.items);
+        before = p.nextBefore;
+        if (!before) break;
+        if (page === DONATIONS_MAX_PAGES - 1) deps.log?.warn({ workspace: q.workspace, platform: q.platform, n: all.length }, 'donations: víc stránek, než se stahuje (součet je jen z načtených)');
+      }
+      entry.value = all;
+    } catch (e) {
+      deps.log?.warn({ workspace: q.workspace, platform: q.platform, err: (e as Error).message }, 'donations: Židolišta nedostupná (dona se neukážou)');
+      entry.value = null;
+    } finally {
+      entry.at = now();
+      entry.inflight = null;
+    }
+    return entry.value;
+  })();
+  return entry.inflight;
+}
+
+/** Jen pro testy. */
+export function _resetDonationsCache(): void { donationsCache.clear(); }
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 /** Držet cache čerstvou pro synchronní použití (server boot). */

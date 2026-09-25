@@ -10,8 +10,7 @@
 //   POST /moderation/permit { channel, platform, userId, durationSec, messageId? }   (messageId: obnovení zprávy smazané filtrem odkazů, část 3)
 //   PUT  /moderation/nickname { channel, platform, login, nickname|null, color? }
 //   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
-//   GET  /moderation/user-history/summary?channel&platform&userId            (Chat historie: identity, záložky kanálů, moderace)
-//   GET  /moderation/user-history/messages?channel&platform&userId&inChannel&before&limit
+//   GET  /moderation/user-history/{summary,messages,donations}   (Profil uživatele — routes/userHistory.ts)
 //   GET  /moderation/deleted-content?channel&ids=<platform>:<id>,…   (obsah smazaných/skrytých zpráv jen pro moda)
 //   Kontrakt: docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md
 //
@@ -45,8 +44,8 @@ import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter, toModeratedContent, type ClientRow, type ClientMessage } from './chat.js';
-import { decodeCursor } from '../lib/cursor.js';
-import { buildSummary, buildMessages, clampHistoryLimit, dbHistoryDeps, HistoryTabsCache } from '../lib/userHistory.js';
+import { dbHistoryDeps } from '../lib/userHistory.js';
+import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
 import { config } from '../config.js';
 
@@ -167,27 +166,6 @@ export const UserStateQuery = z.object({
   channel: z.string().min(1).max(40).optional(),
   platform: PlatformEnum,
   userId: UserIdField,
-});
-
-export const UserHistoryQuery = z.object({
-  channel: z.string().min(1).max(40).optional(),
-  platform: PlatformEnum,
-  userId: UserIdField,
-  /** Klientův login cíle — jen do logu (moderation user-history); server bere login z archivu. */
-  login: z.string().max(60).optional(),
-});
-
-/** Záložka Chat historie: UC kanál, nebo nenamapovaný Kick slug / YouTube handle (i '-' a '.'). */
-export function parseInChannel(raw: string | undefined, fallback: string): string | null {
-  const c = (raw || fallback).trim().toLowerCase().replace(/^@/, '');
-  return /^[a-z0-9_.-]{1,60}$/.test(c) ? c : null;
-}
-
-export const UserHistoryMessagesQuery = UserHistoryQuery.extend({
-  /** Záložka (UC kanál); výchozí = aktuální kanál. */
-  inChannel: z.string().min(1).max(61).optional(),
-  before: z.string().max(40).optional(),
-  limit: z.string().max(4).optional(),
 });
 
 export type Gate = { channel: string; accountId: number; by: string; modPlatforms: Platform[]; isBroadcaster: boolean };
@@ -327,38 +305,21 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     log: app.log,
   };
 
-  // ---- Chat historie (nabídka moda): vlastní limit, čtení je levnější než akce, ale scroll dělá víc dotazů ----
-  const historyLimiter = new RateLimiter(5, 2);
-  const historyTabs = new HistoryTabsCache();
-  const historyDeps = dbHistoryDeps((channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets), accountIdentities);
-  const historyGate = async (req: FastifyRequest, reply: FastifyReply, rawChannel: string | undefined): Promise<Gate | null> => {
-    if (!historyLimiter.allow(String(req.webAccountId!))) { reply.code(429).send({ ok: false, error: 'rate_limited' }); return null; }
-    return modGate(req, reply, rawChannel, false);
-  };
-
-  app.get('/moderation/user-history/summary', { preHandler: requireWebSession }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const q = UserHistoryQuery.safeParse(req.query);
-    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
-    const g = await historyGate(req, reply, q.data.channel);
-    if (!g) return reply;
-    req.log.info({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId, login: q.data.login ?? null }, 'moderation user-history');
-    const out = await buildSummary({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId }, historyDeps, historyTabs);
-    return reply.code(out.status).send(out.body);
-  });
-
-  app.get('/moderation/user-history/messages', { preHandler: requireWebSession }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const q = UserHistoryMessagesQuery.safeParse(req.query);
-    if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
-    const cursor = q.data.before ? decodeCursor(q.data.before) : null;
-    if (q.data.before && !cursor) return reply.code(400).send({ ok: false, error: 'before' });
-    const g = await historyGate(req, reply, q.data.channel);
-    if (!g) return reply;
-    const inChannel = parseInChannel(q.data.inChannel, g.channel);
-    if (!inChannel) return reply.code(400).send({ ok: false, error: 'in_channel' });
-    const out = await buildMessages({ accountId: g.accountId, channel: g.channel, platform: q.data.platform, userId: q.data.userId, inChannel, cursor, limit: clampHistoryLimit(q.data.limit) }, historyDeps, historyTabs);
-    return reply.code(out.status).send(out.body);
+  // ---- Profil uživatele (nabídka moda): routes/userHistory.ts, stejná brána moda, vlastní limity ----
+  await userHistoryRoutes(app, {
+    requireSession: requireWebSession,
+    optionalSession: optionalWebSession,
+    modIdentities: accountModIdentities,
+    history: dbHistoryDeps(
+      (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
+      accountIdentities,
+      async (channel, platform, login) => {
+        const pch = await registryPlatformChannel(channel, platform);
+        return pch ? (await archivedUserByLogin(platform, pch, login))?.userId ?? null : null;
+      },
+      app.log,
+    ),
+    defaultChannel: DEFAULT_CHANNEL,
   });
 
   // ---- obsah smazaných / skrytých zpráv (mod vidí text, divák nikdy) ----

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, buildMessages, HistoryTabsCache, historyIdentities, mergeChannels, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
+import { buildSummary, buildPublicSummary, publicDonationSum, buildMessages, buildDonations, HistoryTabsCache, historyIdentities, mergeChannels, mergeDonations, donationTotals, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
+import type { DonationItem } from './zidolista.js';
 import type { Message } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
 
@@ -28,7 +29,7 @@ function deps(over: Partial<HistoryDeps> = {}): HistoryDeps & { calls: Record<st
     resolveTargets: async (channel, platform, userId) => (channel === 'robdiesalot' && platform === 'twitch' && userId === '1'
       ? { primary: { platform: 'twitch', userId: '1', login: 'spammer' }, all: [{ platform: 'twitch', userId: '1', login: 'spammer' }, { platform: 'kick', userId: '7', login: 'spammer' }], accountId: 42 }
       : null),
-    accountIdentities: async () => [{ platform: 'kick', userId: '7', login: 'Spammer' }, { platform: 'youtube', userId: 'UCx', login: 'Spammer_YT' }],
+    accountIdentities: async () => [{ platform: 'kick', userId: '7', login: 'Spammer', displayName: 'Spammer K' }, { platform: 'youtube', userId: 'UCx', login: 'Spammer_YT', displayName: 'Pan Spammer' }],
     channelGroups: async () => groups,
     ucChannelOf: async (platform, ch) => (platform === 'kick' && ch === 'robdiesalot-kick' ? 'robdiesalot' : ch === '@tensterakdary' ? 'tensterakdary' : ch),
     latestName: async () => 'SpAmMeR',
@@ -38,6 +39,8 @@ function deps(over: Partial<HistoryDeps> = {}): HistoryDeps & { calls: Record<st
       calls.messagesPage.push({ scope, cursor, limit });
       return [row(9, 'twitch', '1', 'robdiesalot', '2026-09-25T10:00:00Z'), row(8, 'kick', '7', 'robdiesalot-kick', '2026-09-24T10:00:00Z', { deletedAt: d('2026-09-24T10:01:00Z'), deletedReason: 'mod' }), row(7, 'twitch', '1', 'robdiesalot', '2026-09-23T10:00:00Z')].slice(0, limit + 1);
     },
+    userIdByLogin: async (channel, platform, login) => (channel === 'robdiesalot' && platform === 'twitch' && login === 'spammer' ? '1' : null),
+    donations: async () => null,
     ...over,
   };
 }
@@ -137,6 +140,78 @@ test('clampHistoryLimit / toModItem', () => {
   assert.deepEqual(toModItem({ action: 'rename', createdAt: at, actor: 'x', platform: 'kick', params: { nickname: null } }).params, { nickname: null });
 });
 
+const don = (id: string, amount: number, currency = 'CZK', matchedBy: string | null = 'uc', paidAt = 1, amountCzk = amount, nickname: string | null = null): DonationItem =>
+  ({ id, amount, currency, amountCzk, paidAt, via: 'qr', matchedBy, nickname, message: null });
+
+test('buildSummary: latest = poslední zpráva každé identity v aktuálním kanálu (badge, bez textu), displayName identit, dona jen když Židolišta odpoví', async () => {
+  const dd = deps({
+    messagesPage: async (scope) => [row(scope[0].platform === 'kick' ? 5 : 6, scope[0].platform, scope[0].userId, scope[0].channels[0], '2026-09-25T10:00:00Z', { contentRaw: { badges: 'vip/1', color: '#123456' } })],
+  });
+  const out = await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, dd);
+  const b = out.body as { latest: Record<string, { badgesRaw: string; message?: string; id: string }>; user: { identities: Array<{ platform: string; displayName: string | null }> }; donations?: unknown };
+  assert.deepEqual(Object.keys(b.latest).sort(), ['kick', 'twitch'], 'YouTube v aktuálním kanálu nepsal');
+  assert.equal(b.latest.twitch.badgesRaw, 'vip/1');
+  assert.equal(b.latest.twitch.message, undefined);
+  assert.deepEqual(b.user.identities.map((i) => `${i.platform}:${i.displayName}`), ['twitch:SpAmMeR', 'kick:Spammer K', 'youtube:Pan Spammer']);
+  assert.equal(b.donations, undefined, 'výpadek Židolišty → pole chybí');
+  const withDon = await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async () => [don('a', 1000), don('b', 250, 'CZK', 'nickname'), don('c', 20, 'EUR', 'uc', 1, 500)] }));
+  assert.deepEqual((withDon.body as { donations: unknown }).donations, { total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } });
+});
+
+test('Profil podle loginu: userId z archivu aktuálního kanálu; neznámý login → 404 bez dalších dotazů', async () => {
+  const dd = deps();
+  const ok = await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: null, login: '@spammer' }, dd);
+  assert.equal(ok.status, 200);
+  assert.equal((ok.body as { user: { userId: string } }).user.userId, '1');
+  let groups = 0;
+  const miss = await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: null, login: 'cizi' }, deps({ channelGroups: async () => { groups++; return []; } }));
+  assert.equal(miss.status, 404);
+  assert.equal(groups, 0);
+  assert.equal((await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: null, login: '', inChannel: 'robdiesalot', cursor: null, limit: 5 }, dd)).status, 404);
+});
+
+test('buildDonations: 404 bez cíle v archivu; nedostupná Židolišta = available false; položky od nejnovějšího', async () => {
+  assert.equal((await buildDonations({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '999' }, deps())).status, 404);
+  assert.deepEqual((await buildDonations({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps())).body, { ok: true, available: false, items: [] });
+  let asked: string | null = null;
+  const out = await buildDonations({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async (ch) => { asked = ch; return [don('x', 5)]; } }));
+  assert.equal(asked, 'robdiesalot');
+  assert.deepEqual((out.body as { items: Array<{ id: string }> }).items.map((i) => i.id), ['x']);
+});
+
+test('mergeDonations / donationTotals: dedup podle id (jistá shoda má přednost), vše null → null', () => {
+  assert.equal(mergeDonations([null, null]), null);
+  const m = mergeDonations([[don('a', 100, 'CZK', 'nickname', 1), don('b', 5, 'CZK', 'uc', 3)], null, [don('a', 100, 'CZK', 'uc', 1)]])!;
+  assert.deepEqual(m.map((i) => `${i.id}:${i.matchedBy}`), ['b:uc', 'a:uc']);
+  assert.deepEqual(donationTotals([]), { total: { czk: 0, byCurrency: {} }, count: 0, uc: { czk: 0, count: 0 }, guess: { czk: 0, byCurrency: {}, count: 0 } });
+});
+
+test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanálu a jen kliknuté identity, dona jen ucNamed', async () => {
+  const all = await deps().channelGroups([]);
+  const dd = deps({
+    channelGroups: async (ids) => all.filter((g) => ids.some((i) => i.platform === g.platform)),
+    messagesPage: async (scope) => [row(6, scope[0].platform, scope[0].userId, scope[0].channels[0], '2026-09-25T10:00:00Z', { contentRaw: { badges: 'vip/1' } })],
+    donations: async () => [don('a', 1000, 'CZK', 'uc', 1, 1000, 'SpAmMeR'), don('b', 300, 'CZK', 'uc', 1, 300, 'anonym'), don('c', 250, 'CZK', 'nickname', 1, 250, 'spammer')],
+  });
+  const out = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, dd);
+  assert.equal(out.status, 200);
+  const b = out.body as Record<string, any>;
+  assert.deepEqual(Object.keys(b).sort(), ['donations', 'latest', 'ok', 'user', 'view']);
+  assert.equal(b.view, 'public');
+  assert.deepEqual(Object.keys(b.user).sort(), ['color', 'displayName', 'firstSeen', 'lastSeen', 'login', 'nickname', 'platform', 'total', 'userId']);
+  assert.equal(b.user.total, 5, 'jen Twitch identita v robdiesalot (Kick propojeného účtu se nepočítá)');
+  assert.deepEqual(Object.keys(b.latest), ['twitch'], 'badge jen kliknuté identity');
+  assert.deepEqual(b.donations, { ucNamed: { czk: 1000, count: 1 } }, 'bez czk celkem, uc, odhadů a položek');
+  assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '999' }, dd)).status, 404);
+  assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: null, login: 'cizi' }, dd)).status, 404);
+  const noDon = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps());
+  assert.equal((noDon.body as Record<string, unknown>).donations, undefined);
+});
+
+test('publicDonationSum: jen matchedBy uc s přezdívkou = login / jméno (bez @, bez ohledu na velikost)', () => {
+  assert.deepEqual(publicDonationSum([don('a', 10, 'CZK', 'uc', 1, 10, '@Jouki'), don('b', 5, 'EUR', 'uc', 1, 125, 'jouki728'), don('c', 7, 'CZK', 'uc', 1, 7, null), don('d', 9, 'CZK', 'nickname', 1, 9, 'jouki')], ['jouki728', 'Jouki']), { czk: 135, count: 2 });
+});
+
 test('DB: skupiny kanálů, stránka zpráv a moderace přes identity (platform, platform_user_id)', { skip: !process.env.TEST_DATABASE_URL && 'TEST_DATABASE_URL není nastavené' }, async () => {
   process.env.DATABASE_URL = process.env.TEST_DATABASE_URL!;
   const { dbHistoryDeps } = await import('./userHistory.js');
@@ -152,7 +227,7 @@ test('DB: skupiny kanálů, stránka zpráv a moderace přes identity (platform,
       { platform: 'kick', platformMessageId: `${pre}-3`, platformUserId: `${pre}u`, platformUsername: 'cizi', content: 'z', contentRaw: {}, channel: ch, sentAt: new Date() },
     ]);
     await db.insert(moderationActions).values({ channel: ch, actor: 'twitch:m', action: 'timeout', platform: 'twitch', targetLogin: 'a', params: { userId: `${pre}u`, durationSec: 60 }, result: {} });
-    const dd = dbHistoryDeps(async () => null, async () => []);
+    const dd = dbHistoryDeps(async () => null, async () => [], async () => null);
     const ids = [{ platform: 'twitch' as const, userId: `${pre}u`, login: 'a' }];
     const groups = await dd.channelGroups(ids);
     assert.deepEqual(groups.map((g) => `${g.channel}:${g.count}`).sort(), ['__test_uh__:1', '__test_uh_jiny__:1'], 'Kick se stejným id je jiný člověk');

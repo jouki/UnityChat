@@ -13,7 +13,7 @@ import { usernameEqualsCondition, chatRole, type ChatRole } from './chatRole.js'
 import { normPlatformChannel } from './ucChannel.js';
 import type { Platform } from './zidolista.js';
 
-export interface UserTarget { platform: Platform; userId: string; login: string }
+export interface UserTarget { platform: Platform; userId: string; login: string; /** Zobrazované jméno z web_identities (jen identity UC účtu). */ displayName?: string | null }
 
 export interface ResolvedTargets {
   /** Uživatel na platformě zprávy (login z archivu). */
@@ -92,10 +92,10 @@ export async function accountOf(platform: Platform, userId: string): Promise<num
 /** Všechny identity účtu včetně odhlášených — pořád je to týž člověk (ban se ho týká). */
 export async function accountIdentities(accountId: number): Promise<UserTarget[]> {
   const rows = await db
-    .select({ platform: webIdentities.platform, userId: webIdentities.platformUserId, login: webIdentities.login })
+    .select({ platform: webIdentities.platform, userId: webIdentities.platformUserId, login: webIdentities.login, displayName: webIdentities.displayName })
     .from(webIdentities)
     .where(eq(webIdentities.accountId, accountId));
-  return rows.map((r) => ({ platform: r.platform as Platform, userId: r.userId, login: r.login }));
+  return rows.map((r) => ({ platform: r.platform as Platform, userId: r.userId, login: r.login, displayName: r.displayName ?? null }));
 }
 
 export const dbTargetDeps = (platformChannel: TargetDeps['platformChannel']): TargetDeps => ({

@@ -1,6 +1,7 @@
-// „Chat historie“ z nabídky moda (2026-09-25): detail uživatele pro moda aktuálního kanálu —
-// propojené identity, počty zpráv po kanálech (záložky), moderace v aktuálním kanálu a stránkované
-// zprávy. Jádro bez HTTP a auth: ověření moda dělá VOLAJÍCÍ (routes/moderation.ts, modGate).
+// „Profil“ uživatele z nabídky moda (2026-09-25, dřív „Chat historie“): detail uživatele pro moda
+// aktuálního kanálu — propojené identity, poslední zpráva na každé platformě (badge), počty zpráv po
+// kanálech (záložky), moderace v aktuálním kanálu, dona (Židolišta) a stránkované zprávy. Jádro bez HTTP
+// a auth: ověření moda dělá VOLAJÍCÍ (routes/userHistory.ts, modGate) PŘED voláním čehokoli odsud.
 //
 // Zprávy uživatele = messages, kde (platform, platform_user_id) ∈ identity uživatele (index
 // messages_platform_user_sent_idx, backend/sql/2026-09-25-user-history-index.sql). Kanál záložky
@@ -14,8 +15,9 @@ import { unionAll } from 'drizzle-orm/pg-core';
 import { db } from '../db/index.js';
 import { messages, moderationActions, nicknames, type Message } from '../db/schema.js';
 import { encodeCursor, type decodeCursor } from './cursor.js';
-import { toClientMessage, type ClientMessage } from '../routes/chat.js';
-import { workspaceForChannel, type Platform } from './zidolista.js';
+import { toClientMessage, toClientContent, type ClientMessage } from '../routes/chat.js';
+import { workspaceForChannel, zidolistaDonations, type Platform, type DonationItem } from './zidolista.js';
+import { defaultWorkspace } from './platformChannels.js';
 import { ucChannelFor } from './ucChannel.js';
 import type { ResolvedTargets, UserTarget } from './moderationTargets.js';
 import type { Out } from './userModActions.js';
@@ -46,20 +48,93 @@ export interface HistoryDeps {
   moderation: (channel: string, ids: UserTarget[], limit: number) => Promise<HistoryModItem[]>;
   /** Zprávy identit v daných platformních kanálech, od nejnovější, limit+1 řádků. */
   messagesPage: (scope: Array<{ platform: Platform; userId: string; channels: string[] }>, cursor: Cursor | null, limit: number) => Promise<Message[]>;
+  /**
+   * Otevření profilu jen podle loginu (citace v odpovědi): userId v archivu PLATFORMNÍHO kanálu aktuálního
+   * kanálu, null = v kanálu nepsal → 404 (nejde tím procházet celý archiv).
+   */
+  userIdByLogin: (channel: string, platform: Platform, login: string) => Promise<string | null>;
+  /** Dona identit ve workspace kanálu `channel` (registr, nikdy od klienta); null = Židolišta nedostupná. */
+  donations: (channel: string, ids: UserTarget[]) => Promise<DonationItem[] | null>;
 }
 
 const sameId = (a: UserTarget, b: UserTarget) => a.platform === b.platform && a.userId === b.userId;
 
 /** Všechny identity člověka: cíl z archivu kanálu + všechny identity jeho UC účtu (i na platformách mimo kanál). */
 export async function historyIdentities(targets: ResolvedTargets, deps: Pick<HistoryDeps, 'accountIdentities'>): Promise<UserTarget[]> {
-  const out: UserTarget[] = [...targets.all];
+  const out: UserTarget[] = targets.all.map((t) => ({ ...t }));
   if (targets.accountId !== null) {
     for (const i of await deps.accountIdentities(targets.accountId)) {
-      const t = { platform: i.platform, userId: i.userId, login: i.login.toLowerCase() };
-      if (!out.some((o) => sameId(o, t))) out.push(t);
+      const t = { platform: i.platform, userId: i.userId, login: i.login.toLowerCase(), displayName: i.displayName ?? null };
+      const known = out.find((o) => sameId(o, t));
+      if (known) { if (!known.displayName) known.displayName = t.displayName; } else out.push(t);
     }
   }
   return out;
+}
+
+// ---- Dona (Židolišta) ----
+export interface MoneyTotal { czk: number; byCurrency: Record<string, number> }
+export interface DonationTotals {
+  total: MoneyTotal;
+  count: number;
+  /** Jistá dona z UnityChatu (matchedBy 'uc' — QR vytvořil tentýž divák v UC). */
+  uc: { czk: number; count: number };
+  /** Část spárovaná jen podle jména (matchedBy 'nickname') — odhad. */
+  guess: MoneyTotal & { count: number };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Seznamy don po identitách → jeden seznam bez duplicit (stejné dono přes víc identit), od nejnovějšího. null = vše nedostupné. */
+export function mergeDonations(lists: Array<DonationItem[] | null>): DonationItem[] | null {
+  if (!lists.length || lists.every((l) => l === null)) return null;
+  const byId = new Map<string, DonationItem>();
+  for (const l of lists) for (const it of l ?? []) {
+    const prev = byId.get(it.id);
+    // Jistá shoda má přednost před odhadem podle jména (jedna identita ho spárovala přes UC).
+    if (!prev || (prev.matchedBy === 'nickname' && it.matchedBy !== 'nickname')) byId.set(it.id, it);
+  }
+  return [...byId.values()].sort((a, b) => b.paidAt - a.paidAt);
+}
+
+/** Součty z položek: celkem v Kč, po měnách a zvlášť část „jen podle jména“. */
+export function donationTotals(items: DonationItem[]): DonationTotals {
+  const add = (t: MoneyTotal, it: DonationItem) => {
+    t.czk = round2(t.czk + it.amountCzk);
+    t.byCurrency[it.currency] = round2((t.byCurrency[it.currency] ?? 0) + it.amount);
+  };
+  const total: MoneyTotal = { czk: 0, byCurrency: {} };
+  const uc = { czk: 0, count: 0 };
+  const guess = { czk: 0, byCurrency: {} as Record<string, number>, count: 0 };
+  for (const it of items) {
+    add(total, it);
+    if (it.matchedBy === 'uc') { uc.czk = round2(uc.czk + it.amountCzk); uc.count++; }
+    if (it.matchedBy === 'nickname') { add(guess, it); guess.count++; }
+  }
+  return { total, count: items.length, uc, guess };
+}
+
+const normName = (s: unknown) => String(s ?? '').trim().replace(/^@/, '').toLowerCase();
+
+/**
+ * Veřejná suma („ucNamed“): jen jistá dona z UC (matchedBy 'uc'), u kterých se dárce neskrýval — přezdívka
+ * dona = login (nebo zobrazované jméno) identity, na kterou divák klikl. Kdo donatoval pod jinou přezdívkou,
+ * chtěl zůstat anonymní → do veřejné sumy se nepočítá.
+ */
+export function publicDonationSum(items: DonationItem[], names: Array<string | null | undefined>): { czk: number; count: number } {
+  const want = new Set(names.map(normName).filter(Boolean));
+  let czk = 0, count = 0;
+  for (const it of items) {
+    if (it.matchedBy !== 'uc' || !want.has(normName(it.nickname))) continue;
+    czk = round2(czk + it.amountCzk); count++;
+  }
+  return { czk, count };
+}
+
+/** Poslední zpráva identity → jen to, co hlavička potřebuje na badge (žádný text — ani u smazané zprávy). */
+export function latestView(row: Message): Pick<ClientMessage, 'platform' | 'id' | 'username' | 'userId' | 'timestamp' | 'color' | 'badgesRaw'> {
+  const c = toClientContent(row, true);
+  return { platform: c.platform, id: c.id, username: c.username, userId: c.userId, timestamp: c.timestamp, color: c.color ?? null, badgesRaw: c.badgesRaw ?? '' };
 }
 
 /** Skupiny (platforma, kanál) → záložky podle UC kanálu. Aktuální kanál vždy první (i s 0), ostatní jen s count>0, od posledně aktivního. */
@@ -81,8 +156,11 @@ export async function mergeChannels(groups: ChannelGroup[], current: string, ucC
   return { channels: [tab(current, byUc.get(current) ?? []), ...others], byUc };
 }
 
-/** `accountId` = účet moda (klíč cache záložek). */
-export interface SummaryInput { accountId: number; channel: string; platform: Platform; userId: string }
+/**
+ * `accountId` = účet moda (klíč cache záložek). Cíl = `userId`, nebo jen `login` (otevření z citace
+ * v odpovědi — userId se dohledá v archivu aktuálního kanálu).
+ */
+export interface SummaryInput { accountId: number; channel: string; platform: Platform; userId: string | null; login?: string | null }
 
 /** Cíl + identity + skupiny kanálů + mapování na záložky — to, co summary i každá stránka zpráv potřebují. */
 export interface HistoryTabs { targets: ResolvedTargets; ids: UserTarget[]; groups: ChannelGroup[]; channels: HistoryChannel[]; byUc: Map<string, ChannelGroup[]> }
@@ -97,7 +175,7 @@ const TABS_CACHE_MAX = 1000;
 export class HistoryTabsCache {
   private map = new Map<string, { at: number; value: HistoryTabs }>();
   constructor(private readonly ttlMs = HISTORY_TABS_TTL_MS, private readonly now: () => number = Date.now) {}
-  static key(i: SummaryInput): string { return `${i.accountId}|${i.channel}|${i.platform}|${i.userId}`; }
+  static key(i: SummaryInput): string { return `${i.accountId}|${i.channel}|${i.platform}|${i.userId ?? `login:${String(i.login || '').toLowerCase()}`}`; }
   get(i: SummaryInput): HistoryTabs | null {
     const hit = this.map.get(HistoryTabsCache.key(i));
     if (!hit) return null;
@@ -111,7 +189,14 @@ export class HistoryTabsCache {
 }
 
 async function computeTabs(input: SummaryInput, deps: HistoryDeps): Promise<HistoryTabs | null> {
-  const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
+  let userId = input.userId;
+  if (!userId) {
+    const login = String(input.login || '').trim().replace(/^@/, '');
+    if (!login) return null;
+    userId = await deps.userIdByLogin(input.channel, input.platform, login);
+    if (!userId) return null;
+  }
+  const targets = await deps.resolveTargets(input.channel, input.platform, userId);
   if (!targets) return null;
   const ids = await historyIdentities(targets, deps);
   const groups = await deps.channelGroups(ids);
@@ -131,32 +216,114 @@ export async function historyTabs(input: SummaryInput, deps: HistoryDeps, cache:
 export async function buildSummary(input: SummaryInput, deps: HistoryDeps, cache: HistoryTabsCache | null = null): Promise<Out> {
   const tabs = await historyTabs(input, deps, cache, { fresh: true });
   if (!tabs) return { status: 404, body: { ok: false, error: 'not_found' } };
-  const { targets, ids, groups, channels } = tabs;
-  const [name, moderation] = await Promise.all([
+  const { targets, ids, groups, channels, byUc } = tabs;
+  const [name, moderation, latest, donationItems] = await Promise.all([
     deps.latestName(targets.primary.platform, targets.primary.userId),
     deps.moderation(input.channel, ids, HISTORY_MODERATION_LIMIT),
+    latestInChannel(ids, byUc.get(input.channel) ?? [], deps),
+    deps.donations(input.channel, ids).catch(() => null),
   ]);
   let nick: { nickname: string; color: string | null } | null = null;
   for (const i of [targets.primary, ...ids]) { nick = await deps.nickname(i.platform, i.login); if (nick) break; }
   const all = groups.filter((g) => g.count > 0);
+  const body: Record<string, unknown> = {
+    ok: true,
+    view: 'mod',
+    user: {
+      platform: targets.primary.platform,
+      userId: targets.primary.userId,
+      login: targets.primary.login,
+      displayName: name || targets.primary.login,
+      nickname: nick?.nickname ?? null,
+      color: nick?.color ?? null,
+      // Chip identity = zobrazované jméno (web_identities), u cíle bez účtu jméno z jeho poslední zprávy.
+      identities: ids.map((i) => ({ platform: i.platform, login: i.login, userId: i.userId, displayName: i.displayName || (sameId(i, targets.primary) ? name : null) || null })),
+      firstSeen: all.length ? Math.min(...all.map((g) => g.firstAt.getTime())) : null,
+      lastSeen: all.length ? Math.max(...all.map((g) => g.lastAt.getTime())) : null,
+      total: all.reduce((s, g) => s + g.count, 0),
+    },
+    channels,
+    moderation,
+    latest,
+  };
+  // Výpadek Židolišty / chybějící endpoint → pole chybí, panel sumu ani řádky neukáže.
+  if (donationItems) body.donations = donationTotals(donationItems);
+  return { status: 200, body };
+}
+
+/** Pole veřejného profilu (divák / nepřihlášený) — cokoli jiného se do odpovědi nedostane. */
+export const PUBLIC_USER_FIELDS = ['platform', 'userId', 'login', 'displayName', 'nickname', 'color', 'firstSeen', 'lastSeen', 'total'] as const;
+
+/**
+ * Veřejný Profil (rozhodnutí usera 2026-09-25: levý klik na jméno otevře Profil všem). Divák vidí jen to,
+ * co ví i z chatu: jméno, přezdívku, badge a statistiku **jen v aktuálním kanálu** a **jen za identitu, na
+ * kterou klikl** (jiné identity by prozradily propojené účty), a sumu QR donů spárovaných jistě (`matchedBy: 'uc'`).
+ * Žádné identity, záložky kanálů, moderace, zprávy, dona podle jména ani jednotlivá dona. Stejná ochrana
+ * proti procházení archivu: cíl musí mít zprávu v archivu aktuálního kanálu, jinak 404.
+ */
+export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>, deps: HistoryDeps): Promise<Out> {
+  let userId = input.userId;
+  if (!userId) {
+    const login = String(input.login || '').trim().replace(/^@/, '');
+    userId = login ? await deps.userIdByLogin(input.channel, input.platform, login) : null;
+    if (!userId) return { status: 404, body: { ok: false, error: 'not_found' } };
+  }
+  const targets = await deps.resolveTargets(input.channel, input.platform, userId);
+  if (!targets) return { status: 404, body: { ok: false, error: 'not_found' } };
+  const primary = targets.primary;
+  const { byUc } = await mergeChannels(await deps.channelGroups([primary]), input.channel, deps.ucChannelOf);
+  const here = byUc.get(input.channel) ?? [];
+  const ids = await historyIdentities(targets, deps);
+  const [name, latest, nick, donationItems] = await Promise.all([
+    deps.latestName(primary.platform, primary.userId),
+    latestInChannel([primary], here, deps),
+    deps.nickname(primary.platform, primary.login),
+    deps.donations(input.channel, ids).catch(() => null),
+  ]);
+  const user = {
+    platform: primary.platform,
+    userId: primary.userId,
+    login: primary.login,
+    displayName: name || primary.login,
+    nickname: nick?.nickname ?? null,
+    color: nick?.color ?? null,
+    firstSeen: here.length ? Math.min(...here.map((g) => g.firstAt.getTime())) : null,
+    lastSeen: here.length ? Math.max(...here.map((g) => g.lastAt.getTime())) : null,
+    total: here.reduce((s, g) => s + g.count, 0),
+  };
+  const body: Record<string, unknown> = { ok: true, view: 'public', user, latest };
+  // Divák dostane JEN ucNamed (žádné czk celkem, uc, odhady ani položky).
+  if (donationItems) body.donations = { ucNamed: publicDonationSum(donationItems, [primary.login, name]) };
+  return { status: 200, body };
+}
+
+/** Poslední zpráva každé identity v aktuálním kanálu → { twitch: {...}, kick: {...} } (badge do hlavičky). */
+async function latestInChannel(ids: UserTarget[], groups: ChannelGroup[], deps: Pick<HistoryDeps, 'messagesPage'>): Promise<Record<string, ReturnType<typeof latestView>>> {
+  const out: Record<string, ReturnType<typeof latestView>> = {};
+  await Promise.all(ids.map(async (i) => {
+    const channels = [...new Set(groups.filter((g) => g.platform === i.platform).map((g) => g.channel))];
+    if (!channels.length || out[i.platform]) return;
+    const [row] = await deps.messagesPage([{ platform: i.platform, userId: i.userId, channels }], null, 1);
+    if (row && (!out[i.platform] || out[i.platform].timestamp < row.sentAt.getTime())) out[i.platform] = latestView(row);
+  }));
+  return out;
+}
+
+/**
+ * Dona uživatele ve workspace aktuálního kanálu (řádky v Profilu). Stejné ověření cíle jako summary
+ * (zpráva v archivu kanálu, jinak 404). `available: false` = Židolišta nedostupná → panel nic neukáže.
+ */
+export async function buildDonations(input: SummaryInput, deps: HistoryDeps, cache: HistoryTabsCache | null = null): Promise<Out> {
+  const tabs = await historyTabs(input, deps, cache);
+  if (!tabs) return { status: 404, body: { ok: false, error: 'not_found' } };
+  const items = await deps.donations(input.channel, tabs.ids).catch(() => null);
+  if (!items) return { status: 200, body: { ok: true, available: false, items: [] } };
   return {
     status: 200,
     body: {
       ok: true,
-      user: {
-        platform: targets.primary.platform,
-        userId: targets.primary.userId,
-        login: targets.primary.login,
-        displayName: name || targets.primary.login,
-        nickname: nick?.nickname ?? null,
-        color: nick?.color ?? null,
-        identities: ids.map((i) => ({ platform: i.platform, login: i.login, userId: i.userId })),
-        firstSeen: all.length ? Math.min(...all.map((g) => g.firstAt.getTime())) : null,
-        lastSeen: all.length ? Math.max(...all.map((g) => g.lastAt.getTime())) : null,
-        total: all.reduce((s, g) => s + g.count, 0),
-      },
-      channels,
-      moderation,
+      available: true,
+      items: items.map((it) => ({ id: it.id, amount: it.amount, currency: it.currency, amountCzk: it.amountCzk, paidAt: it.paidAt, via: it.via, matchedBy: it.matchedBy, nickname: it.nickname, message: it.message })),
     },
   };
 }
@@ -274,7 +441,20 @@ async function dbMessagesPage(scope: Array<{ platform: Platform; userId: string;
   return unionAll(a, b, ...rest).orderBy(desc(messages.sentAt), desc(messages.id)).limit(n);
 }
 
-export const dbHistoryDeps = (resolveTargets: HistoryDeps['resolveTargets'], accountIdentities: HistoryDeps['accountIdentities']): HistoryDeps => ({
+/** Dona identit: workspace JEN z registru podle kanálu (slug od klienta se nebere), dotaz per identita, dedup. */
+export async function registryDonations(channel: string, ids: UserTarget[], log?: { warn: (o: object, m: string) => void }): Promise<DonationItem[] | null> {
+  const ws = await defaultWorkspace(channel).catch(() => null);
+  if (!ws || !ids.length) return null;
+  const lists = await Promise.all(ids.map((i) => zidolistaDonations({ workspace: ws.slug, platform: i.platform, userId: i.userId, login: i.login }, { log })));
+  return mergeDonations(lists);
+}
+
+export const dbHistoryDeps = (
+  resolveTargets: HistoryDeps['resolveTargets'],
+  accountIdentities: HistoryDeps['accountIdentities'],
+  userIdByLogin: HistoryDeps['userIdByLogin'],
+  log?: { warn: (o: object, m: string) => void },
+): HistoryDeps => ({
   resolveTargets,
   accountIdentities,
   channelGroups: dbChannelGroups,
@@ -283,4 +463,6 @@ export const dbHistoryDeps = (resolveTargets: HistoryDeps['resolveTargets'], acc
   nickname: dbNickname,
   moderation: dbModeration,
   messagesPage: dbMessagesPage,
+  userIdByLogin,
+  donations: (channel, ids) => registryDonations(channel, ids, log),
 });
