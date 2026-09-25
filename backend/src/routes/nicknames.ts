@@ -7,14 +7,35 @@ import { addClient, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
 
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+/** Pravidla přezdívky — sdílí PUT /nicknames i přejmenování modem (PUT /moderation/nickname). */
+export const NicknameField = z.string().min(1).max(30).transform((s) => s.trim());
+export const ColorField = z.string().regex(HEX_COLOR).nullable().optional();
 
 const PutBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
   username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
-  nickname: z.string().min(1).max(30).transform((s) => s.trim()),
-  color: z.string().regex(HEX_COLOR).nullable().optional(),
+  nickname: NicknameField,
+  color: ColorField,
 });
+
+type NickPlatform = 'twitch' | 'youtube' | 'kick';
+
+/** Upsert přezdívky; SSE nickname-change rozešle trigger v DB (lib/nicknameNotify.ts). */
+export async function upsertNickname(platform: NickPlatform, username: string, nickname: string, color: string | null): Promise<void> {
+  await db
+    .insert(nicknames)
+    .values({ platform, username, nickname, color })
+    .onConflictDoUpdate({
+      target: [nicknames.platform, nicknames.username],
+      set: { nickname, color, updatedAt: sql`NOW()` },
+    });
+}
+
+/** Smazání přezdívky; SSE nickname-delete rozešle trigger v DB. */
+export async function deleteNickname(platform: NickPlatform, username: string): Promise<void> {
+  await db.delete(nicknames).where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
+}
 
 /** Smí účet měnit přezdívku u (platform, username)? Jen vlastní propojená identita
  *  (dřív bez ověření → kdokoli přepsal přezdívku komukoli, hlášeno 2026-09-25). */
@@ -75,15 +96,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
       }
     }
 
-    // Upsert
-    const colorValue = color ?? null;
-    await db
-      .insert(nicknames)
-      .values({ platform, username, nickname, color: colorValue })
-      .onConflictDoUpdate({
-        target: [nicknames.platform, nicknames.username],
-        set: { nickname, color: colorValue, updatedAt: sql`NOW()` },
-      });
+    await upsertNickname(platform, username, nickname, color ?? null);
 
     // SSE nickname-change rozešle trigger v DB (lib/nicknameNotify.ts) — i pro ruční opravy v DB.
 
@@ -108,9 +121,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
       reply.code(403);
       return { ok: false, error: 'not_owner' };
     }
-    await db
-      .delete(nicknames)
-      .where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
+    await deleteNickname(platform, username);
 
     // SSE nickname-delete rozešle trigger v DB (lib/nicknameNotify.ts).
     return { ok: true };

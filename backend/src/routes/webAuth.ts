@@ -11,11 +11,12 @@ import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import {
   allowedOrigins, isAllowedReturnTo, issueCode, consumeCode, bearerToken, validateWebSession, deleteWebSession,
-  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity, signOutAccount,
-  needsRefresh, type Platform, type IdentityInfo, type TokenSet,
+  requireWebSession, completeWebLogin, listIdentities, unlinkIdentity, signOutAccount,
+  type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
-import { refreshTokens } from '../lib/platformTokens.js';
-import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
+import { outgoingText, SendError } from '../lib/webSend.js';
+import { sendAsAccount } from '../lib/accountSend.js';
+import { pendingWarnings } from '../lib/accountWarnings.js';
 import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
@@ -127,7 +128,10 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const ids = await listIdentities(req.webAccountId!);
     const platforms: Record<string, unknown> = { twitch: null, youtube: null, kick: null };
     for (const i of ids) platforms[i.platform] = { login: i.login, displayName: i.displayName, avatarUrl: i.avatarUrl };
-    return { ok: true, accountId: req.webAccountId, platforms };
+    // Nepotvrzená varování od moda (moderace část 2) — klient je ukáže hned po přihlášení.
+    let warnings: Awaited<ReturnType<typeof pendingWarnings>> = [];
+    try { warnings = await pendingWarnings(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: varování nenačtena'); }
+    return { ok: true, accountId: req.webAccountId, platforms, warnings };
   });
 
   // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.
@@ -159,72 +163,30 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     let text: string;
     try { text = outgoingText(body.data.text); } catch (e) { reply.code(400); return { ok: false, error: (e as Error).message }; }
 
-    const dir = await db
-      .select({ twitchUserId: streamers.twitchUserId, kickUserId: streamers.kickUserId, youtubeHandle: streamers.youtubeHandle })
-      .from(streamers)
-      .where(eq(streamers.twitchLogin, channel))
-      .limit(1);
-    if (!dir.length) { reply.code(404); return { ok: false, error: 'unknown channel' }; }
-
-    let ident = await getDecryptedIdentity(accountId, platform);
-    if (!ident) { reply.code(403); return { ok: false, error: `not linked: ${platform}` }; }
-
-    const refresh = async () => {
-      if (!ident?.refreshToken) throw new SendError(`${platform}: token expired, login again`, 401);
-      const t = await refreshTokens(platform, ident.refreshToken);
-      await storeRefreshedTokens(accountId, platform, t);
-      ident = { ...ident!, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
-    };
-
-    const doSend = async (): Promise<{ id: string | null; sentText?: string; fallback?: 'mention' }> => {
-      if (platform === 'twitch') {
-        if (!dir[0].twitchUserId) throw new SendError('channel has no twitch id', 404);
-        return sendTwitch({ accessToken: ident!.accessToken, senderId: ident!.platformUserId, broadcasterId: dir[0].twitchUserId, text, replyTo: body.data.replyTo });
-      }
-      if (platform === 'kick') {
-        if (!dir[0].kickUserId) throw new SendError('channel has no kick id', 404);
-        try {
-          return await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
-        } catch (e) {
-          // Kick public API vrací na odpověď 404 „Not found" (2026-09-23, i se správným
-          // broadcaster_user_id). Zpráva nesmí propadnout → znovu jako obyčejná „@login text"
-          // (jako odpověď napříč platformami). Log rozliší, jestli padá jen odpověď.
-          if (!(e instanceof SendError) || e.status !== 404 || !body.data.replyTo) throw e;
-          const at = body.data.replyToUser ? `@${body.data.replyToUser.replace(/^@/, '')} ` : '';
-          req.log.warn({ accountId, replyTo: body.data.replyTo, err: e.message }, 'kick: odpověď odmítnuta → posílám jako zprávu s @');
-          const sentText = text.startsWith(at) ? text : at + text;
-          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: sentText, replyTo: null });
-          req.log.info({ accountId, id: res.id }, 'kick: záložní zpráva bez reply odeslána');
-          // Klient podle toho zahodí optimistickou „odpověď" (echo přijde jako „@login text").
-          return { ...res, sentText, fallback: 'mention' as const };
-        }
-      }
-      const videoId = opts.ingest?.videoIdFor('youtube', dir[0].youtubeHandle || channel) || null;
-      if (!videoId) throw new SendError('youtube: stream not live (no video id)', 409);
-      const liveChatId = await youtubeLiveChatId({ accessToken: ident!.accessToken, videoId });
-      if (!liveChatId) throw new SendError('youtube: live chat not active', 409);
-      return sendYoutube({ accessToken: ident!.accessToken, liveChatId, text });
-    };
+    // Nepotvrzené varování od moda (moderace část 2): psát se nesmí, dokud ho uživatel nepotvrdí.
+    // Chybějící tabulka (SQL ještě neproběhlo) / výpadek DB psaní neblokuje.
+    try {
+      if ((await pendingWarnings(accountId)).length) { reply.code(403); return { ok: false, error: 'warning_pending' }; }
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'chat send: kontrola varování selhala'); }
 
     // Odpověď napříč platformami: nahlásit PŘED odesláním, echo z ingestu ji pak rovnou ponese.
     const ucReply = body.data.replyTo ? null : parseUcReply(body.data.ucReplyTo);
-    if (ucReply) {
-      const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text, data: ucReply });
-      if (rh) attachUcReply(rh, ucReply, req.log, { late: true });
-    }
 
     try {
-      if (needsRefresh(ident.expiresAt)) await refresh();
-      let res: { id: string | null; sentText?: string; fallback?: 'mention' };
-      try {
-        res = await doSend();
-      } catch (e) {
-        if (e instanceof SendError && e.retryable) { await refresh(); res = await doSend(); } else throw e;
-      }
+      const res = await sendAsAccount({
+        accountId, platform, channel, text,
+        replyTo: body.data.replyTo, replyToUser: body.data.replyToUser,
+        ingest: opts.ingest, log: req.log,
+        beforeSend: async (ident) => {
+          if (!ucReply) return;
+          const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident.platformUserId, text, data: ucReply });
+          if (rh) attachUcReply(rh, ucReply, req.log, { late: true });
+        },
+      });
       req.log.info({ accountId, platform, channel, id: res.id, len: text.length }, 'web chat send');
       // Command (bez markeru): ingest ho podle hlášení označí jako UnityChat (zlaté logo, lib/ucSends.ts).
       if (text.startsWith('!')) {
-        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text });
+        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: res.platformUserId, text });
         if (hit) markUc(hit, req.log, { late: true });
       }
       return { ok: true, id: res.id, text: res.sentText ?? text, ...(res.fallback ? { fallback: res.fallback } : {}) };
