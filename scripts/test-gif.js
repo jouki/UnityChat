@@ -84,6 +84,92 @@ Promise.all([
   check('connectAccountStream handlers: gif-pending / gif-decided, rozbitý JSON ignorován', eq(got, [['p', 5], ['d', 'approved']]), JSON.stringify(got));
   s.close();
 
+  // --- UX 2026-09-25: schovaná původní zpráva (gif_request) + nahrazení GIFem ---
+  check('isGifHeldReason jen gif_request', g.isGifHeldReason('gif_request') && !g.isGifHeldReason('gif_rejected') && !g.isGifHeldReason('mod') && !g.isGifHeldReason(null));
+  check('gifHeldAfter: schovaná + ozvěna z platformy → dál schovaná', g.gifHeldAfter('gif_request', 'platform') === 'gif_request' && g.gifHeldAfter('gif_request', null) === 'gif_request');
+  check('gifHeldAfter: schovaná + gif_rejected / mod → běžně smazaná', g.gifHeldAfter('gif_request', 'gif_rejected') === 'gif_rejected' && g.gifHeldAfter('gif_request', 'mod') === 'mod');
+  check('gifHeldAfter: nová zpráva', g.gifHeldAfter(undefined, 'gif_request') === 'gif_request' && g.gifHeldAfter(null, 'platform') === 'platform' && g.gifHeldAfter('mod', 'gif_request') === 'gif_request');
+  check('gifReplacedTarget', eq(g.gifReplacedTarget({ replaces: 'twitch:abc-1' }), { platform: 'twitch', id: 'abc-1' }) && g.gifReplacedTarget({ replaces: 'evil:x' }) === null && g.gifReplacedTarget({}) === null);
+
+  // --- detektor GIF odkazů (kopie backendu, shodu hlídá backend gifMedia.test.ts) ---
+  const gl = await import('../extension/core/gif-links.js');
+  check('hasGifLink: Tenor / Giphy / přímý soubor', gl.hasGifLink('hele https://tenor.com/view/cat-gif-1') && gl.hasGifLink('giphy.com/gifs/x-1') && gl.hasGifLink('neco.cz/a.gif'));
+  check('hasGifLink: běžný odkaz / text ne', !gl.hasGifLink('seznam.cz') && !gl.hasGifLink('ahoj') && !gl.hasGifLink('') && !gl.hasGifLink(null));
+
+  // --- bublina cooldownu (core/gif-cooldown.js) ---
+  const cd = await import('../extension/core/gif-cooldown.js');
+  check('gifCooldownText', cd.gifCooldownText(true) === 'Můžeš až za:' && cd.gifCooldownText(false) === 'GIF můžeš poslat za');
+  check('gifCooldownRing: 30 s z 60 → 180°, číslo 30', eq(cd.gifCooldownRing(30_000, 60_000), { deg: 180, sec: 30 }));
+  check('gifCooldownRing: 0,2 s → číslo 1, 60 s bez celkové délky → 0°', cd.gifCooldownRing(200, 60_000).sec === 1 && cd.gifCooldownRing(60_000, 0).deg === 0);
+  check('normalizeGifState: posun hodin přes serverNow', eq(cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: 15_000, cooldownSec: 60, serverNow: 5_000 }, 100_000), { allowed: true, until: 110_000, sec: 60, mod: false, at: 100_000 }));
+  check('normalizeGifState: mod, bez cooldownu; chyba → null', cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true }, 5).mod === true && cd.normalizeGifState({ ok: false }, 1) === null);
+
+  // Minimální DOM pro GifCooldown.
+  class El {
+    constructor(tag) { this.tagName = tag; this.children = []; this.parent = null; this.attrs = {}; this.hidden = false; this.textContent = ''; this._cls = new Set(); this.style = { props: {}, setProperty: (k, v) => { this.style.props[k] = v; } }; }
+    set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
+    get className() { return [...this._cls].join(' '); }
+    get classList() { const c = this._cls; return { add: (x) => c.add(x), remove: (x) => c.delete(x), contains: (x) => c.has(x), toggle: (x, on) => { const v = on === undefined ? !c.has(x) : !!on; if (v) c.add(x); else c.delete(x); return v; } }; }
+    get isConnected() { let e = this; while (e.parent) e = e.parent; return e.root === true; }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    appendChild(c) { c.parent = this; this.children.push(c); return c; }
+    append(...cs) { for (const c of cs) this.appendChild(c); }
+    remove() { if (this.parent) this.parent.children = this.parent.children.filter((x) => x !== this); this.parent = null; }
+    _all() { return this.children.flatMap((c) => [c, ...c._all()]); }
+    _match(sel) { return sel.startsWith('.') ? this._cls.has(sel.slice(1)) : this.tagName === sel; }
+    querySelector(sel) {
+      const parts = sel.trim().split(/\s+/);
+      const find = (root, i) => { for (const e of root._all()) if (e._match(parts[i])) { if (i === parts.length - 1) return e; const r = find(e, i + 1); if (r) return r; } return null; };
+      return find(this, 0);
+    }
+  }
+  const doc = { createElement: (t) => new El(t), defaultView: null };
+  const host = new El('div'); host.root = true;
+  const input = new El('textarea');
+  let t = 1_000_000;
+  const calls = [];
+  let state = { ok: true, allowed: true, cooldownUntil: 50_000 + 10_000, cooldownSec: 60, serverNow: 50_000 };
+  let tick = null;
+  const G = new cd.GifCooldown({ doc, host, input, api: async (p) => { calls.push(p); return state; }, channel: () => 'RobDiesALot', platform: () => 'kick', review: () => false,
+    now: () => t, setInterval: (fn) => { tick = fn; return 1; }, clearInterval: () => { tick = null; } });
+  G.onInput('ahoj');
+  check('GifCooldown: text bez GIF odkazu → žádný dotaz, žádná bublina', calls.length === 0 && !G.visible);
+  G.onInput('hele https://tenor.com/view/cat-gif-1');
+  await G.fetchState();
+  check('GifCooldown: GIF odkaz → GET /gif/state (kanál, platforma)', calls[0] === '/gif/state?channel=robdiesalot&platform=kick', calls.join(' | '));
+  const bubble = host.querySelector('.uc-gif-cd');
+  check('GifCooldown: bublina s kolečkem a číslem sekund', G.visible && bubble.querySelector('.uc-gif-cd-text').textContent === 'GIF můžeš poslat za' && bubble.querySelector('.uc-gif-cd-ring em').textContent === '10' && bubble.querySelector('.uc-qd-ring') !== null);
+  t += 4_000; tick?.();
+  check('GifCooldown: odpočet (číslo klesá, kolečko ukazuje uplynulou část celého cooldownu)', bubble.querySelector('.uc-gif-cd-ring em').textContent === '6' && bubble.querySelector('.uc-gif-cd-ring i').style.props['--deg'] === '324deg', JSON.stringify(bubble.querySelector('.uc-gif-cd-ring i').style.props));
+  check('GifCooldown: odeslání bez GIF odkazu projde', G.checkSend('ahoj') === true);
+  check('GifCooldown: odeslání GIFu během cooldownu → blokováno, červeně „Můžeš až za:", okraj pole', G.checkSend('hele https://tenor.com/view/cat-gif-1') === false && G.blocked && bubble.classList.contains('uc-gif-cd--blocked')
+    && bubble.querySelector('.uc-gif-cd-text').textContent === 'Můžeš až za:' && input.classList.contains('uc-gif-input-blocked'));
+  G.onInput('hele');
+  check('GifCooldown: odkaz pryč → bublina i červená pryč', !G.visible && !input.classList.contains('uc-gif-input-blocked'));
+  G.onInput('https://giphy.com/gifs/x-1');
+  check('GifCooldown: stav z cache do konce cooldownu (bez nového dotazu)', calls.length === 1 && G.visible && !G.blocked);
+  t += 6_100; tick?.();
+  check('GifCooldown: cooldown doběhl → bublina zmizí, odeslání projde', !G.visible && G.checkSend('https://giphy.com/gifs/x-1') === true);
+  // Stav bez cooldownu (60 s cache) → po odeslání GIFu lokální cooldown z cooldownSec.
+  G.reset(); state = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 1 };
+  G.onInput('https://giphy.com/gifs/x-1'); await G.fetchState();
+  check('GifCooldown: bez cooldownu → bez bubliny', !G.visible && calls.length === 2);
+  G.onSent('https://giphy.com/gifs/x-1');
+  G.onInput('https://giphy.com/gifs/x-2');
+  check('GifCooldown: po odeslání GIFu lokální cooldown 60 s', G.visible && bubble.querySelector('.uc-gif-cd-ring em').textContent === '60' && calls.length === 2);
+  G.onDecided({ requestId: 1, channel: 'robdiesalot', status: 'rejected', own: true });
+  check('GifCooldown: vlastní GIF zamítnut → cooldown pryč', !G.visible && G.remainingMs() === 0);
+  // Mod (bez Dev módu) cooldown nemá ani po odeslání; Dev mód → review=1 v dotazu.
+  G.reset(); state = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
+  G.onInput('https://giphy.com/gifs/x-1'); await G.fetchState(); G.onSent('https://giphy.com/gifs/x-1'); G.onInput('https://giphy.com/gifs/x-1');
+  check('GifCooldown: mod → bez bubliny', !G.visible && G.checkSend('https://giphy.com/gifs/x-1') === true);
+  const R = new cd.GifCooldown({ doc, host: new El('div'), api: async (p) => { calls.push(p); return state; }, channel: () => 'robdiesalot', platform: () => 'twitch', review: () => true, now: () => t, setInterval: () => 1, clearInterval: () => {} });
+  await R.fetchState();
+  check('GifCooldown: Dev mód moda → review=1', calls.at(-1) === '/gif/state?channel=robdiesalot&platform=twitch&review=1', calls.at(-1));
+  const off = new cd.GifCooldown({ doc, host: new El('div'), api: async (p) => { calls.push(p); return state; }, channel: () => 'robdiesalot', platform: () => 'twitch', enabled: () => false, now: () => t, setInterval: () => 1, clearInterval: () => {} });
+  const nBefore = calls.length; off.onInput('https://giphy.com/gifs/x-1');
+  check('GifCooldown: nepřihlášený → žádný dotaz', calls.length === nBefore && off.checkSend('https://giphy.com/gifs/x-1') === true);
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

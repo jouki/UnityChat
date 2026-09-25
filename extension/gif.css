@@ -135,3 +135,38 @@
 @media (prefers-reduced-motion: reduce) {
   .uc-gif-card { transition: none; }
 }
+
+/* ---- Původní zpráva čeká na schválení (gif_request): v UnityChatu se nevykresluje vůbec ---- */
+.msg.uc-gif-held, .uc-uh-msg.uc-gif-held { display: none !important; }
+
+/* ---- Bublina cooldownu nad polem pro psaní (core/gif-cooldown.js) ----
+   Kolečko = komponenta odpočtu QR dona (.uc-qd-ring z qr-dono.css), tady jen větší a s číslem sekund. */
+.uc-gif-cd {
+  position: absolute;
+  right: 10px;
+  bottom: 100%;
+  z-index: 31;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 5px 8px 5px 12px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 999px;
+  background: #141417;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
+  color: var(--text-secondary, #adadb8);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.uc-gif-cd[hidden] { display: none; }
+.uc-gif-cd .uc-gif-cd-ring { width: 24px; height: 24px; }
+.uc-gif-cd .uc-gif-cd-ring em { font-weight: 700; font-variant-numeric: tabular-nums; }
+.uc-gif-cd--long .uc-gif-cd-ring em { font-size: 8px; }
+/* Pokus o odeslání během cooldownu: červený text, kolečko i okraj pole. */
+.uc-gif-cd--blocked { border-color: #e5484d; color: #ff6b70; }
+.uc-gif-cd--blocked .uc-gif-cd-ring { --accent: #ff5a5f; }
+#msg-input.uc-gif-input-blocked,
+#msg-input.uc-gif-input-blocked:focus,
+.uc-gif-input-blocked { border-color: #e5484d !important; box-shadow: 0 0 0 1px rgba(229, 72, 77, 0.35); }

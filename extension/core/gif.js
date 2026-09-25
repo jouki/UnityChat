@@ -50,6 +50,30 @@ export const isGifVideo = (g) => g?.kind === 'mp4';
 /** Syntetická zpráva schváleného GIFu (`gif-<requestId>`) — na platformě neexistuje (nativní odpověď / pin nejde). */
 export const isGifMessageId = (id) => /^gif-\d+$/.test(String(id ?? ''));
 
+/**
+ * Původní zpráva s GIF odkazem čeká na schválení (smazaná s důvodem `gif_request`): v UnityChatu se
+ * NEvykresluje vůbec — divák ani mod (odesílatel má kartu „čeká na schválení"). Po schválení ji nahradí GIF
+ * zpráva (`replaces`), po zamítnutí / propadnutí přijde znovu message-deleted s `gif_rejected` → běžně smazaná.
+ */
+export const GIF_HELD_REASON = 'gif_request';
+export const GIF_REJECTED_REASON = 'gif_rejected';
+export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;
+
+/**
+ * Nový důvod smazání u zprávy, která je zrovna schovaná jako gif_request: `platform` (bot ji smazal i na
+ * platformě — ozvěna) ji nechá schovanou; gif_rejected / mod / cokoli jiného ji ukáže jako smazanou.
+ */
+export function gifHeldAfter(prevReason, nextReason) {
+  if (!isGifHeldReason(prevReason)) return isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason ?? null;
+  return !nextReason || nextReason === 'platform' || isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason;
+}
+
+/** Schválený GIF → `{ platform, id }` původní zprávy, kterou nahrazuje (`replaces: "<platform>:<id>"`), nebo null. */
+export function gifReplacedTarget(msg) {
+  const m = /^(twitch|kick|youtube):(.{1,200})$/.exec(String(msg?.replaces ?? ''));
+  return m ? { platform: m[1], id: m[2] } : null;
+}
+
 /** Velikost v chatu: 100 %, nejvýš 400 × 250 px, poměr zachován, nikdy nezvětšovat. Neznámé rozměry = null. */
 export function gifFitSize(width, height, maxW = GIF_MAX_W, maxH = GIF_MAX_H) {
   const w = dim(width), h = dim(height);

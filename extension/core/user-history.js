@@ -810,7 +810,10 @@ export class UserHistoryPanel {
     }
     if (!gone && m.replyTo && (m.replyTo.username || m.replyTo.message)) row.appendChild(this._replyEl(msg));
     row.append(this._time(Number(m.timestamp)), this._platformMark(m.platform, uc), tx);
-    if (gone) this._paintGone(row, { deleted: !!m.deleted, hidden: !m.deleted && !!m.hidden, hasContent: false });
+    // GIF (moderace část 4): původní zpráva čekající na schválení (gif_request) se v UnityChatu nevykresluje —
+    // po schválení ji nahradí GIF zpráva, po zamítnutí z ní bude gif_rejected (smazaná, mod ji neodkryje).
+    if (m.deleted && m.deletedReason === 'gif_request') { row.hidden = true; row.classList.add('uc-gif-held'); }
+    if (gone) this._paintGone(row, { deleted: !!m.deleted, hidden: !m.deleted && !!m.hidden, hasContent: false, restorable: !String(m.deletedReason || '').startsWith('gif_') });
     // Akce moda jen v záložce aktuálního kanálu (v cizím kanálu mod práva nemá).
     if (this.view === 'mod' && this.modMenu && this._isCurrentTab()) row.appendChild(this._actions(m, gone));
     return row;
