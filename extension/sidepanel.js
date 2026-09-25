@@ -1126,7 +1126,15 @@ class UnityChat {
     const un = document.getElementById('input-username');
     if (un) un.readOnly = !on;
     document.body.classList.toggle('uc-dev', on);
-    if (!on && !document.body.classList.contains('uc-dono')) this._qd?.close?.();
+    this._updateQrAvailability();
+  }
+
+  /** QR dono jen pro přihlášené, u kanálu s dary (body.uc-dono) nebo v Dev mode. */
+  _updateQrAvailability() {
+    const b = document.body.classList;
+    const on = this._signedIn === true && (b.contains('uc-dono') || b.contains('uc-dev'));
+    this._qdDock?.setAvailable(on);
+    if (!on) this._qd?.close?.();
   }
 
   /** QR dono tlačítko jen u kanálu, kde má streamer v Židolištce nastavené dary (body.uc-dono). */
@@ -1139,7 +1147,7 @@ class UnityChat {
     } catch (e) { this._ucLog('QrDono', `dostupnost fail ${e?.error || e}`); }
     if (ch !== (this.config.channel || '').toLowerCase()) return; // mezitím přepnutý kanál
     document.body.classList.toggle('uc-dono', on);
-    if (!on && !document.body.classList.contains('uc-dev')) this._qd?.close?.();
+    this._updateQrAvailability();
     this._ucLog('QrDono', `${ch}: ${on ? 'dary zapnuté' : 'bez darů'}`);
   }
 
@@ -1176,8 +1184,8 @@ class UnityChat {
     if (!btn) return;
     const api = this._donateApi();
     this._qd = core.createQrDono({
-      // Kotva = řádek s QR tlačítkem (nad polem pro psaní) → panel se otevře nad ním, nepřekryje ho.
-      host: document.getElementById('tw-credits'),
+      // Kotva nad řádkem s body i nad polem → panel se otevře nad nimi, ať je tlačítko kdekoli.
+      host: document.getElementById('qd-anchor'),
       button: btn,
       api,
       identity: () => {
@@ -1194,6 +1202,20 @@ class UnityChat {
     const slot = document.getElementById('email-settings');
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
+    }
+    // Pozice tlačítka podle šířky chatu: > 500 px v poli vedle noty, jinak v řádku nad polem.
+    const row = document.getElementById('tw-credits');
+    if (row && core.createToolDock) {
+      this._qdDock = core.createToolDock({
+        button: btn, row, container: document.body, breakpoint: 500,
+        inlineParent: document.querySelector('#input-area .msg-input-wrap'),
+        inlineBefore: document.getElementById('btn-sfx'),
+        rowHasOther: () => !document.body.classList.contains('uc-no-twitch-login')
+          && [...row.querySelectorAll('.tc-pill')].some((p) => !p.classList.contains('hidden')),
+      });
+      // Pill bodů/bitů se objeví nebo zmizí → řádek otevřít/zavřít.
+      new MutationObserver(() => this._qdDock.update()).observe(row, { subtree: true, attributes: true, attributeFilter: ['class'] });
+      this._updateQrAvailability();
     }
     this._ucLog('QrDono', 'zapnuto');
     this._refreshDonoAvailability();
@@ -4478,6 +4500,8 @@ class UnityChat {
     this._qd?.refreshIdentity?.();
     // E-mail v nastavení patří k účtu → bez přihlášení skrytý.
     document.body.classList.toggle('uc-signed-out', !linked.length);
+    this._signedIn = linked.length > 0;
+    this._updateQrAvailability();
     this._emailSettings?.refresh?.();
   }
 
@@ -4533,6 +4557,7 @@ class UnityChat {
     if (btn) btn.title = id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
+    this._qdDock?.update();
     const menu = document.getElementById('platform-menu');
     if (menu && !menu.classList.contains('hidden')) this._renderPlatformMenu();
   }

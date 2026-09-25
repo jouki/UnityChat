@@ -2,8 +2,9 @@
    Panel se kotví nad hostitele (#input-area) jako soundboard. */
 
 .uc-qd {
-  position: absolute; bottom: 100%; left: 10px; right: 10px; z-index: 32;
-  max-width: 460px; max-height: min(620px, 80vh); overflow-y: auto;
+  /* Zarovnaný doprava (k tlačítku), nejvýš 460 px; v úzkém chatu přes celou šířku. */
+  position: absolute; bottom: 100%; left: max(10px, calc(100% - 470px)); right: 10px; z-index: 32;
+  max-height: min(620px, 80vh); overflow-y: auto;
   margin-bottom: 6px; padding: 10px 12px 12px;
   /* Tmavší než --bg-tertiary, ať panel nesvítí proti chatu (pokyn usera 2026-09-25); pole zůstávají o stupeň světlejší. */
   background: #141417; border: 1px solid var(--border); border-radius: 8px;
@@ -182,3 +183,32 @@
 }
 .uc-es .uc-es-btn:hover:not(:disabled) { color: #fff; box-shadow: 0 0 8px rgba(255, 140, 0, 0.35); }
 .uc-es-err { margin: 0; color: #ff8a8a; font-size: 12px; }
+
+/* Umístění tlačítka QR dono podle šířky chatu (core/tool-dock.js), addon i web:
+   široký chat → v poli pro psaní vlevo od noty (fade in), úzký → řádek nad polem vyjede zespodu. */
+.uc-qd-anchor { position: relative; height: 0; }
+.uc-tool-btn[hidden] { display: none !important; }
+.uc-tool-btn.uc-dock-inline {
+  position: absolute; right: 32px; bottom: 3px; margin: 0;
+  width: 26px; height: 26px; padding: 0; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
+  color: var(--text-secondary, #9a9aa6); cursor: pointer;
+}
+.uc-tool-btn.uc-dock-inline svg { width: 16px; height: 16px; }
+/* Hover stejný jako nota a smajlík (pravidlo výše by ho jinak přebilo). */
+.uc-tool-btn.uc-dock-inline:hover, .uc-tool-btn.uc-dock-inline.active {
+  color: var(--accent-light); border-color: transparent;
+  background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
+}
+.msg-input-wrap:has(.uc-sb-btn:not(.hidden)) .uc-tool-btn.uc-dock-inline { right: 60px; }
+.msg-input-wrap:has(.uc-dock-inline:not([hidden])) #msg-input { padding-right: 62px; }
+.msg-input-wrap:has(.uc-dock-inline:not([hidden])):has(.uc-sb-btn:not(.hidden)) #msg-input { padding-right: 90px; }
+.uc-dock-fade { animation: uc-dock-fade 0.25s ease both; }
+@keyframes uc-dock-fade { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
+.uc-dock-row { max-height: 48px; transition: max-height 0.25s ease, opacity 0.2s ease, transform 0.25s ease, padding 0.25s ease, border-top-width 0.25s ease; }
+.uc-dock-row.uc-dock-noanim { transition: none; }
+.uc-dock-row.uc-dock-shut {
+  max-height: 0; opacity: 0; transform: translateY(100%); overflow: hidden; pointer-events: none;
+  padding-top: 0 !important; padding-bottom: 0 !important; border-top-width: 0 !important;
+}

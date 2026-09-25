@@ -5,9 +5,18 @@ import { mountCodeInput } from './code-input.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/** Čas, od kdy půjde e-mail znovu změnit (backend drží změnu na 1× za 24 h). */
+export function changeAllowedText(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return 'E-mail jde změnit jen jednou za 24 hodin.';
+  const when = d.toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `E-mail jde změnit jen jednou za 24 hodin, znovu to půjde ${when}.`;
+}
+
 /** Chybové kódy backendu → česky. */
 export function emailErrorText(e) {
   switch (e?.error) {
+    case 'change_cooldown': return changeAllowedText(e.retryAt);
     case 'bad_email': return 'E-mail nemá platný tvar.';
     case 'cooldown': return 'Kód jsme už poslali, další půjde poslat za chvíli.';
     case 'daily_limit': return 'Dnes už jsme ti poslali moc kódů, zkus to zítra.';
@@ -55,6 +64,9 @@ export function createEmailSettings({ container, api, onChange, log }) {
     const q = (s) => container.querySelector(s);
     const err = (m) => { q('.uc-es-err').textContent = m || ''; q('.uc-es-err').hidden = !m; };
     if (p && p.mailEnabled === false) { q('.uc-es-btn').disabled = true; q('.uc-es-btn').title = 'Ověřování e-mailu je teď vypnuté.'; }
+    else if (verified && p.changeAllowedAt && new Date(p.changeAllowedAt).getTime() > Date.now()) {
+      q('.uc-es-btn').disabled = true; q('.uc-es-btn').title = changeAllowedText(p.changeAllowedAt);
+    }
     q('.uc-es-btn').addEventListener('click', () => { q('.uc-es-new').hidden = false; q('.uc-es-in').focus(); });
     const go = () => {
       const email = q('.uc-es-in').value.trim();

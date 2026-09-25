@@ -5,6 +5,14 @@ export const CODE_TTL_MS = 10 * 60_000;
 export const MAX_ATTEMPTS = 5;
 /** Cooldown před dalším odesláním: po 1. e-mailu 2 min, po 2. 5 min, pak 15 min (pokyn usera). */
 export const RESEND_COOLDOWN_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000];
+/** Změna už ověřeného e-mailu nejvýš 1× za 24 h (proti spamu kódy, pokyn usera 2026-09-25). */
+export const EMAIL_CHANGE_COOLDOWN_MS = 24 * 60 * 60_000;
+/** Kdy smí účet ověřený e-mail zase změnit (0 = hned; bez e-mailu vždy hned). */
+export function emailChangeAllowedAt(verifiedAt: Date | null, now = Date.now()): number {
+  if (!verifiedAt) return 0;
+  const at = verifiedAt.getTime() + EMAIL_CHANGE_COOLDOWN_MS;
+  return at > now ? at : 0;
+}
 export const LIMITS = { perAccountDay: 6, perEmailDay: 6, perIpDay: 10 };
 
 export const normEmail = (e: string) => e.trim().toLowerCase();
