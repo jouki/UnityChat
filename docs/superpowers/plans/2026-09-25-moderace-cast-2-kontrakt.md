@@ -169,3 +169,54 @@ data: { "type": "chat.user_moderated", "workspace": "rob", "platform": "twitch",
 Beze změny proti části 1 (`lib/modScopes.ts`): Twitch `moderator:manage:banned_users` (timeout/ban/unban),
 `moderator:manage:warnings` (varování); Kick `moderation:ban`; YouTube `youtube.force-ssl`.
 `!permit` účtem moda potřebuje běžný scope pro psaní (`user:write:chat` / `chat:write` / force-ssl).
+
+## Část 3 — filtr odkazů a permit (backend `lib/linkFilter.ts`, `lib/linkRestore.ts`, `lib/links.ts`)
+
+**Nic se nezapíná samo.** Filtr řídí jen `enabled` z nastavení workspace v Židolištce (výchozí `false`).
+Bez odpovědi Židolišty (nikdy nenačteno, chybí `ZIDOLISTA_API_KEY`) = vypnuto → nic se nemaže (fail-open).
+Při pozdějším výpadku platí poslední známé nastavení. Zapnout až **po vypnutí link filtru v SE**.
+
+### Nastavení (UnityChat → Židolišta)
+`GET <ZIDOLISTA_API_BASE>/integrations/:slug/link-filter` (X-Api-Key, `If-None-Match` → `304`)
+→ `{ ok, workspace, enabled, allowDomains[], extraBots[], version }`. Cache 60 s per workspace,
+načítá se dopředu po každém načtení registru workspaců. Domény se normalizují (bez schématu, cesty, `*.`, `www.`),
+povolená doména pokrývá i subdomény (`m.youtube.com` ⊂ `youtube.com`, ne `evilyoutube.com`).
+Webhook `POST /commands/invalidate { workspace, reason: "link-filter", data: { version } }` → cache i ETag pryč,
+načte se znovu; odpověď `{ ok, workspace, enabled, version }`, neznámý workspace `404 unknown_workspace`.
+
+### Filtr (ingest, jen živé zprávy)
+- Kanál musí být v registru workspaců a workspace musí mít Twitch kanál (= UC kanál).
+- Odkaz = sdílený detektor `extension/core/links.js` (backend má vědomou kopii `lib/links.ts`, test porovnává
+  obě): i bez schématu (`neco.cz/x`, `www.x.com`, známá TLD), ne verze, čísla, časy, e-maily, @zmínky, emoty.
+- **Výjimky:** broadcaster, mod, VIP (odznaky zprávy; Kick OG = VIP), známí boti (bot identity workspace / sdílený
+  JoukiBOT, `bot.ownLogins`, StreamElements, Nightbot, Streamlabs, `extraBots`), aktivní permit.
+- **Akce:** zpráva se označí jako smazaná **před** zápisem do archivu a rozesláním — `/chat/stream` i archiv ji mají
+  rovnou jako `deleted: true` bez obsahu (obsah zůstává v DB, `deleted_reason = 'link_filter'`, `deleted_by = 'filter'`).
+  Pak SSE `message-deleted { channel, platform, messageId, by: "filter", reason: "link_filter", at }`
+  + `chat.deleted` (reason `link_filter`) a smazání na platformě **botem workspace** (`accountId: null`).
+  Bez hlášky a bez timeoutu. Evidence `moderation_actions` (`actor: "filter"`, `action: "delete"`,
+  `params: { reason: "link_filter", host }`). Chyby se jen logují, ingest nikdy nespadne.
+
+### Permit
+- **Z chatu:** `!permit <login> [doba]` od moda/broadcastera (odznaky) z libovolného klienta. Doba `90`, `90s`,
+  `2m`, `2min`, ořez 30–600 s, výchozí 60 s. Echo `!permit` od našeho bota se ignoruje (permit z nabídky už platí).
+  Cíl: login v archivu kanálu → všechny známé identity (propojený UC účet, jen platformy kanálu); uživatel,
+  který ještě nepsal → permit podle loginu na platformě příkazu. Evidence `moderation_actions`
+  (`action: "permit"`, `params.source: "chat"`).
+- **Z nabídky:** `POST /moderation/permit` (část 2) beze změny, jen permity jdou navíc do paměti filtru.
+- Permit platí v paměti serveru (rozhoduje synchronně) + `link_permits` (po restartu se načtou platné).
+  Delší permit vyhrává (kratší ho nepřepíše). Shoda podle `(UC kanál, platforma, userId)` nebo loginu.
+
+### Obnovení zprávy permitem
+`POST /moderation/permit` má nové volitelné pole `messageId` (klient ho posílá, když se nabídka otevřela na
+potvrzené zprávě). Po úspěšném permitu: je-li zpráva téhož autora v kanálu smazaná **filtrem odkazů**, smazání se
+v DB zruší a jde SSE
+```json
+{ "channel": "robdiesalot", "platform": "twitch", "messageId": "abc", "by": "twitch:modik", "at": 1790000000000,
+  "message": { "platform": "twitch", "id": "abc", "username": "divak", "message": "koukni na neco.cz", "...": "..." } }
+```
+jako `event: message-restored` (tvar `message` = `/chat/history`) + `chat.restored { workspace, platform, messageId, by }`
+do integračního streamu. Na platformě zpráva zůstává smazaná. Smazání modem / platformou se neobnovuje.
+Odpověď navíc: `results.restore` = `'ok' | 'not_found' | 'error:no_channel' | 'error:db'` a `restored: boolean`
+(jen když přišlo `messageId`). Klient (addon `_unhideMessage(d, { restore: true })`, core `buildModRequest`)
+zprávu vykreslí na místě z `message`; hláška permitu doplní „zpráva obnovena“.
