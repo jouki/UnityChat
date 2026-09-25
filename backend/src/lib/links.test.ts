@@ -58,7 +58,7 @@ const TOKENS: Array<[string, string | null]> = [
   ['.cz', null],
   ['cz.', null],
   ['', null],
-  ['a:b.cz', null],
+  ['a:b.cz', 'b.cz'],
   ['[emote:123:Kappa]', null],
   // české věty a přípony souborů bez www/cesty
   ['tak.co', null],
@@ -81,6 +81,19 @@ const TOKENS: Array<[string, string | null]> = [
   ['ahoj,evil.com', 'evil.com'],
   ['🔥www.evil.co', 'www.evil.co'],
   ['x:www.evil.co/a', 'www.evil.co'],
+  // kolo 2: host za schématem končí oddělovačem, dvojtečka bez schématu, apostrof, slova jako TLD
+  ['https://evil.com,ahoj', 'evil.com'],
+  ['https://evil.com)', 'evil.com'],
+  ['https://evil.com:443,x', 'evil.com'],
+  ['x:evil.com', 'evil.com'],
+  ['evil.co:8080/x', 'evil.co'],
+  ["it's.com", null],
+  ['it’s.com', null],
+  ['ok.at', null],
+  ['tak.be', null],
+  ['ano.es', null],
+  ['with.us', null],
+  ['D:', null],
 ];
 
 const TEXTS: Array<[string, string[]]> = [
@@ -93,6 +106,8 @@ const TEXTS: Array<[string, string[]]> = [
   ['', []],
   ['tak.co dobre.to jo.je ok.no readme.md run.sh', []],
   ['seznam.cz,https://evil.com', ['seznam.cz', 'evil.com']],
+  ['https://a.com,https://b.com', ['a.com', 'b.com']],
+  ['xhttps://a.com/x?q=https://b.com', ['a.com', 'b.com']],
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));

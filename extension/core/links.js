@@ -6,12 +6,14 @@
 //
 // Co je odkaz:
 //  - cokoli se schématem http(s):// / ftp:// (host libovolný, i IP) — i přilepené uvnitř tokenu
-//    (`ahoj,https://x.cz`, `x:https://x.cz`),
+//    (`ahoj,https://x.cz`, `x:https://x.cz`), host končí prvním znakem, který v hostu být nemůže
+//    (`https://x.cz,ahoj`), víc schémat v jednom tokenu = víc odkazů,
 //  - bez schématu jen se známou TLD (seznam TLDS) A ZÁROVEŇ jedno z: prefix `www.`, cesta/dotaz za
 //    doménou (`neco.cz/x`, `bit.ly/abc`), nebo TLD z užšího seznamu BARE_TLDS (`seznam.cz`, `discord.gg`).
 //    BARE_TLDS vynechává TLD, která jsou česká slova (`tak.co`, `dobre.to`, `jo.je`, `ok.no`), a
 //    přípony souborů (`readme.md`, `run.sh`, `main.py`) — bez www/cesty to odkaz není,
-//  - doména přilepená za interpunkcí nebo emoji (`ahoj,evil.com`, `🔥evil.com`).
+//  - doména přilepená za interpunkcí, dvojtečkou nebo emoji (`ahoj,evil.com`, `x:evil.com`, `🔥evil.com`);
+//    apostrof je součást slova (`it's.com` není `s.com`).
 // Co odkaz NENÍ: verze (`v1.2`, `1.2.3`), desetinná čísla a časy (`1.5`, `12:30`),
 // e-maily a @zmínky (token se `@`), emoty (jméno bez tečky), holá IP bez schématu.
 
@@ -36,23 +38,27 @@ const COUNTRY_TLDS = (
   'ua ug uk us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw'
 ).split(' ');
 const TLDS = new Set([...GENERIC_TLDS, ...COUNTRY_TLDS]);
-// TLD, které stačí i holé (bez www a bez cesty). Záměrně BEZ českých slov (co, to, se, si, na, je, ne,
-// no, by, do, za, me, my, ty, on, ta, te, ze, od, po, ve, ke, ku, ji, mi, ti, ho, mu, jo, …) a bez
-// přípon souborů (md, py, sh, js, ts, rs, go, pl, …).
+// TLD, které stačí i holé (bez www a bez cesty). Záměrně BEZ českých a běžných anglických slov (co, to, se,
+// si, na, je, ne, no, by, do, za, me, my, ty, on, ta, te, ze, od, po, ve, ke, ku, ji, mi, ti, ho, mu, jo,
+// at, be, es, it, is, us, …) a bez přípon souborů (md, py, sh, js, ts, rs, go, pl, …).
 const BARE_TLDS = new Set([
   'com', 'net', 'org', 'info', 'biz', 'io', 'gg', 'tv', 'fm', 'ly', 'cc', 'xyz', 'app', 'dev', 'online', 'site',
   'shop', 'store', 'live', 'stream', 'link', 'click', 'top', 'club', 'vip', 'win', 'bet', 'casino', 'icu',
   'gift', 'gifts', 'free', 'money', 'cash', 'crypto', 'finance', 'market', 'sale', 'deals', 'porn', 'xxx',
   'tube', 'website', 'space', 'blog', 'news', 'tech', 'cloud', 'email', 'social', 'wiki', 'games',
-  'cz', 'sk', 'eu', 'de', 'at', 'uk', 'ru', 'ua', 'us', 'fr', 'nl', 'be', 'ch', 'hu', 'es', 'ca', 'jp', 'cn', 'br', 'ai',
+  'cz', 'sk', 'eu', 'de', 'uk', 'ru', 'ua', 'fr', 'nl', 'ch', 'hu', 'ca', 'jp', 'cn', 'br', 'ai',
 ]);
 
 const SCHEME_RE = /^(?:https?|ftp):\/\//i;
-const SCHEME_ANY_RE = /(?:https?|ftp):\/\//i;
+// Všechna schémata v tokenu (vždy nový RegExp — globální stav lastIndex).
+const SCHEME_ALL_SRC = '(?:https?|ftp):\\/\\/';
+// Host za schématem: volitelné userinfo, pak znaky hostu; končí prvním jiným znakem (`,`, `/`, `:`…).
+const HOST_AFTER_SCHEME = /^(?:[^\s/?#@]*@)?([\p{L}\p{N}.-]+)/u;
 // Uvnitř tokenu: `www.` nepředcházené písmenem/číslicí/tečkou/pomlčkou (`🔥www.x.cz`, `x:www.x.cz`).
 const WWW_ANY_RE = /(?<![\p{L}\p{N}.-])www\./iu;
-// Oddělovače uvnitř tokenu, které v hostu být nemůžou (`ahoj,evil.com`, `(viz neco.cz)`).
-const SEGMENT_SEP = /[,;!(){}[\]<>"'„“”‚‘’«»|…]+/;
+// Oddělovače uvnitř tokenu, které v hostu být nemůžou (`ahoj,evil.com`, `(viz neco.cz)`, `x:evil.com`).
+// Dvojtečka jen když za ní není port (`neco.cz:8080`). Apostrof NENÍ oddělovač (`it's.com`).
+const SEGMENT_SEP = /[,;!(){}[\]<>"„“”‚«»|…]+|:(?!\d{1,5}(?:[/?#]|$))/;
 // Znaky, které obalují odkaz ve větě („(viz neco.cz)", "<https://x>", „neco.cz!").
 const LEAD_PUNCT = /^[(\[{<"'„“‚‘«»]+/;
 const TRAIL_PUNCT = /[)\]}>"'“”‘’«».,;:!?…]+$/;
@@ -79,8 +85,8 @@ function validLabels(host) {
 
 /** Kandidát se schématem na začátku → host, nebo null. */
 function schemeHost(c) {
-  const rest = c.replace(TRAIL_PUNCT, '').replace(SCHEME_RE, '');
-  const host = cleanHost(rest.split(/[/?#]/)[0]);
+  const m = HOST_AFTER_SCHEME.exec(c.replace(SCHEME_RE, ''));
+  const host = m ? m[1].replace(/\.+$/, '').toLowerCase() : '';
   if (!host) return null;
   if (IPV4_RE.test(host) || host === 'localhost') return host;
   return validLabels(host) ? host : null;
@@ -116,14 +122,16 @@ function tokenHosts(token) {
   const t = String(token || '');
   if (!t) return [];
   const out = [];
-  const m = SCHEME_ANY_RE.exec(t);
-  const plain = m ? t.slice(0, m.index) : t;
+  const starts = [];
+  const re = new RegExp(SCHEME_ALL_SRC, 'gi');
+  for (let m = re.exec(t); m; m = re.exec(t)) starts.push(m.index);
+  const plain = starts.length ? t.slice(0, starts[0]) : t;
   for (const seg of plain.split(SEGMENT_SEP)) {
     const h = seg ? bareHost(seg) : null;
     if (h) out.push(h);
   }
-  if (m) {
-    const h = schemeHost(t.slice(m.index));
+  for (let i = 0; i < starts.length; i++) {
+    const h = schemeHost(t.slice(starts[i], starts[i + 1] ?? t.length));
     if (h) out.push(h);
   }
   return out;
