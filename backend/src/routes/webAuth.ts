@@ -11,11 +11,11 @@ import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import {
   allowedOrigins, isAllowedReturnTo, issueCode, consumeCode, bearerToken, validateWebSession, deleteWebSession,
-  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity,
+  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity, signOutAccount,
   needsRefresh, type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
-import { ucSends, markUc } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -38,6 +38,8 @@ const SendBody = z.object({
   replyTo: z.string().max(200).optional().nullable(),
   /** Login autora zprávy, na kterou se odpovídá — pro záložní „@login text", když platforma odpověď odmítne. */
   replyToUser: z.string().max(60).optional().nullable(),
+  /** Odpověď napříč platformami (UnityChat): na kterou zprávu se odpovídá — server ji spáruje s echem. */
+  ucReplyTo: z.object({ platform: z.string(), id: z.string(), username: z.string().optional(), message: z.string().optional(), authorUc: z.boolean().optional() }).optional().nullable(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';
@@ -121,9 +123,13 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     return { ok: true, accountId: req.webAccountId, platforms };
   });
 
+  // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.
   app.post('/auth/logout', async (req) => {
     const raw = bearerToken(req);
-    if (raw) await deleteWebSession(raw);
+    if (!raw) return { ok: true };
+    const accountId = await validateWebSession(raw);
+    if (accountId !== null) await signOutAccount(accountId);
+    else await deleteWebSession(raw);
     return { ok: true };
   });
 
@@ -195,6 +201,13 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       if (!liveChatId) throw new SendError('youtube: live chat not active', 409);
       return sendYoutube({ accessToken: ident!.accessToken, liveChatId, text });
     };
+
+    // Odpověď napříč platformami: nahlásit PŘED odesláním, echo z ingestu ji pak rovnou ponese.
+    const ucReply = body.data.replyTo ? null : parseUcReply(body.data.ucReplyTo);
+    if (ucReply) {
+      const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text, data: ucReply });
+      if (rh) attachUcReply(rh, ucReply, req.log, { late: true });
+    }
 
     try {
       if (needsRefresh(ident.expiresAt)) await refresh();

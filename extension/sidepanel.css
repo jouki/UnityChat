@@ -140,7 +140,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   gap: 2px;
 }
 
-#btn-reconnect, #btn-popout, #btn-dump, #btn-account, #btn-settings {
+#btn-bar, #btn-reconnect, #btn-popout, #btn-dump, #btn-settings {
   background: none;
   border: none;
   color: var(--text-secondary);
@@ -233,12 +233,12 @@ body.layout-large #settings details summary { font-size: 15px; }
 #btn-dump, #btn-popout {
   font-size: 14px;
 }
-#btn-reconnect, #btn-popout, #btn-account { display: inline-flex; align-items: center; }
-/* Přihlášený účet: ikona v barvě značky. */
-#btn-account.logged { color: var(--accent); }
+#btn-bar, #btn-reconnect, #btn-popout { display: inline-flex; align-items: center; }
+#btn-bar { justify-content: center; min-width: 28px; align-self: stretch; }
+#btn-bar .dot { width: 9px; height: 9px; }
 #btn-reconnect:active svg { transform: rotate(-90deg); transition: transform 0.15s; }
 
-#btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-account:hover, #btn-settings:hover {
+#btn-bar:hover, #btn-reconnect:hover, #btn-popout:hover, #btn-dump:hover, #btn-settings:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
@@ -477,40 +477,22 @@ body.layout-large #settings details summary { font-size: 15px; }
   padding-bottom: 10px;
 }
 
-/* ---- Účet UnityChat ---- */
-.account-summary { font-weight: 400; color: var(--accent); margin-left: 4px; }
-.account-hint { margin: 0 0 6px; font-size: 11px; color: var(--text-muted); line-height: 1.35; }
-.account-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
+/* Řádek s body a bity z Twitche jen s přihlášeným Twitch účtem (pokyn usera 2026-09-24). */
+body.uc-no-twitch-login #tw-credits .tc-pill { display: none !important; }
+body.uc-no-twitch-login:not(.uc-dev) #tw-credits { display: none !important; }
+/* Dev mode: QR dono tlačítko v řádku s body z Twitche; bez pill je řádek jen s ním. */
+#tw-credits .uc-tool-btn { display: none; }
+body.uc-dev #tw-credits.hidden { display: flex; }
+body.uc-dev #tw-credits .uc-tool-btn {
+  display: inline-flex; align-items: center; justify-content: center; margin-left: auto;
+  width: 26px; height: 24px; padding: 0; border-radius: 6px; cursor: pointer;
+  background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
 }
-.account-row .badge { flex: 0 0 auto; }
-.account-row .account-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-primary);
-}
-.account-row .account-name.off { color: var(--text-muted); }
-.account-row button, .account-logout {
-  flex: 0 0 auto;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.account-row button.primary { background: var(--accent-gradient); border-color: transparent; color: #1a1000; font-weight: 600; }
-.account-row button:hover, .account-logout:hover { color: var(--text-primary); filter: brightness(1.1); }
-.account-row button:disabled { opacity: 0.5; cursor: default; }
-.account-logout { margin-top: 6px; }
+body.uc-dev #tw-credits .uc-tool-btn svg { width: 16px; height: 16px; }
+.dev-only { display: none; }
+body.uc-dev .dev-only { display: block; }
+/* Bez přihlášení: celé pole pro psaní pryč, zůstane výzva #login-cta. */
+#input-area .msg-input-wrap.hidden { display: none !important; }
 
 .nick-status {
   display: block;
@@ -606,7 +588,12 @@ body.layout-large #settings details summary { font-size: 15px; }
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   gap: 8px;
+  max-height: 40px;
+  overflow: hidden;
+  transition: max-height 200ms ease, padding 200ms ease, opacity 200ms ease, border-color 200ms ease;
 }
+/* Sbaleno tlačítkem #btn-bar v hlavičce (config.barCollapsed). */
+#bar.collapsed { max-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; border-bottom-width: 0; }
 
 /* Stavová tečka žije uvnitř filter tlačítka. Bez stavu = červená
    (nepřipojeno), vyfiltrovaná platforma = šedá bez ohledu na stav. */
@@ -2969,12 +2956,19 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .msg-input-wrap:has(#msg-input.hidden) { display: none; }
 .emote-btn {
   position: absolute; right: 4px; bottom: 3px;
-  width: 26px; height: 26px; padding: 0;
+  width: 26px; height: 26px; padding: 0; box-sizing: border-box;
   display: flex; align-items: center; justify-content: center;
-  border: none; border-radius: 5px; background: transparent;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
   color: var(--text-secondary, #9a9aa6); cursor: pointer;
 }
-.emote-btn:hover, .emote-btn.active { color: var(--accent); background: rgba(255, 140, 0, 0.12); }
+/* Jednotný hover ikonových tlačítek (emoty, soundboard, QR dono): tmavé pozadí, UnityChat gradient
+   v rámečku, zlatá ikona — stejně jako „Změnit email". */
+.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active,
+body.uc-dev #tw-credits .uc-tool-btn:hover, body.uc-dev #tw-credits .uc-tool-btn.active {
+  color: var(--accent-light);
+  border-color: transparent;
+  background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
+}
 #msg-input:disabled + .emote-btn { opacity: 0.4; pointer-events: none; }
 
 .uc-ep {
@@ -3026,3 +3020,18 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .emote-preview .ep-names .ep-name { opacity: 0.75; }
 .emote-preview .ep-names .ep-name.active, .emote-preview .ep-names .ep-name:only-child { opacity: 1; }
 .emote-preview .ep-plus { color: var(--text-secondary, #9a9aa6); font-weight: 400; }
+
+
+/* ---- Příjezd nové zprávy zespodu (core/slide-in.js) — OBS chat, web i addon ---- */
+@property --uc-slide { syntax: '<length>'; inherits: true; initial-value: 0px; }
+#chat.uc-sliding { transition: --uc-slide var(--uc-slide-ms, 160ms) cubic-bezier(0.2, 0.7, 0.2, 1); }
+#chat.uc-sliding.uc-slide-jump { transition: none; }
+#chat.uc-sliding > * { transform: translateY(var(--uc-slide)); }
+
+/* Odpověď napříč platformami: malé logo platformy citované zprávy v ↩ řádku (core/uc-reply.js). */
+.reply-ctx .rctx-pi { width: 12px; height: 12px; vertical-align: -2px; margin-right: 1px; }
+
+/* Autor citované zprávy je uživatel UnityChatu → zlaté logo (jako .pi.uc). */
+.reply-ctx .rctx-pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
+.reply-ctx .rctx-pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
+.reply-ctx .rctx-pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }

@@ -4,7 +4,7 @@ import { db } from '../db/index.js';
 import { messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
-import { ucSends, markUc } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -25,7 +25,8 @@ export interface ClientMessage {
   twitchEmotesOffset?: number;
   firstMsg?: boolean;
   isAction?: boolean;
-  replyTo?: { username: string; message: string; id: string } | null;
+  /** platform + uc: odpověď napříč platformami nahlášená UnityChatem (content_raw.ucReply). */
+  replyTo?: { username: string; message: string; id: string; platform?: string; uc?: boolean; authorUc?: boolean } | null;
   kickContent?: string;
   ytRuns?: unknown[];
   superChat?: boolean;
@@ -45,6 +46,16 @@ export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platfo
 
 /** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
 export function toClientMessage(row: ClientRow, historical = true): ClientMessage {
+  const out = toClientMessageBase(row, historical);
+  // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
+  const ur = ((row.contentRaw || {}) as Record<string, unknown>).ucReply as Record<string, unknown> | undefined;
+  if (ur && ur.id && !out.replyTo) {
+    out.replyTo = { username: String(ur.username || ''), message: String(ur.message || ''), id: String(ur.id), platform: String(ur.platform || ''), uc: true, ...(ur.authorUc ? { authorUc: true } : {}) };
+  }
+  return out;
+}
+
+function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage {
   const raw = (row.contentRaw || {}) as Record<string, unknown>;
   const base = {
     platform: row.platform,
@@ -145,18 +156,29 @@ export default async function chatRoutes(app: FastifyInstance) {
    * (`!…`, bez markeru) nahlásí, že ho poslal z UnityChatu; ingest pak zprávu označí
    * (lib/ucSends.ts) a klienti dostanou SSE `uc-mark` → zlaté logo. Jen commandy.
    */
-  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string } }>('/chat/uc-sent', async (req, reply) => {
+  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string; replyTo?: unknown } }>('/chat/uc-sent', async (req, reply) => {
     if (!ucLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const platform = String(req.body?.platform || '');
     const channel = String(req.body?.channel || '').toLowerCase().replace(/^@/, '');
     const username = String(req.body?.username || '').slice(0, 60);
     const text = String(req.body?.text || '').slice(0, 500);
-    if (!(PLATFORMS as readonly string[]).includes(platform) || !CHANNEL_RE.test(channel) || !username || !text.trim().startsWith('!')) {
+    // Odpověď napříč platformami (záložní odesílání přes kartu): i zpráva, která není command.
+    const ucReply = parseUcReply(req.body?.replyTo);
+    const isCmd = text.trim().startsWith('!');
+    if (!(PLATFORMS as readonly string[]).includes(platform) || !CHANNEL_RE.test(channel) || !username || (!isCmd && !ucReply)) {
       return reply.code(400).send({ ok: false, error: 'bad_request' });
     }
     const ch = await platformChannel(platform, channel);
-    const hit = ucSends.report({ platform, channel: ch, username, text });
-    if (hit) markUc(hit, app.log, { late: true });
+    let hit = null;
+    if (isCmd) {
+      hit = ucSends.report({ platform, channel: ch, username, text });
+      if (hit) markUc(hit, app.log, { late: true });
+    }
+    if (ucReply) {
+      const rh = ucReplies.report({ platform, channel: ch, username, text, data: ucReply });
+      if (rh) attachUcReply(rh, ucReply, app.log, { late: true });
+      hit = hit || rh;
+    }
     return { ok: true, matched: !!hit };
   });
 

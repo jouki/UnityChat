@@ -11,12 +11,14 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
-import { ucSends, markUc } from './lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply } from './lib/ucSends.js';
 import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
 import rawProfileRoutes from './routes/rawProfiles.js';
 import soundboardRoutes from './routes/soundboard.js';
+import donateRoutes from './routes/donate.js';
+import accountRoutes from './routes/account.js';
 import reactionRoutes from './routes/reactions.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
@@ -28,6 +30,7 @@ import { toClientMessage } from './routes/chat.js';
 import { toRow } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
+import { startMailKeepalive } from './lib/mailKeepalive.js';
 
 const startedAt = Date.now();
 
@@ -71,6 +74,9 @@ const ingest = createIngest({
   onLive: (m) => {
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).
     if (ucSends.match(m)) markUc(m, app.log);
+    // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
+    const rep = ucReplies.take(m);
+    if (rep?.data) attachUcReply(m, rep.data, app.log);
     publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
     publishIntegration(m);
@@ -78,6 +84,7 @@ const ingest = createIngest({
 });
 app.addHook('onReady', async () => {
   ingest.start();
+  startMailKeepalive(app.log);
   // Registr workspaců Židolišty (mapování kanálů pro stream) + loginy botů pro isBot.
   // Kanály workspaců se přidávají do ingestu automaticky (env CHAT_INGEST_CHANNELS je jen základ).
   onWorkspaces((list) => {
@@ -127,6 +134,8 @@ await app.register(integrationRoutes, { ingest });
 await app.register(rawProfileRoutes);
 await app.register(reactionRoutes);
 await app.register(soundboardRoutes);
+await app.register(donateRoutes);
+await app.register(accountRoutes);
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);

@@ -256,6 +256,9 @@ export const webIdentities = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     scopes: text('scopes').array(),
     keyVersion: integer('key_version').notNull().default(1),
+    // „Odhlásit se" (2026-09-24): identita zůstane kvůli návaznosti účtu (oblíbené zvuky apod.),
+    // tokeny se zahodí a do dalšího přihlášení přes tuhle platformu se k účtu nepočítá.
+    signedOutAt: timestamp('signed_out_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -317,6 +320,44 @@ export const rawProfiles = pgTable('raw_profiles', {
   id: text('id').primaryKey(),
   settings: jsonb('settings').notNull().$type<Record<string, unknown>>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// QR dono (spec 2026-09-25-qr-dono-v-unitychatu-design.md): e-mail zadaný uživatelem a ověřený
+// kódem patří ÚČTU (všem propojeným identitám). Z loginů platforem se e-mail nečte (Twitch DA VI.C).
+// Ručně SQL (backend/sql/2026-09-25-account-email.sql).
+export const accountEmails = pgTable('account_emails', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Rozpracované ověření: jeden aktivní kód na účet (SHA-256, nikdy v čistém tvaru).
+export const emailVerifications = pgTable('email_verifications', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  codeHash: text('code_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  sends: integer('sends').notNull().default(0),
+  lastSentAt: timestamp('last_sent_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Každý odeslaný e-mail (limity na účet / adresu / IP / celkový denní rozpočet služeb, audit).
+export const emailSendLog = pgTable('email_send_log', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }),
+  email: text('email').notNull(),
+  ipHash: text('ip_hash').notNull(),
+  provider: text('provider').notNull(),
+  sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ sentIdx: index('email_send_log_sent_idx').on(t.sentAt) }));
+
+// Poslední přezdívka zadaná v QR donu (předvyplnění příště).
+export const accountDonatePrefs = pgTable('account_donate_prefs', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  lastNickname: text('last_nickname'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

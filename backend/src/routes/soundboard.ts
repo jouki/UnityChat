@@ -38,7 +38,7 @@ export function normalizeIcon(v: unknown, emoji: string | null): SoundIcon | nul
   if (o.kind === 'emoji' && typeof o.value === 'string' && o.value.trim() && o.value.length <= 16) return { kind: 'emoji', value: o.value.trim() };
   return emoji ? { kind: 'emoji', value: emoji } : null;
 }
-export interface Tier { tier: number; name: string | null }
+export interface Tier { tier: number; name: string | null; position: number }
 interface Catalog { at: number; etag: string | null; tiers: Tier[]; sounds: Sound[]; serverNow: string | null; error?: string }
 
 const isHttps = (u: unknown): u is string => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
@@ -63,11 +63,16 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
   for (const t of Array.isArray(j.tiers) ? j.tiers : []) {
     const o = (t ?? {}) as Record<string, unknown>;
     const tier = posInt(o.tier);
-    if (tier) tiers.set(tier, { tier, name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 40) : null });
+    // position = pořadí z dashboardu Židolišty (v1.2); bez něj pořadí podle čísla tieru.
+    if (tier) tiers.set(tier, { tier, name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 40) : null, position: posInt(o.position) ?? tier });
   }
   // Tier, který má zvuky, ale v seznamu tierů chybí → doplnit bez názvu.
-  for (const s of sounds) if (!tiers.has(s.tier)) tiers.set(s.tier, { tier: s.tier, name: null });
-  return { tiers: [...tiers.values()].sort((a, b) => a.tier - b.tier), sounds: sounds.sort((a, b) => a.tier - b.tier || a.name.localeCompare(b.name, 'cs', { sensitivity: 'base' })) };
+  for (const s of sounds) if (!tiers.has(s.tier)) tiers.set(s.tier, { tier: s.tier, name: null, position: s.tier });
+  const pos = new Map([...tiers.values()].map((t) => [t.tier, t.position]));
+  return {
+    tiers: [...tiers.values()].sort((a, b) => a.position - b.position || a.tier - b.tier),
+    sounds: sounds.sort((a, b) => (pos.get(a.tier)! - pos.get(b.tier)!) || a.name.localeCompare(b.name, 'cs', { sensitivity: 'base' })),
+  };
 }
 
 /** Stav diváka ze Židolišty (sfx-state) → tvar `me` pro klienta (bez identity). */
@@ -227,13 +232,16 @@ export default async function soundboardRoutes(app: FastifyInstance) {
     const ident = idents.find((i) => i.platform === platform);
     if (!ident) return res;
     const role = await chatRole(platform, ident.login, ch.data);
+    // Přihlášený divák bez stavu od Židolišty (nic odemčeno / výpadek) = me s prázdnými tiery,
+    // ne null: null klient bere jako „nepřipojený účet" a nabízel přihlášení (2026-09-24).
+    const noState = { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState({}), role };
     try {
       const st = await cachedState(slug, platform, ident.platformUserId, role);
-      if (!st) return res;
+      if (!st) return { ...res, me: noState };
       return { ...res, serverNow: iso(st.serverNow) ?? res.serverNow, me: { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState(st), role } };
     } catch (e) {
       app.log.warn({ slug, platform, err: (e as Error).message }, 'soundboard: sfx-state failed');
-      return { ...res, stale: true };
+      return { ...res, stale: true, me: noState };
     }
   });
 

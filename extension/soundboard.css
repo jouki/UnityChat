@@ -15,6 +15,22 @@
 .uc-sb-btn:not(.uc-sb-off) { color: var(--accent-light); }
 .uc-sb-btn.uc-sb-cd { color: var(--text-secondary); }
 
+/* ---- hover nad panelem: celý název + délka (core/soundboard.js showHover) ---- */
+.uc-sb-hover {
+  position: absolute; z-index: 32; box-sizing: border-box;
+  padding: 7px 10px; border-radius: 7px;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary); font-size: 13px; line-height: 1.35; pointer-events: none;
+}
+.uc-sb-hover.hidden { display: none; }
+.uc-sb-hover-t { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.uc-sb-hover-t .uc-sb-img { height: 20px; width: auto; }
+.uc-sb-hover-n { overflow-wrap: anywhere; }
+.uc-sb-hover-d { flex: none; font-weight: 400; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.uc-sb-hover-s { margin-top: 2px; font-size: 11px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+.uc-sb-hover-s.locked { font-family: inherit; color: #ff8a8a; }
+
 /* ---- tooltip ---- */
 .uc-sb-tip {
   position: absolute; bottom: 100%; right: 30px; z-index: 31; margin-bottom: 6px;
@@ -74,6 +90,8 @@
   background: var(--bg-tertiary); color: var(--text-secondary);
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
 }
+/* „(Tier 1)“ za jménem tieru: menší a nevýrazné (stejně jako dashboard Židolišty). */
+.uc-sb-tiern { font-size: 0.85em; font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.6; }
 .uc-sb-time { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent-light); font-variant-numeric: tabular-nums; }
 .uc-sb-lock { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .uc-sb-hbar { flex-basis: 100%; }

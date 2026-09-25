@@ -1,6 +1,6 @@
 Privacy Policy
 
-UnityChat · effective 23 September 2026
+UnityChat · effective 25 September 2026
 
 UnityChat is a browser extension (Chrome / Edge / Opera / Brave / Firefox) that merges live chat from Twitch, YouTube and Kick into a single panel. This policy describes what data the extension and its backend service process, for what purpose, for how long, and what your rights are.
 
@@ -22,7 +22,7 @@ a) Locally in your browser (the extension itself)
 
 b) Google / YouTube data (only when a streamer voluntarily links their account)
 
-If a streamer chooses to link their YouTube account (channel-ownership verification), we request the https://www.googleapis.com/auth/youtube.readonly scope via Google OAuth 2.0 and make a single call (youtube.channels.list?mine=true) to read only the following public identifiers of the user's own channel:
+If a streamer chooses to link their YouTube account (channel-ownership verification), they sign in with the same Google OAuth 2.0 sign-in as described in point 1e (scope https://www.googleapis.com/auth/youtube.force-ssl) and we make a single call (youtube.channels.list?mine=true) to read only the following public identifiers of the user's own channel:
 
 - channel ID (e.g. UCxxxxxxxx),
 
@@ -32,7 +32,7 @@ If a streamer chooses to link their YouTube account (channel-ownership verificat
 
 - profile picture (avatar) URL.
 
-The youtube.readonly scope is read-only. UnityChat never reads, modifies or deletes any content of your YouTube account — no videos, comments or subscriptions. We use it solely to verify that the person actually owns the channel and to map it within the service.
+UnityChat never reads, modifies or deletes any content of your YouTube account — no videos, comments or subscriptions. We use this call solely to verify that the person actually owns the channel and to map it within the service.
 
 c) Data sent to the UnityChat server (ordinary use of the extension)
 
@@ -46,7 +46,11 @@ Even without linking an account, the extension sends the following to api.jouki.
 
 - The text of a command you send — when you send a command (a message starting with !) from the panel, the extension sends the platform, channel, your platform username and the command text to the server, so it can mark that command in the public chat as sent from UnityChat (gold logo next to the message). This only concerns commands you yourself posted to the public chat.
 
-Chat archive. The UnityChat server (api.jouki.cz) itself listens to the public live chat of the supported streamers — currently the channels robdiesalot, tensterakdary and arcadebulls on Twitch, YouTube and Kick — and stores every public message from them: the message text, the author's platform username and identifier, the time it was sent, the channel, and the badges or emotes needed to display it. This covers everyone who writes in those chats, not only users of the extension; these are messages that are publicly visible on the platforms. The extension reads history from this archive to show what happened in chat before it was opened — the extension itself sends no messages to the server other than the text of commands you send (see the previous point).
+- Replies to a message from another platform — when you reply from the panel to a message from another platform (or on YouTube, which has no replies), the extension sends the server, together with your message, which message you are replying to (platform, ID, author name and its text). The server matches the reply to the message in the chat, stores this link in the archive, and other UnityChat users then see what the message replies to.
+
+- Soundboard (sound effects) — once you are signed in, your favourite sounds and how often you use them are stored with your account. Which effects you have unlocked is checked by the server with the Židolišta service (point 1f) using your platform identity (ID, name and chat role). You trigger an effect with a command that is posted to the public chat.
+
+Chat archive. The UnityChat server (api.jouki.cz) itself listens to the public live chat of the supported streamers — currently the channels robdiesalot, tensterakdary and arcadebulls on Twitch, YouTube and Kick — and stores every public message from them: the message text, the author's platform username and identifier, the time it was sent, the channel, and the badges or emotes needed to display it. This covers everyone who writes in those chats, not only users of the extension; these are messages that are publicly visible on the platforms. The extension reads history from this archive to show what happened in chat before it was opened. The extension itself sends the server only the messages you write while signed in (point 1e — the server passes them to the platform) and the command and reply details described above.
 
 Archived messages are kept without a time limit (see section 5). If you do not want your messages to be in the archive, e-mail us at the address above and we will delete them.
 
@@ -58,9 +62,9 @@ Likewise on Kick: when you send or reply to a message from the panel, and when t
 
 We do not store these tokens, never write them to logs, and never send them anywhere except the platform they belong to (Twitch or Kick). Without this permission, sending messages from the panel would not work.
 
-e) Web version at robdiesalot.com — viewer sign-in and sending messages
+e) Viewer sign-in and sending messages (extension and the web version at robdiesalot.com)
 
-Besides the extension there is a web version of UnityChat (currently at robdiesalot.com/chat). The chat can be read without signing in. If you want to write from the web, you sign in with the platform of your choice via OAuth 2.0 — Twitch, Kick or Google / YouTube — in a separate window hosted by that platform. UnityChat never sees your password. From the platform we receive:
+Besides the extension there is a web version of UnityChat (currently at robdiesalot.com/chat). The chat can be read without signing in. If you want to write (on the web or in the extension), you sign in with the platform of your choice via OAuth 2.0 — Twitch, Kick or Google / YouTube — in a separate window hosted by that platform. UnityChat never sees your password. From the platform we receive:
 
 - your platform identifier and username (Twitch login, Kick name, YouTube channel ID and handle), profile name and avatar URL — to show who is signed in and to recognise your own messages in the chat,
 
@@ -69,6 +73,20 @@ Besides the extension there is a web version of UnityChat (currently at robdiesa
 We use the tokens solely to post the message you yourself type and send into the streamer's live chat on your behalf (Twitch API chat/messages, Kick API chat, YouTube API liveChatMessages.insert). With Google, the youtube.force-ssl scope is used only for what you do in the chat window: we never read your private data, videos, comments, subscriptions or history, and we never delete, modify or publish anything on our own. Before sending, we append an invisible character to the message so other UnityChat users can tell it came from UnityChat.
 
 Tokens are stored encrypted (section 3); the web sign-in is kept as a random session key in your browser's storage (30 days from last use). You can sign out or unlink a platform at any time from the menu next to the message box; access can also be revoked directly at the platform (for Google at myaccount.google.com/permissions (https://myaccount.google.com/permissions)).
+
+f) E-mail and donations via QR code (Židolišta)
+
+UnityChat lets you send the streamer a donation by bank transfer via a QR code. Donations are processed by Židolišta, a service run for the streamer by the same data controller (Jouki). We do not read your e-mail from platform accounts — you enter it yourself:
+
+- E-mail — entered in the donation form or in UnityChat settings. If you choose to verify it, we send it a one-time 6-digit code; a verified e-mail is stored with your UnityChat account (it applies to all linked platforms) so you don't have to enter it again. An unverified e-mail is not stored with the account, it is only passed on with the donation.
+
+- Donation details — nickname, e-mail (the verified one from your account, otherwise the one you entered), amount and currency, message text and the chosen text-to-speech voice and language. We remember the last nickname you used with your account.
+
+- IP address — when a donation is created we pass your IP address to Židolišta for abuse protection (request limits) and to guess the currency by country. Židolišta stores only a fingerprint (hash) of it.
+
+We pass this data to Židolišta, which creates the payment details for the QR code (the streamer's account number, variable symbol, amount), matches the payment to the donation by its variable symbol once it arrives in the streamer's account, and shows or reads the donation on stream. The e-mail is used to confirm that donations come from you and to link your donations to your account. We do not send you marketing. You make the payment itself in your own bank; neither UnityChat nor Židolišta processes payment cards or banking credentials.
+
+Verification codes are sent through the e-mail provider Brevo (France, EU). The provider only receives the recipient address and the message with the code (no links). We store only a fingerprint (hash) of the code; Židolišta never receives the verification code. To prevent abuse we log, for each code sent, the address, a fingerprint of the IP address (not the IP itself), the provider used and the time.
 
 2. How we use the data
 
@@ -84,13 +102,15 @@ Tokens are stored encrypted (section 3); the web sign-in is kept as a random ses
 
 - Sending a message, reply or pin on Twitch on your behalf.
 
-- In the web version: posting the message you type into the Twitch, Kick or YouTube chat on your behalf (point 1e).
+- Posting the message you type into the Twitch, Kick or YouTube chat on your behalf (point 1e).
+
+- Processing a donation via QR code and verifying your e-mail (point 1f).
 
 UnityChat's use and transfer of information received from Google APIs to any other app will adhere to the Google API Services User Data Policy (https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
 3. Storage and security
 
-- Channel identifiers and OAuth tokens are stored on our backend — a PostgreSQL database on a server in the EU (Hetzner Online, Nuremberg, Germany).
+- Channel identifiers, OAuth tokens, your verified e-mail and donation details are stored on our backend and in Židolišta — databases on a server in the EU (Hetzner Online, Nuremberg, Germany).
 
 - OAuth access and refresh tokens are encrypted (AES-256-GCM); the encryption key is stored separately in the server's secret store.
 
@@ -100,13 +120,15 @@ UnityChat's use and transfer of information received from Google APIs to any oth
 
 4. Sharing with third parties
 
-We do not sell your data and do not share it with third parties for advertising or profiling. We only pass data to providers of essential infrastructure (hosting) who process it on our behalf.
+We do not sell your data and do not share it with third parties for advertising or profiling. We only pass data to providers of essential infrastructure (hosting, sending verification e-mails — point 1f) who process it on our behalf. Donation details go to Židolišta, a service of the same controller. Only the nickname, amount and message are shown on stream; the streamer you donate to can see the donation details including your e-mail in the Židolišta administration.
 
 5. Retention and deletion
 
 We keep linked-account data (streamers and, in the web version, viewers — point 1e) for as long as the link is active — until you sign out, unlink the platform or ask for deletion; web sessions expire 30 days after last use. You can request deletion of your data and revocation of access at any time at m.joukal+unitychat@gmail.com (mailto:m.joukal+unitychat@gmail.com). You can also revoke the access granted to UnityChat at any time in your Google Account at myaccount.google.com/permissions (https://myaccount.google.com/permissions).
 
 Usernames, channel handles and nicknames under point 1c) are kept without a time limit — until you ask us to delete them, or until we remove them ourselves as no longer needed. You can request erasure at any time at the e-mail address above.
+
+We keep your verified e-mail with your account until you change it or ask for the account or e-mail to be deleted (for now at the e-mail address above; self-service deletion in the app is being prepared). A verification code is valid for 10 minutes (at most 5 attempts); its record is deleted after verification, at the latest one day after it expires. The log of sent codes (point 1f) is kept for 30 days. Donation records are kept by Židolišta as the streamer's donation records; you can ask for their deletion at the same e-mail address.
 
 Messages in the chat archive (point 1c) are likewise kept without a time limit — until you ask us to delete your messages, or until we prune the archive ourselves. On request we delete all messages of a given author.
 

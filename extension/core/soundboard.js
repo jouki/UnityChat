@@ -109,10 +109,11 @@ export function formatRemaining(msLeft) {
 export function soundboardIconState(state, now) {
   if (!state || !state.sounds.length) return { mode: 'hidden' };
   if (!state.loggedIn) return { mode: 'login', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
-  if (!state.me) return { mode: 'link', title: 'Soundboard', lines: [`Připoj účet ${PLATFORM_NAMES[state.platform] || state.platform} k UnityChatu.`] };
+  // Sound efekty fungují stejně ze všech platforem — výzva je obecná, ne „připoj Twitch" (pokyn usera 2026-09-24).
+  if (!state.me) return { mode: 'link', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
   const unlocked = unlockedTiers(state, now);
   if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
-  const rows = [...unlocked.entries()].sort((a, b) => a[0] - b[0]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), ...tierTime(t, now) }));
+  const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), nameHtml: tierLabelHtml(state, tier), ...tierTime(t, now) }));
   // Všechno zmrazené: ikona neaktivní jako u zamčené odměny, tooltip ukáže zastavený čas.
   if (!playableTiers(state, now).size) return { mode: 'paused', title: 'Odměna je pozastavená', lines: ['Streamer časovač zastavil, sound efekty teď nejdou pustit.'], rows, cooldownMs: 0, remainingMs: null, progress: null };
   const timed = rows.filter((r) => r.remainingMs !== null);
@@ -130,17 +131,52 @@ export function soundboardIconState(state, now) {
 }
 
 
-export function tierLabel(state, tier) {
+/** Pořadí tieru (v1.2 position z dashboardu; bez něj číslo tieru). */
+export function tierPosition(state, tier) {
   const t = state?.tiers?.find((x) => x.tier === tier);
+  return Number.isInteger(t?.position) && t.position > 0 ? t.position : tier;
+}
+
+/** Tiery v pořadí z dashboardu (sekce soundboardu, řádky tooltipu). */
+export function sortTiers(state, tiers) {
+  return [...tiers].sort((a, b) => tierPosition(state, a) - tierPosition(state, b) || a - b);
+}
+
+function tierParts(state, tier) {
+  const t = state?.tiers?.find((x) => x.tier === tier);
+  const n = tierPosition(state, tier);
   const name = String(t?.name || '').trim();
   // Název, který jen opakuje číslo („Tier 1“), nezdvojovat.
-  return name && name.toLowerCase() !== `tier ${tier}` ? `Tier ${tier} · ${name}` : `Tier ${tier}`;
+  return { n, name: name && name.toLowerCase() !== `tier ${n}` ? name : '' };
+}
+
+/** Popisek tieru jako text: „BASIC (Tier 1)“, bez jména „Tier 1“ (stejně jako dashboard Židolišty). */
+export function tierLabel(state, tier) {
+  const { n, name } = tierParts(state, tier);
+  return name ? `${name} (Tier ${n})` : `Tier ${n}`;
+}
+
+/** Totéž jako HTML: „(Tier 1)“ menším a nevýrazným písmem. */
+export function tierLabelHtml(state, tier) {
+  const { n, name } = tierParts(state, tier);
+  return name ? `${esc(name)} <span class="uc-sb-tiern">(Tier ${n})</span>` : `Tier ${n}`;
 }
 
 /** Popisek zvuku v tlačítku: srozumitelný název, když ho mod v Židolišti nastavil, jinak jméno pro !se. */
 export const soundLabel = (s) => (s?.displayName && String(s.displayName).trim()) || s?.name || '';
 
 /** Ikona zvuku → HTML: 7TV obrázek (jen z cdn.7tv.app, backend to hlídá i tady), emoji, nebo nic. */
+/** Délka zvuku pro hover („2,4 s", „12 s", „1:05"); null/0 → ''. */
+export function formatSoundDuration(ms) {
+  const n = Number(ms);
+  if (!(n > 0)) return '';
+  const sec = n / 1000;
+  if (sec < 10) return `${sec.toFixed(1).replace('.', ',')} s`;
+  if (sec < 60) return `${Math.round(sec)} s`;
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(Math.round(sec - m * 60)).padStart(2, '0')}`;
+}
+
 export function soundIconHtml(s) {
   const i = s?.icon;
   if (i?.kind === '7tv' && /^https:\/\/cdn\.7tv\.app\/emote\/[A-Za-z0-9]+\/[1-4]x\.(webp|avif|png|gif)$/.test(i.url || '')) {
@@ -190,7 +226,8 @@ const DENIED_TEXT = { cooldown: 'Cooldown', locked: 'Zvuk je zamčený', unknown
 const DENIED_SHOW_MS = 8000;
 
 /** SVG osminové noty pro tlačítko (stejné v addonu i na webu). */
-export const SOUNDBOARD_BUTTON_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M13 3.2a1 1 0 0 1 1.45-.9c2.9 1.45 4.55 3.4 4.55 6.2 0 1.02-.23 2.03-.66 2.93a1 1 0 1 1-1.8-.86c.3-.63.46-1.36.46-2.07 0-1.53-.72-2.73-2-3.73V16.5a3.5 3.5 0 1 1-2-3.16V3.2Z"/></svg>';
+// viewBox posunutý o střed tvaru noty (bbox 8–19 × 2,2–20 → střed 13,5 / 11,1), ať je v tlačítku vycentrovaná.
+export const SOUNDBOARD_BUTTON_SVG = '<svg viewBox="1.5 -0.9 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M13 3.2a1 1 0 0 1 1.45-.9c2.9 1.45 4.55 3.4 4.55 6.2 0 1.02-.23 2.03-.66 2.93a1 1 0 1 1-1.8-.86c.3-.63.46-1.36.46-2.07 0-1.53-.72-2.73-2-3.73V16.5a3.5 3.5 0 1 1-2-3.16V3.2Z"/></svg>';
 const SPEAKER_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M11 5 6.5 8.5H3v7h3.5L11 19V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.3 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const STAR_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
 const LOCK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>';
@@ -266,7 +303,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   function renderTip(s = soundboardIconState(state, now())) {
     if (s.mode === 'hidden') { hideTip(); return; }
     const lines = (s.lines || []).map((l) => `<div class="uc-sb-tip-l">${esc(l)}</div>`).join('');
-    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
+    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${r.nameHtml || esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
     const cd = s.cooldownMs > 0 ? `<div class="uc-sb-tip-cd">Cooldown ${esc(formatRemaining(s.cooldownMs))}</div>` : '';
     tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
     tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${lines}${rows}${cd}`;
@@ -281,8 +318,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     const cls = ['uc-sb-s', locked ? 'locked' : '', cd > 0 && !locked ? 'cd' : ''].filter(Boolean).join(' ');
     const label = soundLabel(s);
     const why = unlocked.get(s.tier)?.paused ? 'je pozastavený' : 'není odemčený';
-    const title = locked ? `${label} — ${tierLabel(state, s.tier)} ${why}` : `!se ${s.name}`;
-    return `<div class="${cls}" data-id="${s.id}" title="${esc(title)}">
+    return `<div class="${cls}" data-id="${s.id}" data-why="${locked ? esc(`${tierLabel(state, s.tier)} ${why}`) : ''}">
       <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
       <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
@@ -319,9 +355,9 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
         section('fav', 'Oblíbené', state.favorites.map((id) => byId.get(id)).filter(Boolean), ctx),
         section('recent', 'Často používané', state.recent.map((id) => byId.get(id)).filter(Boolean), ctx),
       ];
-      const tiers = [...new Set(state.sounds.map((s) => s.tier))].sort((a, b) => a - b);
+      const tiers = sortTiers(state, [...new Set(state.sounds.map((s) => s.tier))]);
       for (const tier of tiers) {
-        parts.push(section(`t${tier}`, esc(tierLabel(state, tier)), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
+        parts.push(section(`t${tier}`, tierLabelHtml(state, tier), state.sounds.filter((s) => s.tier === tier), ctx, tierBadge(unlocked.get(tier), t)));
       }
       body.innerHTML = parts.join('');
     }
@@ -359,6 +395,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     audio.pause();
+    hideHover();
   }
   const isOpen = () => !panel.classList.contains('hidden');
   const toggle = () => (isOpen() ? close() : open());
@@ -400,7 +437,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     const s = soundboardIconState(state, now());
-    if (s.mode === 'login' || s.mode === 'link') { hideTip(); onLogin?.(s.mode === 'link' ? state.platform : undefined); return; }
+    if (s.mode === 'login' || s.mode === 'link') { hideTip(); onLogin?.(); return; }
     if (s.mode !== 'active') return;   // odměna není aktivní: ikona je deaktivovaná, vysvětlí to tooltip
     toggle();
   });
@@ -426,6 +463,33 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     audio.volume = vol;
     try { volume?.save?.(vol); } catch { /* ignore */ }
   });
+  // Hover nad panelem: celý název zvuku (v mřížce se zkracuje) + délka, pod tím `!se jméno`
+  // nebo proč je zvuk zamčený. Leží mimo panel (ten má overflow: hidden), kotví se nad něj.
+  const hover = doc.createElement('div');
+  hover.className = 'uc-sb-hover hidden';
+  hover.setAttribute('role', 'tooltip');
+  host.appendChild(hover);
+  let hoverId = null;
+  function showHover(card) {
+    const sound = card && state?.sounds.find((s) => s.id === Number(card.dataset.id));
+    if (!sound || !isOpen()) { hideHover(); return; }
+    if (hoverId === sound.id && !hover.classList.contains('hidden')) return;
+    hoverId = sound.id;
+    const dur = formatSoundDuration(sound.durationMs);
+    const why = card.dataset.why;
+    hover.innerHTML = `<div class="uc-sb-hover-t">${soundIconHtml(sound)}<span class="uc-sb-hover-n">${esc(soundLabel(sound))}</span>${dur ? `<span class="uc-sb-hover-d">(${esc(dur)})</span>` : ''}</div>`
+      + `<div class="uc-sb-hover-s${why ? ' locked' : ''}">${why ? esc(why) : `!se ${esc(sound.name)}`}</div>`;
+    hover.style.left = `${panel.offsetLeft}px`;
+    hover.style.width = `${panel.offsetWidth}px`;
+    hover.style.bottom = `calc(100% + ${panel.offsetHeight + 12}px)`;
+    hover.classList.remove('hidden');
+  }
+  function hideHover() { hoverId = null; hover.classList.add('hidden'); }
+  body.addEventListener('mouseover', (e) => showHover(e.target.closest('.uc-sb-s')));
+  body.addEventListener('mouseleave', hideHover);
+  body.addEventListener('focusin', (e) => showHover(e.target.closest('.uc-sb-s')));
+  body.addEventListener('scroll', hideHover, { passive: true });
+
   panel.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
   panel.addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
@@ -486,6 +550,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       audio.pause();
       panel.remove();
       tip.remove();
+      hover.remove();
     },
   };
 }

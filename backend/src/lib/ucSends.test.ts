@@ -37,3 +37,15 @@ test('ucSends: zpráva dřív než hlášení → report vrátí zprávu (zpětn
   r.match(old); t += RECENT_TTL_MS + 1;
   assert.equal(r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'Tonner', text: '!y' }), null, 'moc stará');
 });
+
+test('ucReplies: odpověď napříč platformami nese data; najde i zprávu s markerem, která přišla dřív', () => {
+  let t = 1000; const r = new UcSendRegistry<{ id: string }>(() => t, { recentMarked: true });
+  r.report({ platform: 'kick', channel: 'robdiesalot', userId: 'u1', text: '@Tonner ahoj ⠀', data: { id: 'tw-1' } });
+  assert.deepEqual(r.take(msg({ platform: 'kick', content: '@Tonner ahoj', isUnitychatUser: true })), { data: { id: 'tw-1' } });
+  const early = msg({ platformMessageId: 'k2', content: '@Tonner znovu ⠀', isUnitychatUser: true });
+  assert.equal(r.take(early), null);
+  assert.equal(r.report({ platform: 'twitch', channel: 'robdiesalot', userId: 'u1', text: '@Tonner znovu', data: { id: 'tw-2' } })?.platformMessageId, 'k2');
+  const plain = new UcSendRegistry(() => t);
+  plain.match(msg({ platformMessageId: 'm1', content: 'x', isUnitychatUser: true }));
+  assert.equal(plain.report({ platform: 'twitch', channel: 'robdiesalot', userId: 'u1', text: 'x' }), null, 'commandy si zprávy s markerem nepamatují');
+});

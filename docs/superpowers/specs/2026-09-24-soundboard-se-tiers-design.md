@@ -45,6 +45,27 @@ do chatu.
 - **Cooldowny se nastavují u odměny**: globální + per-user (výchozí 10 s / 30 s,
   modi 0).
 
+### Pozdější změny (rozhodnutí usera 2026-09-24, mají přednost před textem výše)
+- **SE je typ akce v labelu** (Unlock akce), ne samostatná sekce levelu: řádek akce
+  [Streamer.bot | Židolišta] → Židolišta → Sound Efekt. Název, délka, „V liště“ a karta
+  v Aktivních odměnách patří labelu; timer řídí server se všemi operacemi časovaných
+  odměn (zmrazit/pokračovat, zrušit → hřbitov, obnovit, úprava času, hromadné, Stream OFF,
+  reset). Zmrazení = SE zamčené. Smíšené labely (SB + Židolišta) povolené. „force“ vynechán.
+- **Výchozí cooldown nové akce: 15 s / osobní 60 s.**
+- **Tiery = seřazený seznam** (stabilní id + `position` z dashboardu, přesouvání).
+  „I nižší tiery“ = všechny s nižší pozicí. V akci dropdown + ➕ pro víc tierů se sdíleným
+  nastavením.
+- **Pro koho** (nahrazuje Q1 „diváci = všichni“): **Všichni** = kdokoli (ostatní zešednou);
+  **Diváci** = jen bez sub/VIP/mod/streamer; ostatní role přesně podle nejvyšší role.
+  Efektivní odemčení = odměny „Všichni“ ∪ odměny nejvyšší role. Dřívější „Diváci“ se
+  migrují na „Všichni“.
+- **Zvuk má volitelný srozumitelný název** (displayName) a ikonu (emoji nebo 7TV emote).
+- **SE × TTS se překrývají — záměrně** (rozhodnutí usera 2026-09-24). TTS z donací se řadí
+  mezi sebou (SB fronta „Alerts“), přehrávač SE řadí jen SE mezi sebou (fronta max 10);
+  vzájemně se nehlídají, stejně jako dřív !se ve Streamer.botu. Není to chyba.
+- Echo ochrana v Židolišti: úvodní „!“/„/“ dosazené proměnnou se ořízne; vlastní odpověď
+  přijatá zpět se jako command nevyhodnotí.
+
 ### Commandy
 - `!se <jméno>` přehraje zvuk, pokud má autor zprávy (podle role z ingestu) aktivní
   tier se zvukem a nemá cooldown.
