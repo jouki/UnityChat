@@ -7,7 +7,7 @@ import type { NewModerationAction } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
 import type { ChatRole } from './chatRole.js';
 import type { ResolvedTargets, UserTarget } from './moderationTargets.js';
-import type { UserModAction, UserModeratedParams, BanRow } from './userModeration.js';
+import type { UserModAction, UserModeratedParams, BanRow, EchoKey } from './userModeration.js';
 import { kickMinutes, type BanOutcome, type BanParams, type ModResult } from './modActions.js';
 import type { WarningView } from './accountWarnings.js';
 
@@ -69,6 +69,9 @@ export interface UserActionDeps {
   resolveTargets: (channel: string, platform: Platform, userId: string) => Promise<ResolvedTargets | null>;
   targetRole: TargetRole;
   publish: (p: UserModeratedParams) => Promise<unknown>;
+  /** Ohlásit očekávané echo (CLEARCHAT) PŘED voláním platformy / zrušit ho po selhání (userModeration.ts). */
+  expectEcho: (k: EchoKey) => void;
+  forgetEcho: (k: EchoKey) => void;
   ban: (p: BanParams) => Promise<BanOutcome>;
   unban: (p: { accountId: number | null; channel: string; platform: Platform; userId: string; youtubeBanId: string | null }) => Promise<ModResult>;
   activeBan: (channel: string, platform: Platform, userId: string) => Promise<{ until: Date | null; youtubeBanId: string | null } | null>;
@@ -101,6 +104,9 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
   const results: Partial<Record<Platform, ModResult>> = {};
   const ytBan = new Map<Platform, string | null>();
   await Promise.all(targets.all.map(async (t) => {
+    // Echo z ingestu může přijít dřív než výsledek platformy — klíč musí existovat před voláním.
+    const echo: EchoKey = { channel, platform: t.platform, userId: t.userId, action, durationSec: dur(t) };
+    deps.expectEcho(echo);
     try {
       if (action === 'unban') {
         results[t.platform] = await deps.unban({ accountId: input.accountId, channel, platform: t.platform, userId: t.userId, youtubeBanId: banIds.get(t.platform) ?? null });
@@ -113,6 +119,7 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
       deps.log.warn({ platform: t.platform, err: (e as Error).message }, 'user moderation: akce na platformě vyhodila výjimku');
       results[t.platform] = 'error:exception';
     }
+    if (!succeeded(results[t.platform])) deps.forgetEcho(echo);
   }));
 
   // SSE a evidence jen tam, kde akce na platformě opravdu prošla (klient by jinak ukázal štítek,

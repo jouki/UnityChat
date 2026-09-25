@@ -27,7 +27,7 @@ import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, TIMEOUT_DU
 import { resolveUserTargets, dbTargetDeps, archivedUserByLogin, makeTargetRole } from '../lib/moderationTargets.js';
 import { blacklistFor } from './blacklist.js';
 import { containsBlacklisted } from '../lib/blacklistMatch.js';
-import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
+import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forgetEcho } from '../lib/userModeration.js';
 import { runUserAction, runWarn, runPermit, runRename, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
 import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
 import { sendAsAccount } from '../lib/accountSend.js';
@@ -207,6 +207,8 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
     targetRole,
     publish: (p) => publishUserModerated(p),
+    expectEcho: (k) => expectEcho(k),
+    forgetEcho,
     ban: (p) => banPlatformUser(p, modDeps),
     unban: (p) => unbanUser(p, modDeps),
     activeBan: (channel, platform, userId) => activeBan(channel, platform, userId),

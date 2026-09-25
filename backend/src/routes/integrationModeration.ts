@@ -25,7 +25,7 @@ import { deletePlatformMessage, banPlatformUser, unbanUser, type ModResult, type
 import { resultRecord } from './moderation.js';
 import { runUserAction, type UserActionDeps } from '../lib/userModActions.js';
 import { resolveUserTargets, dbTargetDeps, makeTargetRole } from '../lib/moderationTargets.js';
-import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
+import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forgetEcho } from '../lib/userModeration.js';
 import type { Ingest } from '../ingest/index.js';
 import { RateLimiter } from './chat.js';
 
@@ -179,6 +179,8 @@ export default async function integrationModerationRoutes(app: FastifyInstance, 
         resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
         targetRole: makeTargetRole(targets.platformChannel),
         publish: (p) => publishUserModerated(p),
+        expectEcho: (k) => expectEcho(k),
+        forgetEcho,
         ban: (p) => banPlatformUser({ ...p, accountId: null }, modDeps),
         unban: (p) => unbanUser({ ...p, accountId: null }, modDeps),
         activeBan: (channel, platform, userId) => activeBan(channel, platform, userId),

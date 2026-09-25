@@ -4,6 +4,7 @@ import { runUserAction, runWarn, runPermit, runRename, effectiveDuration, type U
 import type { ResolvedTargets } from './moderationTargets.js';
 import type { NewModerationAction } from '../db/schema.js';
 import type { ChatRole } from './chatRole.js';
+import { publishUserModerated, expectEcho, forgetEcho, _resetUserModeratedDedup } from './userModeration.js';
 
 const silent = { warn() {}, info() {} };
 const NOW = 1_800_000_000_000;
@@ -28,6 +29,8 @@ function actionDeps(over: Partial<UserActionDeps> = {}, log: string[] = []) {
     resolveTargets: async () => linked,
     targetRole: viewer,
     publish: async (p) => { log.push(`sse:${p.platform}:${p.action}:${p.durationSec}`); },
+    expectEcho: () => {},
+    forgetEcho: () => {},
     ban: async (p) => { log.push(`ban:${p.platform}:${p.durationSec}`); return p.platform === 'youtube' ? { result: 'bot', youtubeBanId: 'B1' } : { result: 'ok' }; },
     unban: async (p) => { log.push(`unban:${p.platform}:${p.youtubeBanId}`); return 'ok'; },
     activeBan: async (_c, platform) => (platform === 'youtube' ? { until: null, youtubeBanId: 'B9' } : null),
@@ -262,4 +265,51 @@ test('rename: přezdívka s blacklistem → 400 nickname_blacklisted; mod/broadc
   d = renameDeps({ targetRole: async () => 'broadcaster' });
   assert.equal((await runRename({ ...renameBase, callerIsBroadcaster: true, login: 'robdiesalot', nickname: null }, d.deps)).status, 403);
   assert.deepEqual(d.calls, []);
+});
+
+test('echo CLEARCHAT dorazí DŘÍV než výsledek Helixu → jediná událost (od moda), žádný druhý zápis banu', async () => {
+  _resetUserModeratedDedup();
+  const sent: Array<Record<string, unknown>> = [];
+  const integ: unknown[] = [];
+  const bans: unknown[] = [];
+  const pubDeps = { broadcast: (_e: string, d: object) => { sent.push(d as Record<string, unknown>); }, integration: (ev: unknown) => { integ.push(ev); }, now: () => NOW };
+  // Stejně jako server.ts onUserModerated: echo s source 'platform'; null = přeskočit i recordBan.
+  const ingestEcho = async (durationSec: number) => {
+    const ev = await publishUserModerated({ channel: 'robdiesalot', platform: 'twitch', userId: 't1', login: 'spammer', action: 'timeout', durationSec, by: null, source: 'platform' }, pubDeps);
+    if (ev) bans.push('ingest');
+  };
+  const single: ResolvedTargets = { primary: linked.primary, all: [linked.primary], accountId: null };
+  const { deps } = actionDeps({
+    resolveTargets: async () => single,
+    publish: (p) => publishUserModerated(p, pubDeps),
+    expectEcho: (k) => expectEcho(k, NOW),
+    forgetEcho,
+    ban: async (p) => { await ingestEcho(p.durationSec!); return { result: 'ok' }; },
+    recordBan: async () => { bans.push('uc'); },
+  });
+  const out = await runUserAction({ ...input, action: 'timeout', durationSec: 300 }, deps);
+  assert.equal(out.status, 200);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].by, 'twitch:modik');
+  assert.equal(integ.length, 1);
+  assert.deepEqual(bans, ['uc']);
+});
+
+test('selhání platformy zruší očekávané echo → pozdější CLEARCHAT odjinud projde', async () => {
+  _resetUserModeratedDedup();
+  const sent: unknown[] = [];
+  const pubDeps = { broadcast: (_e: string, d: object) => { sent.push(d); }, now: () => NOW };
+  const single: ResolvedTargets = { primary: linked.primary, all: [linked.primary], accountId: null };
+  const { deps } = actionDeps({
+    resolveTargets: async () => single,
+    publish: (p) => publishUserModerated(p, pubDeps),
+    expectEcho: (k) => expectEcho(k, NOW),
+    forgetEcho,
+    ban: async () => ({ result: 'error:403' }),
+  });
+  await runUserAction({ ...input, action: 'ban', durationSec: null }, deps);
+  assert.equal(sent.length, 0);
+  const ev = await publishUserModerated({ channel: 'robdiesalot', platform: 'twitch', userId: 't1', login: 'spammer', action: 'ban', durationSec: null, by: null, source: 'platform' }, pubDeps);
+  assert.ok(ev);
+  assert.equal(sent.length, 1);
 });

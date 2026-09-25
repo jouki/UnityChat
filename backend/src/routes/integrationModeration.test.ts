@@ -109,6 +109,8 @@ function userDeps() {
         },
         targetRole: async (_c, t) => (t.login === 'modk' ? 'moderator' : 'viewer'),
         publish: async (p) => { seen.published.push(p); },
+        expectEcho: () => {},
+        forgetEcho: () => {},
         ban: async (p) => { seen.bans.push(p); return { result: 'bot' }; },
         unban: async () => 'bot',
         activeBan: async () => null,

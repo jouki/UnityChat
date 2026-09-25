@@ -55,10 +55,27 @@ const ECHO_MS = 30_000;
 // se nespolkne a evidence dostane nové until.
 const recent = new Map<string, number>();
 
+export type EchoKey = Pick<UserModeratedParams, 'channel' | 'platform' | 'userId' | 'action' | 'durationSec'>;
+const echoKey = (p: EchoKey) => `${p.channel}:${p.platform}:${p.userId}:${p.action}:${p.durationSec ?? ''}`;
+
+/**
+ * Ohlásit vlastní akci PŘED voláním platformy: Twitch CLEARCHAT může z ingestu dorazit dřív, než
+ * UC route dostane výsledek Helixu — bez toho by prošel jako „odjinud" (by null) a vznikla by
+ * duplicitní událost, integrační zpráva i zápis banu.
+ */
+export function expectEcho(p: EchoKey, now = Date.now()): void {
+  recent.set(echoKey(p), now);
+}
+
+/** Akce na platformě selhala → echo nepřijde; skutečný CLEARCHAT odjinud pak musí projít. */
+export function forgetEcho(p: EchoKey): void {
+  recent.delete(echoKey(p));
+}
+
 /** SSE `user-moderated` + `chat.user_moderated`. Vrací událost, nebo null, když šlo o echo vlastní akce. */
 export async function publishUserModerated(p: UserModeratedParams, deps: UserModeratedDeps = defaultDeps): Promise<UserModeratedEvent | null> {
   const t = deps.now();
-  const key = `${p.channel}:${p.platform}:${p.userId}:${p.action}:${p.durationSec ?? ''}`;
+  const key = echoKey(p);
   const last = recent.get(key);
   if (p.source === 'platform' && last !== undefined && t - last < ECHO_MS) return null;
   recent.set(key, t);

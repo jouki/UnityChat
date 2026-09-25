@@ -17,6 +17,8 @@
 - **Hierarchie** (timeout/ban/unban, varování, přejmenování): role cíle se ověří na serveru (`chatRole` na
   platformním kanálu každé známé identity cíle). Broadcastera kanálu nemoderuje nikdo, moda jen broadcaster
   → `403 { ok:false, error:'target_protected' }`, nic se nestane.
+  Pozor: ochrana moda stojí na `chatRole` = odznaky z jeho zpráv v archivu za posledních 24 h (broadcaster
+  = login shodný s kanálem); mod, který 24 h v kanálu nepsal, se jeví jako divák a chráněný není.
 - **Rate limit** per účet (10, doplňuje 2/s) sdílený s `/moderation/delete` a `/moderation/user-state` → `429 { error:'rate_limited' }`.
 - `userId` = ID na platformě: Twitch user id, Kick user id, YouTube channel id (`UC…`) — to, co nese zpráva
   (`platformUserId` / `userId` v `/chat/history` a `/chat/stream`).
@@ -125,7 +127,8 @@
   `"zidolista:<id>"` z Chat Logu, `null` = odjinud (Twitch CLEARCHAT z ingestu).
 - **Nenese důvod.** Klient: styl smazaných zpráv (`deletedStyle`) na předchozí zprávy `(platform, userId)`
   + štítek „Timeout (5 min)" / „Zabanován"; `unban` štítek sundá. Chodí jen pro platformy, kde akce
-  prošla. CLEARCHAT, který je echem vlastní akce (stejná akce i délka), server do 30 s nevyšle podruhé;
+  prošla. CLEARCHAT, který je echem vlastní akce (stejná akce i délka), server do 30 s nevyšle podruhé —
+  i když dorazí dřív než výsledek platformy (očekávané echo se ohlásí před voláním, po selhání se zruší);
   re-timeout odjinud s jinou délkou projde (nové `until`).
 
 ## Integrace Židolišty (X-Api-Key + HMAC, `inboundAuthorized`)
