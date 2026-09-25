@@ -33,6 +33,7 @@ const DEFAULTS = {
   sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
   reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
+  acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
   deletedStyle: 'label', // vzhled smazané zprávy pro diváka: label | dim | strike | hide (core/moderation.js)
 };
 
@@ -1641,6 +1642,15 @@ class UnityChat {
         this._saveConfig();
       });
     }
+    // Našeptávání emotů po „:jméno" (jako Twitch), bez nutnosti mačkat Tab
+    const colonBox = $('chk-ac-colon');
+    if (colonBox) {
+      colonBox.checked = this.config.acColon === true;
+      colonBox.addEventListener('change', () => {
+        this.config.acColon = colonBox.checked;
+        this._saveConfig();
+      });
+    }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
     const sndBox = $('chk-sound');
     if (sndBox) {
@@ -1681,6 +1691,17 @@ class UnityChat {
           .map(c => '!' + c.name))];
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
+      } else if (this.config.acColon === true && partial.startsWith(':')) {
+        // Twitch-style „:jméno" spouštěč — bez Tabu (core/colon-emotes.js
+        // hlídá, že dvojtečka je na začátku slova, ne uprostřed URL/času).
+        const cq = window.UC_CORE.colonQuery(text, pos);
+        const matches = cq ? this.emotes.findCompletions(cq.query, { fulltext: this.config.acFulltext === true }) : [];
+        if (cq && matches.length) {
+          this._ac = { start: cq.start, end: pos, index: 0, matches, kind: 'emote', prefix: cq.query, trigger: 'colon' };
           this._acRender();
         } else {
           this._acHide();
@@ -2002,10 +2023,18 @@ class UnityChat {
           return;
         }
         if (e.key === 'Enter') {
-          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern).
-          // Pro emote / !cmd / /uc autocomplete propadne dolů na _sendMessage
-          // (původní funkcionalita — Tab/ArrowRight už emote vložilo,
-          // Enter logicky odešle zprávu).
+          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern)
+          // a pro „:jméno" emote seznam (jako na Twitchi — Enter vloží
+          // zvýrazněný emote místo odeslání zprávy).
+          // Pro Tab-triggered emote / !cmd / /uc autocomplete propadne dolů
+          // na _sendMessage (původní funkcionalita — Tab/ArrowRight už emote
+          // vložilo, Enter logicky odešle zprávu).
+          if (this._ac.trigger === 'colon') {
+            e.preventDefault();
+            this._acApply();
+            this._acHide();
+            return;
+          }
           const isUserAc = this._ac.kind === 'user'
             || this._ac.matches[0]?.startsWith?.('@');
           if (isUserAc) {
@@ -3856,11 +3885,12 @@ class UnityChat {
   _reportUcSent(platform, username, text, replyTo = null) {
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel || !username || username === 'me') return;
-    fetch(`${UC_API}/chat/uc-sent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    // Server bere hlášení jen od přihlášeného majitele účtu (Bearer session).
+    this._ucSessionToken().catch(() => null).then((token) => fetch(`${UC_API}/chat/uc-sent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ platform, channel, username, text, ...(replyTo ? { replyTo } : {}) }),
       signal: AbortSignal.timeout(8000),
-    }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+    })).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
   }
 
   /** ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami). */

@@ -15,9 +15,9 @@ import {
   type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, SendError } from '../lib/webSend.js';
-import { sendAsAccount } from '../lib/accountSend.js';
+import { sendAsAccount, sendUcReply } from '../lib/accountSend.js';
 import { pendingWarnings } from '../lib/accountWarnings.js';
-import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -170,7 +170,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     } catch (e) { req.log.warn({ err: (e as Error).message }, 'chat send: kontrola varování selhala'); }
 
     // Odpověď napříč platformami: nahlásit PŘED odesláním, echo z ingestu ji pak rovnou ponese.
-    const ucReply = body.data.replyTo ? null : parseUcReply(body.data.ucReplyTo);
+    // Citace z archivu, ne od klienta (podvržené citace, 2026-09-25) — sendUcReply → verifyUcReply.
+    const ucReply = await sendUcReply(body.data);
 
     try {
       const res = await sendAsAccount({

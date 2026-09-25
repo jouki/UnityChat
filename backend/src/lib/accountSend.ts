@@ -9,6 +9,17 @@ import { getDecryptedIdentity, storeRefreshedTokens, needsRefresh, type Decrypte
 import { refreshTokens } from './platformTokens.js';
 import { sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from './webSend.js';
 import type { Ingest } from '../ingest/index.js';
+import { parseUcReply, type UcReply } from './ucSends.js';
+import { verifyUcReply, type QuoteLookup } from './ucReplyVerify.js';
+
+/**
+ * Odpověď napříč platformami pro POST /chat/send: jen když není nativní replyTo, a citace (autor,
+ * text) VŽDY z archivu přes verifyUcReply — nikdy od klienta (podvržené citace, 2026-09-25).
+ */
+export async function sendUcReply(body: { replyTo?: string | null; ucReplyTo?: unknown }, lookup?: QuoteLookup): Promise<UcReply | null> {
+  if (body.replyTo) return null;
+  return verifyUcReply(parseUcReply(body.ucReplyTo), lookup);
+}
 
 type Log = { warn: (o: object, m: string) => void; info: (o: object, m: string) => void };
 
