@@ -53,8 +53,11 @@ const mock = {
   deleteDelayMs: 0,
   history: () => [H('e2e-m1', 'první zpráva'), H('e2e-m2', '', { deleted: true }), H('e2e-m3', 'třetí zpráva')],
   sse: [],   // fronta událostí pro /nicknames/stream
+  // GET /moderation/deleted-content — obsah smazané zprávy jen pro moda (Kappa = Twitch emote 25).
+  deletedContent: { 'twitch:e2e-m2': H('e2e-m2', 'tst Kappa', { twitchEmotes: '25:4-8', deleted: true, deletedReason: 'mod' }) },
 };
 const posts = [];
+const contentCalls = [];
 s.onevent = async (d) => {
   if (d.method !== 'Fetch.requestPaused') return;
   const q = d.params.request;
@@ -70,6 +73,12 @@ s.onevent = async (d) => {
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   // GIFy ke schválení (část 4) — tady žádné; nesmí odejít na produkci.
   if (u.includes('/moderation/gif/pending')) return json({ ok: true, requests: [] });
+  if (u.includes('/moderation/deleted-content')) {
+    contentCalls.push(u);
+    if (!mock.mod) return json({ ok: false, error: 'not_mod' }, 403);
+    const ids = (new URL(u).searchParams.get('ids') || '').split(',');
+    return json({ ok: true, messages: Object.fromEntries(ids.filter((k) => mock.deletedContent[k]).map((k) => [k, mock.deletedContent[k]])) });
+  }
   if (u.includes('/moderation/delete')) {
     posts.push(q.postData ? JSON.parse(q.postData) : null);
     if (mock.deleteDelayMs) await sleep(mock.deleteDelayMs);
@@ -100,12 +109,32 @@ check('A body.uc-can-moderate z /moderation/me', await until(`document.body.clas
 const order = await ev(`[...document.querySelector('.msg[data-msg-id="e2e-m1"] .msg-actions').children].map(b => b.dataset.act || b.title).join('|')`);
 check('A koš je hned vlevo od 💩', /^delete\|poop\|/.test(order || ''), order);
 check('A koš má title „Smazat zprávu" a je vidět', await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]'); return b.title === 'Smazat zprávu' && getComputedStyle(b).display !== 'none'; })()`) === true);
+const setStyle = (v) => ev(`(() => { const s = document.getElementById('input-deleted-style'); s.value = '${v}'; s.dispatchEvent(new Event('change')); return true; })()`);
+// Mod, výchozí styl „Zpráva smazána": smazaná zpráva z historie (bez obsahu) → label + štítek + ztlumení.
+const waitNode = async (fn, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { if (fn()) return true; await sleep(150); } return false; };
+check('A mod: obsah smazané zprávy z historie dotažen přes /moderation/deleted-content', await waitNode(() => contentCalls.length > 0), contentCalls.join(' | '));
+check('A mod: dotaz s kanálem a id smazané zprávy (jeden dotaz)', contentCalls.length === 1 && /channel=robdiesalot/.test(contentCalls[0]) && new URL(contentCalls[0]).searchParams.get('ids') === 'twitch:e2e-m2', contentCalls.join(' | '));
+await sleep(400);
 const m2mod = await msgState('e2e-m2');
-check('A smazaná zpráva z historie (bez obsahu) u moda = dim + „Zpráva smazána"', m2mod?.cls.includes('uc-deleted--dim') && m2mod.label, JSON.stringify(m2mod));
+check('A mod + label: „Zpráva smazána" + štítek Smazáno + ztlumeno', m2mod?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--label' && m2mod.text.startsWith('Zpráva smazána') && m2mod.tag === 'Smazáno' && m2mod.label, JSON.stringify(m2mod));
+// Mod přepne na Přeškrtnuté → dotažený text přeškrtnutý (i přes emote), ztlumený, se štítkem.
+await setStyle('strike');
+const m2s = await msgState('e2e-m2');
+check('A mod + strike: dotažený text přeškrtnutý + ztlumený + štítek', m2s?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--strike' && m2s.text.includes('tst') && !m2s.label && m2s.tag === 'Smazáno', JSON.stringify(m2s));
+const strikeEmote = await ev(`(() => { const w = document.querySelector('.msg[data-msg-id="e2e-m2"] .tx .emote-stack, .msg[data-msg-id="e2e-m2"] .tx .uc-strike-emote'); if (!w) return null; const a = getComputedStyle(w, '::after'); return { img: !!w.querySelector('img.emote'), after: a.content, h: a.height, pos: a.position, dec: getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m2"] .tx')).textDecorationLine, op: getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m2"] .tx')).opacity }; })()`);
+check('A mod + strike: čára i přes emote (::after přes obal emotu) + text line-through', strikeEmote?.img && strikeEmote.after !== 'none' && strikeEmote.h === '2px' && strikeEmote.pos === 'absolute' && strikeEmote.dec.includes('line-through'), JSON.stringify(strikeEmote));
+check('A mod: ztlumení (.tx opacity 0.5)', strikeEmote?.op === '0.5', JSON.stringify(strikeEmote));
 await ev(`document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]').click()`);
-await until(`document.querySelector('.msg[data-msg-id="e2e-m1"]').classList.contains('uc-deleted--dim')`, 3000);
+await until(`document.querySelector('.msg[data-msg-id="e2e-m1"]').classList.contains('uc-deleted--strike')`, 3000);
 const m1mod = await msgState('e2e-m1');
-check('A po kliknutí: zpráva dim, text zůstává, štítek Smazáno', m1mod?.cls.includes('uc-deleted--dim') && m1mod.text.includes('první zpráva') && m1mod.tag === 'Smazáno', JSON.stringify(m1mod));
+check('A po kliknutí (strike): text zůstává přeškrtnutý, ztlumený, štítek Smazáno', m1mod?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--strike' && m1mod.text.includes('první zpráva') && m1mod.tag === 'Smazáno', JSON.stringify(m1mod));
+await setStyle('label');
+const m1l = await msgState('e2e-m1');
+check('A mod přepne na „Zpráva smazána": label + štítek + ztlumeno', m1l?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--label' && m1l.label && m1l.tag === 'Smazáno', JSON.stringify(m1l));
+mock.sse.push(['message-hidden', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m3', by: 'twitch:moduser', at: new Date().toISOString() }]);
+check('A mod: skrytá zpráva zůstane vidět', await until(`document.querySelector('.msg[data-msg-id="e2e-m3"]')?.classList.contains('uc-deleted--label')`, 6000));
+const m3mod = await msgState('e2e-m3');
+check('A mod: skrytá = „Zpráva skryta" + štítek „Skryto v UnityChatu" + ztlumeno', m3mod?.cls === 'uc-deleted uc-deleted--dimmed uc-deleted--label' && m3mod.text.startsWith('Zpráva skryta') && m3mod.tag === 'Skryto v UnityChatu' && m3mod.display !== 'none', JSON.stringify(m3mod));
 await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('botem'))`, 4000);
 check('A POST /moderation/delete s kanálem, platformou a id', posts.length === 1 && posts[0]?.platform === 'twitch' && posts[0]?.messageId === 'e2e-m1' && posts[0]?.channel === 'robdiesalot', JSON.stringify(posts));
 const sysBot = await lastSys();
@@ -113,11 +142,18 @@ check('A výsledek „bot" → hláška + tlačítko „Povolit moderaci účtem
 
 // ---- fáze B: divák (ne mod) ----
 mock.mod = false;
+const callsBeforeViewer = contentCalls.length;
 await boot();
 check('B body.uc-can-moderate pryč', await until(`!document.body.classList.contains('uc-can-moderate')`));
 check('B koš u diváka schovaný', await ev(`getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]')).display === 'none'`) === true);
 const m2v = await msgState('e2e-m2');
-check('B smazaná zpráva z historie u diváka = label „Zpráva smazána"', m2v?.cls === 'uc-deleted uc-deleted--label' && m2v.text === 'Zpráva smazána', JSON.stringify(m2v));
+check('B smazaná zpráva z historie u diváka = label „Zpráva smazána" (bez štítku a ztlumení)', m2v?.cls === 'uc-deleted uc-deleted--label' && m2v.text === 'Zpráva smazána' && !m2v.tag, JSON.stringify(m2v));
+await setStyle('strike');
+await sleep(800);
+const m2vs = await msgState('e2e-m2');
+check('B divák se strike: smazaná zpráva bez obsahu zůstává „Zpráva smazána"', m2vs?.cls === 'uc-deleted uc-deleted--strike' && m2vs.text === 'Zpráva smazána', JSON.stringify(m2vs));
+check('B divák obsah smazané zprávy nedotahuje', contentCalls.length === callsBeforeViewer, `${callsBeforeViewer} → ${contentCalls.length}`);
+await setStyle('label');
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m1', by: 'twitch:moduser', reason: 'mod', at: new Date().toISOString() }]);
 check('B SSE message-deleted → label, text pryč', await until(`document.querySelector('.msg[data-msg-id="e2e-m1"]').classList.contains('uc-deleted--label')`));
 const m1v = await msgState('e2e-m1');

@@ -93,6 +93,8 @@ s.onevent = async (d) => {
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, warnings: [] });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
+  // Obsah smazaných zpráv pro moda (smazaný GIF server neposílá) — nesmí odejít na produkci.
+  if (u.includes('/moderation/deleted-content')) return json({ ok: true, messages: {} });
   if (u.includes('/moderation/gif/pending')) {
     posts.pending.push(u);
     if (!mock.mod) return json({ ok: false, error: 'not_mod' }, 403);

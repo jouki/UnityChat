@@ -4417,6 +4417,8 @@ class UnityChat {
 
   /** Má zpráva v datech text? (historie posílá smazané/skryté bez obsahu) */
   _msgHasContent(msg) {
+    // Obsah dotažený jako mod (/moderation/deleted-content) po ztrátě role nevykreslovat.
+    if (msg?._modContent && !this._canModerate) return false;
     const probe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
     return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0) || !!msg?.gif;
   }
@@ -4446,14 +4448,49 @@ class UnityChat {
       if (n) this._ucLog('Gif', `smazaný GIF ${msg.platform}:${el.dataset.msgId} → médium pryč`);
     }
     const hasContent = this._msgHasContent(msg);
-    const mode = core.deletedMode({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
+    // Mod: vždy ztlumené + štítek, nastavení volí přeškrtnutí / „Zpráva smazána" (core deletedView).
+    const view = core.deletedView({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
     // Přechod z „Zpráva smazána" na styl s textem → text zpátky z dat.
     const tx = el.querySelector('.tx');
-    if (tx && hasContent && mode !== 'label' && tx.querySelector('.uc-deleted-label')) {
+    if (tx && hasContent && view.mode !== 'label' && tx.querySelector('.uc-deleted-label')) {
       tx.innerHTML = this._renderMsgBody(msg);
       this._processMentions(tx, msg.platform);
     }
-    core.applyDeleted(el, { mode, hidden, hasContent, label: hidden ? 'Skryto v UnityChatu' : 'Zpráva smazána' });
+    core.applyDeleted(el, { ...view, hidden, hasContent });
+    // Historie/stream posílají smazanou zprávu bez obsahu — mod si text dotáhne (dávkově, jednou).
+    const id = msg?.id != null ? String(msg.id) : '';
+    if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && this.store.get(msg.id) === msg) {
+      if (this._deletedLoader().request(msg.platform, id)) this._ucLog('Mod', `deleted-content ← ${msg.platform}:${id}`);
+    }
+  }
+
+  /** Dotažení textu smazaných/skrytých zpráv pro moda (core DeletedContentLoader → GET /moderation/deleted-content). */
+  _deletedLoader() {
+    if (!this._deletedLoaderInst) {
+      this._deletedLoaderInst = new window.UC_CORE.DeletedContentLoader({
+        api: (path) => this._ucApi(path),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        onContent: (m) => this._onDeletedContent(m),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._deletedLoaderInst;
+  }
+
+  /** Obsah smazané/skryté zprávy (jen mod) → do dat ve store a znovu vykreslit její uzly. */
+  _onDeletedContent(fresh) {
+    const msg = fresh?.id != null ? (this.store.get(String(fresh.id)) || this.store.get(Number(fresh.id))) : null;
+    if (!msg || msg.platform !== fresh.platform || !this._isModerated(msg)) return;
+    const SKIP = ['id', 'platform', 'historical', 'timestamp', 'deleted', 'deletedReason', 'hidden', 'gif', 'segments'];
+    for (const [k, v] of Object.entries(fresh)) if (v !== undefined && !SKIP.includes(k)) msg[k] = v;
+    msg._modContent = true;
+    const els = this._msgEls(msg.id, msg.platform);
+    for (const el of els) {
+      const tx = el.querySelector('.tx');
+      if (tx) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+      this._paintDeleted(el, msg);
+    }
+    this._ucLog('Mod', `deleted-content → ${msg.platform}:${msg.id} (${els.length} el)`);
   }
 
   /** Zrušit vzhled smazání/skrytí a vykreslit text znovu z dat. */
@@ -4590,6 +4627,9 @@ class UnityChat {
     const changed = can !== !!this._canModerate;
     this._canModerate = can;
     document.body.classList.toggle('uc-can-moderate', can);
+    // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu).
+    if (!can) this._deletedLoaderInst?.reset();
+    // Změna role → přebarvit smazané (mod: ztlumení + štítek + dotažení textu, divák: podle nastavení).
     if (changed) this._reapplyDeleted();
     // GIFy ke schválení (část 4): mod si dotáhne čekající žádosti kanálu, karty přebarví tlačítka podle role.
     if (this._gifInst || can) { this._gifs().repaint(); if (can) this._gifs().loadPending(); }
@@ -7024,6 +7064,8 @@ class UnityChat {
       if (tx) { tx.innerHTML = this._renderMsgBody(cached); this._processMentions(tx, cached.platform); }
       const un = msgEl.querySelector('.un');
       if (un) un.textContent = this._censorName(this.nicknames.get(cached.platform, cached.username)?.nickname || cached.username);
+      // Smazaná/skrytá zpráva: znovu „Zpráva smazána" / přeškrtnutí (jinak by se text u diváka vrátil).
+      if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);
       n++;
     }
     this._ucLog('Blacklist', `přerenderováno ${n} zpráv`);
@@ -7051,6 +7093,7 @@ class UnityChat {
       }
       // @mention spans need re-applying since innerHTML wiped them.
       this._processMentions(tx, platform);
+      if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);
     }
   }
 
@@ -7772,6 +7815,8 @@ class UnityChat {
     this._closeUserHistory('reset chatu');
     // Karty GIFů patří kanálu (mod si po _loadModState dotáhne čekající nového kanálu).
     this._gifInst?.clear();
+    // Obsah smazaných zpráv pro moda patří kanálu — rozpracované dotazy zahodit.
+    this._deletedLoaderInst?.reset();
     this.store = new ChatStore();
     this.chatEl.innerHTML = '';
     this._parkedTop = [];

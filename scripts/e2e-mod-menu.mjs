@@ -115,6 +115,8 @@ s.onevent = async (d) => {
   }
   // GIFy ke schválení (část 4, mod dotáhne čekající po /moderation/me) — tady žádné; nesmí odejít na produkci.
   if (u.includes('/moderation/gif/pending')) return json({ ok: true, requests: [] });
+  // Obsah smazaných zpráv pro moda — tady nic (zprávy mají text lokálně); nesmí odejít na produkci.
+  if (u.includes('/moderation/deleted-content')) return json({ ok: true, messages: {} });
   if (u.includes('/moderation/user-state')) return json({ ok: true, banned: mock.banned, until: null });
   if (u.includes('/moderation/user')) {
     posts.user.push(body);
@@ -288,7 +290,7 @@ const at = Date.now();
 mock.sse.push(['user-moderated', { channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester', action: 'timeout', until: at + 300000, by: 'twitch:jinymod', at }]);
 check('A SSE user-moderated → předchozí zprávy uživatele smazané', await until(`document.querySelector('.msg[data-msg-id="e2e-a2"]')?.classList.contains('uc-deleted')`, 6000));
 const a1 = await msgState('e2e-a1'), a2 = await msgState('e2e-a2'), b1 = await msgState('e2e-b1');
-check('A obě zprávy Testera: mod vidí dim + štítek „Timeout (5 min)"', a1?.cls.includes('uc-deleted--dim') && a1.modTag === 'Timeout (5 min)' && a2?.modTag === 'Timeout (5 min)', JSON.stringify([a1, a2]));
+check('A obě zprávy Testera: mod vidí ztlumené + štítek „Timeout (5 min)"', a1?.cls.includes('uc-deleted--dimmed') && a1.modTag === 'Timeout (5 min)' && a2?.modTag === 'Timeout (5 min)', JSON.stringify([a1, a2]));
 check('A štítek „Smazáno" se se štítkem timeoutu nezdvojí', a1?.delTagVisible === false, JSON.stringify(a1));
 check('A zpráva jiného uživatele beze změny', b1?.cls === '' && !b1.modTag, JSON.stringify(b1));
 mock.sse.push(['user-moderated', { channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester', action: 'timeout', until: at + 300000, by: null, at }]);

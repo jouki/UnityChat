@@ -11,6 +11,33 @@
   opacity: .6;
 }
 
+/* Přeškrtnutí přes emoty — text-decoration obrázky nepřeškrtne. Samostatný emote core obalí
+   do .uc-strike-emote (applyDeleted), vrstvený .emote-stack obal má; čáru kreslí ::after. */
+.uc-strike-emote {
+  display: inline-block;
+  position: relative;
+  vertical-align: middle;
+}
+.uc-deleted--strike .tx .emote-stack { position: relative; }
+.uc-deleted--strike .tx .uc-strike-emote::after,
+.uc-deleted--strike .tx .emote-stack::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: currentColor;
+  pointer-events: none;
+}
+
+/* Moderátor: smazaná/skrytá zpráva je vždy ztlumená (i „Zpráva smazána"), štítek zůstává plně vidět. */
+.uc-deleted--dimmed .tx,
+.uc-deleted--dimmed .un {
+  opacity: .5;
+}
+
 .uc-deleted-label {
   font-style: italic;
   color: var(--text-secondary);
