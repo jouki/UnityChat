@@ -595,9 +595,14 @@ export class UserHistoryPanel {
     this._loadPage(this._tab, null);
   }
 
+  /** Je vybraná záložka aktuálního kanálu (kanál, kde je Profil otevřený)? */
+  _isCurrentTab() {
+    return !!this._tab && this._tab.channel === String(this.target?.channel || '').toLowerCase();
+  }
+
   /** Dona patří jen záložce aktuálního kanálu (workspace kanálu, kde je Profil otevřený). */
   _donsHere() {
-    return this._tab && this._dons && this._tab.channel === String(this.target.channel || '').toLowerCase() ? this._dons : [];
+    return this._isCurrentTab() && this._dons ? this._dons : [];
   }
 
   /** Další (starší) stránka. Po chybě nic — až „Zkusit znovu“ (`tab.failed`), jinak by scroll / doplnění výšky točily požadavky dokola. */
@@ -781,7 +786,8 @@ export class UserHistoryPanel {
     if (!gone && m.replyTo && (m.replyTo.username || m.replyTo.message)) row.appendChild(this._replyEl(msg));
     row.append(this._time(Number(m.timestamp)), this._platformMark(m.platform, uc), tx);
     if (gone) this._paintGone(row, { deleted: !!m.deleted, hidden: !m.deleted && !!m.hidden, hasContent: false });
-    if (this.view === 'mod' && this.modMenu) row.appendChild(this._actions(m, gone));
+    // Akce moda jen v záložce aktuálního kanálu (v cizím kanálu mod práva nemá).
+    if (this.view === 'mod' && this.modMenu && this._isCurrentTab()) row.appendChild(this._actions(m, gone));
     return row;
   }
 
@@ -815,7 +821,8 @@ export class UserHistoryPanel {
     }
     wrap.appendChild(node);
     const rt = msg.replyTo;
-    wrap._uhReply = { platform: rt.platform || msg.platform, login: String(rt.username || '').replace(/^@/, ''), authorUc: !!rt.authorUc };
+    // Login autora (Twitch reply-parent-user-login), jinak zobrazované jméno z citace.
+    wrap._uhReply = { platform: rt.platform || msg.platform, login: String(rt.login || rt.username || '').replace(/^@/, ''), authorUc: !!rt.authorUc };
     return wrap;
   }
 
@@ -841,7 +848,8 @@ export class UserHistoryPanel {
       title: `Otevřít profil uživatele ${info.login}?`,
       submitLabel: 'Ano',
       onSubmit: async () => {
-        this.open({ channel: this.target.channel, platform: info.platform, userId: null, login: info.login, displayName: info.login });
+        // Bez displayName: hlavička vezme jméno ze serveru (login z citace může mít jiný tvar).
+        this.open({ channel: this.target.channel, platform: info.platform, userId: null, login: info.login });
       },
     });
   }

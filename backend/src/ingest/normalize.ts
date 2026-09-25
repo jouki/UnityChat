@@ -91,6 +91,8 @@ export function normalizeTwitchPrivmsg(line: string, channel: string): IngestMes
       firstMsg: p.tags['first-msg'] === '1',
       action,
       replyParentDisplayName: p.tags['reply-parent-display-name'] || null,
+      // Login autora citované zprávy (Profil otevírá podle loginu, display name může mít jiný tvar).
+      replyParentLogin: p.tags['reply-parent-user-login'] || null,
       replyParentBody: p.tags['reply-parent-msg-body'] || null,
     },
     sentAt: Number.isFinite(ts) && ts > 0 ? new Date(ts) : new Date(),

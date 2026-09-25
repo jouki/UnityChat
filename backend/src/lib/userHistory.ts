@@ -53,8 +53,11 @@ export interface HistoryDeps {
    * kanálu, null = v kanálu nepsal → 404 (nejde tím procházet celý archiv).
    */
   userIdByLogin: (channel: string, platform: Platform, login: string) => Promise<string | null>;
-  /** Dona identit ve workspace kanálu `channel` (registr, nikdy od klienta); null = Židolišta nedostupná. */
-  donations: (channel: string, ids: UserTarget[]) => Promise<DonationItem[] | null>;
+  /**
+   * Dona identit ve workspace kanálu `channel` (registr, nikdy od klienta); null = Židolišta nedostupná.
+   * `public` = veřejný Profil: necachovaná volání Židolišty jdou přes globální strop (PUBLIC_DONATIONS_PER_MIN).
+   */
+  donations: (channel: string, ids: UserTarget[], opts?: { public?: boolean }) => Promise<DonationItem[] | null>;
 }
 
 const sameId = (a: UserTarget, b: UserTarget) => a.platform === b.platform && a.userId === b.userId;
@@ -273,12 +276,13 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
   const primary = targets.primary;
   const { byUc } = await mergeChannels(await deps.channelGroups([primary]), input.channel, deps.ucChannelOf);
   const here = byUc.get(input.channel) ?? [];
-  const ids = await historyIdentities(targets, deps);
+  // Bez UC účtu nemůže mít dono spárované přes UC (matchedBy 'uc') → ucNamed je vždy 0, Židolišta se neptá.
+  const ids = targets.accountId !== null ? await historyIdentities(targets, deps) : [];
   const [name, latest, nick, donationItems] = await Promise.all([
     deps.latestName(primary.platform, primary.userId),
     latestInChannel([primary], here, deps),
     deps.nickname(primary.platform, primary.login),
-    deps.donations(input.channel, ids).catch(() => null),
+    ids.length ? deps.donations(input.channel, ids, { public: true }).catch(() => null) : Promise.resolve(null),
   ]);
   const user = {
     platform: primary.platform,
@@ -441,11 +445,28 @@ async function dbMessagesPage(scope: Array<{ platform: Platform; userId: string;
   return unionAll(a, b, ...rest).orderBy(desc(messages.sentAt), desc(messages.id)).limit(n);
 }
 
+/** Globální strop necachovaných volání Židolišty z veřejného Profilu (limit Židolišty je 300/min na klíč). */
+export const PUBLIC_DONATIONS_PER_MIN = 60;
+
+/** Klouzavé okno: max `max` povolení za `windowMs` (celkem, ne per klient). */
+export function makeWindowBudget(max: number, windowMs = 60_000, now: () => number = Date.now): () => boolean {
+  const hits: number[] = [];
+  return () => {
+    const t = now();
+    while (hits.length && t - hits[0] >= windowMs) hits.shift();
+    if (hits.length >= max) return false;
+    hits.push(t);
+    return true;
+  };
+}
+
+const publicDonationsBudget = makeWindowBudget(PUBLIC_DONATIONS_PER_MIN);
+
 /** Dona identit: workspace JEN z registru podle kanálu (slug od klienta se nebere), dotaz per identita, dedup. */
-export async function registryDonations(channel: string, ids: UserTarget[], log?: { warn: (o: object, m: string) => void }): Promise<DonationItem[] | null> {
+export async function registryDonations(channel: string, ids: UserTarget[], log?: { warn: (o: object, m: string) => void }, allowFetch?: () => boolean): Promise<DonationItem[] | null> {
   const ws = await defaultWorkspace(channel).catch(() => null);
   if (!ws || !ids.length) return null;
-  const lists = await Promise.all(ids.map((i) => zidolistaDonations({ workspace: ws.slug, platform: i.platform, userId: i.userId, login: i.login }, { log })));
+  const lists = await Promise.all(ids.map((i) => zidolistaDonations({ workspace: ws.slug, platform: i.platform, userId: i.userId, login: i.login }, { log, allowFetch })));
   return mergeDonations(lists);
 }
 
@@ -464,5 +485,5 @@ export const dbHistoryDeps = (
   moderation: dbModeration,
   messagesPage: dbMessagesPage,
   userIdByLogin,
-  donations: (channel, ids) => registryDonations(channel, ids, log),
+  donations: (channel, ids, opts) => registryDonations(channel, ids, log, opts?.public ? publicDonationsBudget : undefined),
 });

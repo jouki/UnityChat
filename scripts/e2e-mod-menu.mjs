@@ -74,7 +74,8 @@ const DONS = [
   { id: 'd1', amount: 150, currency: 'CZK', amountCzk: 150, paidAt: now - 60000 + 2000, via: 'qr', matchedBy: 'uc', nickname: 'Tester', message: 'díky za stream' },
   { id: 'd2', amount: 250, currency: 'CZK', amountCzk: 250, paidAt: now - 2 * DAY, via: 'qr', matchedBy: 'nickname', nickname: 'tester', message: null },
 ];
-const HREP = { ...H('h-rep', 'Tester', 'u1', 'souhlas', 4), replyTo: { username: 'Other', message: 'původní zpráva jiného uživatele, která je dost dlouhá na to, aby se v Profilu nevešla na jeden řádek ani omylem', id: 'e2e-b1' } };
+// Twitch dává login autora citace (reply-parent-user-login) → Profil se otevírá podle něj, ne podle display name.
+const HREP = { ...H('h-rep', 'Tester', 'u1', 'souhlas', 4), replyTo: { username: 'OtherDisplay', login: 'other', message: 'původní zpráva jiného uživatele, která je dost dlouhá na to, aby se v Profilu nevešla na jeden řádek ani omylem', id: 'e2e-b1' } };
 const summaryMod = (who) => who === 'other'
   ? { ok: true, view: 'mod', user: { platform: 'twitch', userId: 'u2', login: 'other', displayName: 'Other', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'other', userId: 'u2', displayName: 'Other' }], firstSeen: now - 60000, lastSeen: now, total: 1 },
     channels: [{ channel: 'robdiesalot', count: 1, firstAt: now - 60000, lastAt: now }], moderation: [], latest: { twitch: { platform: 'twitch', id: 'e2e-b1', username: 'Other', userId: 'u2', timestamp: now, color: null, badgesRaw: '' } } }
@@ -117,7 +118,7 @@ s.onevent = async (d) => {
     posts.hist.push(u);
     const sp = new URL(u).searchParams;
     if (!mock.mod) return json(summaryPublic);
-    return json(summaryMod(!sp.get('userId') && sp.get('login') === 'Other' ? 'other' : 'tester'));
+    return json(summaryMod(!sp.get('userId') && sp.get('login') === 'other' ? 'other' : 'tester'));
   }
   if (u.includes('/moderation/user-history/donations')) {
     posts.hist.push(u);
@@ -312,7 +313,7 @@ const donRows = await ev(`[...document.querySelectorAll('.uc-uh-don')].map(r => 
 check('H 7 řádek dona: „💸 poslal QR dono 150 Kč" + zpráva; odhad šedě „podle jména"', donRows === '💸poslal QR dono 250\u00a0Kč|-|podle jména / 💸poslal QR dono 150\u00a0Kč|díky za stream|-', donRows);
 // 4: citace odpovědi na jeden řádek, klik = celý text
 const rep = await ev(`(() => { const w = document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply'); if (!w) return null; return { user: w.querySelector('.rctx-user')?.textContent, ws: getComputedStyle(w).whiteSpace, oneLine: w.getBoundingClientRect().height < 24, clickable: !w.querySelector('.reply-ctx.clickable') }; })()`);
-check('H 4 citace odpovědi (render chatu) na jeden řádek', rep?.user === '@Other' && rep.ws === 'nowrap' && rep.oneLine && rep.clickable, JSON.stringify(rep));
+check('H 4 citace odpovědi (render chatu) na jeden řádek', rep?.user === '@OtherDisplay' && rep.ws === 'nowrap' && rep.oneLine && rep.clickable, JSON.stringify(rep));
 await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply .rctx-body').click()`);
 const repOpen = await ev(`(() => { const w = document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-reply'); return { wrap: w.classList.contains('uc-uh-reply--wrap'), h: w.getBoundingClientRect().height }; })()`);
 check('H 4 klik na citaci → celý text (zalomení)', repOpen?.wrap === true && repOpen.h > 24 && !(await ev(`!!document.querySelector('.uc-mod-dialog')`)), JSON.stringify(repOpen));
@@ -337,6 +338,7 @@ check('H 9 po timeoutu: zprávy uživatele v Profilu smazané + štítek „Time
 check('H 6 timeout no_actor → nabídka přihlášení i u akce z nabídky', await until(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; return a.some(s => s.textContent.startsWith('Na Twitchi se akce nepovedla') && s !== a[0]) && a.filter(s => s.querySelector('.sys-action')).length >= 2; })()`, 3000));
 mock.userResults = { twitch: 'ok', kick: 'bot' }; mock.deleteResult = 'ok';
 await ev(`document.querySelector('.uc-uh-tab[data-channel="arcadebulls"]').click()`);
+check('H 3/9 cizí záložka: bez ikon akcí moda', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3`, 3000) && await ev(`document.querySelectorAll('.uc-uh-act').length === 0`) === true);
 check('H přepnutí záložky načte zprávy kanálu (bez donů — patří jen aktuálnímu kanálu)', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3 && document.querySelector('.uc-uh-list .uc-uh-msg .uc-uh-tx').textContent === 'zpráva u Bulls 1'`, 3000) && /inChannel=arcadebulls/.test(posts.hist.at(-1) || '') && await ev(`!document.querySelector('.uc-uh-don')`) === true, posts.hist.at(-1));
 check('H chyba starší stránky → hláška nahoře + Zkusit znovu', await until(`document.querySelector('.uc-uh-list').firstElementChild?.classList.contains('uc-uh-older-fail') && !!document.querySelector('.uc-uh-older-fail .uc-uh-retry')`, 3000)
   && (await ev(`document.querySelector('.uc-uh-older-fail span').textContent`)) === 'Starší zprávy se nepodařilo načíst', await ev(`document.querySelector('.uc-uh-older-fail')?.textContent`));
@@ -354,11 +356,11 @@ check('H prázdná záložka → „V tomto kanálu nic nenapsal."', await until
 await ev(`document.querySelector('.uc-uh-tab[data-channel="robdiesalot"]').click()`);
 await until(`!!document.querySelector('.uc-uh-msg[data-id="h-rep"] .rctx-user')`, 4000);
 await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .rctx-user').click()`);
-check('H 4 klik na jméno v citaci → „Otevřít profil uživatele Other?"', await until(`document.querySelector('.uc-mod-dialog h2')?.textContent === 'Otevřít profil uživatele Other?'`, 2000));
+check('H 4 klik na jméno v citaci → „Otevřít profil uživatele other?" (login z reply-parent-user-login)', await until(`document.querySelector('.uc-mod-dialog h2')?.textContent === 'Otevřít profil uživatele other?'`, 2000));
 const nHist = posts.hist.length;
 await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`);
 check('H 4 Ano → Profil autora citace (dotaz jen podle loginu)', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Other'`, 3000)
-  && await (async () => { for (let i = 0; i < 30 && !posts.hist.slice(nHist).length; i++) await sleep(100); return true; })() && posts.hist.slice(nHist).some((x) => /summary\?channel=robdiesalot&platform=twitch&login=Other$/.test(x)), posts.hist.slice(nHist).join(" | ") + " name=" + await ev(`document.querySelector(".uc-uh-name")?.textContent`));
+  && await (async () => { for (let i = 0; i < 30 && !posts.hist.slice(nHist).length; i++) await sleep(100); return true; })() && posts.hist.slice(nHist).some((x) => /summary\?channel=robdiesalot&platform=twitch&login=other$/.test(x)), posts.hist.slice(nHist).join(" | ") + " name=" + await ev(`document.querySelector(".uc-uh-name")?.textContent`));
 check('H 4 další dotazy už s userId ze summary', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20; i++) { if (posts.hist.slice(nHist).some((x) => /messages\?.*userId=u2/.test(x))) return true; await sleep(150); } return false; })(), posts.hist.slice(nHist).join(' | '));
 await ev(`(() => { const i = document.getElementById('msg-input'); i.disabled = false; i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
 await sleep(300);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummary, buildPublicSummary, publicDonationSum, buildMessages, buildDonations, HistoryTabsCache, historyIdentities, mergeChannels, mergeDonations, donationTotals, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
+import { buildSummary, buildPublicSummary, publicDonationSum, makeWindowBudget, buildMessages, buildDonations, HistoryTabsCache, historyIdentities, mergeChannels, mergeDonations, donationTotals, clampHistoryLimit, toModItem, type HistoryDeps, type ChannelGroup } from './userHistory.js';
 import type { DonationItem } from './zidolista.js';
 import type { Message } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
@@ -206,6 +206,32 @@ test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanál
   assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: null, login: 'cizi' }, dd)).status, 404);
   const noDon = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps());
   assert.equal((noDon.body as Record<string, unknown>).donations, undefined);
+});
+
+test('buildPublicSummary: cíl bez UC účtu → Židolišta se vůbec neptá (ucNamed by byl 0); s účtem dotaz jako veřejný', async () => {
+  let asked = 0;
+  let opts: unknown = null;
+  const noAcc = deps({
+    resolveTargets: async () => ({ primary: { platform: 'twitch', userId: '1', login: 'spammer' }, all: [{ platform: 'twitch', userId: '1', login: 'spammer' }], accountId: null }),
+    donations: async () => { asked++; return [don('a', 10, 'CZK', 'uc', 1, 10, 'spammer')]; },
+  });
+  const out = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, noAcc);
+  assert.equal(out.status, 200);
+  assert.equal(asked, 0);
+  assert.equal((out.body as Record<string, unknown>).donations, undefined);
+  await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async (_c, _i, o) => { asked++; opts = o; return []; } }));
+  assert.equal(asked, 1);
+  assert.deepEqual(opts, { public: true }, 'veřejná volání jdou přes globální strop');
+});
+
+test('makeWindowBudget: max N za okno celkem, po okně znovu', () => {
+  let t = 0;
+  const b = makeWindowBudget(3, 60_000, () => t);
+  assert.deepEqual([b(), b(), b(), b()], [true, true, true, false]);
+  t = 59_999;
+  assert.equal(b(), false);
+  t = 60_000;
+  assert.equal(b(), true);
 });
 
 test('publicDonationSum: jen matchedBy uc s přezdívkou = login / jméno (bez @, bez ohledu na velikost)', () => {

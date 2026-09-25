@@ -31,7 +31,7 @@ function historyDeps() {
   const spy = <T extends unknown[], R>(name: string, fn: (...a: T) => R) => (...a: T): R => { calls.push(name); return fn(...a); };
   const deps: HistoryDeps = {
     resolveTargets: spy('resolveTargets', async (channel: string, platform: string, userId: string) => (channel === 'robdiesalot' && platform === 'twitch' && userId === '1'
-      ? { primary: { platform: 'twitch' as const, userId: '1', login: 'spammer' }, all: [{ platform: 'twitch' as const, userId: '1', login: 'spammer' }], accountId: null }
+      ? { primary: { platform: 'twitch' as const, userId: '1', login: 'spammer' }, all: [{ platform: 'twitch' as const, userId: '1', login: 'spammer' }], accountId: 9 }
       : null)),
     accountIdentities: spy('accountIdentities', async () => []),
     channelGroups: spy('channelGroups', async () => [{ platform: 'twitch' as const, channel: 'robdiesalot', count: 1, firstAt: new Date(1), lastAt: new Date(2) }]),
@@ -145,6 +145,15 @@ test('Profil veřejný: divák i nepřihlášený dostanou JEN veřejná pole (b
     const miss = await a.inject({ method: 'GET', url: url('summary', 'channel=robdiesalot&platform=twitch&login=nekdojiny'), headers });
     assert.equal(miss.statusCode, 404, `${who}: mimo archiv kanálu 404`);
   }
+});
+
+test('Profil veřejný: limit per IP PŘED ověřením tokenu — náhodné Bearer tokeny nedělají dotazy do DB', async () => {
+  let sessions = 0;
+  const { a } = await app({ optional: async () => { sessions++; return null; }, now: () => 1000 });
+  const codes: number[] = [];
+  for (let i = 0; i < 12; i++) codes.push((await a.inject({ method: 'GET', url: url('summary'), headers: { authorization: `Bearer nahodny${i}` } })).statusCode);
+  assert.deepEqual(codes.slice(9), [200, 429, 429]);
+  assert.equal(sessions, 10, 'po vyčerpání IP limitu se token vůbec neověřuje');
 });
 
 test('Profil veřejný: bez přihlášení rate limit per IP', async () => {

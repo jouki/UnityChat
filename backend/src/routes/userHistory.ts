@@ -10,7 +10,7 @@
 //   - všechny: `Cache-Control: no-store` hned v onRequest (i 401/403/429), validace query (400),
 //   - messages + donations: requireWebSession (401) → rate limit na účet (429) → modGate na AKTUÁLNÍ kanál
 //     (nemod 403 not_mod) — teprve pak jakýkoli dotaz na data nebo na Židolištu,
-//   - summary: session nepovinná; rate limit per účet, bez přihlášení per IP; nemod / nepřihlášený → veřejný
+//   - summary: session nepovinná; rate limit per IP vždy (PŘED ověřením tokenu), přihlášený navíc per účet; nemod / nepřihlášený → veřejný
 //     tvar (buildPublicSummary — výběr polí dělá server, ne klient),
 //   - cíl musí mít zprávu v archivu aktuálního kanálu (resolveUserTargets / userIdByLogin), jinak 404 —
 //     ani podle loginu nejde procházet celý archiv,
@@ -80,7 +80,7 @@ export async function userHistoryRoutes(app: FastifyInstance, deps: UserHistoryR
   // (summary + zprávy + starší stránka + dona) nesežere limit zpráv.
   const historyLimiter = new RateLimiter(5, 2, deps.now);
   const donationsLimiter = new RateLimiter(5, 1, deps.now);
-  // Veřejný Profil bez přihlášení: per IP (za Traefikem trustProxy → skutečná IP klienta).
+  // Veřejný Profil: per IP pro všechny, ještě před ověřením tokenu (za Traefikem trustProxy → skutečná IP klienta).
   const publicLimiter = new RateLimiter(10, 1, deps.now);
   const tabsCache = new HistoryTabsCache(undefined, deps.now);
 
@@ -101,11 +101,11 @@ export async function userHistoryRoutes(app: FastifyInstance, deps: UserHistoryR
   app.get('/moderation/user-history/summary', { onRequest: noStore }, async (req, reply) => {
     const q = UserHistoryQuery.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
+    // Limit per IP PŘED ověřením tokenu — náhodné Bearer tokeny jinak dělají DB dotazy bez omezení.
+    if (!publicLimiter.allow(`ip:${req.ip}`)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const accountId = await deps.optionalSession(req);
     let g: Gate | null = null;
-    if (accountId === null) {
-      if (!publicLimiter.allow(`ip:${req.ip}`)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-    } else {
+    if (accountId !== null) {
       if (!historyLimiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
       const r = await resolveModGate(accountId, q.data.channel, deps.defaultChannel, deps.modIdentities);
       if ('error' in r && r.error === 'channel') return reply.code(400).send({ ok: false, error: 'channel' });

@@ -128,7 +128,9 @@ export class TwitchProvider {
       replyTo = {
         username: replyUser,
         message: body,
-        id: tags['reply-parent-msg-id'] || null
+        id: tags['reply-parent-msg-id'] || null,
+        // Login autora citace (Profil otevírá podle loginu; display name může být jiný).
+        login: tags['reply-parent-user-login'] || null
       };
     }
 

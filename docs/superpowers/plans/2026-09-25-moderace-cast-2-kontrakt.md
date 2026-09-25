@@ -249,9 +249,13 @@ Panel `extension/core/user-history.js`, routy `backend/src/routes/userHistory.ts
 - `messages` + `donations` (jen mod): `requireWebSession` (bez / s neplatným tokenem **401**) → rate limit na účet
   (messages **5 + 2/s**, donations **5 + 1/s** vlastní) → mod AKTUÁLNÍHO `channel` (`resolveModGate` /
   `accountModIdentities`; nemod **403 `not_mod`**) — teprve potom jakýkoli dotaz na data nebo na Židolištu,
-- `summary` (veřejná): session nepovinná (`optionalWebSession`: bez tokenu / neplatný token = nepřihlášený);
-  rate limit na účet (**5 + 2/s**, společný s messages), bez přihlášení **per IP 10 + 1/s**; nemod / nepřihlášený
-  dostane **veřejný tvar** (`buildPublicSummary`) — výběr polí dělá server,
+- `summary` (veřejná): nejdřív limit **per IP 10 + 1/s** (429) — ještě PŘED ověřením tokenu, ať náhodné Bearer
+  tokeny nedělají DB dotazy bez omezení; pak session nepovinná (`optionalWebSession`: bez tokenu / neplatný token =
+  nepřihlášený), přihlášený navíc limit na účet (**5 + 2/s**, společný s messages); nemod / nepřihlášený dostane
+  **veřejný tvar** (`buildPublicSummary`) — výběr polí dělá server. Veřejná suma donů: Židolišta se ptá jen u cíle
+  s UC účtem (bez něj je `ucNamed` vždy 0) a necachovaná volání z veřejného Profilu mají globální strop
+  **60/min celkem** (`PUBLIC_DONATIONS_PER_MIN`; limit Židolišty je 300/min na klíč) — po vyčerpání summary bez
+  `donations`. Cache 60 s na identitu platí i pro prázdný výsledek a chybu,
 - cíl musí mít zprávu v archivu **aktuálního** kanálu (`resolveUserTargets`; podle loginu `archivedUserByLogin`
   v platformním kanálu z registru) — jinak **404 `not_found`** (ani podle loginu nejde procházet celý archiv),
 - dona jen z workspace kanálu gate (`defaultWorkspace(channel)` z registru Židolišty), slug se od klienta nebere;
@@ -296,6 +300,8 @@ S `userId` je `login` jen do logu serveru; bez `userId` se cíl hledá podle `lo
 - `nickname`/`color` = přezdívka UnityChatu první identity, která ji má (cíl má přednost).
 - `identities[].displayName` = `web_identities.display_name` (identita UC účtu), u cíle bez účtu jméno z poslední
   zprávy; `null` → klient ukáže login.
+- Citace odpovědi (`replyTo`) na Twitchi nese `login` autora (IRC `reply-parent-user-login`, ingest
+  `contentRaw.replyParentLogin`) — Profil autora citace se otevírá podle něj, bez něj podle `username`.
 - `latest` = poslední zpráva každé identity v **aktuálním** kanálu (klíč = platforma) jen s poli pro badge
   (`badgesRaw`, `color`, id, jméno, čas) — **bez textu**, i když je zpráva smazaná. Platforma, kde v kanálu nepsal, chybí.
 - `donations` = dona ve workspace aktuálního kanálu, sečtená z položek přes všechny identity po dedupu podle `id`:

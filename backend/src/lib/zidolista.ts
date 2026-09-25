@@ -208,13 +208,21 @@ export function normalizeDonationsPage(raw: unknown): { items: DonationItem[]; n
 
 export interface DonationsQuery { workspace: string; platform: Platform; userId: string; login: string }
 type WarnLog = { warn: (o: object, m: string) => void };
-export interface DonationsDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; /** Čas podpisu (unix s) — testy. */ nowS?: () => number; log?: WarnLog }
+export interface DonationsDeps {
+  fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; /** Čas podpisu (unix s) — testy. */ nowS?: () => number; log?: WarnLog;
+  /**
+   * Strop necachovaných volání (veřejný Profil): zavolá se jen při skutečném dotazu na Židolištu (cache miss),
+   * false = dotaz se neudělá a vrátí se null (nic se necachuje, další volání to zkusí znovu).
+   */
+  allowFetch?: () => boolean;
+}
 
 const donationsCache = new Map<string, { at: number; value: DonationItem[] | null; inflight: Promise<DonationItem[] | null> | null }>();
 
 /**
- * Všechna dona jedné identity v workspace (cache 60 s). null = Židolišta nedostupná / endpoint chybí (404) /
- * bez klíče — volající pak dona vůbec neukazuje (žádná chyba pro moda).
+ * Všechna dona jedné identity v workspace (cache 60 s — i prázdný seznam a chyba, ať se Židolišta při
+ * výpadku nebo u diváků bez donů neptá pořád dokola). null = Židolišta nedostupná / endpoint chybí (404) /
+ * bez klíče / vyčerpaný strop — volající pak dona vůbec neukazuje (žádná chyba).
  */
 export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps = {}): Promise<DonationItem[] | null> {
   const now = deps.now ?? Date.now;
@@ -224,6 +232,10 @@ export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps 
   if (hit && now() - hit.at < DONATIONS_CACHE_MS) return hit.value;
   const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
   if (!apiKey) return null;
+  if (deps.allowFetch && !deps.allowFetch()) {
+    deps.log?.warn({ workspace: q.workspace, platform: q.platform }, 'donations: veřejný strop volání Židolišty vyčerpán (bez sumy)');
+    return null;
+  }
   if (donationsCache.size > 2000) donationsCache.clear();
   const entry = hit ?? { at: 0, value: null, inflight: null };
   donationsCache.set(key, entry);

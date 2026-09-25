@@ -61,6 +61,25 @@ test('zidolistaDonations: X-Api-Key, stránkování přes nextBefore → before,
   assert.equal(urls.length, 4, 'po 60 s znovu');
 });
 
+test('zidolistaDonations: strop (allowFetch) jen u necachovaného dotazu; prázdný výsledek i chyba se cachují', async () => {
+  _resetDonationsCache();
+  let n = 0, budget = 0;
+  const fetch = (async (u: string) => { n++; return u.includes('userId=err') ? res({ ok: false }, 500) : res({ ok: true, items: [], nextBefore: null }); }) as unknown as typeof globalThis.fetch;
+  const allowFetch = () => { budget++; return budget <= 2; };
+  const d = { fetch, apiKey: 'k', base: 'https://z.test', now: () => 0, log: quiet, allowFetch };
+  assert.deepEqual(await zidolistaDonations(Q, d), [], 'prázdný seznam');
+  assert.deepEqual(await zidolistaDonations(Q, d), [], 'z cache');
+  assert.equal(budget, 1, 'cache strop nečerpá');
+  assert.equal(await zidolistaDonations({ ...Q, userId: 'err' }, d), null);
+  assert.equal(await zidolistaDonations({ ...Q, userId: 'err' }, d), null, 'chyba z cache');
+  assert.equal(n, 2);
+  assert.equal(budget, 2);
+  assert.equal(await zidolistaDonations({ ...Q, userId: 'jiny' }, d), null, 'strop vyčerpaný → bez dotazu');
+  assert.equal(n, 2);
+  assert.equal(await zidolistaDonations({ ...Q, userId: 'jiny' }, { ...d, allowFetch: () => true }), await zidolistaDonations({ ...Q, userId: 'jiny' }, d), 'odmítnutí se necachuje');
+  assert.equal(n, 3);
+});
+
 test('zidolistaDonations: 404 / výpadek / bez klíče → null (žádná chyba); strop stránek', async () => {
   _resetDonationsCache();
   assert.equal(await zidolistaDonations(Q, { fetch: (async () => res({ ok: false }, 404)) as unknown as typeof fetch, apiKey: 'k', base: 'https://z.test', log: quiet }), null);

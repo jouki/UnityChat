@@ -30,7 +30,8 @@ export interface ClientMessage {
   firstMsg?: boolean;
   isAction?: boolean;
   /** platform + uc: odpověď napříč platformami nahlášená UnityChatem (content_raw.ucReply). */
-  replyTo?: { username: string; message: string; id: string; platform?: string; uc?: boolean; authorUc?: boolean } | null;
+  /** login = login autora citované zprávy, když ho platforma dává (Twitch reply-parent-user-login). */
+  replyTo?: { username: string; message: string; id: string; login?: string; platform?: string; uc?: boolean; authorUc?: boolean } | null;
   kickContent?: string;
   ytRuns?: unknown[];
   superChat?: boolean;
@@ -132,7 +133,7 @@ function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage
       firstMsg: !!raw.firstMsg,
       isAction: !!raw.action,
       replyTo: row.isReply && row.replyToMessageId
-        ? { username: (raw.replyParentDisplayName as string) || '', message: (raw.replyParentBody as string) || '', id: row.replyToMessageId }
+        ? { username: (raw.replyParentDisplayName as string) || '', message: (raw.replyParentBody as string) || '', id: row.replyToMessageId, ...(raw.replyParentLogin ? { login: String(raw.replyParentLogin) } : {}) }
         : null,
     };
   }
