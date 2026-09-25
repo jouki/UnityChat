@@ -9,7 +9,7 @@
 // Kanály workspace jsou per platforma jiné (Twitch login, Kick slug, YouTube handle) → filtr
 // na dvojice (platform, channel) z registru Židolišty. Fulltext: ILIKE + trigramový index.
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, gt, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
@@ -35,9 +35,17 @@ export function clampLimit(v: unknown, dflt = 100): number {
   return Number.isInteger(n) && n > 0 ? Math.min(n, MAX_LIMIT) : dflt;
 }
 
-type Row = { id: number; platform: string; platformMessageId: string; platformUserId: string; platformUsername: string; content: string; contentRaw: unknown; channel: string; sentAt: Date; isReply: boolean; replyToMessageId: string | null; isUnitychatUser: boolean };
+type Row = {
+  id: number; platform: string; platformMessageId: string; platformUserId: string; platformUsername: string; content: string; contentRaw: unknown;
+  channel: string; sentAt: Date; isReply: boolean; replyToMessageId: string | null; isUnitychatUser: boolean;
+  deletedAt?: Date | null; deletedBy?: string | null; deletedReason?: string | null; hiddenAt?: Date | null; hiddenBy?: string | null;
+};
 
-/** Řádek → tvar pro dashboard (role z badge, text, odpověď). */
+/**
+ * Řádek → tvar pro dashboard (role z badge, text, odpověď, stav moderace).
+ * Text zůstává i u smazané / skryté zprávy: Chat Log vidí jen mod+ a potřebuje vědět, co se smazalo
+ * (divákům /chat/history a /chat/stream obsah smazané zprávy nepošlou).
+ */
 export function toLogMessage(r: Row) {
   const raw = (r.contentRaw && typeof r.contentRaw === 'object' ? r.contentRaw : {}) as Record<string, unknown>;
   const roles = rolesFromBadges(r.platform as Platform, raw.badges, r.platformUsername, r.channel);
@@ -53,6 +61,14 @@ export function toLogMessage(r: Row) {
     sentAt: r.sentAt.toISOString(),
     replyTo: r.isReply ? { messageId: r.replyToMessageId, user: (raw.replyParentUsername ?? raw.replyParentDisplayName ?? null) as string | null } : null,
     viaUnityChat: r.isUnitychatUser,
+    // by: '<platform>:<login>' (mod z UnityChatu) | 'zidolista:<userId>' | null (smazáno na platformě)
+    deleted: !!r.deletedAt,
+    deletedAt: r.deletedAt ? r.deletedAt.toISOString() : null,
+    deletedBy: r.deletedBy ?? null,
+    deletedReason: r.deletedReason ?? null,   // 'mod' | 'platform' | 'link_filter'
+    hidden: !!r.hiddenAt,
+    hiddenAt: r.hiddenAt ? r.hiddenAt.toISOString() : null,
+    hiddenBy: r.hiddenBy ?? null,
     cursor: encodeCursor(r.sentAt.getTime(), r.id),
   };
 }
@@ -61,6 +77,7 @@ const cols = {
   id: messages.id, platform: messages.platform, platformMessageId: messages.platformMessageId, platformUserId: messages.platformUserId,
   platformUsername: messages.platformUsername, content: messages.content, contentRaw: messages.contentRaw, channel: messages.channel,
   sentAt: messages.sentAt, isReply: messages.isReply, replyToMessageId: messages.replyToMessageId, isUnitychatUser: messages.isUnitychatUser,
+  deletedAt: messages.deletedAt, deletedBy: messages.deletedBy, deletedReason: messages.deletedReason, hiddenAt: messages.hiddenAt, hiddenBy: messages.hiddenBy,
 };
 
 /** Podmínka „zprávy kanálu workspace“ (jen platformy, které workspace má), volitelně jedna platforma. */
@@ -91,6 +108,8 @@ export default async function chatLogRoutes(app: FastifyInstance) {
     }
     const userId = String(qs.userId ?? '').trim().slice(0, 80);
     if (userId) where.push(eq(messages.platformUserId, userId));
+    // Jen moderované: smazané (kýmkoli, i na platformě) nebo skryté v UnityChatu.
+    if (qs.moderated === '1') where.push(or(isNotNull(messages.deletedAt), isNotNull(messages.hiddenAt))!);
     const cur = qs.before ? decodeCursor(qs.before) : null;
     if (cur) where.push(or(lt(messages.sentAt, new Date(cur.sentAtMs)), and(eq(messages.sentAt, new Date(cur.sentAtMs)), lt(messages.id, cur.id)))!);
     const limit = clampLimit(qs.limit);
