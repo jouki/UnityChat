@@ -1,6 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rolesFromBadges, toChatEvent, modIntegrationEvent, publishIntegrationEvent, publishModIntegration, subscribeIntegration } from './integrationStream.js';
+import { rolesFromBadges, toChatEvent, modIntegrationEvent, publishIntegrationEvent, publishModIntegration, publishUserModIntegration, subscribeIntegration } from './integrationStream.js';
+
+test('publishUserModIntegration: tvar chat.user_moderated, duration jen u timeoutu, nenamapovaný kanál nic', async () => {
+  const ws = { slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robkick', youtube: null }, bot: { mode: 'shared' as const, displayName: 'JoukiBOT' } };
+  const published: object[] = [];
+  const deps = { workspaceFor: async (p: string, ch: string) => (ws.channels[p as 'twitch'] === ch ? ws : null), publish: (e: object) => { published.push(e); return 1; } };
+  await publishUserModIntegration('robdiesalot', { platform: 'kick', userId: '77', login: 'k', action: 'timeout', duration: 60, by: 'twitch:modik' }, deps);
+  await publishUserModIntegration('robdiesalot', { platform: 'twitch', userId: '1', login: 't', action: 'ban', duration: null, by: null }, deps);
+  assert.equal(await publishUserModIntegration('jouki', { platform: 'twitch', userId: '1', login: 't', action: 'unban', by: null }, deps), null);
+  assert.deepEqual(published, [
+    { type: 'chat.user_moderated', workspace: 'rob', platform: 'kick', userId: '77', login: 'k', action: 'timeout', by: 'twitch:modik', duration: 60 },
+    { type: 'chat.user_moderated', workspace: 'rob', platform: 'twitch', userId: '1', login: 't', action: 'ban', by: null },
+  ]);
+});
 import type { FastifyReply } from 'fastify';
 import type { WorkspaceInfo } from '../lib/zidolista.js';
 import type { IngestMessage } from '../ingest/types.js';

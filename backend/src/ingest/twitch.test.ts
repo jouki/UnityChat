@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TwitchListener } from './twitch.js';
-import type { IngestMessage } from './types.js';
+import type { IngestMessage, IngestUserModeration } from './types.js';
 
 class FakeWs {
   static instances: FakeWs[] = [];
@@ -93,5 +93,29 @@ test('TwitchListener: PRIVMSG s textem obsahujícím "CLEARMSG" se pořád inges
   assert.equal(got.length, 1);
   assert.equal(got[0].content, 'dej mi ten CLEARMSG prosím');
   assert.deepEqual(deleted, []);
+  l.stop();
+});
+
+test('TwitchListener: CLEARCHAT → onUserModerated (timeout s ban-duration, ban bez), celý chat / PRIVMSG s "CLEARCHAT" nic', () => {
+  FakeWs.instances = [];
+  const got: IngestMessage[] = [];
+  const mods: IngestUserModeration[] = [];
+  const l = new TwitchListener('robdiesalot', (m) => got.push(m), {
+    WebSocketCtor: FakeWs as unknown as typeof WebSocket,
+    log: silent,
+    onUserModerated: (d) => mods.push(d),
+  });
+  l.start();
+  const ws = FakeWs.instances[0];
+  ws.open();
+  ws.recv('@ban-duration=300;room-id=1;target-user-id=42;tmi-sent-ts=1 :tmi.twitch.tv CLEARCHAT #robdiesalot :Spammer\r\n');
+  ws.recv('@room-id=1;target-user-id=43;tmi-sent-ts=2 :tmi.twitch.tv CLEARCHAT #robdiesalot :troll\r\n');
+  ws.recv('@room-id=1;tmi-sent-ts=3 :tmi.twitch.tv CLEARCHAT #robdiesalot\r\n');
+  ws.recv('@id=m2;display-name=B;tmi-sent-ts=1700000000000;user-id=2 :b!b@b PRIVMSG #robdiesalot :CLEARCHAT je příkaz\r\n');
+  assert.deepEqual(mods, [
+    { platform: 'twitch', channel: 'robdiesalot', userId: '42', login: 'spammer', durationSec: 300 },
+    { platform: 'twitch', channel: 'robdiesalot', userId: '43', login: 'troll', durationSec: null },
+  ]);
+  assert.equal(got.length, 1);
   l.stop();
 });

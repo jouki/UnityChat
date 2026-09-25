@@ -1,5 +1,19 @@
 import { normalizeTwitchPrivmsg, parseIrcLine } from './normalize.js';
-import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage, IngestUserModeration, PlatformStatus } from './types.js';
+import type { IrcLine } from './normalize.js';
+
+/**
+ * CLEARCHAT → timeout/ban konkrétního uživatele. Bez `target-user-id` (vyčištění celého chatu) nebo
+ * bez loginu v trailing → null. `ban-duration` = timeout v s, chybí = permanentní ban.
+ */
+export function clearchatToUserModeration(p: IrcLine, channel: string): IngestUserModeration | null {
+  if (p.command !== 'CLEARCHAT') return null;
+  const userId = p.tags['target-user-id'];
+  const login = p.trailing.trim().toLowerCase();
+  if (!userId || !login) return null;
+  const d = Number(p.tags['ban-duration']);
+  return { platform: 'twitch', channel: channel.toLowerCase(), userId, login, durationSec: Number.isFinite(d) && d > 0 ? d : null };
+}
 
 export interface Logger {
   info(o: object, msg: string): void;
@@ -8,7 +22,11 @@ export interface Logger {
 }
 export const noopLog: Logger = { info() {}, warn() {}, error() {} };
 
-interface Opts { WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number; onDelete?: (d: IngestDelete) => void }
+interface Opts {
+  WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number;
+  onDelete?: (d: IngestDelete) => void;
+  onUserModerated?: (d: IngestUserModeration) => void;
+}
 
 /**
  * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
@@ -27,6 +45,7 @@ export class TwitchListener implements IngestListener {
   private readonly log: Logger;
   private readonly baseMs: number;
   private readonly onDelete?: (d: IngestDelete) => void;
+  private readonly onUserModerated?: (d: IngestUserModeration) => void;
 
   constructor(
     private readonly channel: string,
@@ -37,6 +56,7 @@ export class TwitchListener implements IngestListener {
     this.log = opts.log ?? noopLog;
     this.baseMs = opts.reconnectBaseMs ?? 1000;
     this.onDelete = opts.onDelete;
+    this.onUserModerated = opts.onUserModerated;
   }
 
   status() { return this.st; }
@@ -89,6 +109,14 @@ export class TwitchListener implements IngestListener {
           const id = clearmsg.tags['target-msg-id'];
           if (id && this.onDelete) {
             try { this.onDelete({ platform: 'twitch', channel: this.channel, messageId: id }); } catch (err) { this.log.error({ err }, 'twitch ingest: onDelete threw'); }
+          }
+          continue;
+        }
+        // CLEARCHAT (timeout/ban odjinud) — opět podle parsovaného příkazu, nikdy podřetězcem.
+        if (clearmsg?.command === 'CLEARCHAT') {
+          const um = clearchatToUserModeration(clearmsg, this.channel);
+          if (um && this.onUserModerated) {
+            try { this.onUserModerated(um); } catch (err) { this.log.error({ err }, 'twitch ingest: onUserModerated threw'); }
           }
           continue;
         }

@@ -108,7 +108,20 @@ export function modIntegrationEvent(
   return ev;
 }
 
-type IntegrationEvent = ChatEvent | ModIntegrationEvent;
+// ---- moderace uživatelů (moderace část 2): timeout / ban / unban ----
+export interface UserModIntegrationEvent {
+  type: 'chat.user_moderated';
+  workspace: string;
+  platform: Platform;
+  userId: string;
+  login: string;
+  action: 'timeout' | 'ban' | 'unban';
+  /** Jen u timeoutu: délka v sekundách (u Kicku zaokrouhlená na celé minuty). */
+  duration?: number;
+  by: string | null;
+}
+
+type IntegrationEvent = ChatEvent | ModIntegrationEvent | UserModIntegrationEvent;
 
 function frameOf(id: number, ev: IntegrationEvent): string {
   return `id: ${id}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`;
@@ -159,9 +172,33 @@ export async function publishModIntegration(
   p: { platform: Platform; messageId: string; by: string | null; reason?: string },
   deps: ModIntegrationDeps = defaultModDeps,
 ): Promise<ModIntegrationEvent | null> {
-  const ws = (await deps.workspaceFor('twitch', ucChannel)) ?? (p.platform !== 'twitch' ? await deps.workspaceFor(p.platform, ucChannel) : null);
+  const ws = await workspaceForUc(ucChannel, p.platform, deps.workspaceFor);
   if (!ws) return null;
   const ev = modIntegrationEvent(type, ws.slug, p);
+  deps.publish(ev);
+  return ev;
+}
+
+/** Workspace UC kanálu: podle Twitche, fallback podle platformy (ucChannelFor spadl na platformní kanál). */
+async function workspaceForUc(ucChannel: string, platform: Platform, workspaceFor: ModIntegrationDeps['workspaceFor']): Promise<WorkspaceInfo | null> {
+  return (await workspaceFor('twitch', ucChannel)) ?? (platform !== 'twitch' ? await workspaceFor(platform, ucChannel) : null);
+}
+
+export interface UserModIntegrationDeps {
+  workspaceFor: (platform: Platform, channel: string) => Promise<WorkspaceInfo | null>;
+  publish: (ev: UserModIntegrationEvent) => number;
+}
+
+/** `chat.user_moderated` pro UC kanál; nenamapovaný kanál → nic. */
+export async function publishUserModIntegration(
+  ucChannel: string,
+  p: { platform: Platform; userId: string; login: string; action: UserModIntegrationEvent['action']; duration?: number | null; by: string | null },
+  deps: UserModIntegrationDeps = { workspaceFor: workspaceForChannel, publish: publishIntegrationEvent },
+): Promise<UserModIntegrationEvent | null> {
+  const ws = await workspaceForUc(ucChannel, p.platform, deps.workspaceFor);
+  if (!ws) return null;
+  const ev: UserModIntegrationEvent = { type: 'chat.user_moderated', workspace: ws.slug, platform: p.platform, userId: p.userId, login: p.login, action: p.action, by: p.by };
+  if (p.action === 'timeout' && p.duration) ev.duration = p.duration;
   deps.publish(ev);
   return ev;
 }

@@ -4,7 +4,7 @@ import { toRow } from './normalize.js';
 import { TwitchListener, type Logger } from './twitch.js';
 import { KickListener } from './kick.js';
 import { YouTubeListener } from './youtube.js';
-import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage, IngestUserModeration, PlatformStatus } from './types.js';
 
 export interface IngestStatus {
   twitch: PlatformStatus;
@@ -21,7 +21,7 @@ interface CreateOpts {
   log: Logger;
   insert?: typeof insertMessages;
   deleteOld?: typeof deleteOlderThan;
-  listenerFactory?: (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void) => IngestListener;
+  listenerFactory?: (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void, onUserModerated?: (d: IngestUserModeration) => void) => IngestListener;
   flushMs?: number;
   retentionMs?: number;
   /**
@@ -32,11 +32,13 @@ interface CreateOpts {
   onLive?: (m: IngestMessage) => void;
   /** Smazání zprávy na platformě (Twitch CLEARMSG, Kick, YouTube) — server ho napojuje na publishDeleted. Chyba se zaloguje a ingest jede dál. */
   onDelete?: (d: IngestDelete) => void;
+  /** Timeout/ban uživatele na platformě (Twitch CLEARCHAT) — server ho napojuje na user-moderated. Chyba se zaloguje a ingest jede dál. */
+  onUserModerated?: (d: IngestUserModeration) => void;
 }
 
 function defaultFactory(log: Logger) {
-  return (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void): IngestListener => {
-    if (c.platform === 'twitch') return new TwitchListener(c.channel, onMessage, { log, onDelete });
+  return (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void, onUserModerated?: (d: IngestUserModeration) => void): IngestListener => {
+    if (c.platform === 'twitch') return new TwitchListener(c.channel, onMessage, { log, onDelete, onUserModerated });
     if (c.platform === 'kick') return new KickListener(c.channel, onMessage, { log, onDelete });
     return new YouTubeListener(c.channel, onMessage, { log, onDelete });
   };
@@ -96,6 +98,11 @@ export function createIngest(opts: CreateOpts) {
     try { opts.onDelete(d); } catch (err) { opts.log.error({ err }, 'chat ingest: onDelete selhal'); }
   };
 
+  const onUserModerated = (d: IngestUserModeration) => {
+    if (!opts.onUserModerated) return;
+    try { opts.onUserModerated(d); } catch (err) { opts.log.error({ err }, 'chat ingest: onUserModerated selhal'); }
+  };
+
   const runRetention = async () => {
     if (!(opts.retentionDays > 0)) return; // 0 = bez retence
     try {
@@ -113,7 +120,7 @@ export function createIngest(opts: CreateOpts) {
       started = true;
       if (!opts.channels.length) return;
       for (const c of opts.channels) {
-        const l = factory(c, onMessage, onDelete);
+        const l = factory(c, onMessage, onDelete, onUserModerated);
         listeners.set(`${c.platform}:${c.channel}`, l);
         l.start();
       }
@@ -136,7 +143,7 @@ export function createIngest(opts: CreateOpts) {
     ensureChannel(c: IngestChannel): boolean {
       const key = `${c.platform}:${c.channel.toLowerCase()}`;
       if (listeners.has(key)) return false;
-      const l = factory({ platform: c.platform, channel: c.channel.toLowerCase() }, onMessage, onDelete);
+      const l = factory({ platform: c.platform, channel: c.channel.toLowerCase() }, onMessage, onDelete, onUserModerated);
       listeners.set(key, l);
       if (started) l.start();
       return true;

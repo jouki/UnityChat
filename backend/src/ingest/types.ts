@@ -24,6 +24,17 @@ export interface IngestDelete {
   messageId: string;
 }
 
+/** Timeout / ban uživatele na platformě (zatím Twitch CLEARCHAT s target-user-id). */
+export interface IngestUserModeration {
+  platform: IngestPlatform;
+  /** Platformní kanál (twitch login) — ne nutně UC kanál. */
+  channel: string;
+  userId: string;
+  login: string;
+  /** Timeout v sekundách; null = permanentní ban. */
+  durationSec: number | null;
+}
+
 export interface IngestListener {
   start(): void;
   stop(): void;
