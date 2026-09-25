@@ -86,7 +86,7 @@ UnityChat lets you send the streamer a donation by bank transfer via a QR code. 
 
 We pass this data to Židolišta, which creates the payment details for the QR code (the streamer's account number, variable symbol, amount), matches the payment to the donation by its variable symbol once it arrives in the streamer's account, and shows or reads the donation on stream. The e-mail is used to confirm that donations come from you and to link your donations to your account. We do not send you marketing. You make the payment itself in your own bank; neither UnityChat nor Židolišta processes payment cards or banking credentials.
 
-Verification codes are sent through the e-mail providers Brevo (France, EU) and, as a fallback, Resend (USA; transfer outside the EU based on the EU-US Data Privacy Framework). The provider only receives the recipient address and the message with the code (no links). We store only a fingerprint (hash) of the code; Židolišta never receives the verification code. To prevent abuse we log, for each code sent, the address, a fingerprint of the IP address (not the IP itself), the provider used and the time.
+Verification codes are sent through the e-mail provider Brevo (France, EU). The provider only receives the recipient address and the message with the code (no links). We store only a fingerprint (hash) of the code; Židolišta never receives the verification code. To prevent abuse we log, for each code sent, the address, a fingerprint of the IP address (not the IP itself), the provider used and the time.
 
 2. How we use the data
 
