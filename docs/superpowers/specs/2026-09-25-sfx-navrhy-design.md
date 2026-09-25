@@ -48,3 +48,18 @@ schválí (nastaví název a tier) nebo zamítne.
 ## Mimo rozsah
 - Úpravy zvuku kromě hlasitosti (ořez po schválení, efekty).
 - Jiné zdroje než mp3 a YouTube (TikTok, Twitch klipy…).
+
+## Dohodnutý kontrakt se Židolištou (2026-09-25, session robjewsalot)
+Vše X-Api-Key + HMAC.
+- `POST /integrations/:slug/sfx-requests/prepare { url, requester:{ platform, userId, login, role, ucAccountId? } }`
+  → `{ ok, previewId, durationMs, peaks:number[200] (0–1), previewUrl, expiresAt, source:'youtube'|'mp3', title? }`.
+  previewUrl = `/sfx-preview/<token>.mp3` na API Židolišty (128k mono, Range, CORS `*`, 30 min).
+  Zdroj: YouTube ≤ 10 min (jen youtube.com / youtu.be / music.youtube.com), mp3 ≤ 15 MB a ≤ 10 min (safeDownload).
+  Chyby: `bad_url | unsupported | too_long | too_large | download_failed | youtube_blocked | busy | rate_limited`.
+- `POST /integrations/:slug/sfx-requests { previewId, startMs, endMs, name, note?, requester }` → `{ ok, requestId, status:'pending' }`.
+  Chyby: `expired | too_long (>30 s) | bad_range | bad_name | name_taken` (name jako `!se add`, unikátní vůči katalogu i čekajícím).
+  gainDb = −16 LUFS − naměřené, oříznuto na ±20 dB.
+- `GET /integrations/:slug/sfx-requests?platform=&userId=` → `{ ok, requests:[{ requestId, name, status, reason?, createdAt, decidedAt?, soundName? }] }` (posledních 50).
+- Webhook `reason:"sfx-request" { requestId, platform, userId, status, reason?, soundName? }`.
+- `gainDb` u každého zvuku v `GET /integrations/:slug/sound-effects` (`sounds[].gainDb`, 0 = beze změny); UC `/soundboard` ho propíše; změna = webhook sound-effects + nový ETag.
+- Pojistka Židolišty: max 20 prepare/den na requester a 100/den na workspace; limit 10/den + 30/měsíc drží UC backend podle UC účtu.
