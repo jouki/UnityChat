@@ -184,8 +184,8 @@
 .uc-es .uc-es-btn:hover:not(:disabled) { color: #fff; box-shadow: 0 0 8px rgba(255, 140, 0, 0.35); }
 .uc-es-err { margin: 0; color: #ff8a8a; font-size: 12px; }
 
-/* Umístění tlačítka QR dono podle šířky chatu (core/tool-dock.js), addon i web:
-   široký chat → v poli pro psaní vlevo od noty (fade in), úzký → řádek nad polem vyjede zespodu. */
+/* Tlačítka u pole pro psaní podle šířky chatu (core/tool-dock.js), addon i web: QR dono,
+   nota a smajlík se pod svým prahem přesouvají do řádku nad polem (vyjede zespodu). */
 .uc-qd-anchor { position: relative; height: 0; }
 .uc-tool-btn[hidden] { display: none !important; }
 .uc-tool-btn.uc-dock-inline {
@@ -204,6 +204,14 @@
 .msg-input-wrap:has(.uc-sb-btn:not(.hidden)) .uc-tool-btn.uc-dock-inline { right: 60px; }
 .msg-input-wrap:has(.uc-dock-inline:not([hidden])) #msg-input { padding-right: 62px; }
 .msg-input-wrap:has(.uc-dock-inline:not([hidden])):has(.uc-sb-btn:not(.hidden)) #msg-input { padding-right: 90px; }
+/* Nota a smajlík v řádku: ne absolutně v poli, vzhled jako QR tlačítko v řádku. */
+.uc-dock-row .emote-btn.uc-dock-in-row {
+  position: static; flex: 0 0 auto; width: 26px; height: 24px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary);
+}
+.uc-dock-row .emote-btn.uc-dock-in-row.hidden { display: none; }
+/* Smajlík už v poli není → pole bez rezervy vpravo. */
+.msg-input-wrap:not(:has(#btn-emotes)) #msg-input { padding-right: 8px; }
 .uc-dock-fade { animation: uc-dock-fade 0.25s ease both; }
 @keyframes uc-dock-fade { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
 .uc-dock-row { max-height: 48px; transition: max-height 0.25s ease, opacity 0.2s ease, transform 0.25s ease, padding 0.25s ease, border-top-width 0.25s ease; }
