@@ -318,19 +318,31 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
     return r.width > 0 ? ((clientX - r.left) / r.width) * prep.durationMs : 0;
   };
   // Tah myší i dotykem (Pointer Events + capture); klik do osy přesune bližší značku a tah pokračuje.
-  let drag = null;
+  // Značky přes sebe (krátký úsek): kterou vzít, rozhodne směr tahu (doleva začátek, doprava konec).
+  let drag = null, dragX = 0;
+  const OVERLAP_PX = 10;
   track.addEventListener('pointerdown', (e) => {
     if (!tlReady() || (e.button !== undefined && e.button !== 0)) return;
     e.preventDefault();
     const h = e.target.closest('.uc-sr-h');
     const v = msAt(e.clientX);
-    drag = h ? h.dataset.h : (Math.abs(v - sel.startMs) <= Math.abs(v - sel.endMs) ? 'start' : 'end');
+    const overlapPx = (Math.abs(sel.endMs - sel.startMs) / prep.durationMs) * track.getBoundingClientRect().width;
+    drag = h ? (overlapPx < OVERLAP_PX ? 'auto' : h.dataset.h) : (Math.abs(v - sel.startMs) <= Math.abs(v - sel.endMs) ? 'start' : 'end');
+    dragX = e.clientX;
     try { track.setPointerCapture(e.pointerId); } catch { /* syntetické události */ }
-    (drag === 'start' ? hStart : hEnd).focus({ preventScroll: true });
+    if (drag !== 'auto') (drag === 'start' ? hStart : hEnd).focus({ preventScroll: true });
     track.classList.add('dragging');
     if (!h) setHandle(drag, v);
   });
-  track.addEventListener('pointermove', (e) => { if (drag) setHandle(drag, msAt(e.clientX)); });
+  track.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (drag === 'auto') {
+      if (Math.abs(e.clientX - dragX) < 2) return;
+      drag = e.clientX < dragX ? 'start' : 'end';
+      (drag === 'start' ? hStart : hEnd).focus({ preventScroll: true });
+    }
+    setHandle(drag, msAt(e.clientX));
+  });
   const endDrag = () => {
     if (!drag) return;
     L(`výběr ${sel.startMs}–${sel.endMs} ms`);
@@ -406,8 +418,17 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
     }
     try {
       if (audio.dataset.src !== prep.previewUrl) { audio.src = prep.previewUrl; audio.dataset.src = prep.previewUrl; }
-      audio.currentTime = sel.startMs / 1000;
       showPlaying();
+      // Posun až se známými metadaty (jinak ho prohlížeč u nového zdroje zahodí a hraje od 0).
+      if (audio.readyState < 1) {
+        await new Promise((res, rej) => {
+          const t = win.setTimeout(() => rej(new Error('metadata timeout')), 10_000);
+          audio.addEventListener('loadedmetadata', () => { win.clearTimeout(t); res(); }, { once: true });
+          audio.addEventListener('error', () => { win.clearTimeout(t); rej(new Error('audio error')); }, { once: true });
+          audio.load();
+        });
+      }
+      audio.currentTime = sel.startMs / 1000;
       await audio.play();
       raf = win.requestAnimationFrame(tick);
     } catch (e) {
