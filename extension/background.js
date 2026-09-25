@@ -174,6 +174,23 @@ async function dumpLogs() {
   }
 }
 
+// Klik na oznámení o @zmínce (vytváří ho panel, id `ucm|<windowId>|<tabId>|<seq>`):
+// fokus okna s panelem, v tab režimu (Opera) i karty UnityChatu, v Chromu pokus
+// otevřít postranní panel (sidePanel.open synchronně, dokud platí gesto uživatele).
+chrome.notifications?.onClicked?.addListener((id) => {
+  if (!String(id).startsWith('ucm|')) return;
+  const [, w, t] = String(id).split('|');
+  const windowId = w ? Number(w) : null;
+  const tabId = t ? Number(t) : null;
+  if (HAS_SIDE_PANEL && windowId != null && tabId == null) {
+    chrome.sidePanel.open({ windowId }).catch((e) => ucLog('Notify', 'sidePanel.open failed:', e.message));
+  }
+  if (tabId != null) chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  if (windowId != null) chrome.windows.update(windowId, { focused: true }).catch((e) => ucLog('Notify', 'focus failed:', e.message));
+  chrome.notifications.clear(id).catch?.(() => {});
+  ucLog('Notify', 'clicked', id);
+});
+
 // ---- Message handlers ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump

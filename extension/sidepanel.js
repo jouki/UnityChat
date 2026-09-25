@@ -34,6 +34,7 @@ const DEFAULTS = {
   reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
   acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
+  mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
   deletedStyle: 'label', // vzhled smazané zprávy pro diváka: label | dim | strike | hide (core/moderation.js)
 };
 
@@ -1649,6 +1650,34 @@ class UnityChat {
       colonBox.addEventListener('change', () => {
         this.config.acColon = colonBox.checked;
         this._saveConfig();
+      });
+    }
+    // Oznámení prohlížeče na @zmínky a odpovědi (opt-in). Oprávnění „notifications" je
+    // v manifestu, ale uživatel je může v prohlížeči/systému zakázat → pak nejde zapnout.
+    const notifyBox = $('chk-mention-notify');
+    const notifyNote = $('mention-notify-note');
+    if (notifyBox) {
+      const showNote = (text) => {
+        if (!notifyNote) return;
+        notifyNote.textContent = text || '';
+        notifyNote.classList.toggle('hidden', !text);
+      };
+      notifyBox.checked = this.config.mentionNotify === true;
+      notifyBox.addEventListener('change', async () => {
+        showNote('');
+        if (notifyBox.checked) {
+          const api = chrome.notifications;
+          let level = 'granted';
+          try { level = api?.getPermissionLevel ? await api.getPermissionLevel() : (api?.create ? 'granted' : 'denied'); } catch { level = api?.create ? 'granted' : 'denied'; }
+          if (level !== 'granted') {
+            notifyBox.checked = false;
+            showNote('Oznámení jsou pro UnityChat v prohlížeči zakázaná. Povol je v nastavení prohlížeče a zkus to znovu.');
+            this._ucLog('Notify', `permission ${level}`);
+          }
+        }
+        this.config.mentionNotify = notifyBox.checked;
+        this._saveConfig();
+        if (!notifyBox.checked) this._mentionNotifier?.reset();
       });
     }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
@@ -7402,6 +7431,9 @@ class UnityChat {
 
     // Historie (boot / starší stránka) není „nová zpráva" — bez unread logiky.
     const isHistory = this._bootLoading || !!this._prependCursor;
+
+    // Oznámení prohlížeče na zmínku / odpověď (opt-in, jen když se na chat nedíváš).
+    this._maybeNotifyMention(msg, isReplyToMe ? 'reply' : isMentioned ? 'mention' : null, isHistory);
     // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu).
     if (!this.autoScroll && !isHistory) {
       if (this._unreadCount === 0) {
@@ -7807,14 +7839,86 @@ class UnityChat {
 
   /** „@jméno“ jako celé slovo (ne @joukibot pro jouki), text i jméno malými písmeny. */
   _hasMention(text, name) {
-    const word = /[\p{L}\p{N}_]/u;
-    const needle = '@' + name;
-    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
-      const before = text[i - 1];
-      const after = text[i + needle.length];
-      if ((!before || !word.test(before)) && (!after || !word.test(after))) return true;
+    return window.UC_CORE.hasMention(text, name);
+  }
+
+  /** Moje vlastní zpráva (optimistická nebo echo pod mým loginem na dané platformě)? */
+  _isOwnMsg(msg) {
+    if (msg?._optimistic) return true;
+    const mine = (this._platformUsernames[msg?.platform] || (msg?.platform === 'twitch' ? this.config.username : '') || '').toLowerCase().replace(/^@/, '');
+    return !!mine && String(msg?.username || '').toLowerCase().replace(/^@/, '') === mine;
+  }
+
+  /** Díváš se právě na chat? Panel viditelný a s fokusem. */
+  _isWatchingChat() {
+    return !document.hidden && document.hasFocus();
+  }
+
+  /**
+   * Oznámení prohlížeče na @zmínku / odpověď (core/mention-notify.js). Jen živé zprávy,
+   * ne vlastní, ne smazané, jen když se na chat nedíváš; dedup podle id + throttle 1 / 5 s.
+   */
+  _maybeNotifyMention(msg, kind, isHistory) {
+    if (!kind) return;
+    const core = window.UC_CORE;
+    const verdict = core.shouldNotify({
+      enabled: this.config.mentionNotify === true && !!chrome.notifications?.create,
+      kind,
+      historical: isHistory || !!msg.historical || !!msg.scraped,
+      own: this._isOwnMsg(msg),
+      moderated: this._isModerated(msg) || !!msg._cleared,
+      watching: this._isWatchingChat(),
+    });
+    if (!verdict.ok) {
+      if (verdict.reason !== 'off' && verdict.reason !== 'history') this._ucLog('Notify', `skip ${verdict.reason} ${msg.platform}:${msg.id}`);
+      return;
     }
-    return false;
+    if (!this._mentionNotifier) {
+      this._mentionNotifier = core.createMentionNotifier({ emit: (note, more) => this._showMentionNotification(core.withMore(note, more)) });
+      // Vrátil ses do chatu → sloučená čekající oznámení už nejsou potřeba.
+      const drop = () => { if (this._isWatchingChat()) this._mentionNotifier?.reset(); };
+      window.addEventListener('focus', drop);
+      document.addEventListener('visibilitychange', drop);
+    }
+    const note = core.formatNotification(msg, kind, {
+      displayName: this.nicknames.getNickname(msg.platform, msg.username) || msg.username,
+      channel: this._getConfiguredHandle(msg.platform),
+    });
+    const res = this._mentionNotifier.offer(msg.id ? `${msg.platform}:${msg.id}` : null, note);
+    this._ucLog('Notify', `${kind} ${res} ${msg.platform}:${msg.id}`);
+  }
+
+  async _showMentionNotification(note) {
+    try {
+      // Id nese okno (a tab v tab režimu) panelu → background po kliknutí fokusne správné okno.
+      if (this._notifyWin === undefined) {
+        const [win, tab] = await Promise.all([
+          chrome.windows?.getCurrent?.().catch(() => null),
+          chrome.tabs?.getCurrent?.().catch(() => null),
+        ]);
+        this._notifyWin = { windowId: win?.id ?? tab?.windowId ?? '', tabId: tab?.id ?? '' };
+      }
+      this._notifySeq = (this._notifySeq || 0) + 1;
+      const id = `ucm|${this._notifyWin.windowId}|${this._notifyWin.tabId}|${Date.now()}-${this._notifySeq}`;
+      const opts = {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: note.title,
+        message: note.message || ' ',
+        contextMessage: note.contextMessage,
+      };
+      try {
+        await chrome.notifications.create(id, opts);
+      } catch (e) {
+        // Firefox contextMessage nezná → zkusit bez něj (kontext připojit ke zprávě).
+        const { contextMessage, ...rest } = opts;
+        await chrome.notifications.create(id, { ...rest, message: contextMessage ? `${rest.message}
+${contextMessage}` : rest.message });
+      }
+      this._ucLog('Notify', `shown ${id} „${note.title}"`);
+    } catch (e) {
+      this._ucLog('Notify', `create failed: ${e?.message || e}`);
+    }
   }
 
   _scroll(slideEl = null) {
