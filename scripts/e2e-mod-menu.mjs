@@ -113,6 +113,8 @@ s.onevent = async (d) => {
       : { ok: true, messages: [H1[0], H1[2]], nextBefore: 'c1' });
     return json({ ok: true, messages: [], nextBefore: null });
   }
+  // GIFy ke schválení (část 4, mod dotáhne čekající po /moderation/me) — tady žádné; nesmí odejít na produkci.
+  if (u.includes('/moderation/gif/pending')) return json({ ok: true, requests: [] });
   if (u.includes('/moderation/user-state')) return json({ ok: true, banned: mock.banned, until: null });
   if (u.includes('/moderation/user')) {
     posts.user.push(body);

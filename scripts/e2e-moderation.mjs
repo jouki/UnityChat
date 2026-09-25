@@ -68,6 +68,8 @@ s.onevent = async (d) => {
   }
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null } });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
+  // GIFy ke schválení (část 4) — tady žádné; nesmí odejít na produkci.
+  if (u.includes('/moderation/gif/pending')) return json({ ok: true, requests: [] });
   if (u.includes('/moderation/delete')) {
     posts.push(q.postData ? JSON.parse(q.postData) : null);
     if (mock.deleteDelayMs) await sleep(mock.deleteDelayMs);

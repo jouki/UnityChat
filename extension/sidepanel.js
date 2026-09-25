@@ -160,6 +160,10 @@ class NicknameManager {
       this._eventSource.addEventListener('sfx-request', (e) => {
         try { const d = JSON.parse(e.data); if (this.onSfxRequest) this.onSfxRequest(d); } catch {}
       });
+      // Schválený GIF (moderace část 4) → nová zpráva s médiem pro všechny (dedup gif-<id> ve store).
+      this._eventSource.addEventListener('gif-message', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifMessage) this.onGifMessage(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1198,7 +1202,8 @@ class UnityChat {
     const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
     let j = {};
     try { j = await r.json(); } catch {}
-    if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status };
+    // `status` = HTTP status; tělo zvlášť (`body.status` u 409 already_decided nese stav žádosti).
+    if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status, body: j };
     return j;
   }
 
@@ -1435,6 +1440,7 @@ class UnityChat {
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
     this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
     this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
+    this.nicknames.onGifMessage = (d) => this._onGifMessage(d);
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
@@ -4407,7 +4413,7 @@ class UnityChat {
   /** Má zpráva v datech text? (historie posílá smazané/skryté bez obsahu) */
   _msgHasContent(msg) {
     const probe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
-    return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
+    return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0) || !!msg?.gif;
   }
 
   /** Zobrazuje se divákovi místo textu „Zpráva smazána" / nic? Pak kopírovat ani citovat nejde. */
@@ -4428,6 +4434,12 @@ class UnityChat {
     if (!el || !core?.applyDeleted) return;
     const deleted = !!(msg._deleted || msg.deleted);
     const hidden = !deleted && !!(msg._hidden || msg.hidden);
+    // Smazaný GIF (část 1 + 4): server médium přestane servírovat → pryč z dat i z DOM (skrytí jen přes CSS).
+    if (deleted) {
+      if (msg.gif) delete msg.gif;
+      const n = core.removeGifMedia?.(el) || 0;
+      if (n) this._ucLog('Gif', `smazaný GIF ${msg.platform}:${el.dataset.msgId} → médium pryč`);
+    }
     const hasContent = this._msgHasContent(msg);
     const mode = core.deletedMode({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
     // Přechod z „Zpráva smazána" na styl s textem → text zpátky z dat.
@@ -4574,6 +4586,8 @@ class UnityChat {
     this._canModerate = can;
     document.body.classList.toggle('uc-can-moderate', can);
     if (changed) this._reapplyDeleted();
+    // GIFy ke schválení (část 4): mod si dotáhne čekající žádosti kanálu, karty přebarví tlačítka podle role.
+    if (this._gifInst || can) { this._gifs().repaint(); if (can) this._gifs().loadPending(); }
     this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
   }
 
@@ -4620,6 +4634,30 @@ class UnityChat {
       });
     }
     return this._userHistoryInst;
+  }
+
+  /** GIFy ke schválení (core/gif.js): karty modům + stav odesílateli u spodku chatu. */
+  _gifs() {
+    if (!this._gifInst) {
+      this._gifInst = new window.UC_CORE.GifRequests({
+        doc: document,
+        container: document.getElementById('chat-wrapper'),
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        canModerate: () => !!this._canModerate,
+        platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifInst;
+  }
+
+  /** SSE gif-message z /nicknames/stream: schválený GIF = nová zpráva (dedup gif-<id> ve store). */
+  _onGifMessage(d) {
+    const m = window.UC_CORE.gifMessageFromEvent(d, this.config.channel || '');
+    if (!m) { this._ucLog('Gif', `gif-message ignorováno (${d?.channel || '?'} ${d?.message?.id || '?'})`); return; }
+    if (this.store.get(m.id)) { this._ucLog('Gif', `gif-message ${m.id} už v chatu`); return; }
+    this._addMessage({ ...m, historical: false });
   }
 
   /** Zavře Chat historii (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
@@ -4912,7 +4950,7 @@ class UnityChat {
     this._loadModState();
     // Varování účtu: SSE jen pro tento účet (ticket); bez přihlášení pryč.
     if (this._signedIn) this._startAccountStream();
-    else { this._stopAccountStream(); this._warnings?.clear(); }
+    else { this._stopAccountStream(); this._warnings?.clear(); this._gifInst?.clear(); }
   }
 
   /** Okno varování od moderátora (core/account-warnings.js), lazy. */
@@ -4935,6 +4973,11 @@ class UnityChat {
       getTicket: async () => (await this._ucApi('/account/stream-ticket', { method: 'POST' })).ticket,
       onWarning: (w) => this._warn().add(w),
       onAck: (id) => this._warn().remove(id),
+      // GIFy ke schválení (moderace část 4) — jen modům kanálu a odesílateli.
+      handlers: {
+        'gif-pending': (d) => this._gifs().onPending(d),
+        'gif-decided': (d) => this._gifs().onDecided(d),
+      },
       log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
     });
   }
@@ -7042,7 +7085,13 @@ class UnityChat {
     // `message` string is empty — those must NOT be dropped.
     const msgProbe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
     const hasPlatformContent = (msg?.ytRuns?.length > 0) || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
-    const textEmpty = !msgProbe && !hasPlatformContent;
+    // Schválený GIF (část 4) může mít prázdný text — médium je obsah.
+    if (msg?.gif) {
+      const g = window.UC_CORE?.normalizeGifMedia?.(msg.gif);
+      if (!g) this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} s neplatným médiem → bez GIFu`);
+      msg = g ? { ...msg, gif: g } : { ...msg, gif: undefined };
+    }
+    const textEmpty = !msgProbe && !hasPlatformContent && !msg?.gif;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
       || msg?.isMilestone
@@ -7436,6 +7485,18 @@ class UnityChat {
 
     el.appendChild(tx);
 
+    // Schválený GIF pod textem (core/gif.js): max 400 × 250 px, lazy, při chybě odkaz.
+    if (msg.gif) {
+      el.classList.add('has-gif');
+      const media = window.UC_CORE.createGifMedia(document, msg.gif, { lazy: true, log: (tag, t) => this._ucLog(tag, t) });
+      // Bez známých rozměrů se výška ustálí až po načtení → dorovnat konec chatu.
+      if (media.classList.contains('uc-gif--nosize')) {
+        media.firstChild?.addEventListener?.(msg.gif.kind === 'mp4' ? 'loadedmetadata' : 'load', () => { if (this.autoScroll) this._scroll(); }, { once: true });
+      }
+      el.appendChild(media);
+      this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} ${msg.gif.kind} ${msg.gif.width || '?'}×${msg.gif.height || '?'}${msg.historical ? ' (historie)' : ''}`);
+    }
+
     // Easter egg: StreamElements !bulgarians response — click to play audio
     if (msg.username?.toLowerCase() === 'streamelements' && msg.message?.includes('Bulgarians a pojedeš')) {
       el.classList.add('msg-audio');
@@ -7702,6 +7763,8 @@ class UnityChat {
   _resetChat() {
     // Přepnutí streamera: Chat historie patří kanálu, ve kterém se otevřela.
     this._closeUserHistory('reset chatu');
+    // Karty GIFů patří kanálu (mod si po _loadModState dotáhne čekající nového kanálu).
+    this._gifInst?.clear();
     this.store = new ChatStore();
     this.chatEl.innerHTML = '';
     this._parkedTop = [];
