@@ -22,7 +22,7 @@ a) Locally in your browser (the extension itself)
 
 b) Google / YouTube data (only when a streamer voluntarily links their account)
 
-If a streamer chooses to link their YouTube account (channel-ownership verification), we request the https://www.googleapis.com/auth/youtube.readonly scope via Google OAuth 2.0 and make a single call (youtube.channels.list?mine=true) to read only the following public identifiers of the user's own channel:
+If a streamer chooses to link their YouTube account (channel-ownership verification), they sign in with the same Google OAuth 2.0 sign-in as described in point 1e (scope https://www.googleapis.com/auth/youtube.force-ssl) and we make a single call (youtube.channels.list?mine=true) to read only the following public identifiers of the user's own channel:
 
 - channel ID (e.g. UCxxxxxxxx),
 
@@ -32,7 +32,7 @@ If a streamer chooses to link their YouTube account (channel-ownership verificat
 
 - profile picture (avatar) URL.
 
-The youtube.readonly scope is read-only. UnityChat never reads, modifies or deletes any content of your YouTube account — no videos, comments or subscriptions. We use it solely to verify that the person actually owns the channel and to map it within the service.
+UnityChat never reads, modifies or deletes any content of your YouTube account — no videos, comments or subscriptions. We use this call solely to verify that the person actually owns the channel and to map it within the service.
 
 c) Data sent to the UnityChat server (ordinary use of the extension)
 
@@ -50,7 +50,7 @@ Even without linking an account, the extension sends the following to api.jouki.
 
 - Soundboard (sound effects) — once you are signed in, your favourite sounds and how often you use them are stored with your account. Which effects you have unlocked is checked by the server with the Židolišta service (point 1f) using your platform identity (ID, name and chat role). You trigger an effect with a command that is posted to the public chat.
 
-Chat archive. The UnityChat server (api.jouki.cz) itself listens to the public live chat of the supported streamers — currently the channels robdiesalot, tensterakdary and arcadebulls on Twitch, YouTube and Kick — and stores every public message from them: the message text, the author's platform username and identifier, the time it was sent, the channel, and the badges or emotes needed to display it. This covers everyone who writes in those chats, not only users of the extension; these are messages that are publicly visible on the platforms. The extension reads history from this archive to show what happened in chat before it was opened — the extension itself sends no messages to the server other than the text of commands you send (see the previous point).
+Chat archive. The UnityChat server (api.jouki.cz) itself listens to the public live chat of the supported streamers — currently the channels robdiesalot, tensterakdary and arcadebulls on Twitch, YouTube and Kick — and stores every public message from them: the message text, the author's platform username and identifier, the time it was sent, the channel, and the badges or emotes needed to display it. This covers everyone who writes in those chats, not only users of the extension; these are messages that are publicly visible on the platforms. The extension reads history from this archive to show what happened in chat before it was opened. The extension itself sends the server only the messages you write while signed in (point 1e — the server passes them to the platform) and the command and reply details described above.
 
 Archived messages are kept without a time limit (see section 5). If you do not want your messages to be in the archive, e-mail us at the address above and we will delete them.
 
