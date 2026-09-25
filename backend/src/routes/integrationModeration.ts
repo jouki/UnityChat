@@ -202,6 +202,25 @@ export default async function integrationModerationRoutes(app: FastifyInstance, 
     });
   }
 
+  // Stav trestu uživatele pro Chat Log (Unban jen u potrestaných). GET = podpis nad prázdným tělem.
+  app.get<{ Params: { slug: string }; Querystring: { platform?: string; userId?: string } }>('/integrations/:slug/moderation/user-state', async (req, reply) => {
+    if (!inboundAuthorized(req, reply)) return reply;
+    reply.header('Cache-Control', 'no-store');
+    const slug = String(req.params.slug || '').toLowerCase();
+    if (!limiter.allow(slug)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const platform = String(req.query.platform || '');
+    const userId = String(req.query.userId || '').slice(0, 64);
+    if (!['twitch', 'kick', 'youtube'].includes(platform) || !userId) return reply.code(400).send({ ok: false, error: 'query' });
+    const ws = await workspaceBySlug(slug);
+    const channel = ws?.channels.twitch?.toLowerCase();
+    if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+    if (!channel) return reply.code(404).send({ ok: false, error: 'no_channel' });
+    let ban: Awaited<ReturnType<typeof activeBan>> = null;
+    try { ban = await activeBan(channel, platform as Platform, userId); }
+    catch (e) { req.log.warn({ err: (e as Error).message }, 'integration user-state: dotaz selhal'); }
+    return { ok: true, banned: !!ban, until: ban?.until ? ban.until.getTime() : null };
+  });
+
   for (const action of ['delete', 'hide', 'unhide'] as const) {
     app.post<{ Params: { slug: string } }>(`/integrations/:slug/moderation/${action}`, async (req, reply) => {
       if (!inboundAuthorized(req, reply)) return reply;
