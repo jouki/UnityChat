@@ -1238,15 +1238,19 @@ class UnityChat {
   _sfxRequestApi() {
     const channel = () => (this.config.channel || '').toLowerCase();
     const log = (text) => this._ucLog('SfxReq', text);
+    // Bez vybrané platformy (nepřihlášený / bez identity) server nemá za koho návrh poslat.
+    const needPlatform = () => { if (!this.activePlatform) { log('bez aktivní platformy'); throw { error: 'no_platform' }; } };
     return {
       // Stažení a převod zvuku na serveru Židolišty může trvat desítky sekund (YouTube).
       prepare: async (url) => {
+        needPlatform();
         const r = await this._ucApi('/soundboard/requests/prepare', { method: 'POST', body: { channel: channel(), platform: this.activePlatform, url }, timeoutMs: 130000 })
           .catch((e) => { log(`prepare → ${e.status || ''} ${e.error}`); throw e; });
         log(`prepare → ${r.mode} ${r.source} ${r.durationMs ?? '?'} ms`);
         return r;
       },
       submit: async (b) => {
+        needPlatform();
         const r = await this._ucApi('/soundboard/requests', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform }, timeoutMs: 70000 })
           .catch((e) => { log(`submit → ${e.status || ''} ${e.error}`); throw e; });
         log(`submit → id=${r.requestId}`);

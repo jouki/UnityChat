@@ -90,6 +90,7 @@ export function sfxRequestErrorText(err, phase = 'prepare') {
     case 'limit_day': return 'Dnešní limit 10 návrhů je vyčerpaný, zkus to zítra.';
     case 'limit_month': return 'Limit 30 návrhů na tento měsíc je vyčerpaný.';
     case 'platform_not_linked': return 'Na téhle platformě nejsi přihlášený.';
+    case 'no_platform': return 'Nejdřív se přihlas a vyber platformu, za kterou píšeš.';
     case 'unknown_channel': return 'Tenhle kanál návrhy zvuků nepřijímá.';
     case 'no session': case 'invalid session': return 'Přihlášení vypršelo, přihlas se znovu.';
     default: return status === 401 ? 'Přihlášení vypršelo, přihlas se znovu.' : 'Server Židolišty je teď nedostupný, zkus to znovu.';
@@ -457,8 +458,9 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
   }
   function ytCommand(func, args = []) { ytPost({ event: 'command', func, args }); }
   function clearYtTimers() {
-    for (const t of yt?.timers || []) { win.clearInterval(t); win.clearTimeout(t); }
-    if (yt) yt.timers = [];
+    if (!yt) return;
+    win.clearInterval(yt.hello); win.clearTimeout(yt.fallback);
+    yt.hello = yt.fallback = null;
   }
   function ytTeardown() {
     if (!yt) return;
@@ -477,19 +479,22 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
     iframe.referrerPolicy = 'strict-origin-when-cross-origin';
     iframe.src = url;
     $('.uc-sr-yt-box').appendChild(iframe);
-    yt = { iframe, id: ++ytSeq, alive: false, playing: false, t: 0, at: 0, seekAt: 0, timers: [] };
+    yt = { iframe, id: ++ytSeq, alive: false, playing: false, t: 0, at: 0, seekAt: 0, hello: null, fallback: null };
     const cur = yt;
     // „listening“ opakovaně, dokud přehrávač neodpoví (stejně jako oficiální IFrame API).
     const hello = () => { if (yt === cur && !cur.alive) ytPost({ event: 'listening' }); };
     iframe.addEventListener('load', hello);
-    cur.timers.push(win.setInterval(hello, 500));
-    cur.timers.push(win.setTimeout(() => {
-      if (yt !== cur || cur.alive) return;
-      L(`embed ${prep.videoId}: přehrávač neodpověděl do ${EMBED_TIMEOUT_MS} ms → ruční časy`);
+    cur.hello = win.setInterval(hello, 500);
+    // Ruční časy, pokud do 8 s neznáme délku videa (přehrávač mlčí, nebo odpoví bez videa).
+    cur.fallback = win.setTimeout(() => {
+      if (yt !== cur || ytUsable()) return;
+      L(`embed ${prep.videoId}: bez délky videa do ${EMBED_TIMEOUT_MS} ms (alive=${cur.alive}) → ruční časy`);
       startManual();
-    }, EMBED_TIMEOUT_MS));
+    }, EMBED_TIMEOUT_MS);
     L(`embed ${url}`);
   }
+  /** Přehrávač odpovídá a délka je známá → osa funguje, ruční časy netřeba. */
+  const ytUsable = () => !!yt?.alive && prep?.durationMs > 0;
   function ytDuration(ms) {
     if (!prep || !(ms > 0) || prep.durationMs > 0) return;
     prep.durationMs = Math.round(ms);
@@ -504,9 +509,15 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
     let d = e.data;
     if (typeof d === 'string') { try { d = JSON.parse(d); } catch { return; } }
     if (!d || typeof d !== 'object') return;
+    // Chyba přehrávače (video nejde vložit, smazané, soukromé…) → hned ruční časy.
+    if (d.event === 'onError' || (d.info && typeof d.info === 'object' && d.info.errorCode)) {
+      L(`embed ${prep?.videoId}: chyba přehrávače ${JSON.stringify(d.info ?? null).slice(0, 80)} → ruční časy`);
+      startManual();
+      return;
+    }
     if (!yt.alive && (d.event === 'onReady' || d.event === 'infoDelivery' || d.event === 'initialDelivery')) {
       yt.alive = true;
-      clearYtTimers();
+      win.clearInterval(yt.hello); yt.hello = null;
       L('embed přehrávač odpověděl');
     }
     const info = d.info && typeof d.info === 'object' ? d.info : null;
@@ -516,6 +527,7 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
       if (Number.isFinite(info.currentTime) && perfNow() - yt.seekAt > 700) { yt.t = info.currentTime * 1000; yt.at = perfNow(); }
       if ((info.playerState === 0 || info.playerState === 2) && yt.playing && perfNow() - yt.seekAt > 1000) stopPlay();
     }
+    if (ytUsable()) { win.clearTimeout(yt.fallback); yt.fallback = null; }
     renderMode();
   }
   win.addEventListener('message', onMessage);

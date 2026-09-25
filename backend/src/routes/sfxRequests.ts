@@ -197,7 +197,8 @@ export async function handleSfxRequestWebhook(slug: string, data: unknown, log: 
   lists.delete(listKey(slug, platform.data, userId));
   const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
   for (const channel of channels) {
-    broadcast('sfx-request', { channel, platform: platform.data, userId, requestId, status: d.status, reason: str(d.reason, 300), soundName: str(d.soundName, 80) });
+    // Bez důvodu zamítnutí (jde všem divákům kanálu); klient si svůj seznam i s důvodem načte sám.
+    broadcast('sfx-request', { channel, platform: platform.data, userId, requestId, status: d.status, soundName: str(d.soundName, 80) });
   }
   log.info({ slug, requestId, status: d.status, channels }, 'sfx-request: webhook');
   return channels;

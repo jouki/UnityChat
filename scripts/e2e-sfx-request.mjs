@@ -55,6 +55,7 @@ const mock = {
   ],
   limits: { dayUsed: 2, dayMax: 10, monthUsed: 2, monthMax: 30 },
   prepare: null,   // (body) => [status, json]
+  unlocked: false, // divák má odemčený tier (fáze 0 = bez odměny)
   sse: [],
 };
 const log = { prepare: [], submit: [], list: 0, ytCmds: [] };
@@ -62,7 +63,7 @@ const soundboard = () => ({
   ok: true, channel: 'robdiesalot', platform: 'twitch', serverNow: iso(Date.now()), loggedIn: true,
   tiers: [{ tier: 1, name: 'BASIC', position: 1 }],
   sounds: [{ id: 1, name: 'boom', displayName: null, tier: 1, emoji: '💥', icon: null, url: 'https://api-zidolista.jouki.cz/public/sfx/rob/e2e.mp3', durationMs: 1000, gainDb: -3 }],
-  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: [{ tier: 1, startedAt: iso(NOW), expiresAt: null, paused: false, remainingMs: null, available: true, totalMs: null }], cooldown: { globalReadyAt: null, userReadyAt: null } },
+  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: mock.unlocked ? [{ tier: 1, startedAt: iso(NOW), expiresAt: null, paused: false, remainingMs: null, available: true, totalMs: null }] : [], cooldown: { globalReadyAt: null, userReadyAt: null } },
   favorites: [], recent: [],
 });
 // Náhled ze serveru: tichý WAV 95 s (8 kHz, 8 bit mono) místo mp3 Židolišty.
@@ -79,7 +80,11 @@ addEventListener('message', (e) => {
   let d; try { d = JSON.parse(e.data); } catch { return; }
   fetch('/__e2e_cmd?' + encodeURIComponent(e.data)).catch(() => {});
   if (vid === 'NOREPLY0000') return;
-  const send = (info) => parent.postMessage(JSON.stringify({ event: 'infoDelivery', id: d.id, channel: 'widget', info }), '*');
+  const post = (o) => parent.postMessage(JSON.stringify({ id: d.id, channel: 'widget', ...o }), '*');
+  // Přehrávač odpoví, ale video nemá (délku nepošle) / video nejde vložit (onError).
+  if (vid === 'READYNODUR0') { if (d.event === 'listening') { post({ event: 'onReady' }); post({ event: 'infoDelivery', info: { playerState: -1, currentTime: 0 } }); } return; }
+  if (vid === 'ERRORVIDEO1') { if (d.event === 'listening') post({ event: 'onError', info: 150 }); return; }
+  const send = (info) => post({ event: 'infoDelivery', info });
   if (d.event === 'listening') send({ duration: 120.5, currentTime: 0, playerState: -1 });
   if (d.event === 'command' && d.func === 'seekTo') t = d.args[0];
   if (d.event === 'command' && d.func === 'playVideo') send({ currentTime: t, playerState: 1 });
@@ -159,6 +164,24 @@ await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` 
 await sleep(1500);
 await ev(`chrome.storage.local.set({ uc_session: 'tok' })`);
 await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+
+// ---- 0: divák bez aktivní odměny ----
+check('0 nota bez odměny: ztlumená, ale vidět', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && !b.classList.contains('hidden') && b.classList.contains('uc-sb-off'); })()`, 12000));
+await click('#btn-sfx');
+check('0 panel se otevře i bez odměny', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`));
+check('0 zvuky zamčené', await until(`document.querySelectorAll('.uc-sb-s').length > 0 && [...document.querySelectorAll('.uc-sb-s')].every(s => s.classList.contains('locked'))`));
+const lockTxt = await txt('.uc-sb-status');
+check('0 řádek vysvětluje zamčení (texty stavu odměny)', /Odměna není aktivována/.test(lockTxt || '') && /milestony Židolišty/.test(lockTxt || ''), lockTxt);
+await click('.uc-sb-s .uc-sb-play');
+await sleep(300);
+check('0 klik na zamčený zvuk nic neodešle', await ev(`document.getElementById('msg-input')?.value ?? ''`) === '');
+await click('.uc-sb-reqbtn');
+check('0 „Navrhnout zvuk“ jde otevřít i bez odměny', await until(`document.querySelector('.uc-sb').classList.contains('uc-sb-req-on') && !document.querySelector('.uc-sr').classList.contains('hidden')`));
+await click('.uc-sr-back');
+await click('#btn-sfx');   // zavřít
+check('0 panel zavřený', await until(`document.querySelector('.uc-sb').classList.contains('hidden')`));
+mock.unlocked = true;
+mock.sse.push(['soundboard-change', { channel: 'robdiesalot', reason: 'sfx-unlocks' }]);
 
 // ---- A: tlačítko v soundboardu ----
 check('A nota soundboardu aktivní (přihlášený, tier odemčený)', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && !b.classList.contains('hidden') && !b.classList.contains('uc-sb-off'); })()`, 12000));
@@ -269,6 +292,25 @@ await setVal('.uc-sr-edit input[name=to]', '1:20,5');
 check('G délka ručního úseku', (await txt('.uc-sr-manual-len')) === 'Délka 15,5 s', await txt('.uc-sr-manual-len'));
 await click('.uc-sr-go');
 check('G ruční časy odeslané', await until(`!document.querySelector('.uc-sr-done').hidden`) && log.submit[1]?.startMs === 65_000 && log.submit[1]?.endMs === 80_500 && log.submit[1]?.previewId === 'prev-man', JSON.stringify(log.submit[1]));
+
+// ---- G2: přehrávač odpoví, ale délku nepošle → ruční časy po 8 s ----
+await click('[data-act=again]');
+mock.prepare = () => [200, { ok: true, previewId: 'prev-nd', mode: 'embed', source: 'youtube', videoId: 'READYNODUR0', title: null, durationMs: null, peaks: null, previewUrl: null, expiresAt: iso(Date.now() + 1800e3) }];
+await setVal('.uc-sr-link input[name=url]', 'https://youtu.be/READYNODUR0');
+await click('.uc-sr-load');
+await until(`!!document.querySelector('.uc-sr-yt-frame')`, 3000);
+await sleep(3000);
+check('G2 onReady bez délky: po 3 s ještě „Načítám video…“, ne ruční časy', await ev(`document.querySelector('.uc-sr-manual').hidden && !document.querySelector('.uc-sr-yt-wait').hidden`) === true);
+check('G2 bez délky do 8 s → ruční časy', await until(`!document.querySelector('.uc-sr-manual').hidden && !document.querySelector('.uc-sr-yt-frame')`, 8000));
+
+// ---- G3: onError → hned ruční časy ----
+await click('[data-act=other]');
+mock.prepare = () => [200, { ok: true, previewId: 'prev-er', mode: 'embed', source: 'youtube', videoId: 'ERRORVIDEO1', title: null, durationMs: null, peaks: null, previewUrl: null, expiresAt: iso(Date.now() + 1800e3) }];
+await setVal('.uc-sr-link input[name=url]', 'https://youtu.be/ERRORVIDEO1');
+const tErr = Date.now();
+await click('.uc-sr-load');
+check('G3 onError → ruční časy hned (do 3 s)', await until(`!document.querySelector('.uc-sr-manual').hidden && !document.querySelector('.uc-sr-yt-frame')`, 3000), `${Date.now() - tErr} ms`);
+await click('[data-act=other]');
 
 // ---- H: SSE sfx-request → Moje návrhy ----
 const before = log.list;
