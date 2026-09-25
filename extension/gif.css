@@ -41,16 +41,37 @@
   left: 8px;
   right: 8px;
   bottom: 8px;
-  z-index: 8500;
+  /* #chat-wrapper má isolation: isolate → číslo platí jen uvnitř chatu. Pod „↓ Nové zprávy“ (10),
+     reakcí (40), načítáním (50) i Chat historií (9000). */
+  z-index: 8;
   display: flex;
   flex-direction: column;
   gap: 6px;
   max-height: 70%;
   overflow-y: auto;
-  pointer-events: none;
+  overscroll-behavior: contain;
+  /* Zásobník je jen tak vysoký jako karty → klikatelný celý (i posuvník při rozbalení). */
+  scrollbar-width: thin;
 }
+.uc-gif-stack::-webkit-scrollbar { width: 6px; }
+.uc-gif-stack::-webkit-scrollbar-thumb { background: var(--border, #2f2f35); border-radius: 3px; }
+.uc-gif-card[hidden], .uc-gif-more[hidden] { display: none; }
+.uc-gif-more {
+  align-self: center;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 12px;
+  background: var(--bg-secondary, #18181b);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  color: var(--accent-light, #ffc800);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.uc-gif-more:hover { background: var(--bg-hover, #26262c); }
 .uc-gif-card {
-  pointer-events: auto;
+  flex: 0 0 auto;
   padding: 8px 10px;
   border: 1px solid rgba(255, 140, 0, 0.45);
   border-radius: 8px;
@@ -82,7 +103,6 @@
 }
 .uc-gif-card-text { margin-top: 4px; overflow-wrap: anywhere; line-height: 1.35; }
 .uc-gif-card-media .uc-gif { margin: 6px 0 0; }
-.uc-gif-card-media .uc-gif-media { max-height: 160px; width: auto; }
 .uc-gif-card-status { margin-top: 6px; font-weight: 700; color: var(--text-secondary, #adadb8); }
 .uc-gif-card-err { margin-top: 6px; color: #ff9a9d; }
 .uc-gif-card-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }

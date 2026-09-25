@@ -34,6 +34,11 @@ Promise.all([
   check('gifFitSize: 498×280 → 400×225', eq(g.gifFitSize(498, 280), { width: 400, height: 225 }));
   check('gifFitSize: neznámé rozměry → null', g.gifFitSize(null, 200) === null && g.gifFitSize(0, 0) === null);
 
+  check('gifFitSize: karta 400×160', eq(g.gifFitSize(498, 280, 400, 160), { width: 285, height: 160 }));
+  check('isGifMessageId', g.isGifMessageId('gif-12') && !g.isGifMessageId('gif-') && !g.isGifMessageId('abc') && !g.isGifMessageId(null) && !g.isGifMessageId('xgif-1'));
+  check('gifMoreText 3 tvary', g.gifMoreText(1) === '+1 další GIF' && g.gifMoreText(3) === '+3 další GIFy' && g.gifMoreText(5) === '+5 dalších GIFů' && g.gifMoreText(12) === '+12 dalších GIFů');
+  check('normalizeGifMedia: origins', g.normalizeGifMedia({ url: URL_OK }, { origins: ['https://api.jouki.cz'] }) !== null && g.normalizeGifMedia({ url: `https://evil.cz/media/gif/${ID}` }, { origins: ['https://api.jouki.cz'] }) === null);
+
   // --- SSE ---
   const P = { requestId: 12, channel: 'RobDiesALot', platform: 'twitch', login: 'divak', userId: 42, messageId: 'abc', text: 'hele lol', media: { url: URL_OK, kind: 'mp4', width: 498, height: 280 }, createdAt: 1000, expiresAt: 301000 };
   const np = g.normalizeGifPending(P);

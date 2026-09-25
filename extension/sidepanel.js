@@ -53,6 +53,8 @@ const DEFAULTS = {
 
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
 const UC_API = 'https://api.jouki.cz';
+// Média GIFů (moderace část 4) smí jen z našeho backendu (kontrakt: klienti načítají jen z api.jouki.cz).
+const UC_GIF_ORIGINS = [new URL(UC_API).origin];
 // Reakce „Peepo poop" — video sdílené s webem (robdiesalot.com/chat/media/).
 const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2-wet-sound.webm';
 
@@ -3729,7 +3731,10 @@ class UnityChat {
     const identity = legacy ? null : this._identity(platform);
     const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
     const ucProfile = this.nicknames.get(platform, username);
-    const hasNativeReply = reply && reply.platform === platform
+    // Schválený GIF (id gif-<n>) je syntetická zpráva UnityChatu — na platformě neexistuje, nativní
+    // odpověď by selhala → odpověď napříč platformami (ucReplyTo / @jméno).
+    const replyIsGif = window.UC_CORE.isGifMessageId(reply?.messageId);
+    const hasNativeReply = reply && reply.platform === platform && !replyIsGif
       && (platform === 'twitch' || platform === 'kick');
     let displayText = text;
     if (reply && !hasNativeReply) {
@@ -3778,7 +3783,7 @@ class UnityChat {
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
       // YouTube → @mention prefix fallback.
-      if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
+      if (hasNativeReply && reply?.messageId && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
           text: markedText,
@@ -3786,7 +3791,7 @@ class UnityChat {
           username: reply.username,
           broadcasterId: this.config._roomId || null
         });
-      } else if (reply?.messageId && reply.platform === platform && platform === 'kick') {
+      } else if (hasNativeReply && reply?.messageId && platform === 'kick') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'SEND_CHAT',
           text: markedText,
@@ -4645,6 +4650,7 @@ class UnityChat {
         api: (path, opts) => this._ucApi(path, opts),
         channel: () => (this.config.channel || '').toLowerCase(),
         canModerate: () => !!this._canModerate,
+        origins: UC_GIF_ORIGINS,
         platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
         log: (tag, text) => this._ucLog(tag, text),
       });
@@ -4654,7 +4660,7 @@ class UnityChat {
 
   /** SSE gif-message z /nicknames/stream: schválený GIF = nová zpráva (dedup gif-<id> ve store). */
   _onGifMessage(d) {
-    const m = window.UC_CORE.gifMessageFromEvent(d, this.config.channel || '');
+    const m = window.UC_CORE.gifMessageFromEvent(d, this.config.channel || '', { origins: UC_GIF_ORIGINS });
     if (!m) { this._ucLog('Gif', `gif-message ignorováno (${d?.channel || '?'} ${d?.message?.id || '?'})`); return; }
     if (this.store.get(m.id)) { this._ucLog('Gif', `gif-message ${m.id} už v chatu`); return; }
     this._addMessage({ ...m, historical: false });
@@ -7087,7 +7093,7 @@ class UnityChat {
     const hasPlatformContent = (msg?.ytRuns?.length > 0) || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
     // Schválený GIF (část 4) může mít prázdný text — médium je obsah.
     if (msg?.gif) {
-      const g = window.UC_CORE?.normalizeGifMedia?.(msg.gif);
+      const g = window.UC_CORE?.normalizeGifMedia?.(msg.gif, { origins: UC_GIF_ORIGINS });
       if (!g) this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} s neplatným médiem → bez GIFu`);
       msg = g ? { ...msg, gif: g } : { ...msg, gif: undefined };
     }
@@ -7554,7 +7560,8 @@ class UnityChat {
     // Pin button (jen Twitch zprávy; jen pokud viewer je mod/broadcaster).
     // Mod status se detekuje z IRC badge na vlastní zprávě — takže button se
     // objeví až poté co viewer pošle alespoň jednu zprávu (nebo dorazí echo).
-    if (msg.platform === 'twitch' && this._isModOnChannel) {
+    // GIF (gif-<n>) na Twitchi neexistuje → připnout nejde.
+    if (msg.platform === 'twitch' && this._isModOnChannel && !window.UC_CORE.isGifMessageId(msg.id)) {
       const pinBtn = document.createElement('button');
       pinBtn.className = 'msg-action-btn';
       pinBtn.title = 'Připnout zprávu';

@@ -663,6 +663,9 @@ body.uc-dev .dev-only { display: block; }
   position: relative;
   overflow: hidden;
   min-height: 0;
+  /* Vlastní vrstvení: nic uvnitř chatu (karty GIFů, reakce, Chat historie) nepřeleze panely nad polem
+     pro psaní (emoty, soundboard, QR dono) ani přihlašovací okno. */
+  isolation: isolate;
 }
 
 #chat {

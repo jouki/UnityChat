@@ -16,6 +16,8 @@ export const GIF_MAX_W = 400;
 export const GIF_MAX_H = 250;
 /** Jak dlouho zůstane rozhodnutá / propadlá karta vidět (zelená / červená + kdo rozhodl). */
 export const GIF_DECIDED_LINGER_MS = 4000;
+/** Náhled v kartě ke schválení je nižší než GIF v chatu. */
+export const GIF_CARD_MAX_H = 160;
 const MEDIA_PATH_RE = /^\/media\/gif\/[0-9a-f]{32}$/;
 const KINDS = new Set(['gif', 'webp', 'mp4']);
 
@@ -44,6 +46,9 @@ export function normalizeGifMedia(g, { origins = null } = {}) {
 }
 
 export const isGifVideo = (g) => g?.kind === 'mp4';
+
+/** Syntetická zpráva schváleného GIFu (`gif-<requestId>`) — na platformě neexistuje (nativní odpověď / pin nejde). */
+export const isGifMessageId = (id) => /^gif-\d+$/.test(String(id ?? ''));
 
 /** Velikost v chatu: 100 %, nejvýš 400 × 250 px, poměr zachován, nikdy nezvětšovat. Neznámé rozměry = null. */
 export function gifFitSize(width, height, maxW = GIF_MAX_W, maxH = GIF_MAX_H) {
@@ -124,6 +129,17 @@ export function gifOwnStatusText(status) {
   }
 }
 
+/** Zásobník ukazuje nejvýš tolik karet, zbytek schová za řádek „+N dalších GIFů“. */
+export const GIF_STACK_VISIBLE = 3;
+
+/** „+1 další GIF“ / „+3 další GIFy“ / „+5 dalších GIFů“. */
+export function gifMoreText(n) {
+  const a = Math.abs(Math.trunc(Number(n) || 0));
+  if (a === 1) return '+1 další GIF';
+  if (a >= 2 && a <= 4) return `+${a} další GIFy`;
+  return `+${a} dalších GIFů`;
+}
+
 /** Chyba POST /moderation/gif/:id/decide → česky. */
 export function gifDecideErrorText(err) {
   const code = typeof err === 'string' ? err : err?.error;
@@ -143,16 +159,48 @@ export function gifDecideErrorText(err) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Sdílený IntersectionObserver pro videa GIFů (jeden na okno): video dostane src, až je poprvé vidět,
+ * hraje jen když je vidět a mimo záběr se zastaví. Pozorování přežije odpojení uzlu (parkování zpráv
+ * mimo DOM) — po vrácení uzlu do chatu přijde nové protnutí a video se znovu spustí.
+ */
+const videoIo = new WeakMap();   // window → IntersectionObserver
+function playSafe(v) {
+  try { const p = v.play?.(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch { /* autoplay odmítnut */ }
+}
+function gifVideoObserver(win) {
+  const IO = win?.IntersectionObserver;
+  if (typeof IO !== 'function') return null;
+  let io = videoIo.get(win);
+  if (!io) {
+    io = new IO((entries) => {
+      for (const e of entries) {
+        const v = e.target;
+        if (e.isIntersecting) {
+          if (!v.getAttribute('src') && v.dataset.ucSrc) v.src = v.dataset.ucSrc;
+          playSafe(v);
+        } else {
+          try { v.pause(); } catch { /* ignore */ }
+        }
+      }
+    }, { rootMargin: '200px 0px' });
+    videoIo.set(win, io);
+  }
+  return io;
+}
+
+/**
  * Médium GIFu jako prvek `<div class="uc-gif">` (do zprávy pod text, nebo do karty).
- * `lazy`: obrázek `loading="lazy"`, video dostane src, až je vidět (IntersectionObserver, jinak hned).
+ * Velikost: 100 %, nejvýš `maxW` × `maxH` (výchozí 400 × 250), poměr zachován (inline width + aspect-ratio,
+ * aby CSS nemuselo nic ořezávat a obraz se nedeformoval).
+ * `lazy`: obrázek `loading="lazy"`; video se spouští / zastavuje podle viditelnosti (sdílený IO).
  * Chyba načtení → odkaz „GIF se nepodařilo načíst“ (otevře médium v nové kartě).
  */
-export function createGifMedia(doc, gif, { lazy = true, log } = {}) {
+export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H } = {}) {
   const g = gif && gif.url && isGifMediaUrl(gif.url) ? gif : null;
   const wrap = doc.createElement('div');
   wrap.className = 'uc-gif';
   if (!g) return wrap;
-  const fit = gifFitSize(g.width, g.height);
+  const fit = gifFitSize(g.width, g.height, maxW, maxH);
   const video = isGifVideo(g);
   const m = doc.createElement(video ? 'video' : 'img');
   m.className = 'uc-gif-media';
@@ -163,10 +211,13 @@ export function createGifMedia(doc, gif, { lazy = true, log } = {}) {
     m.style.aspectRatio = `${g.width} / ${g.height}`;
   } else {
     wrap.classList.add('uc-gif--nosize');
+    m.style.maxWidth = `min(100%, ${maxW}px)`;
+    m.style.maxHeight = `${maxH}px`;
   }
   const fail = () => {
-    if (!m.isConnected && !wrap.contains(m)) return;
+    if (!wrap.contains(m)) return;
     log?.('Gif', `médium se nenačetlo ${g.url}`);
+    try { if (video) gifVideoObserver(doc.defaultView)?.unobserve(m); } catch { /* ignore */ }
     const a = doc.createElement('a');
     a.className = 'uc-gif-fallback';
     a.href = g.url;
@@ -184,21 +235,17 @@ export function createGifMedia(doc, gif, { lazy = true, log } = {}) {
     m.autoplay = true;
     m.playsInline = true;
     for (const a of ['muted', 'loop', 'autoplay', 'playsinline']) m.setAttribute(a, '');
-    m.preload = lazy ? 'none' : 'auto';
     m.setAttribute('aria-label', 'GIF');
-    const load = () => {
-      if (m.getAttribute('src')) return;
-      m.src = g.url;
-      try { const p = m.play?.(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch { /* autoplay odmítnut */ }
-    };
-    const IO = doc.defaultView?.IntersectionObserver;
-    if (lazy && typeof IO === 'function') {
-      const io = new IO((entries) => {
-        if (entries.some((e) => e.isIntersecting)) { io.disconnect(); load(); }
-      }, { rootMargin: '200px 0px' });
+    const io = lazy ? gifVideoObserver(doc.defaultView) : null;
+    if (io) {
+      m.preload = 'none';
+      m.dataset.ucSrc = g.url;
       io.observe(m);
-      wrap._ucGifIo = io;
-    } else load();
+    } else {
+      m.preload = 'auto';
+      m.src = g.url;
+      playSafe(m);
+    }
   } else {
     m.alt = 'GIF';
     m.decoding = 'async';
@@ -214,9 +261,11 @@ export function removeGifMedia(el) {
   if (!el || typeof el.querySelectorAll !== 'function') return 0;
   const list = [...el.querySelectorAll('.uc-gif')];
   for (const w of list) {
-    try { w._ucGifIo?.disconnect(); } catch { /* ignore */ }
     const v = w.querySelector('video');
-    if (v) { try { v.pause(); v.removeAttribute('src'); v.load?.(); } catch { /* ignore */ } }
+    if (v) {
+      try { gifVideoObserver(v.ownerDocument?.defaultView)?.unobserve(v); } catch { /* ignore */ }
+      try { v.pause(); v.removeAttribute('src'); v.load?.(); } catch { /* ignore */ }
+    }
     w.remove();
   }
   return list.length;
@@ -286,6 +335,7 @@ export class GifRequests {
     el.addEventListener('click', (e) => {
       const b = e.target.closest?.('[data-act]');
       if (!b || !el.contains(b)) return;
+      if (b.dataset.act === 'more') { e.stopPropagation(); this._expanded = !this._expanded; this._layout(); return; }
       const card = b.closest('.uc-gif-card');
       if (!card) return;
       e.stopPropagation();
@@ -293,9 +343,33 @@ export class GifRequests {
       else if (b.dataset.act === 'reject') this.decide(card.dataset.requestId, false);
       else if (b.dataset.act === 'dismiss') this._remove(card.dataset.requestId);
     });
+    const more = this.doc.createElement('button');
+    more.type = 'button';
+    more.className = 'uc-gif-more';
+    more.dataset.act = 'more';
+    more.hidden = true;
+    el.appendChild(more);
     this.container.appendChild(el);
     this.el = el;
     return el;
+  }
+
+  /** Nejvýš GIF_STACK_VISIBLE karet, zbytek za řádkem „+N dalších“ (klik rozbalí / sbalí). */
+  _layout() {
+    const el = this.el;
+    if (!el) return;
+    const cards = [...this._cards.values()].map((c) => c.el).filter(Boolean);
+    const extra = Math.max(0, cards.length - GIF_STACK_VISIBLE);
+    if (!extra) this._expanded = false;
+    cards.forEach((c, i) => { c.hidden = !this._expanded && i >= GIF_STACK_VISIBLE; });
+    const more = el.querySelector('.uc-gif-more');
+    if (more) {
+      more.hidden = !extra;
+      more.textContent = this._expanded ? 'Sbalit' : gifMoreText(extra);
+      more.setAttribute('aria-expanded', String(!!this._expanded));
+      el.appendChild(more);   // vždy poslední
+    }
+    el.classList.toggle('uc-gif-stack--expanded', !!this._expanded);
   }
 
   /** SSE `gif-pending` (i po připojení streamu). Vrací true, když karta vznikla / se obnovila. */
@@ -305,6 +379,8 @@ export class GifRequests {
     if (!sameChannel(req.channel, this.channel())) { this._L(`gif-pending ${req.requestId} z jiného kanálu (${req.channel})`); return false; }
     if (this._decided.has(req.requestId)) { this._L(`gif-pending ${req.requestId} už rozhodnutý (${this._decided.get(req.requestId)})`); return false; }
     if (req.expiresAt <= this.now()) { this._L(`gif-pending ${req.requestId} už propadlý`); return false; }
+    // Cizí žádost vidí jen mod (server ji jinému neposílá; pojistka pro ztrátu role mezi událostmi).
+    if (!req.own && !this.canModerate()) { this._L(`gif-pending ${req.requestId} cizí, nejsem mod → bez karty`); return false; }
     const prev = this._cards.get(req.requestId);
     if (prev) {
       if (prev.state !== 'pending') return false;
@@ -315,7 +391,9 @@ export class GifRequests {
     const card = { req, el: null, state: 'pending', error: '' };
     this._cards.set(req.requestId, card);
     card.el = this._build(card);
-    this._root().appendChild(card.el);
+    const root = this._root();
+    root.insertBefore(card.el, root.querySelector('.uc-gif-more'));
+    this._layout();
     this._startTimer();
     this._L(`gif-pending ${req.requestId} ${req.platform}:${req.login}${req.own ? ' (můj)' : ''} ${req.media.kind} ${req.media.width || '?'}×${req.media.height || '?'} zbývá ${formatCountdown(req.expiresAt - this.now())}`);
     this.onChange(this.size);
@@ -360,6 +438,8 @@ export class GifRequests {
     try {
       const r = await this.api(`/moderation/gif/${encodeURIComponent(card.req.requestId)}/decide`, { method: 'POST', body: { approve: !!approve } });
       card.busy = false;
+      // Mezitím karta zmizela (clear po přepnutí kanálu, odhlášení) → nic nevykreslovat.
+      if (this._cards.get(card.req.requestId) !== card) return null;
       const status = ['approved', 'rejected'].includes(r?.status) ? r.status : (approve ? 'approved' : 'rejected');
       this._rememberDecided(card.req.requestId, status);
       if (card.state === 'pending') this._finish(card, status, 'me');
@@ -368,6 +448,7 @@ export class GifRequests {
       return status;
     } catch (e) {
       card.busy = false;
+      if (this._cards.get(card.req.requestId) !== card) return null;
       this._L(`decide ${card.req.requestId} FAIL ${e?.status || 0} ${e?.error || e?.message || e}${e?.status ? ` status=${e.status}` : ''}`);
       if (e?.error === 'already_decided') {
         // Hostitel vrací HTTP status v `status`; stav žádosti z těla 409 je v `body.status` (nebo řetězcový `status`).
@@ -386,7 +467,12 @@ export class GifRequests {
 
   /** Role se změnila (mod ↔ divák) → tlačítka a texty karet znovu. */
   repaint() {
-    for (const c of this._cards.values()) this._paint(c);
+    const mod = !!this.canModerate();
+    for (const c of [...this._cards.values()]) {
+      // Ztráta role: cizí žádosti už neukazovat (vlastní zůstávají).
+      if (!mod && !c.req.own) { this._L(`gif ${c.req.requestId}: nejsem mod → karta pryč`); this._remove(c.req.requestId); continue; }
+      this._paint(c);
+    }
   }
 
   /** Přepnutí kanálu / odhlášení: všechny karty pryč. */
@@ -395,6 +481,7 @@ export class GifRequests {
     this._cards.clear();
     this._decided.clear();
     this._stopTimer();
+    this._expanded = false;
     if (this.el) { this.el.remove(); this.el = null; }
     this.onChange(0);
   }
@@ -430,6 +517,7 @@ export class GifRequests {
     this._disposeCard(card);
     card.el?.remove();
     if (!this._cards.size && this.el) { this.el.remove(); this.el = null; }
+    else this._layout();
     this.onChange(this.size);
   }
 
@@ -496,7 +584,7 @@ export class GifRequests {
     el.querySelector('.uc-gif-card-who').textContent = req.login || 'neznámý';
     el.querySelector('.uc-gif-card-text').textContent = req.text;
     el.querySelector('.uc-gif-card-text').hidden = !req.text;
-    el.querySelector('.uc-gif-card-media').appendChild(createGifMedia(doc, req.media, { lazy: false, log: this.log }));
+    el.querySelector('.uc-gif-card-media').appendChild(createGifMedia(doc, req.media, { lazy: false, log: this.log, maxW: GIF_MAX_W, maxH: GIF_CARD_MAX_H }));
     el.querySelector('.uc-gif-timer').textContent = formatCountdown(req.expiresAt - this.now());
     this._paint({ ...card, el });
     return el;
