@@ -58,7 +58,10 @@ export function applyDeleted(el, opts = {}) {
   if (!el) return;
   const { mode: rawMode, hasContent = true, hidden = false, dimmed = false, tag: forceTag = false } = opts;
   const label = opts.label || (hidden ? 'Zpráva skryta' : 'Zpráva smazána');
-  const mode = DELETED_STYLES.includes(rawMode) ? rawMode : DEFAULT_DELETED_STYLE;
+  const wanted = DELETED_STYLES.includes(rawMode) ? rawMode : DEFAULT_DELETED_STYLE;
+  // Bez textu (divák / nepřihlášený u zprávy smazané dřív) není co přeškrtnout ani ztlumit → „Zpráva smazána“
+  // jako label, ne přeškrtnutý label (user 2026-09-25 po odhlášení).
+  const mode = !hasContent && (wanted === 'strike' || wanted === 'dim') ? 'label' : wanted;
 
   if (mode === 'hide') {
     // Nejdřív smazat případný předchozí stav (tag/jiné mode třídy, obal emotů), pak schovat.

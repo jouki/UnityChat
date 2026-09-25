@@ -112,7 +112,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     }
     if (!kick.kickConfigured()) { reply.code(503); return { ok: false, error: 'Kick OAuth not configured' }; }
     const pkce = kick.generatePkcePair();
-    const kickScopes = wantMod ? [...kick.WEB_SCOPES, ...kick.MOD_SCOPES] : kick.WEB_SCOPES;
+    // Kick: moderátorské scopes jsou v Kick dev app povolené (2026-09-25) → rovnou při každém přihlášení.
+    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
     return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes) };
   });
 

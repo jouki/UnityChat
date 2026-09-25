@@ -75,6 +75,8 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
     message: '',
     timestamp: row.sentAt.getTime(),
     historical,
+    // Zlaté logo i bez textu (marker UnityChatu je v textu, který se smazané zprávě neposílá).
+    ...(row.isUnitychatUser ? { uc: true } : {}),
   };
   if (row.deletedAt) return { ...meta, deleted: true, deletedReason: row.deletedReason };
   if (row.hiddenAt) return { ...meta, hidden: true, segments: [] };

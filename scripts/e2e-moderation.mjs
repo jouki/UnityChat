@@ -154,7 +154,7 @@ check('B smazaná zpráva z historie u diváka = label „Zpráva smazána" (bez
 await setStyle('strike');
 await sleep(800);
 const m2vs = await msgState('e2e-m2');
-check('B divák se strike: smazaná zpráva bez obsahu zůstává „Zpráva smazána"', m2vs?.cls === 'uc-deleted uc-deleted--strike' && m2vs.text === 'Zpráva smazána', JSON.stringify(m2vs));
+check('B divák se strike: smazaná zpráva bez obsahu = „Zpráva smazána" bez přeškrtnutí', m2vs?.cls === 'uc-deleted uc-deleted--label' && m2vs.text === 'Zpráva smazána', JSON.stringify(m2vs));
 check('B divák obsah smazané zprávy nedotahuje', contentCalls.length === callsBeforeViewer, `${callsBeforeViewer} → ${contentCalls.length}`);
 await setStyle('label');
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m1', by: 'twitch:moduser', reason: 'mod', at: new Date().toISOString() }]);
