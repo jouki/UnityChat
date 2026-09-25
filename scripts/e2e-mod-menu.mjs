@@ -1,7 +1,8 @@
 // E2E (headless Chrome + CDP): moderace část 2 v addonu — nabídka moda na jméno (pravé tlačítko),
 // timeout (tělo POST /moderation/user), Unban podle /moderation/user-state, target_protected,
 // SSE user-moderated (styl + štítek na předchozích zprávách, unban štítek sundá), divák má nativní menu,
-// varování účtu (okno z /auth/me i z /account/stream, blokace psaní do potvrzení, 403 warning_pending).
+// varování účtu (okno z /auth/me i z /account/stream, blokace psaní do potvrzení, 403 warning_pending),
+// Chat historie (panel přes chat: hlavička, záložky kanálů ze summary, přepnutí záložky, starší stránka, Esc).
 //
 // Backend je mockovaný přes Fetch.requestPaused (api.jouki.cz). /nicknames/stream = SSE s frontou
 // (EventSource se po konci odpovědi sám znovu připojí, retry 300 ms). /account/stream = požadavek se
@@ -59,7 +60,7 @@ const mock = {
   heldAcc: null,         // podržený požadavek /account/stream
 };
 const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera', 3)];
-const posts = { user: [], ack: [], send: [], tickets: 0 };
+const posts = { user: [], ack: [], send: [], tickets: 0, hist: [] };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 const pushAcc = (type, data) => {
@@ -85,6 +86,24 @@ s.onevent = async (d) => {
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: mock.warnings });
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, warnings: mock.warnings });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
+  // Chat historie (před /moderation/user — ten by ji pohltil).
+  if (u.includes('/moderation/user-history/summary')) {
+    posts.hist.push(u);
+    return json({ ok: true,
+      user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'tester', userId: 'u1' }, { platform: 'kick', login: 'tester_k', userId: 'k1' }], firstSeen: now - 86400000, lastSeen: now, total: 6 },
+      channels: [{ channel: 'robdiesalot', count: 2, firstAt: now - 60000, lastAt: now }, { channel: 'arcadebulls', count: 3, firstAt: now - 86400000, lastAt: now - 3600000 }, { channel: 'tensterakdary', count: 1, firstAt: now - 7200000, lastAt: now - 7200000 }],
+      moderation: [{ action: 'timeout', at: now - 1000, by: 'twitch:modik', platform: 'twitch', params: { durationSec: 600, reason: 'spam' } }] });
+  }
+  if (u.includes('/moderation/user-history/messages')) {
+    posts.hist.push(u);
+    const inCh = new URL(u).searchParams.get('inChannel');
+    if (inCh === 'arcadebulls') return json({ ok: true, messages: [H('h-b1', 'Tester', 'u1', 'zpráva u Bulls 1', 1), H('h-b2', 'Tester', 'u1', 'zpráva u Bulls 2', 2), { ...H('h-b3', 'Tester', 'u1', '', 3), deleted: true }], nextBefore: null });
+    // Dvě stránky: první nezaplní panel → klient sám dotáhne starší (before=c1).
+    if (inCh === 'robdiesalot') return json(u.includes('before=c1')
+      ? { ok: true, messages: [H('h-old', 'Tester', 'u1', 'nejstarší zpráva', -50)], nextBefore: null }
+      : { ok: true, messages: [H1[0], H1[2]], nextBefore: 'c1' });
+    return json({ ok: true, messages: [], nextBefore: null });
+  }
   if (u.includes('/moderation/user-state')) return json({ ok: true, banned: mock.banned, until: null });
   if (u.includes('/moderation/user')) {
     posts.user.push(body);
@@ -128,7 +147,7 @@ const head = await ev(`document.querySelector('.uc-mod-menu .uc-mm-head')?.textC
 check('A hlavička: jméno + platforma', /Tester/.test(head || '') && /Twitch/.test(head || ''), head);
 await until(`!!document.querySelector('.uc-mod-menu')`, 1000);
 const items = await menuItems();
-check('A položky nabídky', JSON.stringify(items) === JSON.stringify(['Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Varovat…', 'Permit']), JSON.stringify(items));
+check('A položky nabídky', JSON.stringify(items) === JSON.stringify(['Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Chat historie', 'Varovat…', 'Permit']), JSON.stringify(items));
 check('A fokus na první položce', await ev(`document.activeElement?.dataset?.id === 'delete'`) === true);
 await key('ArrowDown');
 check('A šipka dolů → Timeout', await ev(`document.activeElement?.dataset?.id === 'timeout'`) === true);
@@ -204,6 +223,37 @@ await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`)
 check('A varování bez důvodu → chyba v dialogu', await until(`document.querySelector('.uc-mod-dialog-err')?.hidden === false`, 2000));
 await ev(`document.querySelector('.uc-mod-dialog button[type=button]').click()`);
 check('A Zrušit zavře dialog', await ev(`!document.querySelector('.uc-mod-dialog')`) === true);
+
+// ---- Chat historie ----
+await rightClick('e2e-a1');
+const nameColor = await ev(`document.querySelector('.msg[data-msg-id="e2e-a1"] .un').style.color`);
+await ev(`document.querySelector('.uc-mod-menu [data-id="history"]').click()`);
+check('H „Chat historie" → panel přes chat, nabídka zavřená', await until(`!!document.querySelector('#chat-wrapper > .uc-uh') && !document.querySelector('.uc-mod-menu')`, 3000));
+await until(`document.querySelectorAll('.uc-uh-tab').length > 0`, 4000);
+check('H summary GET s kanálem a cílem', /summary\?channel=robdiesalot&platform=twitch&userId=u1/.test(posts.hist[0] || ''), posts.hist[0]);
+check('H hlavička: jméno v barvě uživatele', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Tester'`, 3000)
+  && !!nameColor && (await ev(`document.querySelector('.uc-uh-name').style.color`)) === nameColor, String(nameColor));
+const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img')).join(',')`);
+check('H propojené identity s logy', idsTxt === 'tester:true,tester_k:true', idsTxt);
+const statsTxt = await ev(`document.querySelector('.uc-uh-stats').textContent`);
+check('H statistika česky (3 tvary)', /^Poprvé viděn .+ · naposledy .+ · celkem 6 zpráv$/.test(statsTxt || ''), statsTxt);
+const modTxt = await ev(`document.querySelector('.uc-uh-mod').textContent`);
+check('H moderace: timeout 10 min + důvod + kdo', /Timeout 10 min/.test(modTxt || '') && /spam/.test(modTxt) && /modik \(Twitch\)/.test(modTxt), modTxt);
+const tabsTxt = await ev(`[...document.querySelectorAll('.uc-uh-tab')].map(b => b.dataset.channel + ':' + b.querySelector('.uc-uh-tab-count').textContent).join(',')`);
+check('H záložky = kanály ze summary s počty, aktuální první', tabsTxt === 'robdiesalot:2,arcadebulls:3,tensterakdary:1', tabsTxt);
+check('H výchozí záložka = aktuální kanál, zprávy načtené', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3`, 3000) && posts.hist.some((x) => /inChannel=robdiesalot&limit=50$/.test(x)), posts.hist.join(' | '));
+const order = await ev(`[...document.querySelectorAll('.uc-uh-list .uc-uh-msg')].map(r => r.dataset.id).join(',')`);
+check('H starší stránka (nextBefore) doplněná nahoru + konec historie', order === 'h-old,e2e-a1,e2e-a2' && /before=c1/.test(posts.hist.at(-1) || '') && await ev(`document.querySelector('.uc-uh-list').firstElementChild.classList.contains('uc-uh-edge')`) === true, order);
+const row0 = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return { time: r.querySelector('.uc-uh-time').textContent, logo: !!r.querySelector('.uc-uh-pi img'), text: r.querySelector('.uc-uh-tx').textContent }; })()`);
+check('H řádek: datum + čas, logo, text', /^\d{1,2}\. \d{1,2}\. \d{4} \d{2}:\d{2}$/.test(row0?.time || '') && row0.logo && row0.text === 'první zpráva testera', JSON.stringify(row0));
+await ev(`document.querySelector('.uc-uh-tab[data-channel="arcadebulls"]').click()`);
+check('H přepnutí záložky načte zprávy kanálu', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 3 && document.querySelector('.uc-uh-list .uc-uh-msg .uc-uh-tx').textContent === 'zpráva u Bulls 1'`, 3000) && /inChannel=arcadebulls/.test(posts.hist.at(-1) || ''), posts.hist.at(-1));
+check('H aktivní záložka přepnutá', await ev(`document.querySelector('.uc-uh-tab--on')?.dataset.channel`) === 'arcadebulls');
+check('H smazaná zpráva bez obsahu', await ev(`document.querySelector('.uc-uh-msg[data-id="h-b3"] .uc-uh-tx').textContent`) === 'Zpráva smazána');
+await ev(`document.querySelector('.uc-uh-tab[data-channel="tensterakdary"]').click()`);
+check('H prázdná záložka → „V tomto kanálu nic nenapsal."', await until(`document.querySelector('.uc-uh-status')?.textContent === 'V tomto kanálu nic nenapsal.'`, 3000));
+await key('Escape');
+check('H Esc zavře panel', await until(`!document.querySelector('.uc-uh')`, 2000));
 
 // ---- SSE user-moderated ----
 const at = Date.now();

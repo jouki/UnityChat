@@ -4593,6 +4593,7 @@ class UnityChat {
           const el = t.messageId ? this._msgEls(t.messageId, t.platform)[0] : null;
           if (el) this._deleteMessage(el);
         },
+        onHistory: (t) => this._userHistory().open(t),
         notify: (text, info) => {
           if (info?.error?.status === 401) { this._sys(text); this._refreshAccount(); return; }
           if (info?.error?.status === 403 && info.error.error === 'not_mod') this._loadModState();
@@ -4602,6 +4603,22 @@ class UnityChat {
       });
     }
     return this._modMenuInst;
+  }
+
+  /** Panel „Chat historie" (core/user-history.js) přes chat — položka v nabídce moda. */
+  _userHistory() {
+    if (!this._userHistoryInst) {
+      this._userHistoryInst = new window.UC_CORE.UserHistoryPanel({
+        doc: document,
+        api: (path, opts) => this._ucApi(path, opts),
+        container: document.getElementById('chat-wrapper'),
+        // Stejný render těla jako chat (emoty, odkazy, cenzura z blacklistu).
+        renderMessage: (m) => this._renderMsgBody(m),
+        platformIcon: (p, uc) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}${uc ? '-gold' : ''}.svg` : null),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._userHistoryInst;
   }
 
   /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */

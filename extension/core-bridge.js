@@ -35,8 +35,9 @@ import * as moderation from './core/moderation.js';
 import * as modMenu from './core/mod-menu.js';
 import * as accountWarnings from './core/account-warnings.js';
 import * as mentionNotify from './core/mention-notify.js';
+import * as userHistory from './core/user-history.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

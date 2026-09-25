@@ -83,6 +83,33 @@ Promise.all([
   check('menuModel podnabídka timeoutu', eq(mm.menuModel({})[1].sub.map((s) => s.label), fmt));
   check('menuModel podnabídka permitu', eq(mm.menuModel({}).find((i) => i.id === 'permit').sub.map((s) => s.durationSec), [30, 60, 120, 300, 600]));
 
+  // --- Chat historie (core/user-history.js) ---
+  check('menuModel s historií → za Přejmenovat', ids(mm.menuModel({ history: true })) === 'delete,timeout,ban,rename,history,warn,permit');
+  check('menuModel historie bez userId → neaktivní', mm.menuModel({ history: true, hasUserId: false }).find((i) => i.id === 'history').disabled === true);
+  {
+    const uh = await import('../extension/core/user-history.js');
+    check('czPlural / fmtMsgCount 3 tvary', [0, 1, 2, 4, 5, 22, 1234].map(uh.fmtMsgCount).join('|') === `0 zpráv|1 zpráva|2 zprávy|4 zprávy|5 zpráv|22 zpráv|${(1234).toLocaleString('cs-CZ')} zpráv`, [0, 1, 2, 4, 5, 22, 1234].map(uh.fmtMsgCount).join('|'));
+    const at = new Date(2026, 8, 25, 14, 5).getTime();
+    check('fmtDateTime', uh.fmtDateTime(at) === '25. 9. 2026 14:05' && uh.fmtDateTime(at, { withTime: false }) === '25. 9. 2026' && uh.fmtDateTime(null) === '');
+    const ht = { channel: 'RobDiesALot', platform: 'twitch', userId: 123, login: 'spammer' };
+    check('history summary GET', eq(uh.buildHistoryRequest('summary', ht), { path: '/moderation/user-history/summary?channel=robdiesalot&platform=twitch&userId=123&login=spammer', method: 'GET' }));
+    check('history messages GET', uh.buildHistoryRequest('messages', ht, { inChannel: 'ArcadeBulls', before: '17:5', limit: 50 }).path === '/moderation/user-history/messages?channel=robdiesalot&platform=twitch&userId=123&login=spammer&inChannel=arcadebulls&before=17%3A5&limit=50');
+    check('modActionLabel', [
+      { action: 'timeout', params: { durationSec: 600 } }, { action: 'ban', params: {} }, { action: 'warn', params: { reason: 'x' } },
+      { action: 'permit', params: { durationSec: 60 } }, { action: 'rename', params: { nickname: 'Pan' } }, { action: 'rename', params: { nickname: null } },
+    ].map(uh.modActionLabel).join('|') === 'Timeout 10 min|Ban|Varování|Permit 1 min|Přezdívka „Pan“|Přezdívka smazána');
+    check('actorLabel', uh.actorLabel('twitch:modik') === 'modik (Twitch)' && uh.actorLabel('zidolista:5') === 'Židolišta');
+    check('statsText', uh.statsText({ firstSeen: at, lastSeen: at, total: 3 }) === 'Poprvé viděn 25. 9. 2026 · naposledy 25. 9. 2026 14:05 · celkem 3 zprávy');
+    const s = uh.stripUcMarker({ message: 'ahoj ⠀', kickContent: 'ahoj ⠀' });
+    check('stripUcMarker → bez markeru + uc', s.uc && s.msg.message === 'ahoj' && s.msg.kickContent === 'ahoj' && !uh.stripUcMarker({ message: 'x' }).uc);
+    const opened = [];
+    const menu = new mm.ModMenu({ doc: {}, api: async () => ({}), onHistory: (tt) => opened.push(tt) });
+    menu.target = ht;
+    check('ModMenu model s onHistory má položku', menu._model().some((i) => i.id === 'history') && !new mm.ModMenu({ doc: {}, api: async () => ({}) })._model.call({ target: ht, _state: {}, onHistory: undefined }).some((i) => i.id === 'history'));
+    menu._activate({ id: 'history' });
+    check('ModMenu „Chat historie" → onHistory(target)', opened[0] === ht);
+  }
+
   // --- summarize ---
   check('summarize timeout', mm.summarizeModResult('timeout', { login: 'spammer', displayName: 'Spammer', platform: 'twitch' }, { results: { twitch: 'ok' } }, { durationSec: 300 }) === 'Timeout 5 min pro Spammer: Twitch ✓');
   check('summarize permit', mm.summarizeModResult('permit', { login: 'x', platform: 'kick' }, { results: { permit: 'ok', chat: 'bot' } }, { durationSec: 60 }) === 'Permit 1 min pro x: !permit v chatu (Kick) ✓ (bot) · UnityChat ✓');

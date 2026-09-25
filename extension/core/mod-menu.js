@@ -1,6 +1,6 @@
 // Kontextová nabídka moderátora na jméno (moderace část 2) — sdílená addonem i webem.
 // Pravé tlačítko na jméno (jen mod; divák má nativní menu prohlížeče) → Smazat zprávu,
-// Timeout ▸, Zabanovat / Unban, Přejmenovat…, Varovat…, Permit ▸. Kontrakt backendu:
+// Timeout ▸, Zabanovat / Unban, Přejmenovat…, Chat historie, Varovat…, Permit ▸. Kontrakt backendu:
 // docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md.
 //
 // Host dodá DOM (`doc`) a `api(path, { method, body })` → JSON, při chybě throw { error, status }
@@ -143,8 +143,9 @@ export function buildModRequest(kind, t, x = {}) {
 /**
  * Položky nabídky (čistá funkce). `banned` → Unban místo Timeout/Zabanovat.
  * Bez userId jde jen Přejmenovat (a Smazat zprávu, pokud je zpráva potvrzená).
+ * `history` = hostitel umí otevřít Chat historii (core/user-history.js) → položka za Přejmenovat.
  */
-export function menuModel({ banned = false, canDelete = true, hasUserId = true } = {}) {
+export function menuModel({ banned = false, canDelete = true, hasUserId = true, history = false } = {}) {
   const noId = !hasUserId;
   const items = [];
   if (canDelete) items.push({ id: 'delete', label: 'Smazat zprávu' });
@@ -154,6 +155,7 @@ export function menuModel({ banned = false, canDelete = true, hasUserId = true }
     items.push({ id: 'ban', label: 'Zabanovat…', danger: true, disabled: noId });
   }
   items.push({ id: 'rename', label: 'Přejmenovat…' });
+  if (history) items.push({ id: 'history', label: 'Chat historie', disabled: noId });
   items.push({ id: 'warn', label: 'Varovat…', disabled: noId });
   items.push({ id: 'permit', label: 'Permit', disabled: noId, sub: PERMIT_OPTIONS.map((s) => ({ id: `permit:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_PERMIT_SEC } });
   return items;
@@ -302,13 +304,15 @@ export class ModMenu {
    * @param {Document} [o.doc]
    * @param {(path: string, opts: {method?: string, body?: object}) => Promise<any>} o.api
    * @param {(target: object) => void} [o.onDelete]  „Smazat zprávu" (část 1, host)
+   * @param {(target: object) => void} [o.onHistory]  „Chat historie" (host otevře UserHistoryPanel); bez něj položka není
    * @param {(text: string, info: {ok: boolean, kind: string, target: object, res?: object, error?: object}) => void} [o.notify]
    * @param {(tag: string, text: string) => void} [o.log]
    */
-  constructor({ doc = globalThis.document, api, onDelete, notify, log } = {}) {
+  constructor({ doc = globalThis.document, api, onDelete, onHistory, notify, log } = {}) {
     this.doc = doc;
     this.api = api;
     this.onDelete = onDelete;
+    this.onHistory = onHistory;
     this.notify = notify || (() => {});
     this.log = log || (() => {});
     this.el = null;
@@ -412,7 +416,7 @@ export class ModMenu {
 
   _model() {
     const t = this.target;
-    return menuModel({ banned: this._state.banned, canDelete: !!t.messageId, hasUserId: !!t.userId });
+    return menuModel({ banned: this._state.banned, canDelete: !!t.messageId, hasUserId: !!t.userId, history: typeof this.onHistory === 'function' });
   }
 
   _render() {
@@ -654,6 +658,7 @@ export class ModMenu {
       case 'unban': this.run('unban', t); break;
       case 'ban': this._confirmBan(t); break;
       case 'rename': this._renameDialog(t); break;
+      case 'history': this.onHistory?.(t); break;
       case 'warn': this._warnDialog(t); break;
       default: break;
     }
