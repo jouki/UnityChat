@@ -44,9 +44,12 @@ source as https://github.com/jouki/UnityChat (folder extension/, built for Firef
 by scripts/build-firefox.mjs, which only rewrites the manifest).
 
 How to test:
-1. Open a live channel, e.g. https://www.twitch.tv/robdiesalot (or any live
-   Twitch/Kick/YouTube stream) and click the UnityChat toolbar button — the
-   sidebar opens and shows the chat of all three platforms.
+UnityChat serves one streaming community: it connects to the chats of the
+supported streamers only (robdiesalot, tensterakdary, arcadebulls - each on
+Twitch, YouTube and Kick). On any other channel the panel stays on robdiesalot.
+1. Open https://www.twitch.tv/robdiesalot and click the UnityChat toolbar
+   button - the sidebar opens with the merged chat. Recent history loads from
+   our server even when the stream is offline; new messages appear while it is live.
 2. Reading chat needs no login. Sending a message requires being logged in on
    the platform in this browser (the message is sent as that account).
 
