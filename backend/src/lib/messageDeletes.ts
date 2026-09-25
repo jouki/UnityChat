@@ -52,7 +52,12 @@ export function deletedEvent(p: { channel: string; platform: Platform; messageId
 }
 
 export interface PublishDeletedParams {
-  /** Fallback kanál — volající (route/ingest) ho vždy zná; DB kanál z markDeleted má přednost. */
+  /**
+   * UC kanál pro SSE broadcast — volající (route/ingest, viz `ucChannelFor`) ho
+   * musí dodat jako UC kanál (streamerův Twitch login), ne platformní. DB řádek
+   * v `messages.channel` může nést platformní kanál (Kick slug / YT handle) —
+   * proto se broadcast řídí vždy tímhle parametrem, nikdy DB hodnotou.
+   */
   channel: string;
   platform: Platform;
   messageId: string;
@@ -73,7 +78,7 @@ const DEDUP_MS = 60_000;
 // z ingestu dorazí i po vlastním /moderation/delete, druhý broadcast by jen zbytečně mihnul UI.
 const recentlyPublished = new Map<string, number>();
 
-/** markDeleted + broadcast('message-deleted', …), s dedup 60 s per platform:messageId. */
+/** markDeleted + broadcast('message-deleted', …) s p.channel (UC kanál), s dedup 60 s per platform:messageId. */
 export async function publishDeleted(p: PublishDeletedParams, deps: PublishDeletedDeps = defaultDeps): Promise<void> {
   const key = `${p.platform}:${p.messageId}`;
   const t = deps.now();
@@ -83,6 +88,6 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
   if (recentlyPublished.size > 1000) {
     for (const [k, at] of recentlyPublished) if (t - at >= DEDUP_MS) recentlyPublished.delete(k);
   }
-  const { channel } = await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason });
-  deps.broadcast('message-deleted', deletedEvent({ channel: channel ?? p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t }));
+  await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason });
+  deps.broadcast('message-deleted', deletedEvent({ channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t }));
 }

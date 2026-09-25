@@ -16,6 +16,14 @@ export interface IngestMessage {
 
 export type PlatformStatus = 'off' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
+/** Smazání zprávy na platformě (Twitch CLEARMSG, Kick MessageDeletedEvent, YouTube markChatItemAsDeletedAction/removeChatItemAction). */
+export interface IngestDelete {
+  platform: IngestPlatform;
+  /** Platformní kanál (twitch login / kick slug / youtube handle) — ne nutně UC kanál. */
+  channel: string;
+  messageId: string;
+}
+
 export interface IngestListener {
   start(): void;
   stop(): void;

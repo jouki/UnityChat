@@ -59,6 +59,37 @@ test('YouTubeListener: findLive → chat page (popout) → all-chat switch → A
   assert.equal(got.find((m) => m.platformMessageId === 'new1')!.sentAt.getTime(), 1789820014396);
 });
 
+test('YouTubeListener: markChatItemAsDeletedAction/removeChatItemAction v akcích → onDelete, ne onMessage', async () => {
+  const renderer = (id: string, usec: string) => ({ addChatItemAction: { item: { liveChatTextMessageRenderer: { id, timestampUsec: usec, authorName: { simpleText: '@a' }, authorExternalChannelId: 'UC1', message: { runs: [{ text: 'hi ' + id }] } } } } });
+  const pageJson = (actions: unknown[]) => JSON.stringify({ contents: { liveChatRenderer: {
+    continuations: [{ timedContinuationData: { continuation: 'T1', timeoutMs: 10 } }],
+    actions,
+  } } });
+  const fetchImpl = (async (url: string) => {
+    if (url.endsWith('/robdiesalot/live')) return new Response('"isLive":true "videoId":"ABCDEFGHIJK"', { status: 200 });
+    if (url.startsWith('https://www.youtube.com/live_chat?v=')) {
+      return new Response(`<script>var ytInitialData = ${pageJson([
+        renderer('keep1', '1000000'),
+        { markChatItemAsDeletedAction: { targetItemId: 'del1' } },
+        { removeChatItemAction: { targetItemId: 'del2' } },
+      ])};</script>"INNERTUBE_API_KEY":"KEY" "clientVersion":"2.20260101.00.00"`, { status: 200 });
+    }
+    return new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+
+  const got: IngestMessage[] = [];
+  const deleted: { platform: string; channel: string; messageId: string }[] = [];
+  const l = new YouTubeListener('robdiesalot', (m) => got.push(m), { fetchImpl, log: { info() {}, warn() {}, error() {} }, minPollMs: 20, onDelete: (d) => deleted.push(d) });
+  l.start();
+  await new Promise((r) => setTimeout(r, 60));
+  l.stop();
+  assert.deepEqual(got.map((m) => m.platformMessageId), ['keep1']);
+  assert.deepEqual(deleted.sort((a, b) => a.messageId.localeCompare(b.messageId)), [
+    { platform: 'youtube', channel: 'robdiesalot', messageId: 'del1' },
+    { platform: 'youtube', channel: 'robdiesalot', messageId: 'del2' },
+  ]);
+});
+
 test('YouTubeListener: offline → live, nový stream → přepojení, konec streamu → zpět hledat', async () => {
   let live: string | null = null;   // aktuální videoId na /live (null = offline)
   const chatFor: string[] = [];

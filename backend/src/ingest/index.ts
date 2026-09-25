@@ -4,7 +4,7 @@ import { toRow } from './normalize.js';
 import { TwitchListener, type Logger } from './twitch.js';
 import { KickListener } from './kick.js';
 import { YouTubeListener } from './youtube.js';
-import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
 
 export interface IngestStatus {
   twitch: PlatformStatus;
@@ -21,7 +21,7 @@ interface CreateOpts {
   log: Logger;
   insert?: typeof insertMessages;
   deleteOld?: typeof deleteOlderThan;
-  listenerFactory?: (c: IngestChannel, onMessage: (m: IngestMessage) => void) => IngestListener;
+  listenerFactory?: (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void) => IngestListener;
   flushMs?: number;
   retentionMs?: number;
   /**
@@ -30,13 +30,15 @@ interface CreateOpts {
    * zaloguje a ingest jede dál.
    */
   onLive?: (m: IngestMessage) => void;
+  /** Smazání zprávy na platformě (Twitch CLEARMSG, Kick, YouTube) — server ho napojuje na publishDeleted. Chyba se zaloguje a ingest jede dál. */
+  onDelete?: (d: IngestDelete) => void;
 }
 
 function defaultFactory(log: Logger) {
-  return (c: IngestChannel, onMessage: (m: IngestMessage) => void): IngestListener => {
-    if (c.platform === 'twitch') return new TwitchListener(c.channel, onMessage, { log });
-    if (c.platform === 'kick') return new KickListener(c.channel, onMessage, { log });
-    return new YouTubeListener(c.channel, onMessage, { log });
+  return (c: IngestChannel, onMessage: (m: IngestMessage) => void, onDelete?: (d: IngestDelete) => void): IngestListener => {
+    if (c.platform === 'twitch') return new TwitchListener(c.channel, onMessage, { log, onDelete });
+    if (c.platform === 'kick') return new KickListener(c.channel, onMessage, { log, onDelete });
+    return new YouTubeListener(c.channel, onMessage, { log, onDelete });
   };
 }
 
@@ -89,6 +91,11 @@ export function createIngest(opts: CreateOpts) {
     if (!flushTimer) flushTimer = setTimeout(() => void flush(), flushMs);
   };
 
+  const onDelete = (d: IngestDelete) => {
+    if (!opts.onDelete) return;
+    try { opts.onDelete(d); } catch (err) { opts.log.error({ err }, 'chat ingest: onDelete selhal'); }
+  };
+
   const runRetention = async () => {
     if (!(opts.retentionDays > 0)) return; // 0 = bez retence
     try {
@@ -106,7 +113,7 @@ export function createIngest(opts: CreateOpts) {
       started = true;
       if (!opts.channels.length) return;
       for (const c of opts.channels) {
-        const l = factory(c, onMessage);
+        const l = factory(c, onMessage, onDelete);
         listeners.set(`${c.platform}:${c.channel}`, l);
         l.start();
       }
@@ -129,7 +136,7 @@ export function createIngest(opts: CreateOpts) {
     ensureChannel(c: IngestChannel): boolean {
       const key = `${c.platform}:${c.channel.toLowerCase()}`;
       if (listeners.has(key)) return false;
-      const l = factory({ platform: c.platform, channel: c.channel.toLowerCase() }, onMessage);
+      const l = factory({ platform: c.platform, channel: c.channel.toLowerCase() }, onMessage, onDelete);
       listeners.set(key, l);
       if (started) l.start();
       return true;

@@ -31,6 +31,8 @@ import { toRow } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
 import { startMailKeepalive } from './lib/mailKeepalive.js';
+import { publishDeleted } from './lib/messageDeletes.js';
+import { ucChannelFor } from './lib/ucChannel.js';
 
 const startedAt = Date.now();
 
@@ -80,6 +82,13 @@ const ingest = createIngest({
     publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
     publishIntegration(m);
+  },
+  // Smazání na platformě (Twitch CLEARMSG, Kick, YouTube) — moderace §mazání. `d.channel`
+  // je platformní (Kick slug / YT handle), publishDeleted potřebuje UC kanál (ucChannelFor).
+  onDelete: (d) => {
+    ucChannelFor(d.platform, d.channel)
+      .then((channel) => publishDeleted({ channel, platform: d.platform, messageId: d.messageId, by: null, reason: 'platform' }))
+      .catch((err) => app.log.warn({ err: (err as Error)?.message, platform: d.platform }, 'chat ingest: onDelete (mazání z platformy) selhalo'));
   },
 });
 app.addHook('onReady', async () => {

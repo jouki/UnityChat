@@ -58,3 +58,21 @@ test('TwitchListener: po close se reconnectne s backoffem a stop() reconnect zru
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(FakeWs.instances.length, 2, 'po stop() žádný další pokus');
 });
+
+test('TwitchListener: CLEARMSG → onDelete, nejde do onMessage', () => {
+  FakeWs.instances = [];
+  const got: IngestMessage[] = [];
+  const deleted: { platform: string; channel: string; messageId: string }[] = [];
+  const l = new TwitchListener('robdiesalot', (m) => got.push(m), {
+    WebSocketCtor: FakeWs as unknown as typeof WebSocket,
+    log: silent,
+    onDelete: (d) => deleted.push(d),
+  });
+  l.start();
+  const ws = FakeWs.instances[0];
+  ws.open();
+  ws.recv('@login=foo;target-msg-id=abc-123;tmi-sent-ts=1 :tmi.twitch.tv CLEARMSG #robdiesalot :text\r\n');
+  assert.equal(got.length, 0);
+  assert.deepEqual(deleted, [{ platform: 'twitch', channel: 'robdiesalot', messageId: 'abc-123' }]);
+  l.stop();
+});

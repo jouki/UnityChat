@@ -9,20 +9,20 @@ test('deletedEvent: tvar SSE message-deleted', () => {
   assert.deepEqual(e, { channel: 'robdiesalot', platform: 'twitch', messageId: 'abc', by: 'twitch:jouki', reason: 'mod', at: 1700000000000 });
 });
 
-test('publishDeleted: broadcast s kanálem z DB (markDeleted ho vrátil)', async () => {
+test('publishDeleted: broadcast vždy s kanálem z parametru p.channel (DB řádek má platformní kanál, ne UC kanál)', async () => {
   const calls: { event: string; data: object }[] = [];
   const deps: PublishDeletedDeps = {
-    markDeleted: async () => ({ channel: 'robdiesalot', login: 'nekdo' }),
+    markDeleted: async () => ({ channel: 'jiny-platformni-kanal', login: 'nekdo' }),
     broadcast: (event, data) => { calls.push({ event, data }); },
     now: () => 1700000000000,
   };
-  await publishDeleted({ channel: 'fallback', platform: 'twitch', messageId: 'pd-1', by: 'twitch:jouki', reason: 'mod' }, deps);
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'pd-1', by: 'twitch:jouki', reason: 'mod' }, deps);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].event, 'message-deleted');
   assert.deepEqual(calls[0].data, { channel: 'robdiesalot', platform: 'twitch', messageId: 'pd-1', by: 'twitch:jouki', reason: 'mod', at: 1700000000000 });
 });
 
-test('publishDeleted: fallback kanál z parametru, když markDeleted řádek nenajde', async () => {
+test('publishDeleted: kanál z parametru i když markDeleted řádek nenajde (neznámé/už smazané ID)', async () => {
   const calls: { event: string; data: object }[] = [];
   const deps: PublishDeletedDeps = {
     markDeleted: async () => ({ channel: null, login: null }),

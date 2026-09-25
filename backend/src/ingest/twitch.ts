@@ -1,5 +1,5 @@
-import { normalizeTwitchPrivmsg } from './normalize.js';
-import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import { normalizeTwitchPrivmsg, parseIrcLine } from './normalize.js';
+import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
 
 export interface Logger {
   info(o: object, msg: string): void;
@@ -8,7 +8,7 @@ export interface Logger {
 }
 export const noopLog: Logger = { info() {}, warn() {}, error() {} };
 
-interface Opts { WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number }
+interface Opts { WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number; onDelete?: (d: IngestDelete) => void }
 
 /**
  * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
@@ -26,6 +26,7 @@ export class TwitchListener implements IngestListener {
   private readonly Ctor: typeof WebSocket;
   private readonly log: Logger;
   private readonly baseMs: number;
+  private readonly onDelete?: (d: IngestDelete) => void;
 
   constructor(
     private readonly channel: string,
@@ -35,6 +36,7 @@ export class TwitchListener implements IngestListener {
     this.Ctor = opts.WebSocketCtor ?? WebSocket;
     this.log = opts.log ?? noopLog;
     this.baseMs = opts.reconnectBaseMs ?? 1000;
+    this.onDelete = opts.onDelete;
   }
 
   status() { return this.st; }
@@ -80,6 +82,13 @@ export class TwitchListener implements IngestListener {
       for (const line of data.split('\r\n')) {
         if (!line) continue;
         if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
+        if (line.includes('CLEARMSG')) {
+          const id = parseIrcLine(line)?.tags['target-msg-id'];
+          if (id && this.onDelete) {
+            try { this.onDelete({ platform: 'twitch', channel: this.channel, messageId: id }); } catch (err) { this.log.error({ err }, 'twitch ingest: onDelete threw'); }
+          }
+          continue;
+        }
         if (!line.includes('PRIVMSG')) continue;
         const m = normalizeTwitchPrivmsg(line, this.channel);
         if (!m) continue;

@@ -220,6 +220,12 @@ export function normalizeYoutubeAction(action: unknown, channel: string): Ingest
   };
 }
 
+/** Smazání zprávy v live chatu: mod (removeChatItemAction) nebo automod/systém (markChatItemAsDeletedAction). */
+export function normalizeYoutubeDelete(action: unknown): string | null {
+  const a = action as { markChatItemAsDeletedAction?: { targetItemId?: string }; removeChatItemAction?: { targetItemId?: string } };
+  return a?.markChatItemAsDeletedAction?.targetItemId || a?.removeChatItemAction?.targetItemId || null;
+}
+
 // ------------------------------------------------------------------- Row --
 
 export function toRow(m: IngestMessage): NewMessage {
