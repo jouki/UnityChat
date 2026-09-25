@@ -57,6 +57,18 @@ test('publishRestored: chyba integrace neshodí obnovení', async () => {
   assert.equal(sent.length, 1);
 });
 
+test('publishRestored: odkrytí modem (bez autora, se skutečným důvodem) → značka proti ozvěně; gif_request značku nedá', async () => {
+  const { d, marks } = deps(row());
+  const remembered: string[] = [];
+  d.remember = (platform, id) => { remembered.push(`${platform}:${id}`); };
+  const { userId: _u, ...noUser } = P;
+  assert.equal(await publishRestored({ ...noUser, reason: 'platform' }, d), 'ok');
+  assert.deepEqual(marks[0], { platform: 'twitch', messageId: 'm1', platformChannel: 'robdiesalot', reason: 'platform' });
+  assert.deepEqual(remembered, ['twitch:m1']);
+  assert.equal(await publishRestored({ ...P, reason: 'gif_request' }, d), 'ok');
+  assert.deepEqual(remembered, ['twitch:m1']);
+});
+
 test('restoreOnPermit: bez messageId nic; s ním přes platformní kanál; chyby do výsledku', async () => {
   const log = { warn() {} };
   let called: unknown = null;

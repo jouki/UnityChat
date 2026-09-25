@@ -110,6 +110,15 @@ const recentlyPublished = new Map<string, number>();
 export async function publishDeleted(p: PublishDeletedParams, deps: PublishDeletedDeps = defaultDeps): Promise<void> {
   const key = `${p.platform}:${p.messageId}`;
   const t = deps.now();
+  // Zpráva odkrytá modem (POST /moderation/restore, permit): na platformě zůstává smazaná, takže
+  // každé další smazání z platformy (CLEARMSG, Kick, YouTube) je jen ozvěna — nesmí ji znovu schovat.
+  // Smazání modem / filtrem značku ruší (je to nové rozhodnutí).
+  const restoredAt = restoredByMod.get(key);
+  if (restoredAt !== undefined) {
+    if (t - restoredAt >= RESTORED_MS) restoredByMod.delete(key);
+    else if (p.reason === 'platform') return;
+    else restoredByMod.delete(key);
+  }
   const last = recentlyPublished.get(key);
   if (last !== undefined && t - last < DEDUP_MS) return;
   // Dedup se zapíše až po úspěšném zápisu — když DB selže, opakování do 60 s musí projít.
@@ -128,6 +137,22 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
 /** Zapomenout dedup smazání (obnovení permitem, část 3) — další smazání téže zprávy musí zase projít. */
 export function forgetPublished(platform: Platform, messageId: string): void {
   recentlyPublished.delete(`${platform}:${messageId}`);
+}
+
+/** Jak dlouho se po odkrytí ignoruje smazání téže zprávy z platformy (ozvěna CLEARMSG / Kick / YouTube). */
+export const RESTORED_MS = 30 * 60_000;
+const restoredByMod = new Map<string, number>();
+
+/**
+ * Zpráva byla v UnityChatu odkrytá, ale na platformě zůstává smazaná → další `reason: 'platform'`
+ * pro ni v publishDeleted je ozvěna, RESTORED_MS se ignoruje. Ne pro gif_request (tam se na
+ * platformě nic nesmazalo, pozdější smazání z platformy je skutečné).
+ */
+export function rememberRestored(platform: Platform, messageId: string, now: number = Date.now()): void {
+  restoredByMod.set(`${platform}:${messageId}`, now);
+  if (restoredByMod.size > 1000) {
+    for (const [k, at] of restoredByMod) if (now - at >= RESTORED_MS) restoredByMod.delete(k);
+  }
 }
 
 /** messages.channel zprávy (platformní kanál, jak ho uložil ingest); null = v archivu není. */

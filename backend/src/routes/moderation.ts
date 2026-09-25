@@ -8,6 +8,7 @@
 //   POST /moderation/user   { channel, platform, userId, action: timeout|ban|unban, durationSec?, reason? }   (část 2)
 //   POST /moderation/warn   { channel, platform, userId, reason }
 //   POST /moderation/permit { channel, platform, userId, durationSec, messageId? }   (messageId: obnovení zprávy smazané filtrem odkazů, část 3)
+//   POST /moderation/restore { channel, platform, messageId }   (odkrýt smazanou/skrytou zprávu jen v UnityChatu)
 //   PUT  /moderation/nickname { channel, platform, login, nickname|null, color? }
 //   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
 //   GET  /moderation/user-history/{summary,messages,donations}   (Profil uživatele — routes/userHistory.ts)
@@ -24,7 +25,8 @@ import { moderationActions, messages, type NewModerationAction } from '../db/sch
 import { and, eq, inArray } from 'drizzle-orm';
 import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
-import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
+import { publishDeleted, archivedMessageChannel, channelMatches, type DeleteReason } from '../lib/messageDeletes.js';
+import { publishUnhidden, type HideParams, type HideResult } from '../lib/messageHides.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, MAX_TIMEOUT_SEC, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resolveUserTargets, dbTargetDeps, archivedUserByLogin, makeTargetRole } from '../lib/moderationTargets.js';
@@ -34,7 +36,7 @@ import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forge
 import { runUserAction, runWarn, runPermit, runRename, MAX_PERMIT_SEC, type UserActionDeps } from '../lib/userModActions.js';
 import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
 import { storePermits } from '../lib/linkFilter.js';
-import { restoreOnPermit, publishRestored } from '../lib/linkRestore.js';
+import { restoreOnPermit, publishRestored, type RestoreParams, type RestoreResult } from '../lib/linkRestore.js';
 import { sendAsAccount } from '../lib/accountSend.js';
 import { sendAsBot, BotSendError } from '../lib/botSend.js';
 import { outgoingText } from '../lib/webSend.js';
@@ -262,6 +264,83 @@ export async function runDeletedContent(
   return { status: 200, body: { ok: true, messages: await buildDeletedContent(g.channel, keys, deps) } };
 }
 
+// ---- Odkrytí zprávy jen v UnityChatu (smazaná / skrytá → zase vidět; na platformě zůstává smazaná) ----
+export const RestoreBody = z.object({
+  channel: z.string().min(1).max(40).optional(),
+  platform: PlatformEnum,
+  messageId: z.string().min(1).max(128),
+});
+
+/** Důvody smazání, které smí mod v UnityChatu odkrýt. gif_request rozhoduje karta GIFu, jiné/null nic. */
+export const RESTORABLE_REASONS = ['mod', 'platform', 'link_filter'] as const;
+
+export type RestoreState = { channel: string; deletedAt: Date | null; deletedReason: string | null; hiddenAt: Date | null };
+
+export interface RestoreDeps {
+  /** Platformní kanál UC kanálu (registr). */
+  platformChannel: (channel: string, platform: Platform) => Promise<string | null>;
+  /** Stav zprávy v archivu; null = není. */
+  messageState: (platform: Platform, messageId: string) => Promise<RestoreState | null>;
+  publishRestored: (p: RestoreParams) => Promise<RestoreResult>;
+  publishUnhidden: (p: HideParams) => Promise<HideResult>;
+  recordAction: (v: NewModerationAction) => Promise<void>;
+  log: { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
+}
+
+export type RestoreOutcome = 'ok' | 'not_deleted' | 'not_found';
+
+/**
+ * `POST /moderation/restore` bez HTTP (mod už ověřený branou): zpráva musí patřit kanálu gate.
+ * Smazaná (mod | platform | link_filter) → publishRestored (SSE message-restored + chat.restored,
+ * značka proti ozvěně smazání z platformy), záznam `restore` s původním důvodem; skrytá → publishUnhidden,
+ * záznam `unhide`. gif_request → 409 gif_pending, jiný důvod → 409 not_restorable.
+ */
+export async function runRestore(
+  g: Pick<Gate, 'channel' | 'accountId' | 'by'>,
+  b: { platform: Platform; messageId: string },
+  deps: RestoreDeps,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { platform, messageId } = b;
+  const want = await deps.platformChannel(g.channel, platform);
+  const state = want ? await deps.messageState(platform, messageId) : null;
+  if (!want || !state || !channelMatches(state.channel, want)) {
+    deps.log.info({ accountId: g.accountId, channel: g.channel, platform }, 'moderation restore: zpráva mimo kanál / není v archivu');
+    return { status: 404, body: { ok: false, error: 'not_found', result: 'not_found' satisfies RestoreOutcome } };
+  }
+  const record = async (action: 'restore' | 'unhide', params: Record<string, unknown>, result: Record<string, unknown>) => {
+    try { await deps.recordAction({ channel: g.channel, accountId: g.accountId, actor: g.by, action, platform, targetMessageId: messageId, params, result }); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'moderation restore: zápis do moderation_actions selhal'); }
+  };
+
+  let done = false;
+  if (state.deletedAt) {
+    const reason = state.deletedReason;
+    if (reason === 'gif_request') return { status: 409, body: { ok: false, error: 'gif_pending' } };
+    if (!(RESTORABLE_REASONS as readonly string[]).includes(reason ?? '')) return { status: 409, body: { ok: false, error: 'not_restorable' } };
+    const r = await deps.publishRestored({ channel: g.channel, platform, messageId, platformChannel: want, by: g.by, reason: reason as DeleteReason });
+    await record('restore', { reason }, { restore: r });
+    done = r === 'ok';
+  }
+  if (state.hiddenAt) {
+    const r = await deps.publishUnhidden({ channel: g.channel, platform, messageId, by: g.by });
+    await record('unhide', {}, { unhide: r });
+    done = done || r === 'ok';
+  }
+  const result: RestoreOutcome = done ? 'ok' : 'not_deleted';
+  return { status: 200, body: { ok: true, result } };
+}
+
+const restoreStateDeps = {
+  messageState: async (platform: Platform, messageId: string): Promise<RestoreState | null> => {
+    const rows = await db
+      .select({ channel: messages.channel, deletedAt: messages.deletedAt, deletedReason: messages.deletedReason, hiddenAt: messages.hiddenAt })
+      .from(messages)
+      .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId)))
+      .limit(1);
+    return rows[0] ?? null;
+  },
+};
+
 const deletedContentDeps: DeletedContentDeps = {
   platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
   rows: (platform, ids) => db.select().from(messages).where(and(eq(messages.platform, platform), inArray(messages.platformMessageId, ids))),
@@ -468,6 +547,24 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
         out.body.restored = restore === 'ok';
       }
     }
+    return reply.code(out.status).send(out.body);
+  });
+
+  // ---- odkrytí smazané / skryté zprávy jen v UnityChatu (na platformě zůstává smazaná) ----
+  app.post('/moderation/restore', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = RestoreBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const g = await modGate(req, reply, body.data.channel);
+    if (!g) return reply;
+    const out = await runRestore(g, { platform: body.data.platform, messageId: body.data.messageId }, {
+      platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
+      messageState: restoreStateDeps.messageState,
+      publishRestored: (p) => publishRestored(p),
+      publishUnhidden: (p) => publishUnhidden(p),
+      recordAction,
+      log: req.log,
+    });
+    if (out.status === 200) req.log.info({ accountId: g.accountId, channel: g.channel, platform: body.data.platform, result: out.body.result }, 'moderation restore');
     return reply.code(out.status).send(out.body);
   });
 

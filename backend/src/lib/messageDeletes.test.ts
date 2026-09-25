@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deletedEvent, publishDeleted, channelMatches, type PublishDeletedDeps, type MarkDeletedParams } from './messageDeletes.js';
+import { deletedEvent, publishDeleted, channelMatches, rememberRestored, RESTORED_MS, type PublishDeletedDeps, type MarkDeletedParams } from './messageDeletes.js';
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -103,6 +103,22 @@ test('publishDeleted: když markDeleted selže, dedup se nezapíše — opaková
   assert.equal(broadcasts, 1);
   await publishDeleted(p, deps); // teď už dedup
   assert.equal(markCalls, 2);
+});
+
+test('publishDeleted: po odkrytí modem se smazání z platformy (ozvěna) ignoruje RESTORED_MS; smazání modem projde a značku zruší', async () => {
+  let t = 1_800_000_000_000;
+  let broadcasts = 0;
+  const deps: PublishDeletedDeps = { markDeleted: async () => ({ channel: null, login: null }), broadcast: () => { broadcasts++; }, now: () => t };
+  rememberRestored('twitch', 'rr-1', t);
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'rr-1', by: null, reason: 'platform' }, deps);
+  assert.equal(broadcasts, 0);
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'rr-1', by: 'twitch:jouki', reason: 'mod' }, deps);
+  assert.equal(broadcasts, 1);
+  // Po uplynutí okna smazání z platformy zase projde.
+  rememberRestored('kick', 'rr-2', t);
+  t += RESTORED_MS;
+  await publishDeleted({ channel: 'robdiesalot', platform: 'kick', messageId: 'rr-2', by: null, reason: 'platform' }, deps);
+  assert.equal(broadcasts, 2);
 });
 
 test('markDeleted: nastaví deleted_* jen když ještě není smazaná; vrátí channel+login', { skip: !url && 'TEST_DATABASE_URL není nastavené' }, async () => {

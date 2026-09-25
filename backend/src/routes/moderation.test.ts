@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, parseDeletedKeys, buildDeletedContent, runDeletedContent, DELETED_CONTENT_MAX, type DeleteTargetDeps, type DeletedContentRow } from './moderation.js';
+import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes, resolveDeleteTarget, resolveModGate, UserActionBody, PermitBody, RenameBody, WarnBody, parseDeletedKeys, buildDeletedContent, runDeletedContent, DELETED_CONTENT_MAX, runRestore, RestoreBody, type RestoreDeps, type RestoreState, type DeleteTargetDeps, type DeletedContentRow } from './moderation.js';
 
 test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotazu na role), mod → by + platformy', async () => {
   let asked = 0;
@@ -183,4 +183,87 @@ test('runDeletedContent: nemod → 403 not_mod a DB se nedotkne; neplatné ids �
   const ok = await runDeletedContent({ accountId: 1, channel: 'RobDiesALot', ids: 'twitch:m1', fallback: 'x' }, { ...deletedDeps([dRow({})]), modIdentities: mod });
   assert.equal(ok.status, 200);
   assert.equal((ok.body.messages as Record<string, { message: string }>)['twitch:m1'].message, 'tst');
+});
+
+// ---- POST /moderation/restore ----
+function restoreDeps(state: RestoreState | null, over: Partial<RestoreDeps> = {}) {
+  const calls: Array<[string, unknown]> = [];
+  const d: RestoreDeps = {
+    platformChannel: async (_c, p) => (p === 'youtube' ? null : 'robdiesalot'),
+    messageState: async () => state,
+    publishRestored: async (p) => { calls.push(['restored', p]); return 'ok'; },
+    publishUnhidden: async (p) => { calls.push(['unhidden', p]); return 'ok'; },
+    recordAction: async (v) => { calls.push(['record', v]); },
+    log: { info() {}, warn() {} },
+    ...over,
+  };
+  return { d, calls };
+}
+const G = { channel: 'robdiesalot', accountId: 7, by: 'twitch:modik' };
+const st = (o: Partial<RestoreState>): RestoreState => ({ channel: 'robdiesalot', deletedAt: null, deletedReason: null, hiddenAt: null, ...o });
+
+test('RestoreBody: platforma + messageId povinné', () => {
+  assert.equal(RestoreBody.safeParse({ platform: 'twitch', messageId: 'm1' }).success, true);
+  assert.equal(RestoreBody.safeParse({ platform: 'x', messageId: 'm1' }).success, false);
+  assert.equal(RestoreBody.safeParse({ platform: 'twitch' }).success, false);
+});
+
+test('runRestore: smazaná modem / platformou / filtrem → publishRestored se skutečným důvodem + záznam restore', async () => {
+  for (const reason of ['mod', 'platform', 'link_filter']) {
+    const { d, calls } = restoreDeps(st({ deletedAt: new Date(), deletedReason: reason }));
+    const out = await runRestore(G, { platform: 'twitch', messageId: 'm1' }, d);
+    assert.equal(out.status, 200);
+    assert.deepEqual(out.body, { ok: true, result: 'ok' });
+    assert.deepEqual(calls[0], ['restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', platformChannel: 'robdiesalot', by: 'twitch:modik', reason }]);
+    const rec = calls[1][1] as { action: string; params: { reason: string }; actor: string; accountId: number; targetMessageId: string };
+    assert.equal(rec.action, 'restore');
+    assert.equal(rec.params.reason, reason);
+    assert.equal(rec.actor, 'twitch:modik');
+    assert.equal(rec.accountId, 7);
+    assert.equal(rec.targetMessageId, 'm1');
+  }
+});
+
+test('runRestore: gif_request → 409 gif_pending, neznámý důvod → 409 not_restorable, nic se neposílá', async () => {
+  const a = restoreDeps(st({ deletedAt: new Date(), deletedReason: 'gif_request' }));
+  const out = await runRestore(G, { platform: 'twitch', messageId: 'm1' }, a.d);
+  assert.equal(out.status, 409);
+  assert.equal(out.body.error, 'gif_pending');
+  assert.equal(a.calls.length, 0);
+  const b = restoreDeps(st({ deletedAt: new Date(), deletedReason: null }));
+  assert.equal((await runRestore(G, { platform: 'twitch', messageId: 'm1' }, b.d)).body.error, 'not_restorable');
+  assert.equal(b.calls.length, 0);
+});
+
+test('runRestore: skrytá → publishUnhidden + záznam unhide; smazaná i skrytá → obojí', async () => {
+  const a = restoreDeps(st({ hiddenAt: new Date() }));
+  assert.deepEqual((await runRestore(G, { platform: 'twitch', messageId: 'h1' }, a.d)).body, { ok: true, result: 'ok' });
+  assert.deepEqual(a.calls.map((c) => c[0]), ['unhidden', 'record']);
+  assert.equal((a.calls[1][1] as { action: string }).action, 'unhide');
+  const b = restoreDeps(st({ hiddenAt: new Date(), deletedAt: new Date(), deletedReason: 'mod' }));
+  await runRestore(G, { platform: 'twitch', messageId: 'h1' }, b.d);
+  assert.deepEqual(b.calls.map((c) => c[0]), ['restored', 'record', 'unhidden', 'record']);
+});
+
+test('runRestore: nesmazaná → not_deleted; cizí kanál / není v archivu / platforma mimo registr → 404, nic se neposílá', async () => {
+  const a = restoreDeps(st({}));
+  assert.deepEqual((await runRestore(G, { platform: 'twitch', messageId: 'm1' }, a.d)).body, { ok: true, result: 'not_deleted' });
+  assert.equal(a.calls.length, 0);
+  const cases: Array<[RestoreState | null, 'twitch' | 'youtube']> = [
+    [st({ channel: 'cizi', deletedAt: new Date(), deletedReason: 'mod' }), 'twitch'],
+    [null, 'twitch'],
+    [st({ deletedAt: new Date(), deletedReason: 'mod' }), 'youtube'],
+  ];
+  for (const [state, platform] of cases) {
+    const x = restoreDeps(state);
+    const out = await runRestore(G, { platform, messageId: 'm1' }, x.d);
+    assert.equal(out.status, 404);
+    assert.equal(out.body.result, 'not_found');
+    assert.equal(x.calls.length, 0);
+  }
+});
+
+test('runRestore: souběh (už obnovená jiným modem) → not_deleted; chyba zápisu záznamu neshodí odkrytí', async () => {
+  const a = restoreDeps(st({ deletedAt: new Date(), deletedReason: 'mod' }), { publishRestored: async () => 'not_found', recordAction: async () => { throw new Error('db'); } });
+  assert.deepEqual((await runRestore(G, { platform: 'twitch', messageId: 'm1' }, a.d)).body, { ok: true, result: 'not_deleted' });
 });

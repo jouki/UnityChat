@@ -226,7 +226,8 @@ v DB zruší a jde SSE
   "message": { "platform": "twitch", "id": "abc", "username": "divak", "message": "koukni na neco.cz", "...": "..." } }
 ```
 jako `event: message-restored` (tvar `message` = `/chat/history`) + `chat.restored { workspace, platform, messageId, by }`
-do integračního streamu. Na platformě zpráva zůstává smazaná. Smazání modem / platformou se neobnovuje.
+do integračního streamu. Na platformě zpráva zůstává smazaná. Smazání modem / platformou se permitem neobnovuje (na to je
+„Odkrýt zprávu“, `POST /moderation/restore`, viz níže).
 Odpověď navíc: `results.restore` = `'ok' | 'not_found' | 'error:no_channel' | 'error:db'` a `restored: boolean`
 (jen když přišlo `messageId`). Klient (addon `_unhideMessage(d, { restore: true })`, core `buildModRequest`)
 zprávu vykreslí na místě z `message`; hláška permitu doplní „zpráva obnovena“.
@@ -381,6 +382,36 @@ Bearer + mod `channel` (`resolveModGate`, nemod → `403 not_mod`, DB se nečte)
   smazanou/skrytou zprávu bez obsahu, `reset()` při přepnutí kanálu. Vzhled: `deletedView({ style, isMod, raw, hidden })`
   → `{ mode, dimmed, tag }` pro `applyDeleted(el, { mode, dimmed, tag, hasContent, hidden })` — mod má vždy ztlumení
   + štítek, nastavení volí přeškrtnutí (`strike`) / ztlumený text (`dim`) / „Zpráva smazána“ (`label`, i `hide`).
+
+## Odkrytí zprávy jen v UnityChatu (2026-09-25)
+Mod u **smazané** nebo **skryté** zprávy místo „Smazat zprávu“ vidí „Odkrýt zprávu“ (nabídka) a ikonu oka
+v hover akcích (tooltip „Odkrýt zprávu (jen v UnityChatu)“). Zpráva se znovu zobrazí všem v UnityChatu
+(addon, web, OBS); **na platformě zůstává smazaná** (platformy obnovení neumí).
+
+### `POST /moderation/restore { channel?, platform, messageId }`
+Bearer + brána moda (`modGate`: rate limit per účet 10 + 2/s → 429 `rate_limited`, kanál → 400 `channel`,
+nemod → 403 `not_mod`), tělo špatně → 400 `body`. Zpráva musí být v archivu a patřit platformnímu kanálu
+`channel` (registr + `channelMatches`, jako u delete), jinak **404** `{ ok:false, error:'not_found', result:'not_found' }`.
+
+| Stav zprávy | Co se stane | Odpověď |
+|---|---|---|
+| smazaná, `deleted_reason` `mod` / `platform` / `link_filter` | `deleted_*` = NULL (`markRestored` s tímto důvodem), SSE `message-restored` s celou zprávou + integrační `chat.restored`, `moderation_actions` `action:'restore'`, `params.reason` = původní důvod, `result.restore` | `200 { ok:true, result:'ok' }` |
+| smazaná, `gif_request` | nic (o GIFu rozhoduje karta ke schválení) | `409 { ok:false, error:'gif_pending' }` |
+| smazaná, jiný / prázdný důvod | nic | `409 { ok:false, error:'not_restorable' }` |
+| skrytá (`hidden_at`) | `publishUnhidden` (SSE `message-unhidden` + `chat.unhidden`), `moderation_actions` `action:'unhide'` | `200 { ok:true, result:'ok' }` |
+| smazaná i skrytá | obojí v tomto pořadí | `200 { ok:true, result:'ok' }` |
+| ani jedno (nebo mezitím odkryl jiný mod) | nic | `200 { ok:true, result:'not_deleted' }` |
+
+**Ozvěna smazání z platformy.** Po odkrytí server zprávu na **30 min** (`RESTORED_MS`) označí (`rememberRestored`,
+`lib/messageDeletes.ts`); `publishDeleted` s `reason:'platform'` (Twitch CLEARMSG, Kick, YouTube) ji v té době
+ignoruje — zpráva je na platformě smazaná, další smazání je jen ozvěna. Samotný 60s dedup `publishDeleted` nestačí:
+obnovení ho maže (`forgetPublished`) a ozvěna po vlastním smazání modem může přijít až po odkrytí. Smazání modem
+nebo filtrem značku zruší (nové rozhodnutí). Stejnou značku dává i obnovení permitem; obnovení po neúspěšném
+převodu GIFu ne (tam se na platformě nic nesmazalo). Značka je jen v paměti procesu (restart ji zapomene).
+
+Klient: `menuModel({ …, deleted: true })` → bez „Smazat zprávu“, s „Odkrýt zprávu“ (`buildModRequest('restore')`);
+po `message-restored` / `message-unhidden` (i od jiného moda) klient zprávu vykreslí zpět a v hover akcích
+se vrátí koš.
 
 ## Část 4 — odměna „Posílání GIFů" (backend `lib/gifMedia.ts`, `lib/gifAccess.ts`, `lib/gifRequests.ts`, `routes/gif.ts`)
 
