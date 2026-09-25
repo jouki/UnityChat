@@ -23,7 +23,8 @@ export function rowShut(places, rowHasOther) {
  * @param {HTMLElement} o.row            řádek nad polem pro psaní (dostane třídu uc-dock-row)
  * @param {HTMLElement} o.inlineParent   kontejner pole pro psaní (.msg-input-wrap) — jeho šířka
  *        rozhoduje (tlačítka v něm jsou absolutně, šířku pole nemění)
- * @param {Array<{ button: HTMLElement, minWidth: number, available?: () => boolean }>} o.items
+ * @param {Array<{ button: HTMLElement, minWidth: number | (() => number), available?: () => boolean }>} o.items
+ *        (minWidth jako funkce = práh se mění za běhu, např. mobil na výšku / na šířku)
  *        v pořadí zleva doprava v řádku. S `available` dock tlačítko i skrývá (atribut hidden);
  *        bez něj je vždy dostupné a skrytí řeší hostitel (nota bez soundboardu má třídu hidden).
  * @param {() => boolean} [o.rowHasOther] řádek má i jiný viditelný obsah
@@ -45,7 +46,8 @@ export function createToolDock({ row, inlineParent, items, rowHasOther = () => f
     const vis = inlineVisible();
     const before = new Map();
     for (const it of home) if (it.button.parentNode === row) before.set(it.button, it.button.getBoundingClientRect().left);
-    const places = home.map((it) => placeItem({ available: it.available ? it.available() : true, width, minWidth: it.minWidth, inlineVisible: vis }));
+    const places = home.map((it) => placeItem({ available: it.available ? it.available() : true, width,
+      minWidth: typeof it.minWidth === 'function' ? it.minWidth() : it.minWidth, inlineVisible: vis }));
 
     // Do pole zprava doleva, ať soused zprava už stojí na svém místě.
     for (let i = home.length - 1; i >= 0; i--) {
