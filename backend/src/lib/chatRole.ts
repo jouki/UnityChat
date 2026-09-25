@@ -4,6 +4,9 @@ import { and, desc, eq, gt, ilike } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { rolesFromBadges } from '../sse/integrationStream.js';
+import { listIdentities, type PublicIdentity } from './webAuth.js';
+import { registryPlatformChannel } from './modActions.js';
+import type { Platform } from './zidolista.js';
 
 export type ChatRole = 'broadcaster' | 'moderator' | 'vip' | 'sub' | 'viewer';
 const RANK: ChatRole[] = ['viewer', 'sub', 'vip', 'moderator', 'broadcaster'];
@@ -34,4 +37,46 @@ export async function chatRole(platform: 'twitch' | 'kick' | 'youtube', login: s
     if (RANK.indexOf(role) > RANK.indexOf(best)) best = role;
   }
   return best;
+}
+
+/** Identita propojeného účtu UnityChatu, kde je mod/broadcaster kanálu. */
+export interface AccountModIdentity {
+  platform: Platform;
+  login: string;
+}
+
+export interface AccountModDeps {
+  listIdentities: (accountId: number) => Promise<Pick<PublicIdentity, 'platform' | 'login'>[]>;
+  registryPlatformChannel: (channel: string, platform: Platform) => Promise<string | null>;
+  chatRole: (platform: Platform, login: string, channel: string) => Promise<ChatRole>;
+}
+
+const defaultAccountModDeps: AccountModDeps = { listIdentities, registryPlatformChannel, chatRole };
+
+/**
+ * Propojené identity účtu (Task 6, moderace mazání), kde je uživatel mod/broadcaster kanálu.
+ * Role se VŽDY ověřuje přes platformní kanál té které platformy (Twitch = kanál sám, Kick/
+ * YouTube z registru Židolišty), NIKDY přes UC kanál napříč platformami — jinak by twitch mod
+ * dostal roli i na platformě, kde vůbec nechatuje. Platforma bez registrovaného kanálu (Kick/
+ * YouTube nenamapované) se přeskočí (žádný záznam, ne chyba).
+ */
+export async function accountModIdentities(
+  accountId: number,
+  channel: string,
+  deps: AccountModDeps = defaultAccountModDeps,
+): Promise<AccountModIdentity[]> {
+  const ids = await deps.listIdentities(accountId);
+  const out: AccountModIdentity[] = [];
+  for (const i of ids) {
+    const platformChannel = await deps.registryPlatformChannel(channel, i.platform);
+    if (!platformChannel) continue;
+    const role = await deps.chatRole(i.platform, i.login, platformChannel);
+    if (role === 'moderator' || role === 'broadcaster') out.push({ platform: i.platform, login: i.login });
+  }
+  return out;
+}
+
+/** Jen platformy z `accountModIdentities` — pro `GET /moderation/me` (tlačítko/nabídka scopes). */
+export async function accountModPlatforms(accountId: number, channel: string, deps?: AccountModDeps): Promise<Platform[]> {
+  return (await accountModIdentities(accountId, channel, deps)).map((m) => m.platform);
 }
