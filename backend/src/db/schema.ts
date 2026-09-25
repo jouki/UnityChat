@@ -103,6 +103,49 @@ export const moderationActions = pgTable(
   }),
 );
 
+// Moderace část 2 (backend/sql/2026-09-25-moderation-2.sql, ručně SQL).
+// Známé bany/timeouty: vlastní akce + Twitch CLEARCHAT. until null = permanentní; unban řádek maže.
+export const moderationBans = pgTable(
+  'moderation_bans',
+  {
+    channel: text('channel').notNull(),
+    platform: text('platform').notNull(),
+    targetUserId: text('target_user_id').notNull(),
+    targetLogin: text('target_login').notNull(),
+    until: timestamp('until', { withTimezone: true }),
+    youtubeBanId: text('youtube_ban_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.platform, t.targetUserId], name: 'moderation_bans_pkey' }) }),
+);
+
+// Permit odkazů (nabídka moda) — čte filtr odkazů v části 3.
+export const linkPermits = pgTable(
+  'link_permits',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),
+    platform: text('platform').notNull(),
+    targetUserId: text('target_user_id').notNull(),
+    targetLogin: text('target_login').notNull(),
+    until: timestamp('until', { withTimezone: true }).notNull(),
+    by: text('by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ targetIdx: index('link_permits_target_idx').on(t.channel, t.platform, t.targetUserId) }),
+);
+
+// Varování uživatele UnityChatu (napříč platformami), musí potvrdit.
+export const accountWarnings = pgTable('account_warnings', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  channel: text('channel').notNull(),
+  reason: text('reason').notNull(),
+  by: text('by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+});
+
 export const events = pgTable(
   'events',
   {

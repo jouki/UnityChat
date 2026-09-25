@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deletePlatformMessage, type ModDeps } from './modActions.js';
+import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, kickMinutes, type ModDeps } from './modActions.js';
 import { MOD_SCOPES } from './modScopes.js';
 import type { WorkspaceInfo, Platform } from './zidolista.js';
 
@@ -143,5 +143,119 @@ test('accountId null a bot chybí → error:no_actor', async () => {
   const r = await deletePlatformMessage({ accountId: null, channel: 'robdiesalot', platform: 'kick', messageId: 'k-z' },
     deps({ calls, identities: { mod: async () => modIdent('kick'), bot: async () => null, role: async () => 'broadcaster' } }));
   assert.equal(r, 'error:no_actor');
+  assert.equal(calls.length, 0);
+});
+
+// ---- část 2: timeout / ban / unban / varování ----
+function jsonFetch(responses: Array<{ status: number; body?: unknown }>, calls: Call[]) {
+  let i = 0;
+  return (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init || {} });
+    const r = responses[Math.min(i++, responses.length - 1)];
+    return new Response(r.body === undefined ? null : JSON.stringify(r.body), { status: r.status });
+  }) as typeof fetch;
+}
+const bodyOf = (c: Call) => JSON.parse(String(c.init.body));
+const modTw = { mod: async () => modIdent('twitch'), bot: async () => null, role: async () => 'moderator' as const };
+
+test('Twitch timeout: POST /moderation/bans s duration + reason, tokenem moda', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', durationSec: 300, reason: 'spam' },
+    deps({ calls, identities: modTw }));
+  assert.equal(r.result, 'ok');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].url, 'https://api.twitch.tv/helix/moderation/bans?broadcaster_id=b160&moderator_id=m1');
+  assert.deepEqual(bodyOf(calls[0]), { data: { user_id: 'u9', duration: 300, reason: 'spam' } });
+  assert.equal(auth(calls[0]), 'Bearer modtok');
+});
+
+test('Twitch ban (permanentní): bez duration', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', durationSec: null }, deps({ calls, identities: modTw }));
+  assert.equal(r.result, 'ok');
+  assert.deepEqual(bodyOf(calls[0]), { data: { user_id: 'u9' } });
+});
+
+test('Kick timeout 5 s → 1 minuta, broadcaster_user_id z kickBroadcasterId, botem', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'kick', userId: '77', durationSec: 5 },
+    deps({ calls, kickBroadcasterId: async () => '555', identities: { mod: async () => null, bot: async () => botIdent('kick'), role: async () => 'viewer' } }));
+  assert.equal(r.result, 'bot');
+  assert.equal(calls[0].url, 'https://api.kick.com/public/v1/moderation/bans');
+  assert.deepEqual(bodyOf(calls[0]), { broadcaster_user_id: 555, user_id: 77, duration: 1 });
+  assert.equal(kickMinutes(30), 1);
+  assert.equal(kickMinutes(61), 2);
+  assert.equal(kickMinutes(7200), 120);
+});
+
+test('YouTube timeout: liveChatId z videos.list, liveChatBans.insert temporary, vrátí id banu', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'youtube', userId: 'UCx', durationSec: 60 },
+    deps({ calls, youtubeVideoId: () => 'vid1', fetch: jsonFetch([
+      { status: 200, body: { items: [{ liveStreamingDetails: { activeLiveChatId: 'LC1' } }] } },
+      { status: 200, body: { id: 'BAN-1' } },
+    ], calls), identities: { mod: async () => modIdent('youtube'), bot: async () => null, role: async () => 'moderator' } }));
+  assert.equal(r.result, 'ok');
+  assert.equal(r.youtubeBanId, 'BAN-1');
+  assert.match(calls[0].url, /videos\?part=liveStreamingDetails&id=vid1/);
+  assert.equal(calls[1].url, 'https://www.googleapis.com/youtube/v3/liveChat/bans?part=snippet');
+  assert.deepEqual(bodyOf(calls[1]), { snippet: { liveChatId: 'LC1', type: 'temporary', bannedUserDetails: { channelId: 'UCx' }, banDurationSeconds: 60 } });
+});
+
+test('YouTube bez živého streamu → error:not_live, žádné volání platformy', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'youtube', userId: 'UCx', durationSec: null },
+    deps({ calls, identities: { mod: async () => modIdent('youtube'), bot: async () => null, role: async () => 'moderator' } }));
+  assert.equal(r.result, 'error:not_live');
+  assert.equal(calls.length, 0);
+});
+
+test('ban: 401 → refresh → retry', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', durationSec: 60 },
+    deps({ calls, statuses: [401, 200], identities: modTw }));
+  assert.equal(r.result, 'ok');
+  assert.equal(auth(calls[1]), 'Bearer newtok');
+});
+
+test('unban Twitch: DELETE s user_id; 400 (nebyl zabanovaný) = ok', async () => {
+  const calls: Call[] = [];
+  assert.equal(await unbanUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: 'u9' }, deps({ calls, statuses: [400], identities: modTw })), 'ok');
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.equal(calls[0].url, 'https://api.twitch.tv/helix/moderation/bans?broadcaster_id=b160&moderator_id=m1&user_id=u9');
+});
+
+test('unban Kick: DELETE s JSON tělem', async () => {
+  const calls: Call[] = [];
+  const r = await unbanUser({ accountId: 1, channel: 'robdiesalot', platform: 'kick', userId: '77' },
+    deps({ calls, kickBroadcasterId: async () => '555', identities: { mod: async () => modIdent('kick'), bot: async () => null, role: async () => 'moderator' } }));
+  assert.equal(r, 'ok');
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.deepEqual(bodyOf(calls[0]), { broadcaster_user_id: 555, user_id: 77 });
+});
+
+test('unban YouTube: bez id banu → error:no_ban_id; s id → DELETE liveChat/bans?id=', async () => {
+  const calls: Call[] = [];
+  const idents = { mod: async () => modIdent('youtube'), bot: async () => null, role: async () => 'moderator' as const };
+  assert.equal(await unbanUser({ accountId: 1, channel: 'robdiesalot', platform: 'youtube', userId: 'UCx' }, deps({ calls, identities: idents })), 'error:no_ban_id');
+  assert.equal(calls.length, 0);
+  assert.equal(await unbanUser({ accountId: 1, channel: 'robdiesalot', platform: 'youtube', userId: 'UCx', youtubeBanId: 'BAN-1' }, deps({ calls, identities: idents })), 'ok');
+  assert.equal(calls[0].url, 'https://www.googleapis.com/youtube/v3/liveChat/bans?id=BAN-1');
+});
+
+test('warn: Twitch POST /moderation/warnings; jiné platformy error:unsupported; prázdný důvod error:reason', async () => {
+  const calls: Call[] = [];
+  assert.equal(await warnUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', reason: ' Nespamuj ' }, deps({ calls, identities: modTw })), 'ok');
+  assert.equal(calls[0].url, 'https://api.twitch.tv/helix/moderation/warnings?broadcaster_id=b160&moderator_id=m1');
+  assert.deepEqual(bodyOf(calls[0]), { data: { user_id: 'u9', reason: 'Nespamuj' } });
+  assert.equal(await warnUser({ accountId: 1, channel: 'robdiesalot', platform: 'kick', userId: '1', reason: 'x' }, deps({ calls })), 'error:unsupported');
+  assert.equal(await warnUser({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', reason: '  ' }, deps({ calls })), 'error:reason');
+  assert.equal(calls.length, 1);
+});
+
+test('ban bez aktéra → error:no_actor', async () => {
+  const calls: Call[] = [];
+  const r = await banPlatformUser({ accountId: null, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', durationSec: 60 }, deps({ calls }));
+  assert.equal(r.result, 'error:no_actor');
   assert.equal(calls.length, 0);
 });
