@@ -63,3 +63,13 @@ Vše X-Api-Key + HMAC.
 - Webhook `reason:"sfx-request" { requestId, platform, userId, status, reason?, soundName? }`.
 - `gainDb` u každého zvuku v `GET /integrations/:slug/sound-effects` (`sounds[].gainDb`, 0 = beze změny); UC `/soundboard` ho propíše; změna = webhook sound-effects + nový ETag.
 - Pojistka Židolišty: max 20 prepare/den na requester a 100/den na workspace; limit 10/den + 30/měsíc drží UC backend podle UC účtu.
+
+## Změna 2026-09-25: YouTube přes embed + stahování na PC schvalovatele
+YouTube z IP serveru Židolišty většinu videí blokuje (PO token nepomohl, 1/6). User rozhodl:
+- `prepare` vrací `mode: 'server' | 'embed'`. mp3 vždy `server`. YouTube: když server stáhne → `server`;
+  jinak `{ mode:'embed', videoId, title|null, durationMs|null, peaks:null, previewUrl:null }`.
+- UC v režimu embed: `<iframe>` youtube-nocookie s `enablejsapi=1`, ovládání přes postMessage
+  protokol přehrávače (addon MV3 nesmí načíst YouTube IFrame API skript), stejný dvojitý posuvník
+  bez waveformu; fallback ruční časy od–do, když embed v extension originu nefunguje.
+- Po schválení v dashboardu stáhne úsek pomocník na PC schvalovatele (`zidolista-dl://`), nahraje
+  na server, server změří hlasitost → teprve pak `approved`. Selhání = zůstává `pending` s chybou v dashboardu.
