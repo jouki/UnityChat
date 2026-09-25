@@ -110,11 +110,17 @@ test('cíl mimo archiv kanálu → 404, žádné SSE, platforma ani zápis', asy
   assert.equal(actions.length, 0);
 });
 
-test('mod na sebe → 400 self, nic se neděje', async () => {
+test('mod na sebe: ban → 400 self, nic se neděje', async () => {
   const { deps, log } = actionDeps();
   const out = await runUserAction({ ...input, accountId: 50, action: 'ban', durationSec: null }, deps);
   assert.equal(out.status, 400);
   assert.deepEqual(log, []);
+});
+
+test('mod na sebe: timeout smí i jako mod (bez kontroly hierarchie)', async () => {
+  const { deps } = actionDeps({ targetRole: async () => 'moderator' });
+  const out = await runUserAction({ ...input, accountId: 50, action: 'timeout', durationSec: 60 }, deps);
+  assert.equal(out.status, 200);
 });
 
 test('výjimka platformy / evidence / logu → pořád 200, error:exception, bez SSE', async () => {

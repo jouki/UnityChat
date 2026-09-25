@@ -87,8 +87,11 @@ export interface UserActionDeps {
 export async function runUserAction(input: UserActionInput, deps: UserActionDeps): Promise<Out> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
-  if (input.accountId !== null && targets.accountId === input.accountId) return self;
-  const denied = await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
+  // Self-timeout pro srandu smí (pokyn usera 2026-09-25), ban/unban na sebe ne. Na sebe se hierarchie
+  // nekontroluje — jestli platforma timeout moda pustí, ukáže výsledek po platformách.
+  const isSelf = input.accountId !== null && targets.accountId === input.accountId;
+  if (isSelf && input.action !== 'timeout') return self;
+  const denied = isSelf ? null : await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
   if (denied) return denied;
   const { channel, action, by } = input;
   const timeout = action === 'timeout';
@@ -252,7 +255,7 @@ export interface PermitDeps {
 export async function runPermit(input: PermitInput, deps: PermitDeps): Promise<Out> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
-  if (input.accountId != null && targets.accountId === input.accountId) return self;
+  // Permit na sebe smí (pokyn usera 2026-09-25).
   const p = targets.primary;
   // Login jde doslova do chatu — nic mimo běžné znaky loginu (mezera by přidala další argumenty).
   if (!PERMIT_LOGIN_RE.test(p.login)) return { status: 400, body: { ok: false, error: 'bad_login' } };
