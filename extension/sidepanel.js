@@ -3885,11 +3885,12 @@ class UnityChat {
   _reportUcSent(platform, username, text, replyTo = null) {
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel || !username || username === 'me') return;
-    fetch(`${UC_API}/chat/uc-sent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    // Server bere hlášení jen od přihlášeného majitele účtu (Bearer session).
+    this._ucSessionToken().catch(() => null).then((token) => fetch(`${UC_API}/chat/uc-sent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ platform, channel, username, text, ...(replyTo ? { replyTo } : {}) }),
       signal: AbortSignal.timeout(8000),
-    }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+    })).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
   }
 
   /** ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami). */

@@ -17,6 +17,7 @@ import {
 import { refreshTokens } from '../lib/platformTokens.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
 import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
+import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -207,7 +208,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     };
 
     // Odpověď napříč platformami: nahlásit PŘED odesláním, echo z ingestu ji pak rovnou ponese.
-    const ucReply = body.data.replyTo ? null : parseUcReply(body.data.ucReplyTo);
+    // Citace z archivu, ne od klienta (podvržené citace, 2026-09-25).
+    const ucReply = body.data.replyTo ? null : await verifyUcReply(parseUcReply(body.data.ucReplyTo));
     if (ucReply) {
       const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text, data: ucReply });
       if (rh) attachUcReply(rh, ucReply, req.log, { late: true });

@@ -5,6 +5,9 @@ import { messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
 import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
+import { verifyUcReply } from '../lib/ucReplyVerify.js';
+import { listIdentities, requireWebSession } from '../lib/webAuth.js';
+import { ownsHandle } from './nicknames.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -184,18 +187,24 @@ export default async function chatRoutes(app: FastifyInstance) {
    * (`!…`, bez markeru) nahlásí, že ho poslal z UnityChatu; ingest pak zprávu označí
    * (lib/ucSends.ts) a klienti dostanou SSE `uc-mark` → zlaté logo. Jen commandy.
    */
-  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string; replyTo?: unknown } }>('/chat/uc-sent', async (req, reply) => {
+  // Jen přihlášený a jen za vlastní účet (dřív bez ověření → podvržené citace, 2026-09-25).
+  app.post<{ Body: { platform?: string; channel?: string; username?: string; text?: string; replyTo?: unknown } }>('/chat/uc-sent', { preHandler: requireWebSession }, async (req, reply) => {
     if (!ucLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const platform = String(req.body?.platform || '');
     const channel = String(req.body?.channel || '').toLowerCase().replace(/^@/, '');
     const username = String(req.body?.username || '').slice(0, 60);
     const text = String(req.body?.text || '').slice(0, 500);
     // Odpověď napříč platformami (záložní odesílání přes kartu): i zpráva, která není command.
-    const ucReply = parseUcReply(req.body?.replyTo);
     const isCmd = text.trim().startsWith('!');
-    if (!(PLATFORMS as readonly string[]).includes(platform) || !CHANNEL_RE.test(channel) || !username || (!isCmd && !ucReply)) {
+    if (!(PLATFORMS as readonly string[]).includes(platform) || !CHANNEL_RE.test(channel) || !username) {
       return reply.code(400).send({ ok: false, error: 'bad_request' });
     }
+    if (!ownsHandle(await listIdentities(req.webAccountId!), platform, username)) {
+      req.log.warn({ platform, username }, 'uc-sent: hlášení za cizí účet odmítnuto');
+      return reply.code(403).send({ ok: false, error: 'not_owner' });
+    }
+    const ucReply = await verifyUcReply(parseUcReply(req.body?.replyTo));
+    if (!isCmd && !ucReply) return reply.code(400).send({ ok: false, error: 'bad_request' });
     const ch = await platformChannel(platform, channel);
     let hit = null;
     if (isCmd) {
