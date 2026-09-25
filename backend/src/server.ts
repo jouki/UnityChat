@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { startNicknameNotify } from './lib/nicknameNotify.js';
 import cors from '@fastify/cors';
 import { config } from './config.js';
 import { pingDb, closeDb } from './db/index.js';
@@ -186,6 +187,8 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 
 try {
   await app.listen({ port: config.PORT, host: config.HOST });
+  // Změny přezdívek z DB (trigger) → SSE; selhání poslechu nesmí shodit server.
+  startNicknameNotify(app.log).catch((e) => app.log.error({ err: (e as Error).message }, 'nicknames: LISTEN selhal'));
 } catch (err) {
   app.log.error(err);
   process.exit(1);

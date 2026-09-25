@@ -3,7 +3,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { nicknames } from '../db/schema.js';
-import { addClient, broadcast, replaySince } from '../sse/bus.js';
+import { addClient, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
 
@@ -85,8 +85,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
         set: { nickname, color: colorValue, updatedAt: sql`NOW()` },
       });
 
-    // Broadcast to all SSE clients
-    broadcast('nickname-change', { platform, username, nickname, color: colorValue });
+    // SSE nickname-change rozešle trigger v DB (lib/nicknameNotify.ts) — i pro ruční opravy v DB.
 
     return { ok: true };
   });
@@ -113,7 +112,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
       .delete(nicknames)
       .where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
 
-    broadcast('nickname-delete', { platform, username });
+    // SSE nickname-delete rozešle trigger v DB (lib/nicknameNotify.ts).
     return { ok: true };
   });
 
