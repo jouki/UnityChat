@@ -56,6 +56,18 @@ export function normalizeRequestName(raw) {
   return /^[\p{L}\p{N}_-]{1,40}$/u.test(s) ? s : null;
 }
 
+/** Návrh názvu z titulku videa (oEmbed): jen písmena, číslice, _ a -, mezery → _, max 40 znaků. */
+export function suggestRequestName(title) {
+  const words = String(title ?? '').replace(/[^\p{L}\p{N}_-]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  let out = '';
+  for (const w of words) {
+    const next = out ? `${out}_${w}` : w;
+    if (next.length > NAME_MAX) { if (!out) out = w.slice(0, NAME_MAX); break; }
+    out = next;
+  }
+  return normalizeRequestName(out) || '';
+}
+
 /** Chybové kódy serveru → česky. `phase` rozliší too_long u zdroje (prepare) a u úseku (submit). */
 export function sfxRequestErrorText(err, phase = 'prepare') {
   const code = typeof err === 'string' ? err : err?.error;
@@ -558,6 +570,8 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
       }
       renderMode();
       renderSel();
+      // Název předvyplnit z titulku (u YouTube z oEmbed); divák ho může přepsat.
+      if (!nameInput.value.trim() && prep.title) { nameInput.value = suggestRequestName(prep.title); renderCmd(); }
       if (!nameInput.value) nameInput.focus({ preventScroll: true });
       L(`prepare ok ${prep.mode} ${prep.source} ${prep.durationMs} ms peaks=${prep.peaks.length}${prep.videoId ? ` video=${prep.videoId}` : ''}`);
     } catch (e) {

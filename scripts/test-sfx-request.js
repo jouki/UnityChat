@@ -42,6 +42,13 @@ const assert = require('node:assert/strict');
   assert.equal(sr.normalizeRequestName('x'.repeat(41)), null);
   assert.equal(sr.normalizeRequestName(''), null);
 
+  // návrh názvu z titulku
+  assert.equal(sr.suggestRequestName('Rick Astley - Never Gonna Give You Up (Official Video)'), 'Rick_Astley_-_Never_Gonna_Give_You_Up');
+  assert.equal(sr.suggestRequestName('Čau! Lidi…'), 'Čau_Lidi');
+  assert.equal(sr.suggestRequestName('x'.repeat(50)), 'x'.repeat(40));
+  assert.equal(sr.suggestRequestName('!!!'), '');
+  assert.equal(sr.suggestRequestName(null), '');
+
   // chyby → česky
   assert.match(sr.sfxRequestErrorText({ error: 'youtube_blocked' }), /YouTube .*mp3/);
   assert.equal(sr.sfxRequestErrorText({ error: 'too_long' }, 'prepare'), 'Zdroj je delší než 10 minut.');

@@ -237,6 +237,7 @@ check('F embed → iframe youtube-nocookie se správnou URL', await until(`(() =
   await ev(`document.querySelector('.uc-sr-yt-frame')?.src`));
 check('F délka z infoDelivery → posuvník aktivní, výběr 0:00–0:30', await until(`!document.querySelector('.uc-sr-track').classList.contains('uc-sr-off') && document.querySelector('.uc-sr-te').textContent === '0:30,0'`, 6000),
   JSON.stringify(await ev(`({ off: document.querySelector('.uc-sr-track').classList.contains('uc-sr-off'), te: document.querySelector('.uc-sr-te').textContent, cmds: 0 })`)));
+check('F název předvyplněný z titulku videa', (await ev(`document.querySelector('.uc-sr-edit input[name=name]').value`)) === 'Video' && (await txt('.uc-sr-cmd')) === '!se Video', await ev(`document.querySelector('.uc-sr-edit input[name=name]').value`));
 check('F osa bez waveformu (plná lišta)', await ev(`document.querySelector('.uc-sr-track').classList.contains('uc-sr-flat') && document.querySelectorAll('.uc-sr-wave i').length === 0 && document.querySelector('.uc-sr-yt-wait').hidden`) === true);
 check('F listening poslán přehrávači', log.ytCmds.some((c) => JSON.parse(c).event === 'listening'), log.ytCmds.slice(0, 2).join(' '));
 await dragHandle('start', 0.1);
