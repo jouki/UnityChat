@@ -76,9 +76,10 @@ class NicknameManager {
 
   async fetchAll() {
     try {
-      const resp = await fetch(`${UC_API}/nicknames`);
+      const resp = await fetch(`${UC_API}/nicknames`, { cache: 'no-store' });
       if (!resp.ok) return;
       const data = await resp.json();
+      const prev = new Map(this._map);
       this._map.clear();
       for (const n of data.nicknames) {
         this._map.set(`${n.platform}:${n.username.toLowerCase()}`, {
@@ -87,6 +88,15 @@ class NicknameManager {
         });
       }
       this._saveCache();
+      // Zprávy už vykreslené z lokální cache (nebo se změnou, která přišla mimo SSE) přepsat
+      // na stav ze serveru — jinak zůstane stará přezdívka až do dalšího reloadu.
+      for (const key of new Set([...prev.keys(), ...this._map.keys()])) {
+        const a = prev.get(key), b = this._map.get(key);
+        if ((a?.nickname || null) === (b?.nickname || null) && (a?.color || null) === (b?.color || null)) continue;
+        const i = key.indexOf(':');
+        const username = key.slice(i + 1);
+        this.onChange?.({ platform: key.slice(0, i), username, nickname: b?.nickname || username, color: b?.color || null });
+      }
       if (this.onLoad) this.onLoad();
     } catch {}
   }
