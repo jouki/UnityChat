@@ -24,6 +24,8 @@ export interface WorkspaceInfo {
 }
 
 const CACHE_MS = 60_000;
+/** Základ URL API Židolišty (bez koncového lomítka). */
+export const zidolistaBase = (): string => config.ZIDOLISTA_API_BASE.replace(/\/$/, '');
 let cache: { at: number; list: WorkspaceInfo[]; source: 'zidolista' | 'env' } | null = null;
 let inflight: Promise<WorkspaceInfo[]> | null = null;
 // Po každém úspěšném načtení registru (server si podle něj přidává kanály do ingestu).
@@ -73,7 +75,7 @@ export function workspacesFromEnv(csv: string): WorkspaceInfo[] {
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
-  const r = await fetch(`${config.ZIDOLISTA_API_BASE.replace(/\/$/, '')}/integrations/workspaces`, {
+  const r = await fetch(`${zidolistaBase()}/integrations/workspaces`, {
     headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
     signal: AbortSignal.timeout(8000),
   });
