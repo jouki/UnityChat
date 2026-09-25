@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { MOD_SCOPES as MOD_SCOPES_BY_PLATFORM } from './modScopes.js';
 
 // Google OAuth 2.0 for YouTube identity.
 // Docs: https://developers.google.com/identity/protocols/oauth2/web-server
@@ -15,6 +16,8 @@ export const WEB_SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl'] 
 // o force-ssl, youtube.readonly je z consent screenu odebraný (Google verifikace
 // 2026-09-24 — konfigurované scopes musí odpovídat tomu, o co aplikace žádá).
 const SCOPES = WEB_SCOPES;
+// Moderace (mazání zpráv, ban) jde přes stejný force-ssl scope výše — žádný navíc.
+export const MOD_SCOPES = MOD_SCOPES_BY_PLATFORM.youtube;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/youtube/callback`;

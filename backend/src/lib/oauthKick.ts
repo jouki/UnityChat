@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { config } from '../config.js';
+import { MOD_SCOPES as MOD_SCOPES_BY_PLATFORM } from './modScopes.js';
 
 // Kick OAuth 2.1 — PKCE is MANDATORY (even for confidential clients).
 // Docs: https://docs.kick.com/getting-started/generating-tokens-oauth2-flow
@@ -13,6 +14,9 @@ const USERS_URL = 'https://api.kick.com/public/v1/users';
 const SCOPES = ['user:read'] as const;
 // Web verze: posílání zpráv (public API POST /chat). Scope musí být povolený v Kick dev appce.
 export const WEB_SCOPES = ['user:read', 'chat:write'] as const;
+// Moderátorské scopes (mazání zpráv, bany) — hodnoty z lib/modScopes.ts. Musí být povolené
+// i v Kick developer dashboardu appky, jinak authorize selže (ověří user, Task 4 Step 5).
+export const MOD_SCOPES = MOD_SCOPES_BY_PLATFORM.kick;
 
 export function redirectUri(): string {
   return `${config.PUBLIC_BASE_URL}/streamers/oauth/kick/callback`;

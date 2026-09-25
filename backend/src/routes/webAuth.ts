@@ -29,7 +29,9 @@ import type { Ingest } from '../ingest/index.js';
  */
 
 const PlatformParam = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
-const StartBody = z.object({ returnTo: z.string().url().optional() }).optional();
+// `mod: true` = navíc žádat moderátorské scopes (mazání zpráv, bany) — mod se přihlašuje
+// vlastním účtem, aby mohl mazat/banovat z UnityChatu na platformách, kde to podporují.
+const StartBody = z.object({ returnTo: z.string().url().optional(), mod: z.boolean().optional() }).optional();
 const ExchangeBody = z.object({ code: z.string().min(8).max(200) });
 const SendBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
@@ -71,7 +73,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
   const startLimiter = new RateLimiter(10, 0.2); // per IP: 10 startů, doplňuje 1 za 5 s
 
   // ---- start OAuth (web) ----
-  app.post<{ Params: { platform: string }; Body: { returnTo?: string } }>('/auth/:platform/start', async (req, reply) => {
+  app.post<{ Params: { platform: string }; Body: { returnTo?: string; mod?: boolean } }>('/auth/:platform/start', async (req, reply) => {
     const params = PlatformParam.safeParse(req.params);
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     const body = StartBody.safeParse(req.body ?? {});
@@ -93,17 +95,21 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     if (raw) { const id = await validateWebSession(raw); if (id !== null) webAccountId = id; }
 
     const stateInput: StateInput = { platform, kind: 'web', returnTo, webAccountId };
+    const wantMod = body.data?.mod === true;
     if (platform === 'twitch') {
       if (!twitch.twitchConfigured()) { reply.code(503); return { ok: false, error: 'Twitch OAuth not configured' }; }
-      return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), twitch.WEB_SCOPES) };
+      const scopes = wantMod ? [...twitch.WEB_SCOPES, ...twitch.MOD_SCOPES] : twitch.WEB_SCOPES;
+      return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (platform === 'youtube') {
       if (!youtube.youtubeConfigured()) { reply.code(503); return { ok: false, error: 'YouTube OAuth not configured' }; }
-      return { ok: true, url: youtube.buildAuthorizeUrl(signState(stateInput), youtube.WEB_SCOPES) };
+      const scopes = wantMod ? [...youtube.WEB_SCOPES, ...youtube.MOD_SCOPES] : youtube.WEB_SCOPES;
+      return { ok: true, url: youtube.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (!kick.kickConfigured()) { reply.code(503); return { ok: false, error: 'Kick OAuth not configured' }; }
     const pkce = kick.generatePkcePair();
-    return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kick.WEB_SCOPES) };
+    const kickScopes = wantMod ? [...kick.WEB_SCOPES, ...kick.MOD_SCOPES] : kick.WEB_SCOPES;
+    return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes) };
   });
 
   // ---- jednorázový kód → session token ----

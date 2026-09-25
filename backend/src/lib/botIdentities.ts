@@ -7,6 +7,7 @@ import { botIdentities, botChannelGrants } from '../db/schema.js';
 import { decryptToken } from './crypto.js';
 import { encryptedColumns, type IdentityInfo, type TokenSet } from './webAuth.js';
 import type { Platform } from './zidolista.js';
+import { missingModScopes } from './modScopes.js';
 
 export const SHARED = '_shared';
 
@@ -20,6 +21,7 @@ export interface BotIdentity {
   refreshToken: string | null;
   expiresAt: Date | null;
   state: string;
+  scopes: string[];
 }
 
 export type BotState = 'online' | 'expired' | 'missing';
@@ -99,7 +101,7 @@ async function readIdentity(workspace: string, platform: Platform): Promise<BotI
   const refreshToken = r.refreshTokenEncrypted && r.refreshIv && r.refreshAuthTag
     ? decryptToken({ ciphertext: r.refreshTokenEncrypted, iv: r.refreshIv, authTag: r.refreshAuthTag, keyVersion: r.keyVersion })
     : null;
-  return { workspace: r.workspace, platform: r.platform as Platform, platformUserId: r.platformUserId, login: r.login, displayName: r.displayName, accessToken, refreshToken, expiresAt: r.expiresAt, state: r.state };
+  return { workspace: r.workspace, platform: r.platform as Platform, platformUserId: r.platformUserId, login: r.login, displayName: r.displayName, accessToken, refreshToken, expiresAt: r.expiresAt, state: r.state, scopes: r.scopes || [] };
 }
 
 /** Identita, kterou workspace na platformě mluví: vlastní, jinak sdílená. */
@@ -122,17 +124,22 @@ export async function deleteChannelGrant(workspace: string, platform: Platform):
 }
 
 export async function botStatus(workspace: string): Promise<{
-  shared: Record<Platform, { state: BotState; login?: string }>;
-  own: Record<Platform, { state: BotState; login?: string }>;
+  shared: Record<Platform, { state: BotState; login?: string; missingScopes?: string[] }>;
+  own: Record<Platform, { state: BotState; login?: string; missingScopes?: string[] }>;
   channelGrant: Record<Platform, { granted: boolean; login?: string; grantedAt?: string }>;
 }> {
-  const rows = await db.select({ workspace: botIdentities.workspace, platform: botIdentities.platform, login: botIdentities.login, state: botIdentities.state }).from(botIdentities);
-  const empty = (): Record<Platform, { state: BotState; login?: string }> => ({ twitch: { state: 'missing' }, kick: { state: 'missing' }, youtube: { state: 'missing' } });
+  const rows = await db.select({ workspace: botIdentities.workspace, platform: botIdentities.platform, login: botIdentities.login, state: botIdentities.state, scopes: botIdentities.scopes }).from(botIdentities);
+  const empty = (): Record<Platform, { state: BotState; login?: string; missingScopes?: string[] }> => ({ twitch: { state: 'missing' }, kick: { state: 'missing' }, youtube: { state: 'missing' } });
   const out = { shared: empty(), own: empty(), channelGrant: { twitch: { granted: false }, kick: { granted: false }, youtube: { granted: false } } as Record<Platform, { granted: boolean; login?: string; grantedAt?: string }> };
   for (const r of rows) {
     const bucket = r.workspace === SHARED ? out.shared : r.workspace === workspace ? out.own : null;
     if (!bucket) continue;
-    bucket[r.platform as Platform] = { state: r.state === 'expired' ? 'expired' : 'online', login: r.login };
+    const platform = r.platform as Platform;
+    bucket[platform] = {
+      state: r.state === 'expired' ? 'expired' : 'online',
+      login: r.login,
+      missingScopes: missingModScopes(platform, r.scopes),
+    };
   }
   const grants = await db.select().from(botChannelGrants).where(eq(botChannelGrants.workspace, workspace));
   for (const g of grants) out.channelGrant[g.platform as Platform] = { granted: true, login: g.login, grantedAt: g.grantedAt.toISOString() };

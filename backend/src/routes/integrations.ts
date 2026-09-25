@@ -173,20 +173,25 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     if (t) linkTokens.delete(req.params.token);
     if (!t) { reply.type('text/html'); return '<!doctype html><meta charset="utf-8"><p style="font-family:system-ui;padding:40px">Odkaz pro napojení bota je neplatný nebo vypršel. Vygeneruj v Židolištce nový.</p>'; }
     const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin, botKind: t.kind };
+    // Bot mluví za mody i maže/banuje → link vždy žádá i MOD_SCOPES. Výjimka: broadcaster
+    // channel-grant flow je souhlas streamera s botem v jeho kanálu (channel:bot), jiné
+    // consent okno než účet bota samotného — moderátorské scopes tam nepatří.
     if (t.platform === 'twitch') {
       if (!twitch.twitchConfigured()) return botErrorRedirect(reply, t.returnTo, 'Twitch OAuth not configured');
-      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : twitch.BOT_SCOPES;
+      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : [...twitch.BOT_SCOPES, ...twitch.MOD_SCOPES];
       return reply.redirect(twitch.buildAuthorizeUrl(signState(state), scopes), 302);
     }
     if (t.platform === 'youtube') {
       if (!youtube.youtubeConfigured()) return botErrorRedirect(reply, t.returnTo, 'YouTube OAuth not configured');
       // Bot = jiný Google účet než ten přihlášený → nechat vybrat účet (select_account).
-      const url = youtube.buildAuthorizeUrl(signState(state), youtube.WEB_SCOPES).replace('prompt=consent', 'prompt=consent%20select_account');
+      const scopes = [...youtube.WEB_SCOPES, ...youtube.MOD_SCOPES];
+      const url = youtube.buildAuthorizeUrl(signState(state), scopes).replace('prompt=consent', 'prompt=consent%20select_account');
       return reply.redirect(url, 302);
     }
     if (!kick.kickConfigured()) return botErrorRedirect(reply, t.returnTo, 'Kick OAuth not configured');
     const pkce = kick.generatePkcePair();
-    return reply.redirect(kick.buildAuthorizeUrl(signState({ ...state, codeVerifier: pkce.verifier }), pkce.challenge, kick.WEB_SCOPES), 302);
+    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
+    return reply.redirect(kick.buildAuthorizeUrl(signState({ ...state, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes), 302);
   });
 
   // ---- stav + odpojení ----

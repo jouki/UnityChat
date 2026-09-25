@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { MOD_SCOPES as MOD_SCOPES_BY_PLATFORM } from './modScopes.js';
 
 // Twitch OAuth 2.0 code flow.
 // Docs: https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/
@@ -19,6 +20,9 @@ export const WEB_SCOPES = ['user:write:chat'] as const;
 export const BOT_SCOPES = ['user:write:chat', 'user:bot'] as const;
 // Souhlas broadcastera s botem v jeho kanálu (jen kvůli odznaku; token se neukládá).
 export const BROADCASTER_BOT_SCOPES = ['channel:bot'] as const;
+// Moderátorské scopes (mazání zpráv, bany, timeouty, varování) — hodnoty z lib/modScopes.ts,
+// jeden zdroj pravdy sdílený se stavem v botStatus/missingModScopes.
+export const MOD_SCOPES = MOD_SCOPES_BY_PLATFORM.twitch;
 
 // App access token (client credentials) — cache do expirace, invalidace při 401.
 let appToken: { token: string; exp: number } | null = null;
