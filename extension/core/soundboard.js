@@ -4,7 +4,11 @@
 // odeslání commandu, oblíbené a přihlášení řeší hostitel přes callbacky.
 //
 // UnityChat NIKDY nepřehrává SE jako reakci na command (zvuk je slyšet ze streamu);
-// jediné přehrávání tady je lokální náhled po kliku na repráček.
+// jediné přehrávání tady je lokální náhled po kliku na repráček (se zesílením gainDb).
+//
+// Návrhy zvuků (core/sfx-request.js): s option `requestApi` je vedle hledání tlačítko
+// „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
+import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
@@ -186,6 +190,12 @@ export function soundIconHtml(s) {
   return emoji ? `<span class="uc-sb-em">${esc(emoji)}</span>` : '';
 }
 
+/** Zesílení v dB → násobek amplitudy (0 dB = 1; neplatné = 1). Rozsah ±20 dB jako Židolišta. */
+export function gainFactor(gainDb) {
+  const g = Number(gainDb);
+  return Number.isFinite(g) ? 10 ** (Math.max(-20, Math.min(20, g)) / 20) : 1;
+}
+
 /** Hledání: bez diakritiky a velikosti písmen, začátek jména má přednost. */
 export function searchSounds(sounds, query) {
   const norm = (s) => String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -242,8 +252,10 @@ const LOCK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentC
  * @param {(platform?: string) => void} [o.onLogin]                přihlásit / připojit platformu
  * @param {{ load(): number|null, save(v: number): void }} [o.volume]   hlasitost náhledu 0–1
  * @param {(tag: string, text: string) => void} [o.log]
+ * @param {{ prepare(url: string): Promise<object>, submit(b: object): Promise<object>, list(): Promise<object> }} [o.requestApi]
+ *        API návrhů zvuků (core/sfx-request.js); bez něj tlačítko „Navrhnout zvuk“ není.
  */
-export function createSoundboard({ host, button, onSend, onFavorite, onLogin, volume, log }) {
+export function createSoundboard({ host, button, onSend, onFavorite, onLogin, volume, log, requestApi }) {
   const doc = host.ownerDocument;
   const win = doc.defaultView;
   let state = null;
@@ -257,11 +269,13 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   panel.innerHTML = `
     <div class="uc-sb-top">
       <input type="search" placeholder="Najdi zvuk…" autocomplete="off" spellcheck="false" aria-label="Hledat zvuk">
+      ${requestApi ? `<button type="button" class="uc-sb-reqbtn uc-tool-btn" title="Navrhnout zvuk" aria-label="Navrhnout zvuk">${SFX_REQUEST_BUTTON_SVG}</button>` : ''}
       <label class="uc-sb-vol" title="Hlasitost náhledu (jen pro tebe)">${SPEAKER_SVG}<input type="range" min="0" max="100" step="1" aria-label="Hlasitost náhledu"></label>
     </div>
     <div class="uc-sb-status"></div>
     <div class="uc-sb-body"></div>
-    <div class="uc-sb-foot"></div>`;
+    <div class="uc-sb-foot"></div>
+    ${requestApi ? '<div class="uc-sb-reqview"></div>' : ''}`;
   host.appendChild(panel);
   const search = panel.querySelector('input[type="search"]');
   const volInput = panel.querySelector('.uc-sb-vol input');
@@ -284,6 +298,22 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   const now = () => Date.now() + (state?.offsetMs || 0);
   const audio = new win.Audio();
   audio.preload = 'none';
+  // Zesílení zvuku (gainDb, i nad 100 %) přes Web Audio; soubory Židolišty mají CORS *,
+  // bez crossOrigin by MediaElementSource hrál ticho. Graf vzniká až při prvním náhledu (gesto).
+  audio.crossOrigin = 'anonymous';
+  let gainNode = null, actx = null;
+  function applyGain(sound) {
+    const f = gainFactor(sound?.gainDb);
+    try {
+      if (!gainNode && f !== 1 && win.AudioContext) {
+        actx = new win.AudioContext();
+        gainNode = actx.createGain();
+        actx.createMediaElementSource(audio).connect(gainNode).connect(actx.destination);
+      }
+    } catch (e) { log?.('Soundboard', `Web Audio nejde: ${e?.message || e}`); gainNode = null; }
+    if (gainNode) { audio.volume = 1; gainNode.gain.value = vol * f; actx?.resume?.().catch(() => {}); }
+    else audio.volume = Math.min(1, vol * f);
+  }
 
   // ---- tlačítko + tooltip ----
   let tipOpen = false;
@@ -396,6 +426,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     button.setAttribute('aria-expanded', 'false');
     audio.pause();
     hideHover();
+    showList();
   }
   const isOpen = () => !panel.classList.contains('hidden');
   const toggle = () => (isOpen() ? close() : open());
@@ -405,7 +436,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       if (audio.dataset.id === String(sound.id) && !audio.paused) { audio.pause(); audio.currentTime = 0; return; }
       audio.dataset.id = String(sound.id);
       audio.src = sound.url;
-      audio.volume = vol;
+      applyGain(sound);
       audio.currentTime = 0;
       audio.play().catch((e) => log?.('Soundboard', `náhled ${sound.name} selhal: ${e?.message || e}`));
     } catch (e) { log?.('Soundboard', `náhled ${sound.name} selhal: ${e?.message || e}`); }
@@ -431,6 +462,26 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       renderPanel();
     }
   }
+
+  // ---- návrh zvuku (místo seznamu, zpět šipkou) ----
+  const reqBtn = panel.querySelector('.uc-sb-reqbtn');
+  const reqView = panel.querySelector('.uc-sb-reqview');
+  let request = null;
+  function showRequest() {
+    if (!requestApi) return;
+    if (!state?.loggedIn) { close(); onLogin?.(); return; }
+    audio.pause();
+    hideHover();
+    request ??= createSfxRequest({ host: reqView, api: requestApi, log, onBack: () => { showList(); search.focus(); } });
+    panel.classList.add('uc-sb-req-on');
+    request.open();
+  }
+  function showList() {
+    if (!panel.classList.contains('uc-sb-req-on')) return;
+    panel.classList.remove('uc-sb-req-on');
+    request?.close();
+  }
+  reqBtn?.addEventListener('click', (e) => { e.stopPropagation(); showRequest(); });
 
   // ---- události ----
   button.addEventListener('mousedown', (e) => e.preventDefault());   // neukrást fokus textarea
@@ -460,7 +511,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   });
   volInput.addEventListener('input', () => {
     vol = Math.min(1, Math.max(0, Number(volInput.value) / 100));
-    audio.volume = vol;
+    applyGain(state?.sounds.find((s) => String(s.id) === audio.dataset.id));
     try { volume?.save?.(vol); } catch { /* ignore */ }
   });
   // Hover nad panelem: celý název zvuku (v mřížce se zkracuje) + délka, pod tím `!se jméno`
@@ -543,7 +594,16 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       if (isOpen()) renderPanel();
     },
     open, close, toggle, isOpen,
+    /** Otevřít rovnou formulář návrhu zvuku (s option requestApi). */
+    openRequest() { if (!isOpen()) open(); if (isOpen()) showRequest(); },
+    /** SSE sfx-request → obnovit „Moje návrhy“ (jen když jde o můj návrh nebo je formulář otevřený). */
+    onSfxRequest(data) {
+      if (data?.channel && state?.channel && data.channel !== state.channel) return;
+      request?.onSse(data);
+    },
     destroy() {
+      request?.destroy();
+      actx?.close?.().catch(() => {});
       win.clearInterval(timer);
       doc.removeEventListener('mousedown', onDocDown);
       doc.removeEventListener('keydown', onDocKey);
