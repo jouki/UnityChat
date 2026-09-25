@@ -63,6 +63,9 @@ export const messages = pgTable(
     replyToMessageId: text('reply_to_message_id'),
     sentAt: timestamp('sent_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedBy: text('deleted_by'),
+    deletedReason: text('deleted_reason'),
   },
   (t) => ({
     platformMessageUnique: uniqueIndex('messages_platform_message_unique').on(
@@ -72,6 +75,28 @@ export const messages = pgTable(
     channelSentIdx: index('messages_channel_sent_idx').on(t.channel, t.sentAt),
     platformUsernameIdx: index('messages_platform_username_idx').on(t.platform, t.platformUsername),
     userIdIdx: index('messages_user_id_idx').on(t.userId),
+  }),
+);
+
+export const moderationActions = pgTable(
+  'moderation_actions',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),
+    accountId: bigint('account_id', { mode: 'number' }).references(() => webAccounts.id, {
+      onDelete: 'set null',
+    }),
+    actor: text('actor').notNull(),
+    action: text('action').notNull(),
+    platform: text('platform').notNull(),
+    targetLogin: text('target_login'),
+    targetMessageId: text('target_message_id'),
+    params: jsonb('params').notNull().default({}),
+    result: jsonb('result').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    channelCreatedIdx: index('moderation_actions_channel_idx').on(t.channel, t.createdAt),
   }),
 );
 
@@ -114,6 +139,8 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+export type ModerationAction = typeof moderationActions.$inferSelect;
+export type NewModerationAction = typeof moderationActions.$inferInsert;
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type PlatformIdentity = typeof platformIdentities.$inferSelect;

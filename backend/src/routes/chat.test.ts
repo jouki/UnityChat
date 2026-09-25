@@ -9,6 +9,7 @@ const base: Message = {
   contentRaw: { color: '#B22222', badges: 'moderator/1', emotes: '425618:3-5', emotesOffset: 0, firstMsg: false, action: false, replyParentDisplayName: 'hlavis697', replyParentBody: 'x' },
   channel: 'robdiesalot', isUnitychatUser: false, isReply: true, replyToMessageId: 'p1',
   sentAt: new Date(1789820014396), createdAt: new Date(),
+  deletedAt: null, deletedBy: null, deletedReason: null,
 };
 
 test('toClientMessage: twitch', () => {
