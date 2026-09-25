@@ -80,6 +80,10 @@
 .uc-sb-status.hidden { display: none; }
 .uc-sb-status span { flex: 1; }
 .uc-sb-cdtxt { font-variant-numeric: tabular-nums; }
+/* Panel bez aktivní odměny (každý přihlášený): proč jsou zvuky zamčené. */
+.uc-sb-locktxt { line-height: 1.35; }
+.uc-sb-locktxt b { margin-right: 4px; color: #ff8a8a; }
+.uc-sb-locktxt-paused b { color: #9ecbff; }
 .uc-sb-body { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
 .uc-sb-body::-webkit-scrollbar { width: 5px; }
 .uc-sb-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -135,3 +139,13 @@
 .uc-sb-s.cd .uc-sb-play { cursor: wait; opacity: 0.55; }
 .uc-sb-foot { min-height: 0; padding: 0 10px; font-size: 12px; }
 .uc-sb-foot.err { padding: 5px 10px; border-top: 1px solid var(--border); color: #ff8a8a; }
+
+/* ---- návrh zvuku (core/sfx-request.js, option requestApi) ---- */
+.uc-sb-reqbtn.uc-tool-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; box-sizing: border-box; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--bg-secondary); color: var(--text-secondary);
+}
+.uc-sb-reqview { display: none; }
+.uc-sb.uc-sb-req-on > :not(.uc-sb-reqview) { display: none; }
+.uc-sb.uc-sb-req-on > .uc-sb-reqview { display: flex; flex: 1; min-height: 0; flex-direction: column; }

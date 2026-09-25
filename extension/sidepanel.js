@@ -139,6 +139,10 @@ class NicknameManager {
           try { const d = JSON.parse(e.data); if (this.onSoundboard) this.onSoundboard(type, d); } catch {}
         });
       }
+      // Změna stavu návrhu zvuku (schváleno / zamítnuto v Židolištce) → „Moje návrhy“.
+      this._eventSource.addEventListener('sfx-request', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onSfxRequest) this.onSfxRequest(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1071,6 +1075,8 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
     this._initEmotePicker();
+    // Emote, který se nenačetl (výpadek sítě/CDN), zkusit znovu — jinak zůstane rozbitý do reloadu.
+    window.UC_CORE?.installEmoteRetry?.(document, { log: (t) => this._ucLog('EmoteRetry', t) });
     this._initSoundboard();
     this._initQrDono();
 
@@ -1160,10 +1166,10 @@ class UnityChat {
   }
 
   /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
-  async _ucApi(path, { method = 'GET', body } = {}) {
+  async _ucApi(path, { method = 'GET', body, timeoutMs = 15000 } = {}) {
     const token = await this._ucSessionToken();
     const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
     let j = {};
     try { j = await r.json(); } catch {}
     if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status };
@@ -1234,6 +1240,35 @@ class UnityChat {
     this._refreshDonoAvailability();
   }
 
+  /**
+   * API návrhů zvuků (backend /soundboard/requests*, proxy na Židolištu). Identitu a roli
+   * ověří server z přihlášení; klient posílá jen kanál a platformu, za kterou navrhuje.
+   */
+  _sfxRequestApi() {
+    const channel = () => (this.config.channel || '').toLowerCase();
+    const log = (text) => this._ucLog('SfxReq', text);
+    // Bez vybrané platformy (nepřihlášený / bez identity) server nemá za koho návrh poslat.
+    const needPlatform = () => { if (!this.activePlatform) { log('bez aktivní platformy'); throw { error: 'no_platform' }; } };
+    return {
+      // Stažení a převod zvuku na serveru Židolišty může trvat desítky sekund (YouTube).
+      prepare: async (url) => {
+        needPlatform();
+        const r = await this._ucApi('/soundboard/requests/prepare', { method: 'POST', body: { channel: channel(), platform: this.activePlatform, url }, timeoutMs: 130000 })
+          .catch((e) => { log(`prepare → ${e.status || ''} ${e.error}`); throw e; });
+        log(`prepare → ${r.mode} ${r.source} ${r.durationMs ?? '?'} ms`);
+        return r;
+      },
+      submit: async (b) => {
+        needPlatform();
+        const r = await this._ucApi('/soundboard/requests', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform }, timeoutMs: 70000 })
+          .catch((e) => { log(`submit → ${e.status || ''} ${e.error}`); throw e; });
+        log(`submit → id=${r.requestId}`);
+        return r;
+      },
+      list: () => this._ucApi(`/soundboard/requests?channel=${encodeURIComponent(channel())}`),
+    };
+  }
+
   /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
   _initSoundboard() {
     const core = window.UC_CORE;
@@ -1264,6 +1299,8 @@ class UnityChat {
         save: (v) => { try { localStorage.setItem('uc_sfx_volume', String(v)); } catch {} },
       },
       log: (tag, text) => this._ucLog(tag, text),
+      // Tlačítko „Navrhnout zvuk“ vedle hledání (core/sfx-request.js).
+      requestApi: this._sfxRequestApi(),
     });
   }
 
@@ -1362,6 +1399,11 @@ class UnityChat {
       // Změnu dostanou všichni diváci naráz → refetch rozprostřít do 0–3 s (backend volá Židolištu z jedné IP).
       if (type === 'soundboard-change') { clearTimeout(this._sfxRefetchTimer); this._sfxRefetchTimer = setTimeout(() => this._loadSoundboard(), Math.random() * 3000); }
       else this._sfx?.onSse(type, d);
+    };
+    this.nicknames.onSfxRequest = (d) => {
+      if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
+      this._ucLog('SfxReq', `SSE ${d?.requestId} → ${d?.status}`);
+      this._sfx?.onSfxRequest(d);
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
@@ -6996,21 +7038,15 @@ class UnityChat {
       }
     }
 
-    // @mention zvýraznění - kontroluje text zprávy i reply-parent
-    // Matchuje jak @username tak @nickname (pokud je nastavený)
-    const myName = this.config.username?.toLowerCase();
-    // Check nickname on the message's platform (not activePlatform —
-    // that may be null when rendering cached messages at startup)
-    const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
+    // @mention zvýraznění — text zprávy i reply-parent. Moje jména napříč VŠEMI platformami
+    // (login z každé platformy + UC přezdívky), ne jen z platformy zprávy: divák z YouTube
+    // píše „@Jouki“ (přezdívka z Twitche / login z Kicku) — stejně jako web (renderCtx.myNames).
+    const myNames = this._myMentionNames();
     const msgLower = msg.message?.toLowerCase() || '';
-    const replyTarget = msg.replyTo?.username?.toLowerCase();
-    const isMentioned = myName && (
-      msgLower.includes(`@${myName}`) ||
-      (myNick && msgLower.includes(`@${myNick}`)) ||
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      // Also match platform-specific username
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
+    const replyTarget = msg.replyTo?.username?.toLowerCase().replace(/^@/, '');
+    const isMentioned = myNames.size > 0 && (
+      (replyTarget && myNames.has(replyTarget)) ||
+      [...myNames].some((n) => this._hasMention(msgLower, n))
     );
 
     const el = document.createElement('div');
@@ -7070,11 +7106,7 @@ class UnityChat {
     }
 
     // Determine if reply is TO the current user (not just any reply)
-    const isReplyToMe = msg.replyTo && (
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
-    );
+    const isReplyToMe = !!(msg.replyTo && replyTarget && myNames.has(replyTarget));
 
     if (isGift) {
       this._renderGiftEvent(el, msg);
@@ -7706,6 +7738,32 @@ class UnityChat {
     if (abs === 1) return `${n} nová zpráva`;
     if (abs >= 2 && abs <= 4) return `${n} nové zprávy`;
     return `${n} nových zpráv`;
+  }
+
+  /** Moje jména pro @zmínky: config.username, loginy ze všech platforem a UC přezdívky k nim. */
+  _myMentionNames() {
+    const names = new Set();
+    const add = (n) => { const v = String(n || '').trim().replace(/^@/, '').toLowerCase(); if (v) names.add(v); };
+    add(this.config.username);
+    for (const p of ['twitch', 'youtube', 'kick']) {
+      const login = this._platformUsernames[p] || (p === 'twitch' ? this.config.username : null);
+      if (!login) continue;
+      add(login);
+      add(this.nicknames.getNickname(p, login));
+    }
+    return names;
+  }
+
+  /** „@jméno“ jako celé slovo (ne @joukibot pro jouki), text i jméno malými písmeny. */
+  _hasMention(text, name) {
+    const word = /[\p{L}\p{N}_]/u;
+    const needle = '@' + name;
+    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
+      const before = text[i - 1];
+      const after = text[i + needle.length];
+      if ((!before || !word.test(before)) && (!after || !word.test(after))) return true;
+    }
+    return false;
   }
 
   _scroll(slideEl = null) {

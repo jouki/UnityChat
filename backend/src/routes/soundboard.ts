@@ -19,6 +19,7 @@ import { chatRole } from '../lib/chatRole.js';
 import { twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
 import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
+import { handleSfxRequestWebhook } from './sfxRequests.js';
 
 type Platform = 'twitch' | 'kick' | 'youtube';
 const PLATFORMS: Platform[] = ['twitch', 'kick', 'youtube'];
@@ -26,7 +27,7 @@ const RECENT_MAX = 8;
 const CATALOG_CACHE_MS = 60_000;
 
 export type SoundIcon = { kind: 'emoji'; value: string } | { kind: '7tv'; id: string; name: string; url: string };
-export interface Sound { id: number; name: string; displayName: string | null; tier: number; emoji: string | null; icon: SoundIcon | null; url: string; durationMs: number | null }
+export interface Sound { id: number; name: string; displayName: string | null; tier: number; emoji: string | null; icon: SoundIcon | null; url: string; durationMs: number | null; gainDb: number }
 
 /** Ikona zvuku z katalogu: emoji, nebo 7TV emote (URL jen z cdn.7tv.app — obrázek se vkládá do klienta). */
 export function normalizeIcon(v: unknown, emoji: string | null): SoundIcon | null {
@@ -57,7 +58,9 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
     const emoji = typeof o.emoji === 'string' && o.emoji.trim() && o.emoji.length <= 16 ? o.emoji.trim() : null;
     const durationMs = Number.isFinite(o.durationMs) && (o.durationMs as number) > 0 ? Math.round(o.durationMs as number) : null;
     const displayName = typeof o.displayName === 'string' && o.displayName.trim() ? o.displayName.trim().slice(0, 40) : null;
-    sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs });
+    // Zesílení v dB proti originálu (normalizace hlasitosti + úprava moda), přehrávač ho aplikuje za běhu.
+    const gainDb = Number.isFinite(o.gainDb) ? Math.round(Math.max(-20, Math.min(20, o.gainDb as number)) * 10) / 10 : 0;
+    sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs, gainDb });
   }
   const tiers = new Map<number, Tier>();
   for (const t of Array.isArray(j.tiers) ? j.tiers : []) {
@@ -156,11 +159,13 @@ async function fetchState(slug: string, platform: Platform, userId: string, role
 
 /**
  * Webhook ze Židolišty (přes /commands/invalidate, reason sfx / sfx-unlocks / sfx-played /
- * sfx-denied). Vrací kanály workspace; prázdné = neznámý workspace.
+ * sfx-denied / sfx-request). Vrací kanály workspace; prázdné = neznámý workspace.
  */
 export async function handleSfxWebhook(slug: string, reason: string, data: unknown, log: FastifyInstance['log']): Promise<string[]> {
   const channels = await twitchChannelsOf(slug);
   if (!channels.length) return channels;
+  // Změna stavu návrhu zvuku (schváleno / zamítnuto) → SSE sfx-request (routes/sfxRequests.ts).
+  if (reason === 'sfx-request') return handleSfxRequestWebhook(slug, data, log);
   const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
   if (reason === 'sfx-unlocks' || reason === 'sfx-played') dropStates(slug);
   if (reason === 'sfx' || reason === 'sfx-unlocks') {
