@@ -133,8 +133,10 @@ check('A fokus na první položce', await ev(`document.activeElement?.dataset?.i
 await key('ArrowDown');
 check('A šipka dolů → Timeout', await ev(`document.activeElement?.dataset?.id === 'timeout'`) === true);
 await key('ArrowRight');
-const sub = await menuItems();
-check('A šipka doprava → podnabídka timeoutu', JSON.stringify(sub) === JSON.stringify(['‹ Timeout', '5 s', '30 s', '1 min', '5 min', '10 min', '30 min', '1 h', '2 h']), JSON.stringify(sub));
+// Počítač s myší: podnabídka vyjede vedle (.uc-mm-fly), fokus na její první položce.
+const sub = await ev(`JSON.stringify([...document.querySelectorAll('.uc-mod-menu .uc-mm-fly .uc-mm-item')].map(b => b.textContent))`);
+check('A šipka doprava → podnabídka timeoutu vedle', sub === JSON.stringify(['5 s', '30 s', '1 min', '5 min', '10 min', '30 min', '1 h', '2 h']), sub);
+check('A fokus v podnabídce', await ev(`document.activeElement?.dataset?.id === 'timeout:5'`) === true);
 await key('ArrowDown'); await key('ArrowDown'); await key('ArrowDown');
 check('A fokus na „5 min"', await ev(`document.activeElement?.dataset?.id === 'timeout:300'`) === true, await ev(`document.activeElement?.dataset?.id`));
 await ev(`document.activeElement.click()`);
@@ -148,9 +150,9 @@ check('A hláška výsledku po platformách', (await lastSys()) === 'Timeout 5 m
 await rightClick('e2e-a1');
 await key('ArrowDown');
 await ev(`document.activeElement.click()`);   // Enter v headless neklikne → klik na fokusovaný „Timeout"
-check('A v podnabídce', await ev(`!!document.querySelector('.uc-mod-menu .uc-mm-back')`) === true);
+check('A v podnabídce', await ev(`!!document.querySelector('.uc-mod-menu .uc-mm-fly')`) === true);
 await key('Escape');
-check('A Esc v podnabídce → zpět na hlavní', await ev(`!document.querySelector('.uc-mod-menu .uc-mm-back') && !!document.querySelector('.uc-mod-menu')`) === true);
+check('A Esc v podnabídce → zpět na hlavní', await ev(`!document.querySelector('.uc-mod-menu .uc-mm-fly') && !!document.querySelector('.uc-mod-menu') && document.activeElement?.dataset?.id === 'timeout'`) === true);
 await key('Escape');
 check('A Esc → nabídka zavřená', await ev(`!document.querySelector('.uc-mod-menu')`) === true);
 

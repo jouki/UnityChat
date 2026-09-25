@@ -364,6 +364,7 @@ export class ModMenu {
 
   close() {
     if (!this.el) return;
+    this._closeFlyout();
     const doc = this.doc;
     this.el.remove();
     this.el = null;
@@ -437,12 +438,76 @@ export class ModMenu {
         arrow.textContent = '›';
         b.appendChild(arrow);
       }
-      b.addEventListener('click', (e) => { e.stopPropagation(); this._activate(it); });
+      b.addEventListener('click', (e) => { e.stopPropagation(); this._activate(it, b); });
+      // Počítač s myší: podnabídka vyjede vedle při najetí (pokyn usera 2026-09-25), jinak klik.
+      if (this._view === 'root') {
+        b.addEventListener('mouseenter', () => {
+          clearTimeout(this._flyTimer);
+          if (it.sub && !it.disabled && this._canFlyout()) this._flyTimer = setTimeout(() => this._openFlyout(it, b), 120);
+          else if (!it.sub) this._flyTimer = setTimeout(() => this._closeFlyout(), 150);
+        });
+      }
       list.appendChild(b);
     }
   }
 
-  _items() { return this._list ? [...this._list.querySelectorAll('.uc-mm-item:not([disabled])')] : []; }
+  /** Podnabídka vedle: jen jemný ukazatel s hoverem (ne mobil) a když se vedle menu vejde. */
+  _canFlyout() {
+    const win = this.doc.defaultView;
+    if (!this.el || !win?.matchMedia?.('(hover: hover) and (pointer: fine)').matches) return false;
+    const r = this.el.getBoundingClientRect();
+    const need = 150;
+    return r.right + need + 8 <= win.innerWidth || r.left - need - 8 >= 0;
+  }
+
+  _openFlyout(it, anchor) {
+    if (!this.el) return;
+    if (this._fly?.dataset.parent === it.id) return;
+    this._closeFlyout();
+    const doc = this.doc;
+    const win = doc.defaultView;
+    const fly = doc.createElement('div');
+    fly.className = 'uc-mm-fly';
+    fly.setAttribute('role', 'menu');
+    fly.dataset.parent = it.id;
+    for (const s of it.sub) {
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.className = 'uc-mm-item';
+      b.setAttribute('role', 'menuitem');
+      b.tabIndex = -1;
+      b.dataset.id = s.id;
+      b.textContent = s.label;
+      b.addEventListener('click', (e) => { e.stopPropagation(); this._activate(s); });
+      fly.appendChild(b);
+    }
+    fly.addEventListener('mouseenter', () => clearTimeout(this._flyTimer));
+    this.el.appendChild(fly);
+    anchor.classList.add('uc-mm-item--open');
+    const r = this.el.getBoundingClientRect();
+    const fw = fly.getBoundingClientRect().width || 140;
+    const right = r.right + fw + 8 <= (win?.innerWidth || 1000);
+    fly.style[right ? 'left' : 'right'] = 'calc(100% + 4px)';
+    const top = anchor.offsetTop - 4;
+    const maxTop = (win?.innerHeight || 1000) - r.top - fly.getBoundingClientRect().height - 8;
+    fly.style.top = `${Math.max(-r.top + 8, Math.min(top, maxTop))}px`;
+    this._fly = fly;
+    this._flyAnchor = anchor;
+  }
+
+  _closeFlyout() {
+    clearTimeout(this._flyTimer);
+    this._flyAnchor?.classList.remove('uc-mm-item--open');
+    this._fly?.remove();
+    this._fly = null;
+    this._flyAnchor = null;
+  }
+
+  _items() {
+    const inFly = this._fly && this._fly.contains(this.doc.activeElement);
+    const root = inFly ? this._fly : this._list;
+    return root ? [...root.querySelectorAll('.uc-mm-item:not([disabled])')] : [];
+  }
 
   _focus(i) {
     const items = this._items();
@@ -465,7 +530,8 @@ export class ModMenu {
     switch (e.key) {
       case 'Escape':
         e.preventDefault(); e.stopPropagation();
-        if (this._view !== 'root') this._back(); else this.close();
+        if (this._fly) { const a = this._flyAnchor; this._closeFlyout(); a?.focus(); }
+        else if (this._view !== 'root') this._back(); else this.close();
         break;
       case 'ArrowDown': e.preventDefault(); this._focus(cur + 1); break;
       case 'ArrowUp': e.preventDefault(); this._focus(cur < 0 ? -1 : cur - 1); break;
@@ -473,11 +539,12 @@ export class ModMenu {
       case 'End': e.preventDefault(); this._focus(-1); break;
       case 'ArrowRight': {
         const it = this._model().find((m) => m.id === items[cur]?.dataset.id);
-        if (it?.sub && !it.disabled) { e.preventDefault(); this._activate(it); }
+        if (it?.sub && !it.disabled) { e.preventDefault(); this._activate(it, items[cur]); }
         break;
       }
       case 'ArrowLeft':
-        if (this._view !== 'root') { e.preventDefault(); this._back(); }
+        if (this._fly && this._fly.contains(this.doc.activeElement)) { e.preventDefault(); const a = this._flyAnchor; this._closeFlyout(); a?.focus(); }
+        else if (this._view !== 'root') { e.preventDefault(); this._back(); }
         break;
       case 'Tab': e.preventDefault(); this.close(); break;
       default: break;
@@ -495,10 +562,15 @@ export class ModMenu {
     el.style.top = `${Math.max(m, y + r.height + m > vh ? y - r.height : y)}px`;
   }
 
-  _activate(it) {
+  _activate(it, anchor) {
     if (it.disabled) return;
     const t = this.target;
-    if (it.sub) { this._view = it.id; this._render(); this._focus(1); return; }
+    if (it.sub && anchor && this._view === 'root' && this._canFlyout()) {
+      this._openFlyout(it, anchor);
+      this._fly?.querySelector('.uc-mm-item')?.focus();
+      return;
+    }
+    if (it.sub) { this._closeFlyout(); this._view = it.id; this._render(); this._focus(1); return; }
     const [kind, arg] = it.id.split(':');
     this.log('ModMenu', `akce ${it.id} → ${t.platform}:${t.userId || '?'} ${t.login}`);
     this.close();
