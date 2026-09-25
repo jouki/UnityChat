@@ -44,6 +44,17 @@ test('toChatEvent: tvar chat.message podle kontraktu', () => {
   });
 });
 
+test('toChatEvent: zpráva smazaná filtrem odkazů jde bez textu, s deleted: true', () => {
+  const m: IngestMessage = {
+    platform: 'kick', platformMessageId: 'k1', platformUserId: '7', username: 'spam', channel: 'uctest',
+    content: 'koukni neco.cz/x', contentRaw: {}, sentAt: new Date('2026-09-25T14:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null, deleted: { by: 'filter', reason: 'link_filter' },
+  };
+  const ev = toChatEvent(m, 'jouki');
+  assert.equal(ev.text, '');
+  assert.equal(ev.deleted, true);
+});
+
 test('modIntegrationEvent: tvary chat.deleted / chat.hidden / chat.unhidden', () => {
   assert.deepEqual(modIntegrationEvent('chat.deleted', 'rob', { platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod' }),
     { type: 'chat.deleted', workspace: 'rob', platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod' });

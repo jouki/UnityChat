@@ -64,6 +64,15 @@ export function isBotAuthor(platform: string, login: string, workspace: string, 
   return sets.some((s) => !!s && (s.has(SHARED) || s.has(workspace)));
 }
 
+/**
+ * Je účet bot workspace (filtr odkazů)? S id účtu jen podle id (login si na Kicku/YouTube může vzít kdokoli),
+ * bez id podle loginu.
+ */
+export function isBotAccount(platform: string, workspace: string, platformUserId: string | null, login: string): boolean {
+  const s = platformUserId ? botLogins.get(idKey(platform, String(platformUserId))) : botLogins.get(loginKey(platform, login));
+  return !!s && (s.has(SHARED) || s.has(workspace));
+}
+
 export async function upsertBotIdentity(workspace: string, platform: Platform, identity: IdentityInfo, tokens: TokenSet): Promise<void> {
   const cols = encryptedColumns(tokens);
   await db

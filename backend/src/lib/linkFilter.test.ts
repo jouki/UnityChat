@@ -71,14 +71,17 @@ test('PermitStore: podle id i loginu, delší platnost vyhrává, kanál a platf
 const WS: WorkspaceInfo = { slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robdiesalot', youtube: 'robdiesalot' }, bot: { mode: 'shared', displayName: 'JoukiBOT', ownLogins: { kick: 'jouki-bot' } } };
 
 test('isKnownBot: SE/Nightbot/Streamlabs, extraBots, vlastní login bota, bot identity', () => {
-  const base = { platform: 'twitch' as const, userId: '5', ws: WS, extraBots: ['moobot'], isBotAuthor: () => false };
+  const base = { platform: 'twitch' as const, userId: '5', ws: WS, extraBots: ['moobot'], isBotAccount: () => false };
   assert.equal(isKnownBot({ ...base, login: 'StreamElements' }), true);
   assert.equal(isKnownBot({ ...base, login: 'nightbot' }), true);
   assert.equal(isKnownBot({ ...base, login: 'streamlabs' }), true);
   assert.equal(isKnownBot({ ...base, login: 'moobot' }), true);
   assert.equal(isKnownBot({ ...base, platform: 'kick', login: 'jouki-bot' }), true);
-  assert.equal(isKnownBot({ ...base, login: 'joukibot', isBotAuthor: (_p, l, w) => l === 'joukibot' && w === 'rob' }), true);
+  assert.equal(isKnownBot({ ...base, login: 'joukibot', isBotAccount: (_p, w, id) => id === '5' && w === 'rob' }), true);
   assert.equal(isKnownBot({ ...base, login: 'divak' }), false);
+  assert.equal(isKnownBot({ ...base, platform: 'kick', login: 'nightbot' }), false, 'SE/Nightbot jen na Twitchi');
+  assert.equal(isKnownBot({ ...base, platform: 'youtube', login: 'StreamElements' }), false);
+  assert.equal(isKnownBot({ ...base, platform: 'kick', login: 'moobot' }), true, 'extraBots platí všude');
 });
 
 // ---- createLinkFilter (ingest onLive) ----
@@ -98,12 +101,12 @@ function harness(settings: LinkFilterSettings = { enabled: true, allowDomains: A
   const deps: LinkFilterDeps = {
     workspaceFor: (platform, channel) => (WS.channels[platform] === channel ? WS : null),
     settingsFor: () => settings,
-    isBotAuthor: () => false,
+    isBotAccount: () => false,
     permits: store,
     publishDeleted: async (p) => { calls.published.push(p); },
     deletePlatform: async (p) => { calls.deleted.push(p); return 'bot'; },
     resolvePermitTarget: async () => [{ platform: 'twitch', userId: '42', login: 'divak' }, { platform: 'kick', userId: '77', login: 'divak_k' }],
-    storePermits: async (rows) => { calls.stored.push(rows); for (const r of rows) store.grant({ channel: r.channel, platform: r.platform, userId: r.targetUserId || null, login: r.targetLogin, until: r.until.getTime() }); },
+    storePermits: async (rows) => { calls.stored.push(rows); for (const r of rows) store.grant({ channel: r.channel, platform: r.platform, userId: r.targetUserId || null, login: r.targetLogin, until: r.until.getTime() }, 0); },
     recordAction: async (v) => { calls.actions.push(v); if (calls.actions.length >= 1) resolveDone(); },
     now: () => 10_000,
     log: quietLog,
@@ -175,11 +178,35 @@ test('!permit na neznámého uživatele → permit podle loginu; od diváka / od
   assert.deepEqual(unknown.calls.stored[0].map((r) => [r.platform, r.targetUserId, r.targetLogin]), [['twitch', '', 'novacek']]);
   assert.equal(unknown.f.check(msg({ username: 'Novacek', platformUserId: '500' })), null);
 
-  const { f, calls } = harness(undefined, { isBotAuthor: (_p, l) => l === 'joukibot' });
+  const { f, calls } = harness(undefined, { isBotAccount: (_p, _w, _id, l) => l === 'joukibot' });
   f.check(msg({ content: '!permit divak' }));
   f.check(msg({ username: 'joukibot', content: '!permit divak', contentRaw: { badges: 'moderator/1' } }));
   await new Promise((r) => setImmediate(r));
   assert.equal(calls.stored.length, 0);
+});
+
+test('!permit od diváka nepřeskočí filtr (s odkazem se smaže)', () => {
+  const { f } = harness();
+  assert.deepEqual(f.check(msg({ content: '!permit divak neco.cz/x' })), { host: 'neco.cz', channel: 'robdiesalot' });
+});
+
+test('echo vlastního !permit (udělen před < 10 s) se neukládá znovu; později ano', async () => {
+  const { f, calls, store } = harness();
+  store.grant({ channel: 'robdiesalot', platform: 'twitch', userId: '42', login: 'divak', until: 70_000 }, 5_000);
+  f.check(msg({ username: 'modik', content: '!permit divak', contentRaw: { badges: 'moderator/1' } }));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.stored.length, 0);
+  const late = harness();
+  late.store.grant({ channel: 'robdiesalot', platform: 'twitch', login: 'divak', until: 70_000 }, -5_000);
+  late.f.check(msg({ username: 'modik', content: '!permit divak', contentRaw: { badges: 'moderator/1' } }));
+  await late.settled;
+  assert.equal(late.calls.stored.length, 1);
+});
+
+test('stará zpráva (> 60 s, replay po reconnectu) se nefiltruje', () => {
+  const { f } = harness(undefined, { now: () => 200_000 });
+  assert.equal(f.check(msg({ sentAt: new Date(100_000) })), null);
+  assert.notEqual(f.check(msg({ sentAt: new Date(150_000) })), null);
 });
 
 test('filtr nikdy nevyhodí do ingestu', () => {
@@ -238,5 +265,27 @@ test('refreshLinkFilter: prošlá cache → If-None-Match s ETagem, 304 drží s
   const again = await refreshLinkFilter('rob2', opts);
   assert.equal(seen[1]['If-None-Match'], '"e1"');
   assert.equal(again.enabled, true);
+  _resetLinkFilterCache();
+});
+
+test('refreshLinkFilter(force) během běžného načtení spustí nové načtení', async () => {
+  _resetLinkFilterCache();
+  let n = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const fakeFetch = (async () => {
+    n++;
+    if (n === 1) { await gate; return new Response(JSON.stringify({ ok: true, enabled: false, version: 'old' }), { status: 200 }); }
+    return new Response(JSON.stringify({ ok: true, enabled: true, version: 'new' }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const opts = { fetch: fakeFetch, apiKey: 'k', base: 'https://z.example' };
+  const first = refreshLinkFilter('rob3', opts);
+  const forced = refreshLinkFilter('rob3', { ...opts, force: true });
+  release();
+  assert.equal((await first).version, 'old');
+  const r = await forced;
+  assert.equal(n, 2);
+  assert.equal(r.version, 'new');
+  assert.equal(r.enabled, true);
   _resetLinkFilterCache();
 });

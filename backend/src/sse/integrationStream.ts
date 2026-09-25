@@ -24,6 +24,8 @@ export interface ChatEvent {
   isVip: boolean;
   isBroadcaster: boolean;
   isBot: boolean;
+  /** Smazaná filtrem odkazů už při příjmu → `text` je prázdný (obsah jen v archivu), následuje chat.deleted. */
+  deleted?: true;
   replyTo: { messageId: string; user: string | null } | null;
   timestamp: string;
 }
@@ -66,7 +68,8 @@ export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
     platform: m.platform,
     user: m.username,
     userId: m.platformUserId,
-    text: m.content,
+    text: m.deleted ? '' : m.content,
+    ...(m.deleted ? { deleted: true as const } : {}),
     ...roles,
     isBot: isBotAuthor(m.platform, m.username, workspace, m.platformUserId),
     replyTo: m.replyToMessageId ? { messageId: m.replyToMessageId, user: replyUser } : null,

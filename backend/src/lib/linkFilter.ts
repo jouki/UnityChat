@@ -65,7 +65,8 @@ export async function refreshLinkFilter(slug: string, opts: { force?: boolean } 
   const s = slug.toLowerCase();
   const hit = settingsCache.get(s);
   if (!opts.force && hit && Date.now() - hit.at < SETTINGS_TTL_MS) return hit.value;
-  if (hit?.inflight) return hit.inflight;
+  // Vynucené načtení (webhook) nesmí vrátit běžící běžné načtení, které mohlo začít před změnou.
+  if (hit?.inflight) return opts.force ? hit.inflight.catch(() => LINK_FILTER_OFF).then(() => refreshLinkFilter(s, opts)) : hit.inflight;
   const apiKey = opts.apiKey ?? config.ZIDOLISTA_API_KEY;
   const entry: SettingsEntry = hit ?? { at: 0, etag: null, value: LINK_FILTER_OFF, inflight: null };
   settingsCache.set(s, entry);
@@ -123,7 +124,10 @@ export function _expireLinkFilterForTest(slug: string): void { const h = setting
 // Výjimky
 // ---------------------------------------------------------------------------
 
-/** Boti, kteří smí odkazy vždy (vedle botů workspace z bot_identities a extraBots ze Židolišty). */
+/**
+ * Známí boti Twitche (login je tam jedinečný a jejich). Na Kicku/YouTube si stejné jméno může vzít kdokoli,
+ * proto tam neplatí — tam jen extraBots (nastavuje streamer v Židolištce) a identity botů workspace.
+ */
 export const KNOWN_BOTS = ['streamelements', 'nightbot', 'streamlabs'] as const;
 
 export interface BotCheck {
@@ -132,15 +136,16 @@ export interface BotCheck {
   userId: string | null;
   ws: WorkspaceInfo;
   extraBots: string[];
-  /** isBotAuthor z lib/botIdentities.ts (identity botů workspace / sdíleného JoukiBOTa). */
-  isBotAuthor: (platform: string, login: string, workspace: string, platformUserId?: string | null) => boolean;
+  /** isBotAccount z lib/botIdentities.ts (identity botů workspace / sdíleného JoukiBOTa): podle id, když je, jinak loginu. */
+  isBotAccount: (platform: string, workspace: string, platformUserId: string | null, login: string) => boolean;
 }
 
 export function isKnownBot(p: BotCheck): boolean {
   const l = p.login.toLowerCase();
-  if ((KNOWN_BOTS as readonly string[]).includes(l) || p.extraBots.includes(l)) return true;
+  if (p.platform === 'twitch' && (KNOWN_BOTS as readonly string[]).includes(l)) return true;
+  if (p.extraBots.includes(l)) return true;
   if (p.ws.bot.ownLogins?.[p.platform] === l) return true;
-  return p.isBotAuthor(p.platform, l, p.ws.slug, p.userId);
+  return p.isBotAccount(p.platform, p.ws.slug, p.userId, l);
 }
 
 export interface FilterInput {
@@ -195,6 +200,8 @@ export interface PermitGrant { channel: string; platform: Platform | string; use
 
 export class PermitStore {
   private m = new Map<string, number>();
+  /** Kdy byl permit na klíč naposledy udělen (poznání echa vlastního `!permit` v chatu). */
+  private granted = new Map<string, number>();
   private static keys(p: { channel: string; platform: string; userId?: string | null; login?: string | null }): string[] {
     const base = `${p.channel.toLowerCase()}|${p.platform}|`;
     const out: string[] = [];
@@ -203,16 +210,20 @@ export class PermitStore {
     return out;
   }
   /** Udělit permit; delší platnost vyhrává (echo `!permit` botem nezkrátí permit z nabídky). */
-  grant(p: PermitGrant): void {
-    for (const k of PermitStore.keys(p)) this.m.set(k, Math.max(this.m.get(k) ?? 0, p.until));
+  grant(p: PermitGrant, at: number = Date.now()): void {
+    for (const k of PermitStore.keys(p)) { this.m.set(k, Math.max(this.m.get(k) ?? 0, p.until)); this.granted.set(k, at); }
     if (this.m.size > 5000) this.prune(Date.now());
+  }
+  /** Byl permit pro cíl udělen před méně než `ms`? (echo `!permit` z POST /moderation/permit) */
+  grantedRecently(p: { channel: string; platform: string; userId?: string | null; login?: string | null }, now: number, ms: number): boolean {
+    return PermitStore.keys(p).some((k) => { const d = now - (this.granted.get(k) ?? -Infinity); return d >= 0 && d < ms; });
   }
   active(p: { channel: string; platform: string; userId?: string | null; login?: string | null }, now: number): boolean {
     return PermitStore.keys(p).some((k) => (this.m.get(k) ?? 0) > now);
   }
-  prune(now: number): void { for (const [k, until] of this.m) if (until <= now) this.m.delete(k); }
+  prune(now: number): void { for (const [k, until] of this.m) if (until <= now) { this.m.delete(k); this.granted.delete(k); } }
   get size(): number { return this.m.size; }
-  clear(): void { this.m.clear(); }
+  clear(): void { this.m.clear(); this.granted.clear(); }
 }
 
 export const permits = new PermitStore();
@@ -220,7 +231,7 @@ export const permits = new PermitStore();
 /** Po startu serveru: platné permity z link_permits do paměti. */
 export async function loadActivePermits(store: PermitStore = permits): Promise<number> {
   const rows = await db.select().from(linkPermits).where(gt(linkPermits.until, new Date()));
-  for (const r of rows) store.grant({ channel: r.channel, platform: r.platform, userId: r.targetUserId || null, login: r.targetLogin || null, until: r.until.getTime() });
+  for (const r of rows) store.grant({ channel: r.channel, platform: r.platform, userId: r.targetUserId || null, login: r.targetLogin || null, until: r.until.getTime() }, 0); // at 0: po restartu to není echo
   return rows.length;
 }
 
@@ -242,7 +253,7 @@ export interface LinkFilterDeps {
   /** Workspace kanálu synchronně z cache registru (workspaceForChannelSync). */
   workspaceFor: (platform: Platform, channel: string) => WorkspaceInfo | null;
   settingsFor: (slug: string) => LinkFilterSettings;
-  isBotAuthor: BotCheck['isBotAuthor'];
+  isBotAccount: BotCheck['isBotAccount'];
   permits: PermitStore;
   /** publishDeleted (SSE message-deleted + chat.deleted). */
   publishDeleted: (p: { channel: string; platform: Platform; messageId: string; by: string; reason: 'link_filter' }) => Promise<void>;
@@ -258,6 +269,11 @@ export interface LinkFilterDeps {
 }
 
 export interface LinkVerdict { host: string; channel: string }
+
+/** Starší zprávy (YouTube po reconnectu přehrává historii) filtr ani `!permit` neřeší. */
+export const MAX_MESSAGE_AGE_MS = 60_000;
+/** `!permit` pro týž cíl do 10 s po udělení = echo vlastní zprávy z POST /moderation/permit. */
+export const PERMIT_ECHO_MS = 10_000;
 
 /**
  * Filtr pro ingest onLive. `check(m)` je synchronní: rozhodne, případně nastaví `m.deleted`
@@ -299,6 +315,8 @@ export function createLinkFilter(deps: LinkFilterDeps) {
   return {
     check(m: IngestMessage): LinkVerdict | null {
       try {
+        const now = deps.now();
+        if (now - m.sentAt.getTime() > MAX_MESSAGE_AGE_MS) return null;
         const ws = deps.workspaceFor(m.platform, m.channel);
         // UC kanál = Twitch login streamera (moderace hledá workspace podle Twitche); bez něj nic.
         const ucChannel = ws?.channels.twitch;
@@ -306,19 +324,22 @@ export function createLinkFilter(deps: LinkFilterDeps) {
         const raw = (m.contentRaw || {}) as Record<string, unknown>;
         const roles = rolesFromBadges(m.platform, raw.badges, m.username, m.channel);
         const settings = deps.settingsFor(ws.slug);
-        const bot = isKnownBot({ platform: m.platform, login: m.username, userId: m.platformUserId || null, ws, extraBots: settings.extraBots, isBotAuthor: deps.isBotAuthor });
+        const bot = isKnownBot({ platform: m.platform, login: m.username, userId: m.platformUserId || null, ws, extraBots: settings.extraBots, isBotAccount: deps.isBotAccount });
 
+        // `!permit` bere jen od moda/streamera; od kohokoli jiného je to běžná zpráva (projde filtrem níže).
         const cmd = parsePermitCommand(m.content);
-        if (cmd) {
-          // Echo `!permit` od našeho bota (POST /moderation/permit) už permit uložil — nepřepisovat.
-          if ((roles.isMod || roles.isBroadcaster) && !bot) void handlePermit(m, cmd, ucChannel).catch(() => {});
+        if (cmd && (roles.isMod || roles.isBroadcaster) && !bot) {
+          // Echo `!permit` z POST /moderation/permit (účtem moda nebo botem) — permit už je uložený.
+          if (!deps.permits.grantedRecently({ channel: ucChannel, platform: m.platform, login: cmd.login }, now, PERMIT_ECHO_MS)) {
+            void handlePermit(m, cmd, ucChannel).catch(() => {});
+          }
           return null;
         }
 
         if (!settings.enabled) return null;
         const hosts = linkHosts(m.content);
         if (!hosts.length) return null;
-        const permit = deps.permits.active({ channel: ucChannel, platform: m.platform, userId: m.platformUserId, login: m.username }, deps.now());
+        const permit = deps.permits.active({ channel: ucChannel, platform: m.platform, userId: m.platformUserId, login: m.username }, now);
         const host = shouldFilter({ roles, hosts, allow: settings.allowDomains, permit, bot });
         if (!host) return null;
         m.deleted = { by: 'filter', reason: 'link_filter' };

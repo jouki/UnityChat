@@ -182,24 +182,34 @@ Při pozdějším výpadku platí poslední známé nastavení. Zapnout až **po
 načítá se dopředu po každém načtení registru workspaců. Domény se normalizují (bez schématu, cesty, `*.`, `www.`),
 povolená doména pokrývá i subdomény (`m.youtube.com` ⊂ `youtube.com`, ne `evilyoutube.com`).
 Webhook `POST /commands/invalidate { workspace, reason: "link-filter", data: { version } }` → cache i ETag pryč,
-načte se znovu; odpověď `{ ok, workspace, enabled, version }`, neznámý workspace `404 unknown_workspace`.
+načte se znovu (i když zrovna běží běžné načtení — vynucené počká a načte znovu); odpověď `{ ok, workspace, enabled, version }`, neznámý workspace `404 unknown_workspace`.
 
 ### Filtr (ingest, jen živé zprávy)
 - Kanál musí být v registru workspaců a workspace musí mít Twitch kanál (= UC kanál).
+- Zprávy starší než 60 s (čas platformy; YouTube po reconnectu přehrává historii) se nefiltrují ani nečtou jako `!permit`.
 - Odkaz = sdílený detektor `extension/core/links.js` (backend má vědomou kopii `lib/links.ts`, test porovnává
-  obě): i bez schématu (`neco.cz/x`, `www.x.com`, známá TLD), ne verze, čísla, časy, e-maily, @zmínky, emoty.
-- **Výjimky:** broadcaster, mod, VIP (odznaky zprávy; Kick OG = VIP), známí boti (bot identity workspace / sdílený
-  JoukiBOT, `bot.ownLogins`, StreamElements, Nightbot, Streamlabs, `extraBots`), aktivní permit.
+  obě): se schématem vždy (i přilepený uvnitř tokenu: `ahoj,https://x.cz`, `x:https://x.cz`); bez schématu jen známá
+  TLD a zároveň `www.`, cesta/dotaz (`neco.cz/x`, `bit.ly/abc`), nebo TLD z užšího seznamu bez českých slov a přípon
+  souborů (`seznam.cz`, `discord.gg` ano; `tak.co`, `dobre.to`, `jo.je`, `readme.md`, `run.sh` ne); doména i za
+  interpunkcí/emoji (`ahoj,evil.com`, `🔥evil.com`). Ne verze, čísla, časy, e-maily, @zmínky, emoty.
+- **Výjimky:** broadcaster, mod, VIP (odznaky zprávy; Kick OG = VIP), známí boti — StreamElements, Nightbot,
+  Streamlabs **jen na Twitchi** (jinde si jméno může vzít kdokoli), `extraBots` ze Židolišty (podle loginu na všech
+  platformách), `bot.ownLogins`, identity botů workspace / sdílený JoukiBOT (podle id účtu, když ho zpráva nese,
+  jinak loginu) — a aktivní permit.
 - **Akce:** zpráva se označí jako smazaná **před** zápisem do archivu a rozesláním — `/chat/stream` i archiv ji mají
   rovnou jako `deleted: true` bez obsahu (obsah zůstává v DB, `deleted_reason = 'link_filter'`, `deleted_by = 'filter'`).
   Pak SSE `message-deleted { channel, platform, messageId, by: "filter", reason: "link_filter", at }`
   + `chat.deleted` (reason `link_filter`) a smazání na platformě **botem workspace** (`accountId: null`).
   Bez hlášky a bez timeoutu. Evidence `moderation_actions` (`actor: "filter"`, `action: "delete"`,
   `params: { reason: "link_filter", host }`). Chyby se jen logují, ingest nikdy nespadne.
+- **Integrační stream:** smazaná zpráva jde jako `chat.message` s `text: ""` a `deleted: true` (obsah odkazu se
+  Židolištce neposílá; commandy z ní nespouštět), hned za ní `chat.deleted` s `reason: "link_filter"`.
 
 ### Permit
 - **Z chatu:** `!permit <login> [doba]` od moda/broadcastera (odznaky) z libovolného klienta. Doba `90`, `90s`,
-  `2m`, `2min`, ořez 30–600 s, výchozí 60 s. Echo `!permit` od našeho bota se ignoruje (permit z nabídky už platí).
+  `2m`, `2min`, ořez 30–600 s, výchozí 60 s. `!permit` od kohokoli jiného je běžná zpráva (s odkazem se smaže).
+  Echo vlastního `!permit` z nabídky (účtem moda i botem) se nezapisuje znovu: permit pro týž cíl udělený
+  před méně než 10 s = echo.
   Cíl: login v archivu kanálu → všechny známé identity (propojený UC účet, jen platformy kanálu); uživatel,
   který ještě nepsal → permit podle loginu na platformě příkazu. Evidence `moderation_actions`
   (`action: "permit"`, `params.source: "chat"`).

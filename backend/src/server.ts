@@ -42,7 +42,7 @@ import { startMailKeepalive } from './lib/mailKeepalive.js';
 import { publishDeleted } from './lib/messageDeletes.js';
 import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
-import { isBotAuthor } from './lib/botIdentities.js';
+import { isBotAccount } from './lib/botIdentities.js';
 import { workspaceForChannelSync } from './lib/zidolista.js';
 import { deletePlatformMessage } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
@@ -87,7 +87,7 @@ const linkTargets = dbTargetDeps((channel, platform) => registryPlatformChannel(
 const linkFilter = createLinkFilter({
   workspaceFor: workspaceForChannelSync,
   settingsFor: (slug) => linkFilterSync(slug, app.log),
-  isBotAuthor,
+  isBotAccount,
   permits,
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
