@@ -131,7 +131,8 @@ export default async function donateRoutes(app: FastifyInstance) {
     const email = (await verifiedEmail(req.webAccountId!)) ?? (givenEmail ? normEmail(givenEmail) : '');
     if (!EMAIL_RE.test(email)) return reply.code(400).send({ ok: false, error: 'email_required' });
     // Ověřený dárce (platforma + login z účtu UnityChatu) — Židolišta ho ukáže u daru (pokyn usera 2026-09-25).
-    const body = { ...rest, email, ucPlatform: ident.platform, ucLogin: ident.login };
+    // ucUserId = ID na platformě — Židolišta páruje dona divákovi přednostně podle něj (login se může změnit).
+    const body = { ...rest, email, ucPlatform: ident.platform, ucLogin: ident.login, ucUserId: ident.platformUserId };
     try {
       const u = await upstream(req, `/donate/public/${encodeURIComponent(slug)}/intents`, { method: 'POST', body });
       req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken }, 'donate: intent');
