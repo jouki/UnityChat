@@ -15,7 +15,10 @@ Promise.all([
   check('PERMIT_OPTIONS dle specu', eq(mm.PERMIT_OPTIONS, [30, 60, 120, 300, 600]));
   const fmt = mm.TIMEOUT_OPTIONS.map(mod.fmtDuration);
   check('fmtDuration timeoutů', eq(fmt, ['5 s', '30 s', '1 min', '5 min', '10 min', '30 min', '1 h', '2 h']), fmt.join('|'));
-  check('fmtDuration 1,5 h / dny', mod.fmtDuration(5400) === '1,5 h' && mod.fmtDuration(86400) === '1 den' && mod.fmtDuration(3 * 86400) === '3 dny' && mod.fmtDuration(14 * 86400) === '14 dní');
+  check('fmtDuration vlastní délky přesně', mod.fmtDuration(90) === '1 min 30 s' && mod.fmtDuration(9000) === '2 h 30 min' && mod.fmtDuration(90061) === '1 den 1 h', [90, 9000, 90061].map(mod.fmtDuration).join('|'));
+  check('customDurationSec: jednotky, min 1, strop', mm.customDurationSec(3, 60, mm.MAX_TIMEOUT_SEC) === 180 && mm.customDurationSec(0, 1, 100) === null && mm.customDurationSec(25, 3600, mm.MAX_PERMIT_SEC) === null && mm.customDurationSec(24, 3600, mm.MAX_PERMIT_SEC) === 86400 && mm.customDurationSec('x', 1, 10) === null);
+  check('menuModel: timeout i permit mají vlastní délku', mm.menuModel().filter((i) => i.custom).map((i) => i.id + ':' + i.custom.max).join(',') === 'timeout:1209600,permit:86400');
+  check('fmtDuration 1 h 30 min / dny', mod.fmtDuration(5400) === '1 h 30 min' && mod.fmtDuration(86400) === '1 den' && mod.fmtDuration(3 * 86400) === '3 dny' && mod.fmtDuration(14 * 86400) === '14 dní');
 
   // --- štítek ---
   check('modTagText ban', mod.modTagText({ action: 'ban' }) === 'Zabanován');

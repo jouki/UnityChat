@@ -224,3 +224,23 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55); display: flex; flex-direction: column;
 }
 .uc-mm-item--open { background: var(--bg-hover, #26262c); }
+
+/* Vlastní délka timeoutu / permitu: číslo + s / m / h (pokyn usera 2026-09-25) */
+.uc-mm-custom {
+  display: flex; align-items: center; gap: 4px; padding: 6px 4px 2px;
+  margin-top: 2px; border-top: 1px solid var(--border, #2f2f35);
+}
+.uc-mm-custom-num {
+  width: 52px; min-width: 0; padding: 4px 6px; font: inherit; font-size: 12px;
+  color: var(--text, #efeff1); background: var(--bg-primary, #0e0e10);
+  border: 1px solid var(--border, #2f2f35); border-radius: 6px; -moz-appearance: textfield;
+}
+.uc-mm-custom-num::-webkit-inner-spin-button, .uc-mm-custom-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.uc-mm-custom-num:focus { outline: none; border-color: #ff8c00; }
+.uc-mm-unit {
+  flex: 1 1 0; min-width: 26px; padding: 4px 0; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  color: var(--text, #efeff1); background: var(--bg-hover, #26262c); border: 1px solid var(--border, #2f2f35); border-radius: 6px;
+}
+.uc-mm-unit:hover, .uc-mm-unit:focus-visible { border-color: #ff8c00; background: rgba(255, 140, 0, 0.18); outline: none; }
+.uc-mm-custom--bad .uc-mm-custom-num { border-color: #e5484d; animation: uc-mm-shake 0.3s; }
+@keyframes uc-mm-shake { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }

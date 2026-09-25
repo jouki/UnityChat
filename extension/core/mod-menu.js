@@ -12,6 +12,18 @@ import { PLATFORM_NAMES } from './soundboard.js';
 
 export const TIMEOUT_OPTIONS = [5, 30, 60, 300, 600, 1800, 3600, 7200];
 export const PERMIT_OPTIONS = [30, 60, 120, 300, 600];
+/** Vlastní délka (pokyn usera 2026-09-25): stejné stropy jako server (Twitch 14 dní, permit 24 h). */
+export const MAX_TIMEOUT_SEC = 1_209_600;
+export const MAX_PERMIT_SEC = 86_400;
+export const CUSTOM_UNITS = [{ id: 's', sec: 1 }, { id: 'm', sec: 60 }, { id: 'h', sec: 3600 }];
+
+/** Vlastní délka z pole + jednotky → sekundy, nebo null (mimo 1…max). */
+export function customDurationSec(value, unitSec, max) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return null;
+  const sec = n * unitSec;
+  return sec >= 1 && sec <= max ? sec : null;
+}
 export const NICKNAME_MAX = 30;
 export const WARN_REASON_MAX = 500;
 
@@ -138,12 +150,12 @@ export function menuModel({ banned = false, canDelete = true, hasUserId = true }
   if (canDelete) items.push({ id: 'delete', label: 'Smazat zprávu' });
   if (banned) items.push({ id: 'unban', label: 'Unban', disabled: noId });
   else {
-    items.push({ id: 'timeout', label: 'Timeout', disabled: noId, sub: TIMEOUT_OPTIONS.map((s) => ({ id: `timeout:${s}`, label: fmtDuration(s), durationSec: s })) });
+    items.push({ id: 'timeout', label: 'Timeout', disabled: noId, sub: TIMEOUT_OPTIONS.map((s) => ({ id: `timeout:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_TIMEOUT_SEC } });
     items.push({ id: 'ban', label: 'Zabanovat…', danger: true, disabled: noId });
   }
   items.push({ id: 'rename', label: 'Přejmenovat…' });
   items.push({ id: 'warn', label: 'Varovat…', disabled: noId });
-  items.push({ id: 'permit', label: 'Permit', disabled: noId, sub: PERMIT_OPTIONS.map((s) => ({ id: `permit:${s}`, label: fmtDuration(s), durationSec: s })) });
+  items.push({ id: 'permit', label: 'Permit', disabled: noId, sub: PERMIT_OPTIONS.map((s) => ({ id: `permit:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_PERMIT_SEC } });
   return items;
 }
 
@@ -451,6 +463,64 @@ export class ModMenu {
       }
       list.appendChild(b);
     }
+    if (this._view !== 'root') {
+      const parent = model.find((i) => i.id === this._view);
+      if (parent?.custom) list.appendChild(this._customRow(parent));
+    }
+  }
+
+  /**
+   * Řádek vlastní délky pod předvolbami: číslo (kolečko myši ±1, nejméně 1) + tlačítka s / m / h,
+   * klik na jednotku rovnou provede akci podnabídky (timeout / permit).
+   */
+  _customRow(parent) {
+    const doc = this.doc;
+    const row = doc.createElement('div');
+    row.className = 'uc-mm-custom';
+    const input = doc.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.step = '1';
+    input.value = '1';
+    input.inputMode = 'numeric';
+    input.className = 'uc-mm-custom-num';
+    input.setAttribute('aria-label', `Vlastní délka (${parent.label})`);
+    const clamp = () => { const n = Math.floor(Number(input.value)); input.value = String(Number.isFinite(n) && n >= 1 ? n : 1); };
+    input.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const n = Math.max(1, (Math.floor(Number(input.value)) || 1) + (e.deltaY < 0 ? 1 : -1));
+      input.value = String(n);
+    }, { passive: false });
+    input.addEventListener('change', clamp);
+    input.addEventListener('click', (e) => e.stopPropagation());
+    // Šipky/Home/End patří poli, ne navigaci v nabídce; Enter = sekundy.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' || e.key === 'Tab') return;
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); row.querySelector('.uc-mm-unit')?.click(); }
+    });
+    row.appendChild(input);
+    for (const u of CUSTOM_UNITS) {
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.className = 'uc-mm-unit';
+      b.textContent = u.id;
+      b.title = { s: 'sekundy', m: 'minuty', h: 'hodiny' }[u.id];
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clamp();
+        const sec = customDurationSec(input.value, u.sec, parent.custom.max);
+        if (sec == null) {
+          row.classList.add('uc-mm-custom--bad');
+          b.title = `Nejvýš ${fmtDuration(parent.custom.max)}`;
+          setTimeout(() => row.classList.remove('uc-mm-custom--bad'), 600);
+          return;
+        }
+        this._activate({ id: `${parent.id}:${sec}` });
+      });
+      row.appendChild(b);
+    }
+    return row;
   }
 
   /** Podnabídka vedle: jen jemný ukazatel s hoverem (ne mobil) a když se vedle menu vejde. */
@@ -483,6 +553,7 @@ export class ModMenu {
       b.addEventListener('click', (e) => { e.stopPropagation(); this._activate(s); });
       fly.appendChild(b);
     }
+    if (it.custom) fly.appendChild(this._customRow(it));
     fly.addEventListener('mouseenter', () => clearTimeout(this._flyTimer));
     this.el.appendChild(fly);
     anchor.classList.add('uc-mm-item--open');

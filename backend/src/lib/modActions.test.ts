@@ -186,6 +186,7 @@ test('Kick timeout 5 s → 1 minuta, broadcaster_user_id z kickBroadcasterId, bo
   assert.equal(kickMinutes(30), 1);
   assert.equal(kickMinutes(61), 2);
   assert.equal(kickMinutes(7200), 120);
+  assert.equal(kickMinutes(1_209_600), 10_080);
 });
 
 test('YouTube timeout: liveChatId z videos.list, liveChatBans.insert temporary, vrátí id banu', async () => {

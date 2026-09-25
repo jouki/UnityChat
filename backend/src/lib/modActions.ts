@@ -231,12 +231,16 @@ export async function deletePlatformMessage(
   return result;
 }
 
-/** Povolené délky timeoutu (s) z nabídky moda; ban = permanentní (durationSec null). */
+/** Předvolby timeoutu (s) v nabídce moda; ban = permanentní (durationSec null). */
 export const TIMEOUT_DURATIONS = [5, 30, 60, 300, 600, 1800, 3600, 7200] as const;
+/** Vlastní délka timeoutu (nabídka moda i Chat Log): 1 s až Twitch limit 14 dní. */
+export const MAX_TIMEOUT_SEC = 1_209_600;
+/** Kick bere timeout v minutách, nejvýš 7 dní. */
+export const KICK_MAX_TIMEOUT_MIN = 10_080;
 
-/** Kick má timeout v celých minutách (min. 1) → 5 s a 30 s = 1 min. */
+/** Kick má timeout v celých minutách (min. 1, max. 7 dní) → 5 s a 30 s = 1 min. */
 export function kickMinutes(sec: number): number {
-  return Math.max(1, Math.ceil(sec / 60));
+  return Math.min(KICK_MAX_TIMEOUT_MIN, Math.max(1, Math.ceil(sec / 60)));
 }
 
 export interface BanParams {

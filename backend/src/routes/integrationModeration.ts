@@ -23,7 +23,7 @@ import { publishDeleted, archivedMessageChannel, channelMatches, type PublishDel
 import { publishHidden, publishUnhidden, type HideParams, type HideResult } from '../lib/messageHides.js';
 import { deletePlatformMessage, banPlatformUser, unbanUser, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resultRecord } from './moderation.js';
-import { runUserAction, runPermit, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
+import { runUserAction, runPermit, MAX_PERMIT_SEC, type UserActionDeps } from '../lib/userModActions.js';
 import { storePermits } from '../lib/linkFilter.js';
 import { restoreOnPermit, publishRestored } from '../lib/linkRestore.js';
 import { sendAsBot } from '../lib/botSend.js';
@@ -45,8 +45,8 @@ export const IntegrationModBody = z.object({
   actor: ActorSchema,
 });
 
-/** Max délka timeoutu z Chat Logu = Twitch limit 14 dní (Kick se zaokrouhlí na minuty). */
-export const MAX_TIMEOUT_SEC = 1_209_600;
+export { MAX_TIMEOUT_SEC } from '../lib/modActions.js';
+import { MAX_TIMEOUT_SEC } from '../lib/modActions.js';
 
 export const IntegrationUserModBody = z.object({
   platform: z.enum(['twitch', 'kick', 'youtube']),
@@ -162,7 +162,7 @@ export async function runIntegrationUserModeration(action: IntegrationUserModAct
 export const IntegrationPermitBody = z.object({
   platform: z.enum(['twitch', 'kick', 'youtube']),
   userId: z.string().min(1).max(64),
-  durationSec: z.number().int().refine((n) => (PERMIT_DURATIONS as readonly number[]).includes(n)),
+  durationSec: z.number().int().min(1).max(MAX_PERMIT_SEC),
   messageId: z.string().min(1).max(128).optional(),
   actor: ActorSchema,
 });

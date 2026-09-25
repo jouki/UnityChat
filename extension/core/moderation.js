@@ -106,10 +106,14 @@ export function clearDeleted(el) {
 export function fmtDuration(sec) {
   const s = Math.max(0, Math.round(Number(sec) || 0));
   if (s < 60) return `${s} s`;
-  if (s < 3600) return `${Math.round(s / 60)} min`;
-  if (s < 86400) return `${String(Math.round((s / 3600) * 10) / 10).replace('.', ',')} h`;
-  const d = Math.round(s / 86400);
-  return `${d} ${d === 1 ? 'den' : d < 5 ? 'dny' : 'dní'}`;
+  // Vlastní délky z nabídky moda (90 s, 150 min…): dvě nejvyšší nenulové jednotky, přesně.
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const parts = [];
+  if (d) parts.push(`${d} ${d === 1 ? 'den' : d < 5 ? 'dny' : 'dní'}`);
+  if (h) parts.push(`${h} h`);
+  if (m) parts.push(`${m} min`);
+  if (r) parts.push(`${r} s`);
+  return parts.slice(0, 2).join(' ');
 }
 
 /**

@@ -15,7 +15,9 @@ test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotaz
 test('UserActionBody: timeout jen s povolenou délkou, ban/unban bez ní', () => {
   const b = { platform: 'twitch', userId: '1' };
   assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 300 }).success, true);
-  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 301 }).success, false);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 301 }).success, true);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 0 }).success, false);
+  assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout', durationSec: 1_209_601 }).success, false);
   assert.equal(UserActionBody.safeParse({ ...b, action: 'timeout' }).success, false);
   assert.equal(UserActionBody.safeParse({ ...b, action: 'ban' }).success, true);
   assert.equal(UserActionBody.safeParse({ ...b, action: 'kill' }).success, false);
@@ -23,7 +25,9 @@ test('UserActionBody: timeout jen s povolenou délkou, ban/unban bez ní', () =>
 
 test('PermitBody / WarnBody / RenameBody: délky permitu, povinný důvod, null přezdívka = smazat', () => {
   assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 120 }).success, true);
-  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 90 }).success, false);
+  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 90 }).success, true);
+  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 0 }).success, false);
+  assert.equal(PermitBody.safeParse({ platform: 'kick', userId: '1', durationSec: 86_401 }).success, false);
   assert.equal(WarnBody.safeParse({ platform: 'kick', userId: '1', reason: '   ' }).success, false);
   assert.equal(WarnBody.safeParse({ platform: 'kick', userId: '1', reason: 'x'.repeat(501) }).success, false);
   const r = RenameBody.safeParse({ platform: 'twitch', login: '@Spammer', nickname: null });

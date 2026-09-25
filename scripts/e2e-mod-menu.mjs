@@ -146,6 +146,26 @@ const tb = posts.user[0];
 check('A POST /moderation/user tělo', tb && tb.channel === 'robdiesalot' && tb.platform === 'twitch' && tb.userId === 'u1' && tb.login === 'Tester' && tb.action === 'timeout' && tb.durationSec === 300, JSON.stringify(tb));
 check('A hláška výsledku po platformách', (await lastSys()) === 'Timeout 5 min pro Tester: Twitch ✓ · Kick ✓ (bot)', await lastSys());
 
+// Vlastní délka: kolečko nad polem (nejméně 1) + jednotka → akce s n × jednotka
+await rightClick('e2e-a1');
+await key('ArrowDown'); await key('ArrowRight');
+check('A podnabídka má řádek vlastní délky s/m/h', await ev(`JSON.stringify([...document.querySelectorAll('.uc-mod-menu .uc-mm-fly .uc-mm-custom .uc-mm-unit')].map(b => b.textContent))`) === JSON.stringify(['s', 'm', 'h']));
+const wheel = await ev(`(() => { const i = document.querySelector('.uc-mod-menu .uc-mm-fly .uc-mm-custom-num');
+  const w = (dy) => i.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, bubbles: true, cancelable: true }));
+  w(100); const low = i.value; w(-100); w(-100); w(-100); return low + '|' + i.value; })()`);
+check('A kolečko: pod 1 nejde, nahoru přičítá', wheel === '1|4', wheel);
+const nUser = posts.user.length;
+await ev(`[...document.querySelectorAll('.uc-mod-menu .uc-mm-fly .uc-mm-unit')].find(b => b.textContent === 'm').click()`);
+check('A klik na „m" zavře nabídku', await until(`!document.querySelector('.uc-mod-menu')`, 2000));
+await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.startsWith('Timeout 4 min'))`, 4000);
+check('A vlastní timeout 4 min → durationSec 240', posts.user.length === nUser + 1 && posts.user.at(-1)?.durationSec === 240, JSON.stringify(posts.user.at(-1)));
+await rightClick('e2e-a1');
+await ev(`document.querySelector('.uc-mod-menu [data-id="permit"]').click()`);
+await ev(`(() => { const i = document.querySelector('.uc-mod-menu .uc-mm-custom-num'); i.value = '25'; })()`);
+await ev(`[...document.querySelectorAll('.uc-mod-menu .uc-mm-unit')].find(b => b.textContent === 'h').click()`);
+check('A permit 25 h (nad strop 24 h) → neodejde, nabídka zůstane', await ev(`!!document.querySelector('.uc-mod-menu .uc-mm-custom--bad')`) === true);
+await key('Escape'); await key('Escape'); await key('Escape');
+
 // Esc zavře, Esc v podnabídce se vrátí
 await rightClick('e2e-a1');
 await key('ArrowDown');

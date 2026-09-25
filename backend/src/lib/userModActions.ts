@@ -16,6 +16,8 @@ export type Out = { status: number; body: Record<string, unknown> };
 
 /** Povolené délky permitu (s). */
 export const PERMIT_DURATIONS = [30, 60, 120, 300, 600] as const;
+/** Vlastní délka permitu z nabídky moda / Chat Logu: 1 s až 24 h. */
+export const MAX_PERMIT_SEC = 86_400;
 /** Login do `!permit <login>` — nic, co by v chatu přidalo další argumenty / příkaz. */
 export const PERMIT_LOGIN_RE = /^[\w.-]{1,60}$/;
 

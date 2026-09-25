@@ -23,12 +23,12 @@ import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
 import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
-import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, TIMEOUT_DURATIONS, type ModResult, type ModDeps } from '../lib/modActions.js';
+import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, MAX_TIMEOUT_SEC, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resolveUserTargets, dbTargetDeps, archivedUserByLogin, makeTargetRole } from '../lib/moderationTargets.js';
 import { blacklistFor } from './blacklist.js';
 import { containsBlacklisted } from '../lib/blacklistMatch.js';
 import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forgetEcho } from '../lib/userModeration.js';
-import { runUserAction, runWarn, runPermit, runRename, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
+import { runUserAction, runWarn, runPermit, runRename, MAX_PERMIT_SEC, type UserActionDeps } from '../lib/userModActions.js';
 import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
 import { storePermits } from '../lib/linkFilter.js';
 import { restoreOnPermit, publishRestored } from '../lib/linkRestore.js';
@@ -128,7 +128,7 @@ export const UserActionBody = z.object({
   action: z.enum(['timeout', 'ban', 'unban']),
   durationSec: z.number().int().optional(),
   reason: ReasonField.optional(),
-}).refine((b) => b.action !== 'timeout' || (TIMEOUT_DURATIONS as readonly number[]).includes(b.durationSec ?? -1), { message: 'durationSec', path: ['durationSec'] });
+}).refine((b) => b.action !== 'timeout' || (Number.isInteger(b.durationSec) && b.durationSec! >= 1 && b.durationSec! <= MAX_TIMEOUT_SEC), { message: 'durationSec', path: ['durationSec'] });
 
 export const WarnBody = z.object({
   channel: z.string().min(1).max(40).optional(),
@@ -143,7 +143,7 @@ export const PermitBody = z.object({
   platform: PlatformEnum,
   userId: UserIdField,
   login: z.string().max(60).optional(),
-  durationSec: z.number().int().refine((d) => (PERMIT_DURATIONS as readonly number[]).includes(d)),
+  durationSec: z.number().int().min(1).max(MAX_PERMIT_SEC),
   /** Část 3: zpráva, na které mod permit udělil — smazaná filtrem odkazů se v UnityChatu obnoví. */
   messageId: z.string().min(1).max(128).optional(),
 });
