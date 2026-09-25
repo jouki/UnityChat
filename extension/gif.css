@@ -1,0 +1,117 @@
+/* Odměna „Posílání GIFů" (extension/core/gif.js) — sdílené addonem i webem.
+   Médium ve zprávě (.uc-gif) + karty ke schválení / stav odesílatele (.uc-gif-stack). */
+
+/* ---- GIF ve zprávě: 100 %, nejvýš šířka chatu a 400 × 250 px, poměr zachován ---- */
+.uc-gif {
+  display: block;
+  margin: 4px 0 2px;
+  max-width: min(100%, 400px);
+  line-height: 0;
+}
+.uc-gif-media {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+/* Neznámé rozměry (MP4 bez tkhd): omezit rámečkem, poměr drží prohlížeč. */
+.uc-gif--nosize .uc-gif-media {
+  max-width: min(100%, 400px);
+  max-height: 250px;
+  width: auto;
+}
+.uc-gif-fallback {
+  display: inline-block;
+  line-height: 1.4;
+  font-size: 12px;
+  color: var(--accent, #ff8c00);
+  text-decoration: underline;
+}
+
+/* Smazaná / skrytá zpráva: GIF se neukazuje (text nahrazuje štítek), u dim/strike jen ztlumený. */
+.uc-deleted--label .uc-gif,
+.uc-deleted--hide .uc-gif { display: none; }
+.uc-deleted--dim .uc-gif,
+.uc-deleted--strike .uc-gif { opacity: .45; }
+
+/* ---- Karty ke schválení (mod) a stav odesílatele — nad polem pro psaní, u spodku chatu ---- */
+.uc-gif-stack {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 8500;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 70%;
+  overflow-y: auto;
+  pointer-events: none;
+}
+.uc-gif-card {
+  pointer-events: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 8px;
+  background: var(--bg-secondary, #18181b);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  color: var(--text-primary, #efeff1);
+  font-size: 12px;
+  transition: border-color .2s, background-color .2s, opacity .3s;
+}
+.uc-gif-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.uc-gif-card-pi { flex: 0 0 auto; display: inline-flex; font-size: 10px; color: var(--text-secondary, #adadb8); }
+.uc-gif-card-pi img { width: 16px; height: 16px; display: block; }
+.uc-gif-card-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.uc-gif-card-kind { color: var(--text-secondary, #adadb8); white-space: nowrap; }
+.uc-gif-timer {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgba(255, 140, 0, 0.15);
+  color: var(--accent-light, #ffc800);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.uc-gif-card-text { margin-top: 4px; overflow-wrap: anywhere; line-height: 1.35; }
+.uc-gif-card-media .uc-gif { margin: 6px 0 0; }
+.uc-gif-card-media .uc-gif-media { max-height: 160px; width: auto; }
+.uc-gif-card-status { margin-top: 6px; font-weight: 700; color: var(--text-secondary, #adadb8); }
+.uc-gif-card-err { margin-top: 6px; color: #ff9a9d; }
+.uc-gif-card-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.uc-gif-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 6px;
+  background: var(--bg-tertiary, #1f1f23);
+  color: var(--text-primary, #efeff1);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.uc-gif-btn:hover { background: var(--bg-hover, #26262c); }
+.uc-gif-btn:disabled { opacity: .5; cursor: default; }
+.uc-gif-btn--approve { background: #1f7a3d; border-color: transparent; color: #fff; }
+.uc-gif-btn--approve:hover { background: #26914a; }
+.uc-gif-btn--reject { color: #ff9a9d; }
+.uc-gif-card--busy .uc-gif-card-actions { cursor: progress; }
+
+/* Rozhodnuto: krátký efekt (zelená / červená / šedá), pak karta zmizí. */
+.uc-gif-card--approved { border-color: #2fbf5b; background: #12301c; }
+.uc-gif-card--approved .uc-gif-card-status { color: #6ee08f; }
+.uc-gif-card--rejected { border-color: #e5484d; background: #3a1517; }
+.uc-gif-card--rejected .uc-gif-card-status { color: #ff9a9d; }
+.uc-gif-card--expired,
+.uc-gif-card--closed { border-color: var(--border, #2f2f35); opacity: .85; }
+.uc-gif-card--own.uc-gif-card--pending { border-style: dashed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .uc-gif-card { transition: none; }
+}

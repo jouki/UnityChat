@@ -21,11 +21,13 @@ export function normalizeWarning(w) {
  * @param {typeof EventSource} [o.EventSource]
  * @param {(w: object) => void} o.onWarning
  * @param {(id: string) => void} o.onAck
+ * @param {Record<string, (data: object) => void>} [o.handlers]  další soukromé události (např. `gif-pending`,
+ *   `gif-decided` — core/gif.js GifRequests.onPending / onDecided); data = rozparsovaný JSON
  * @param {(tag: string, text: string) => void} [o.log]
  * @param {number} [o.retryMs]
  * @returns {{close: () => void}}
  */
-export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = globalThis.EventSource, onWarning, onAck, log = () => {}, retryMs = 5000, setTimeout: st = globalThis.setTimeout.bind(globalThis), clearTimeout: ct = globalThis.clearTimeout.bind(globalThis) }) {
+export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = globalThis.EventSource, onWarning, onAck, handlers = {}, log = () => {}, retryMs = 5000, setTimeout: st = globalThis.setTimeout.bind(globalThis), clearTimeout: ct = globalThis.clearTimeout.bind(globalThis) }) {
   let es = null;
   let timer = null;
   let closed = false;
@@ -58,6 +60,15 @@ export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = glo
     src.addEventListener('account-warning-ack', (e) => {
       try { const d = JSON.parse(e.data); if (d?.id != null) onAck?.(String(d.id)); } catch {}
     });
+    for (const [type, fn] of Object.entries(handlers || {})) {
+      if (typeof fn !== 'function') continue;
+      src.addEventListener(type, (e) => {
+        if (src !== es) return;
+        let d;
+        try { d = JSON.parse(e.data); } catch { return; }
+        try { fn(d); } catch (err) { log('AccWarn', `${type} handler FAIL ${err?.message || err}`); }
+      });
+    }
     src.addEventListener('error', (e) => {
       if (src !== es) return;
       let data = null;
