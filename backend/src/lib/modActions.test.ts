@@ -109,3 +109,21 @@ test('404 = už smazaná → ok; jiná chyba → error:<status>', async () => {
   assert.equal(await deletePlatformMessage({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', messageId: 'x' }, deps({ calls, statuses: [404], identities: idents })), 'ok');
   assert.equal(await deletePlatformMessage({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', messageId: 'x' }, deps({ calls, statuses: [403], identities: idents })), 'error:403');
 });
+
+test('proaktivní refresh s přechodnou chybou (503) → smazání současným tokenem', async () => {
+  const calls: Call[] = [];
+  const stale = { ...modIdent('twitch'), expiresAt: new Date(Date.now() - 1000) };
+  const r = await deletePlatformMessage({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', messageId: 'msg-1' },
+    deps({ calls, refresh: async () => { throw new Error('Twitch token refresh failed: 503'); }, identities: { mod: async () => stale, bot: async () => null, role: async () => 'moderator' } }));
+  assert.equal(r, 'ok');
+  assert.equal(auth(calls[0]), 'Bearer modtok');
+});
+
+test('proaktivní refresh s neplatným refresh tokenem (400) → error:401 bez volání platformy', async () => {
+  const calls: Call[] = [];
+  const stale = { ...modIdent('twitch'), expiresAt: new Date(Date.now() - 1000) };
+  const r = await deletePlatformMessage({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', messageId: 'msg-1' },
+    deps({ calls, refresh: async () => { throw new Error('Twitch token refresh failed: 400'); }, identities: { mod: async () => stale, bot: async () => null, role: async () => 'moderator' } }));
+  assert.equal(r, 'error:401');
+  assert.equal(calls.length, 0);
+});

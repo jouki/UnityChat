@@ -163,7 +163,10 @@ export async function resolveChannels(channel: string): Promise<string[]> {
   return [...new Set([channel, dir[0]?.yt?.toLowerCase(), dir[0]?.kick?.toLowerCase()].filter((c): c is string => !!c))];
 }
 
-/** Kanál zprávy v ingestu pro danou platformu (YouTube handle / Kick slug podle streamers directory). */
+/**
+ * Kanál zprávy v ingestu pro danou platformu (YouTube handle / Kick slug podle streamers directory).
+ * Zdroj: adresář `streamers` (fallback UC kanál). Moderace používá lib/modActions `registryPlatformChannel` (registr Židolišty).
+ */
 export async function platformChannel(platform: string, channel: string): Promise<string> {
   if (platform === 'twitch') return channel;
   const dir = await db.select({ yt: streamers.youtubeHandle, kick: streamers.kickSlug }).from(streamers).where(eq(streamers.twitchLogin, channel)).limit(1);

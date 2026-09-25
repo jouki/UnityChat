@@ -43,8 +43,12 @@ export interface ModDeps {
 
 const defaultWorkspace = (ucChannel: string) => workspaceForChannel('twitch', ucChannel);
 
-/** Kanál na platformě pro UC kanál (Twitch login streamera): Twitch = týž, Kick/YouTube z registru Židolišty. */
-export async function platformChannel(channel: string, platform: Platform, ws?: WorkspaceInfo | null): Promise<string | null> {
+/**
+ * Kanál na platformě pro UC kanál (Twitch login streamera): Twitch = týž, Kick/YouTube z registru Židolišty.
+ * Registr = kanály, které ingest poslouchá a ukládá do messages.channel (role moda se čte odtud).
+ * Pozor: routes/chat.ts `platformChannel(platform, channel)` bere adresář `streamers` (párování uc-sent) — jiný zdroj.
+ */
+export async function registryPlatformChannel(channel: string, platform: Platform, ws?: WorkspaceInfo | null): Promise<string | null> {
   const c = channel.toLowerCase();
   if (platform === 'twitch') return c;
   const w = ws === undefined ? await defaultWorkspace(c) : ws;
@@ -76,6 +80,12 @@ async function callDelete(platform: Platform, token: string, url: string, f: typ
   throw new HttpFail(r.status);
 }
 
+/**
+ * Smaže zprávu na platformě účtem moda, jinak botem workspace.
+ * PŘEDPOKLAD: volající MUSÍ předem ověřit, že UC účet smí v kanálu moderovat
+ * (accountModPlatforms / isModOrBroadcaster). Tahle funkce to nekontroluje — bez
+ * toho by kterýkoli přihlášený divák mohl nechat bota mazat zprávy.
+ */
 export async function deletePlatformMessage(
   p: { accountId: number; channel: string; platform: Platform; messageId: string },
   deps: ModDeps = {},
@@ -93,7 +103,7 @@ export async function deletePlatformMessage(
 
   const ucChannel = p.channel.toLowerCase();
   const ws = await (deps.workspace ?? defaultWorkspace)(ucChannel);
-  const pch = await platformChannel(ucChannel, p.platform, ws);
+  const pch = await registryPlatformChannel(ucChannel, p.platform, ws);
   if (!pch) return 'error:no_channel';
 
   // 1) vlastní účet moda
@@ -137,7 +147,10 @@ export async function deletePlatformMessage(
   };
 
   try {
-    if (a.refreshToken && needsRefresh(a.expiresAt)) await doRefresh();
+    if (a.refreshToken && needsRefresh(a.expiresAt)) {
+      // Přechodná chyba proaktivního refreshe (5xx, síť) nevadí — zkusit současný token, 401 cestu řeší retry níže.
+      try { await doRefresh(); } catch (e) { if (statusOf(e) === 401) throw e; }
+    }
     try { await doDelete(); }
     catch (e) {
       if (statusOf(e) !== 401) throw e;
