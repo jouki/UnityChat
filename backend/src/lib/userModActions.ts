@@ -198,8 +198,9 @@ export interface WarnDeps {
 export async function runWarn(input: WarnInput, deps: WarnDeps): Promise<Out> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
-  if (input.accountId !== null && targets.accountId === input.accountId) return self;
-  const denied = await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
+  // Varování na sebe smí (test / sranda, pokyn usera 2026-09-25); hierarchie se na sebe nekontroluje.
+  const isSelf = input.accountId !== null && targets.accountId === input.accountId;
+  const denied = isSelf ? null : await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
   if (denied) return denied;
   const results: Record<string, ModResult | 'no_account'> = {};
 

@@ -180,9 +180,9 @@ test('warn: divák mimo UC na Kicku → žádná Twitch akce, unitychat no_accou
   assert.equal(sent.length, 0);
 });
 
-test('warn: cíl mimo kanál 404, na sebe 400, na moda 403', async () => {
+test('warn: cíl mimo kanál 404, na sebe smí (i jako mod), na moda 403', async () => {
   assert.equal((await runWarn(warnIn, warnDeps({ resolveTargets: async () => null }).deps)).status, 404);
-  assert.equal((await runWarn({ ...warnIn, accountId: 50 }, warnDeps().deps)).status, 400);
+  assert.equal((await runWarn({ ...warnIn, accountId: 50 }, warnDeps({ targetRole: async () => 'moderator' }).deps)).status, 200);
   const d = warnDeps({ targetRole: roleOf({ 'twitch:spammer': 'moderator' }) });
   assert.equal((await runWarn(warnIn, d.deps)).status, 403);
   assert.equal(d.sent.length + d.twitch.length, 0);
