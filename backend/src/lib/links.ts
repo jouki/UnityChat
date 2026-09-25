@@ -2,13 +2,7 @@
 // VĚDOMÁ KOPIE extension/core/links.js: backend image se staví z base dir `backend/`
 // (Coolify), soubory z `extension/` v něm nejsou, takže sdílený modul importovat nejde.
 // Logika MUSÍ zůstat shodná — test links.test.ts pouští oba moduly na stejné případy
-// a porovnává výstupy. Při změně upravit oba soubory.
-//
-// Co je odkaz:
-//  - cokoli se schématem http(s):// / ftp:// (host libovolný, i IP),
-//  - bez schématu `www.x.y`, `neco.cz`, `neco.cz/x`, `neco.com:8080` — poslední
-//    štítek musí být známá TLD, jinak by `ahoj.jak` nebo `v1.2` byly odkazy.
-// Co odkaz NENÍ: verze, desetinná čísla a časy, e-maily a @zmínky, emoty, holá IP bez schématu.
+// a porovnává výstupy. Při změně upravit oba soubory (pravidla viz hlavička core souboru).
 
 // Generické TLD, které se v chatu reálně objevují (spam i běžné odkazy).
 const GENERIC_TLDS = [
@@ -31,11 +25,28 @@ const COUNTRY_TLDS = (
   'ua ug uk us uy uz va vc ve vg vi vn vu wf ws ye yt za zm zw'
 ).split(' ');
 const TLDS = new Set([...GENERIC_TLDS, ...COUNTRY_TLDS]);
+// TLD, které stačí i holé (bez www a bez cesty). Záměrně BEZ českých slov (co, to, se, si, na, je, ne,
+// no, by, do, za, me, my, ty, on, ta, te, ze, od, po, ve, ke, ku, ji, mi, ti, ho, mu, jo, …) a bez
+// přípon souborů (md, py, sh, js, ts, rs, go, pl, …).
+const BARE_TLDS = new Set([
+  'com', 'net', 'org', 'info', 'biz', 'io', 'gg', 'tv', 'fm', 'ly', 'cc', 'xyz', 'app', 'dev', 'online', 'site',
+  'shop', 'store', 'live', 'stream', 'link', 'click', 'top', 'club', 'vip', 'win', 'bet', 'casino', 'icu',
+  'gift', 'gifts', 'free', 'money', 'cash', 'crypto', 'finance', 'market', 'sale', 'deals', 'porn', 'xxx',
+  'tube', 'website', 'space', 'blog', 'news', 'tech', 'cloud', 'email', 'social', 'wiki', 'games',
+  'cz', 'sk', 'eu', 'de', 'at', 'uk', 'ru', 'ua', 'us', 'fr', 'nl', 'be', 'ch', 'hu', 'es', 'ca', 'jp', 'cn', 'br', 'ai',
+]);
 
 const SCHEME_RE = /^(?:https?|ftp):\/\//i;
+const SCHEME_ANY_RE = /(?:https?|ftp):\/\//i;
+// Uvnitř tokenu: `www.` nepředcházené písmenem/číslicí/tečkou/pomlčkou (`🔥www.x.cz`, `x:www.x.cz`).
+const WWW_ANY_RE = /(?<![\p{L}\p{N}.-])www\./iu;
+// Oddělovače uvnitř tokenu, které v hostu být nemůžou (`ahoj,evil.com`, `(viz neco.cz)`).
+const SEGMENT_SEP = /[,;!(){}[\]<>"'„“”‚‘’«»|…]+/;
 // Znaky, které obalují odkaz ve větě („(viz neco.cz)", "<https://x>", „neco.cz!").
 const LEAD_PUNCT = /^[(\[{<"'„“‚‘«»]+/;
 const TRAIL_PUNCT = /[)\]}>"'“”‘’«».,;:!?…]+$/;
+// Cokoli před prvním písmenem/číslicí (emoji, interpunkce) — doména přilepená za tím.
+const LEAD_NON_WORD = /^[^\p{L}\p{N}]+/u;
 const LABEL_RE = /^[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?$/u;
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -55,24 +66,28 @@ function validLabels(host: string): boolean {
   return labels.length >= 2 && labels.every((l) => LABEL_RE.test(l));
 }
 
-/**
- * Jeden token (bez bílých znaků) → host odkazu, nebo null.
- * @param {string} token
- * @returns {string|null}
- */
-export function tokenHost(token: string): string | null {
-  let t = String(token || '').replace(LEAD_PUNCT, '').replace(TRAIL_PUNCT, '');
+/** Kandidát se schématem na začátku → host, nebo null. */
+function schemeHost(c: string): string | null {
+  const rest = c.replace(TRAIL_PUNCT, '').replace(SCHEME_RE, '');
+  const host = cleanHost(rest.split(/[/?#]/)[0]);
+  if (!host) return null;
+  if (IPV4_RE.test(host) || host === 'localhost') return host;
+  return validLabels(host) ? host : null;
+}
+
+/** Kandidát bez schématu → host, nebo null (pravidla viz hlavička). */
+function bareHost(c: string): string | null {
+  let t = c.replace(LEAD_PUNCT, '').replace(TRAIL_PUNCT, '');
+  // E-mail / @zmínka / cokoli s @ není odkaz (kontrola PŘED odříznutím úvodních znaků — `@neco.cz`).
+  if (!t || t.includes('@')) return null;
+  const w = t.search(WWW_ANY_RE);
+  if (w > 0) t = t.slice(w);
+  t = t.replace(LEAD_NON_WORD, '');
   if (!t) return null;
-  if (SCHEME_RE.test(t)) {
-    const rest = t.replace(SCHEME_RE, '');
-    const host = cleanHost(rest.split(/[/?#]/)[0]);
-    if (!host) return null;
-    if (IPV4_RE.test(host) || host === 'localhost') return host;
-    return validLabels(host) ? host : null;
-  }
-  // Bez schématu: e-mail / @zmínka / cokoli s @ není odkaz.
-  if (t.includes('@')) return null;
-  const hostPart = t.split(/[/?#]/)[0];
+  const cut = t.search(/[/?#]/);
+  const hostPart = cut < 0 ? t : t.slice(0, cut);
+  // Cesta = `/…`, dotaz/kotva jen s obsahem (koncové `?` odřízl TRAIL_PUNCT).
+  const hasPath = cut >= 0 && (t[cut] === '/' || t.length > cut + 1);
   // Dvojtečka jen jako port (`neco.cz:8080`); „12:30", „a:b.cz", „D:" odkazy nejsou.
   if (hostPart.includes(':') && !/^[^:]+:\d{1,5}$/.test(hostPart)) return null;
   const host = cleanHost(hostPart);
@@ -81,7 +96,35 @@ export function tokenHost(token: string): string | null {
   if (!validLabels(host)) return null;
   const tld = host.slice(host.lastIndexOf('.') + 1);
   if (!/^\p{L}{2,24}$/u.test(tld) || !TLDS.has(tld)) return null;
-  return host;
+  if (host.startsWith('www.') || hasPath || BARE_TLDS.has(tld)) return host;
+  return null;
+}
+
+/** Všechny hosty v jednom tokenu (bez bílých znaků); schéma i uprostřed tokenu. */
+function tokenHosts(token: string): string[] {
+  const t = String(token || '');
+  if (!t) return [];
+  const out: string[] = [];
+  const m = SCHEME_ANY_RE.exec(t);
+  const plain = m ? t.slice(0, m.index) : t;
+  for (const seg of plain.split(SEGMENT_SEP)) {
+    const h = seg ? bareHost(seg) : null;
+    if (h) out.push(h);
+  }
+  if (m) {
+    const h = schemeHost(t.slice(m.index));
+    if (h) out.push(h);
+  }
+  return out;
+}
+
+/**
+ * Jeden token (bez bílých znaků) → první host odkazu, nebo null.
+ * @param {string} token
+ * @returns {string|null}
+ */
+export function tokenHost(token: string): string | null {
+  return tokenHosts(token)[0] ?? null;
 }
 
 /**
@@ -95,8 +138,7 @@ export function findLinks(text: string, opts: { ignore?: Iterable<string> } = {}
   const out: Array<{ text: string; host: string }> = [];
   for (const token of String(text || '').split(/\s+/)) {
     if (!token || (ignore && ignore.has(token))) continue;
-    const host = tokenHost(token);
-    if (host) out.push({ text: token, host });
+    for (const host of tokenHosts(token)) out.push({ text: token, host });
   }
   return out;
 }

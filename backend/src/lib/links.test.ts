@@ -54,12 +54,33 @@ const TOKENS: Array<[string, string | null]> = [
   ['x.c', null],
   ['...', null],
   ['a..b.cz', null],
-  ['-x.com', null],
+  ['-x.com', 'x.com'],
   ['.cz', null],
   ['cz.', null],
   ['', null],
   ['a:b.cz', null],
   ['[emote:123:Kappa]', null],
+  // české věty a přípony souborů bez www/cesty
+  ['tak.co', null],
+  ['dobre.to', null],
+  ['ok.no', null],
+  ['jo.je', null],
+  ['readme.md', null],
+  ['run.sh', null],
+  ['main.py', null],
+  ['ano.se', null],
+  ['tak.co?', null],
+  ['seznam.cz', 'seznam.cz'],
+  ['www.evil.co', 'www.evil.co'],
+  ['evil.co/x', 'evil.co'],
+  ['readme.md/x', 'readme.md'],
+  // přilepené odkazy
+  ['ahoj,https://evil.com', 'evil.com'],
+  ['x:https://evil.com', 'evil.com'],
+  ['🔥evil.com', 'evil.com'],
+  ['ahoj,evil.com', 'evil.com'],
+  ['🔥www.evil.co', 'www.evil.co'],
+  ['x:www.evil.co/a', 'www.evil.co'],
 ];
 
 const TEXTS: Array<[string, string[]]> = [
@@ -70,6 +91,8 @@ const TEXTS: Array<[string, string[]]> = [
   ['Kappa catJAM PogU', []],
   ['multi\nline\twww.x.com', ['www.x.com']],
   ['', []],
+  ['tak.co dobre.to jo.je ok.no readme.md run.sh', []],
+  ['seznam.cz,https://evil.com', ['seznam.cz', 'evil.com']],
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));
