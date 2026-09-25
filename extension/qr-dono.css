@@ -2,8 +2,9 @@
    Panel se kotví nad hostitele (#input-area) jako soundboard. */
 
 .uc-qd {
-  position: absolute; bottom: 100%; left: 10px; right: 10px; z-index: 32;
-  max-width: 460px; max-height: min(620px, 80vh); overflow-y: auto;
+  /* Zarovnaný doprava (k tlačítku), nejvýš 460 px; v úzkém chatu přes celou šířku. */
+  position: absolute; bottom: 100%; left: max(10px, calc(100% - 470px)); right: 10px; z-index: 32;
+  max-height: min(620px, 80vh); overflow-y: auto;
   margin-bottom: 6px; padding: 10px 12px 12px;
   /* Tmavší než --bg-tertiary, ať panel nesvítí proti chatu (pokyn usera 2026-09-25); pole zůstávají o stupeň světlejší. */
   background: #141417; border: 1px solid var(--border); border-radius: 8px;
@@ -195,6 +196,11 @@
   color: var(--text-secondary, #9a9aa6); cursor: pointer;
 }
 .uc-tool-btn.uc-dock-inline svg { width: 16px; height: 16px; }
+/* Hover stejný jako nota a smajlík (pravidlo výše by ho jinak přebilo). */
+.uc-tool-btn.uc-dock-inline:hover, .uc-tool-btn.uc-dock-inline.active {
+  color: var(--accent-light); border-color: transparent;
+  background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
+}
 .msg-input-wrap:has(.uc-sb-btn:not(.hidden)) .uc-tool-btn.uc-dock-inline { right: 60px; }
 .msg-input-wrap:has(.uc-dock-inline:not([hidden])) #msg-input { padding-right: 62px; }
 .msg-input-wrap:has(.uc-dock-inline:not([hidden])):has(.uc-sb-btn:not(.hidden)) #msg-input { padding-right: 90px; }
