@@ -6899,11 +6899,7 @@ class UnityChat {
     }
 
     // Determine if reply is TO the current user (not just any reply)
-    const isReplyToMe = msg.replyTo && (
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
-    );
+    const isReplyToMe = !!(msg.replyTo && replyTarget && myNames.has(replyTarget));
 
     if (isGift) {
       this._renderGiftEvent(el, msg);
