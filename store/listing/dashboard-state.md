@@ -19,8 +19,8 @@ ověřené ze screenshotů dashboardu od usera + z textů, které do něj vloži
 | Publisher ID | `d58dce79-af81-41eb-91a9-4df9337c3727` |
 | Veřejná URL | https://chromewebstore.google.com/detail/unitychat/picaeipbmkgcippknkpkbnbgjlkblbnp |
 | Dashboard | https://chrome.google.com/webstore/devconsole/d58dce79-af81-41eb-91a9-4df9337c3727/picaeipbmkgcippknkpkbnbgjlkblbnp/edit |
-| Publikovaná verze | 3.38.62 |
-| Ve frontě na review | 3.39.3 (odesláno 19. 9. 2026 workflow `cws-release.yml`) |
+| Publikovaná verze | 3.40.24 |
+| Ve frontě na review | 3.41.0 (PR #29, 25. 9. 2026; znovu odesláno ručně po zrušení kvůli „Finanční a platební údaje") |
 | Viditelnost / distribuce | Veřejné, všechny regiony, zdarma |
 | Jazyk záznamu | čeština (jediný; anglický text v `description-en.md` je jen rezerva) |
 | Kategorie | Social & Communication (Komunikace) |
