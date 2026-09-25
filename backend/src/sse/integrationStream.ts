@@ -85,7 +85,7 @@ const clients = new Set<FastifyReply>();
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 
 // ---- moderační události (moderace část 1, Task 6b) ----
-export type ModEventType = 'chat.deleted' | 'chat.hidden' | 'chat.unhidden';
+export type ModEventType = 'chat.deleted' | 'chat.hidden' | 'chat.unhidden' | 'chat.restored';
 
 export interface ModIntegrationEvent {
   type: ModEventType;

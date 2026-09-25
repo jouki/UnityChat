@@ -7,7 +7,7 @@
 //   POST /moderation/delete { channel, platform, messageId }
 //   POST /moderation/user   { channel, platform, userId, action: timeout|ban|unban, durationSec?, reason? }   (část 2)
 //   POST /moderation/warn   { channel, platform, userId, reason }
-//   POST /moderation/permit { channel, platform, userId, durationSec }
+//   POST /moderation/permit { channel, platform, userId, durationSec, messageId? }   (messageId: obnovení zprávy smazané filtrem odkazů, část 3)
 //   PUT  /moderation/nickname { channel, platform, login, nickname|null, color? }
 //   GET  /moderation/user-state?channel&platform&userId   → { banned, until }
 //   Kontrakt: docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md
@@ -18,7 +18,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { moderationActions, linkPermits, type NewModerationAction } from '../db/schema.js';
+import { moderationActions, type NewModerationAction } from '../db/schema.js';
 import { requireWebSession, getDecryptedIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
 import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
@@ -30,6 +30,8 @@ import { containsBlacklisted } from '../lib/blacklistMatch.js';
 import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forgetEcho } from '../lib/userModeration.js';
 import { runUserAction, runWarn, runPermit, runRename, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
 import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
+import { storePermits } from '../lib/linkFilter.js';
+import { restoreOnPermit, publishRestored } from '../lib/linkRestore.js';
 import { sendAsAccount } from '../lib/accountSend.js';
 import { sendAsBot, BotSendError } from '../lib/botSend.js';
 import { outgoingText } from '../lib/webSend.js';
@@ -142,6 +144,8 @@ export const PermitBody = z.object({
   userId: UserIdField,
   login: z.string().max(60).optional(),
   durationSec: z.number().int().refine((d) => (PERMIT_DURATIONS as readonly number[]).includes(d)),
+  /** Část 3: zpráva, na které mod permit udělil — smazaná filtrem odkazů se v UnityChatu obnoví. */
+  messageId: z.string().min(1).max(128).optional(),
 });
 
 export const RenameBody = z.object({
@@ -324,7 +328,8 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (!g) return reply;
     const out = await runPermit({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId, durationSec: body.data.durationSec, modPlatforms: g.modPlatforms }, {
       resolveTargets: userActionDeps.resolveTargets,
-      insertPermits: async (rows) => { if (rows.length) await db.insert(linkPermits).values(rows); },
+      // Paměť (synchronní filtr odkazů) + link_permits.
+      insertPermits: (rows) => storePermits(rows),
       sendAsMod: async (platform, text) => { await sendAsAccount({ accountId: g.accountId, platform, channel: g.channel, text: outgoingText(text), ingest: opts.ingest, log: req.log }); },
       sendAsBot: async (platform, text) => {
         const ws = await defaultWorkspace(g.channel);
@@ -335,6 +340,19 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
       now: Date.now,
       log: req.log,
     });
+    // Část 3: permit na zprávě smazané filtrem odkazů ji v UnityChatu obnoví (SSE message-restored).
+    if (out.status === 200 && body.data.messageId) {
+      const restore = await restoreOnPermit({ channel: g.channel, platform: body.data.platform, userId: body.data.userId, messageId: body.data.messageId, by: g.by }, {
+        platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
+        publishRestored: (p) => publishRestored(p),
+        log: req.log,
+      });
+      if (restore) {
+        const results = (out.body.results ?? {}) as Record<string, unknown>;
+        out.body.results = { ...results, restore };
+        out.body.restored = restore === 'ok';
+      }
+    }
     return reply.code(out.status).send(out.body);
   });
 

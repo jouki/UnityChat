@@ -117,6 +117,11 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
   try { await deps.integration?.(ev); } catch { /* ignore */ }
 }
 
+/** Zapomenout dedup smazání (obnovení permitem, část 3) — další smazání téže zprávy musí zase projít. */
+export function forgetPublished(platform: Platform, messageId: string): void {
+  recentlyPublished.delete(`${platform}:${messageId}`);
+}
+
 /** messages.channel zprávy (platformní kanál, jak ho uložil ingest); null = v archivu není. */
 export async function archivedMessageChannel(platform: Platform, messageId: string): Promise<string | null> {
   const rows = await db
