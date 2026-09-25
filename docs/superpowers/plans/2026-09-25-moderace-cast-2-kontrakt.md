@@ -233,7 +233,7 @@ zprávu vykreslí na místě z `message`; hláška permitu doplní „zpráva ob
 
 ## Integrace — permit (Chat Log Židolišty, 2026-09-25)
 `POST /integrations/:slug/moderation/permit` (X-Api-Key + X-UC-Signature) — tělo
-`{ platform, userId, durationSec: 30|60|120|300|600, messageId?, actor }`. Kanál a bot jen ze slugu.
+`{ platform, userId, durationSec: 1–86400, messageId?, actor }`. Kanál a bot jen ze slugu.
 Uloží permit (i napříč platformami známého UC účtu), pošle `!permit <login>` botem workspace, s `messageId`
 obnoví zprávu smazanou filtrem odkazů (SSE `message-restored`, integrační `chat.restored`).
 Odpověď jako UC `/moderation/permit`: `{ ok, until, results: { permit, chat, restore? }, restored? }`;
@@ -283,3 +283,112 @@ Pořadí **stejné jako `/chat/history`**: v rámci stránky nejstarší → nej
 `null` = konec. Smazané / skryté zprávy jdou bez obsahu (`deleted: true` / `hidden: true`) — konzistentní s chatem.
 Záložka, kde uživatel nic nenapsal → `{ ok: true, messages: [], nextBefore: null }`.
 Chyby: 400 `query` | `before` | `in_channel` | `channel`, 403 `not_mod`, 404 `not_found`, 429 `rate_limited`.
+
+## Část 4 — odměna „Posílání GIFů" (backend `lib/gifMedia.ts`, `lib/gifAccess.ts`, `lib/gifRequests.ts`, `routes/gif.ts`)
+
+**SQL `backend/sql/2026-09-25-gif-requests.sql` se musí spustit PŘED nasazením backendu** (idempotentní):
+```
+docker exec -i <postgres> psql -U postgres -d unitychat < backend/sql/2026-09-25-gif-requests.sql
+```
+Tabulky `gif_media` (id = 32 hex, `bytes` bytea ≤ 10 MB, kind, content_type, size, sha256, width, height) a
+`gif_requests` (id, channel = UC kanál, workspace, platform, platform_channel, user_id, login, message_id původní
+zprávy, text_without_link, media_id, kind, width, height, meta `{displayName, color, badges}`, status
+`pending|approved|rejected|expired|deleted`, decided_by, decided_at, created_at, expires_at).
+**Úložiště = DB (bytea):** kontejner backendu nemá trvalý svazek; zamítnuté a propadlé médium se maže hned,
+schválené zůstává (retence archivu).
+
+### Odemčení (UnityChat → Židolišta)
+- `GET <ZIDOLISTA_API_BASE>/integrations/:slug/gif-access?platform=&userId=&login=&role=` (X-Api-Key), role =
+  nejvyšší ověřená z badge zprávy (`broadcaster|moderator|vip|sub|viewer`). Odpověď
+  `{ ok, serverNow, allowed, until|null, cooldownUntil|null, cooldownSec, requestTtlSec }` (čas ISO nebo ms; přepočet
+  přes `serverNow`). Cache 60 s per (workspace, platforma, uživatel, role). Chyba / bez klíče = neodemčeno.
+- Po schválení `POST …/integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }` (cache hned v cooldownu).
+- Webhook `POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } }` → cache workspace pryč;
+  odpověď `{ ok, workspace }`, neznámý workspace `404 unknown_workspace`.
+
+### Zachycení (ingest, v rámci filtru odkazů)
+- Odkaz na GIF: stránky `tenor.com/view/…` (i `/<jazyk>/view/…`), `giphy.com/gifs/…`, `imgur.com/…` (`/a/`,
+  `/gallery/`), `7tv.app/emotes/<id>` (→ `cdn.7tv.app/emote/<id>/4x.webp`); média `media*.tenor.com`, `c.tenor.com`,
+  `media*.giphy.com`, `i.giphy.com`, `i.imgur.com/*.gifv` (→ `.mp4`); **libovolný přímý** `.gif/.webp/.mp4`.
+- Platí pro autora s `allowed` (a bez cooldownu), **nezávisle na zapnutí filtru a na výjimkách** (odemčení řídí
+  Židolišta); známí boti nikdy. Jedna čekající žádost na uživatele (další GIF = běžný odkaz).
+- Stav přístupu v cache:
+  - **odemčeno** → zpráva se hned označí `deleted_reason: 'gif_request'` (archiv i `/chat/stream` bez obsahu),
+    SSE `message-deleted { …, reason: "gif_request" }` hned, převod na pozadí;
+  - **neznámý** → filtr rozhodne jako vždy (smaže / pustí), přístup se ověří na pozadí; odemčeno + převod OK →
+    zobrazená zpráva se smaže zpětně (`message-deleted`, reason `gif_request`), smazaná filtrem se jen přeznačí;
+  - **neodemčeno** → běžný filtr odkazů.
+- Převod: stránka → `og:video` (MP4), jinak `og:image`; médium s `Accept: image/*,video/*`. Ochrana SSRF: jen http(s)
+  a porty 80/443, bez údajů v URL, všechny DNS adresy veřejné (privátní, loopback, link-local, CGNAT, multicast,
+  IPv4-mapped/NAT64 zakázané; ověřující lookup i při samotném připojení), max 3 přesměrování (každé znovu ověřené),
+  10 MB, 10 s celkem, Content-Type (`image/*`, `video/*`, octet-stream) + magic bytes (GIF87a/89a, RIFF…WEBP, MP4 `ftyp`),
+  rozměry z hlavičky (GIF, WebP; MP4 z `tkhd`, jinak null).
+- **Převod selže** → běžný odkaz: filtr by ho smazal → přeznačení na `link_filter` + akce filtru (platforma botem);
+  filtr by ho pustil → v UC obnovení (`message-restored`, jako u permitu). Na platformě se nic nesmazalo.
+- **Převod OK** → původní zpráva smazaná na platformě **botem workspace** (`deleted_reason` zůstává `gif_request`,
+  permit ji neobnoví), médium do `gif_media`, žádost `pending`, `expires_at = now + requestTtlSec` (výchozí 300 s).
+  Audit `moderation_actions` (`actor: "filter"`, `action: "gif_request"`; rozhodnutí `gif_approve` / `gif_reject`).
+
+### Soukromé doručení — `/account/stream` (ticket, část 2)
+`/nicknames/stream` je veřejný, čekající GIF tam nikdy nejde. Události jdou jen účtům s otevřeným `/account/stream`,
+které jsou **mody kanálu** (`accountModIdentities`, cache 60 s) nebo **odesílatelem** (propojená identita
+`web_identities` platformy + userId; dostane navíc `own: true`). Po připojení streamu přijdou čekající žádosti,
+které účet smí vidět (`gif-pending`).
+```
+event: gif-pending
+data: { "requestId": 12, "channel": "robdiesalot", "platform": "twitch", "login": "divak", "userId": "42",
+        "messageId": "abc", "text": "hele lol",
+        "media": { "url": "https://api.jouki.cz/media/gif/<32 hex>", "kind": "mp4", "width": 498, "height": 280 },
+        "createdAt": 1790000000000, "expiresAt": 1790000300000, "own": true }
+
+event: gif-decided
+data: { "requestId": 12, "channel": "robdiesalot", "approved": false, "status": "rejected", "by": "twitch:modik" }
+```
+`status`: `approved` | `rejected` | `expired` (`by: null`). `media.url` je **absolutní** (`PUBLIC_BASE_URL`), klienti
+(addon, web, OBS) načítají jen z api.jouki.cz. `kind` `mp4` → `<video autoplay loop muted playsinline>`, jinak `<img>`.
+
+### UC routy (Bearer)
+- `POST /moderation/gif/:requestId/decide { "approve": true }` — mod kanálu **žádosti** (kanál z DB, ne od klienta),
+  rate limit per účet. `200 { ok, requestId, status }`; `404 not_found`; `403 not_mod`; už rozhodnuto nebo propadlo
+  `409 { ok:false, error:'already_decided', status }` (první rozhodnutí vyhrává, podmíněný UPDATE); `400 body`.
+- `GET /moderation/gif/pending?channel=` — mod; `{ ok, requests: [<tvar gif-pending bez own>] }`.
+
+### Médium
+`GET /media/gif/:id` (bez auth, id 32 hex neuhodnutelné) — jen když patří žádosti `pending` nebo `approved`, jinak
+`404`. Hlavičky: `Content-Type` podle ověřeného druhu, `Cache-Control: public, max-age=31536000, immutable`,
+`Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`,
+`Cross-Origin-Resource-Policy: cross-origin`. Rate limit per IP (60, 10/s), paměťová LRU cache 64 MB.
+
+### Po schválení — všem
+- Archiv: syntetická zpráva `messages` s `platform_message_id = "gif-<requestId>"` (platforma a autor původní
+  zprávy, `channel` = platformní kanál, čas = schválení, `content` = text bez odkazu, `content_raw.gif`).
+  `/chat/history` ji vrací běžně, zpráva má navíc `gif: { url, kind, width, height }`.
+- SSE `/nicknames/stream`:
+```
+event: gif-message
+data: { "channel": "robdiesalot", "requestId": 12,
+        "message": { "platform": "twitch", "id": "gif-12", "username": "Divak", "userId": "42", "message": "hele lol",
+                     "timestamp": 1790000100000, "historical": false, "color": "#ff0000", "badgesRaw": "subscriber/1",
+                     "gif": { "url": "https://api.jouki.cz/media/gif/<id>", "kind": "mp4", "width": 498, "height": 280 } } }
+```
+  Stejná zpráva jde i do `/chat/stream` (`event: message`) — klient, který poslouchá oba, deduplikuje podle
+  `platform:id` (ChatStore). Pak `gif-used` do Židolišty (cooldown).
+- Zobrazení: 100 %, max šířka chatu, max 400 × 250 px, poměr zachován.
+
+### Smazání schváleného GIFu (část 1)
+`POST /moderation/delete { platform, messageId: "gif-12" }` (i Chat Log Židolišty) funguje beze změny: SSE
+`message-deleted`, archiv `deleted: true` bez obsahu i bez `gif`. Na platformě se nic nevolá (výsledek `ok`), žádost
+→ `deleted`, médium se přestane servírovat.
+
+### Integrační stream (`GET /integrations/chat/stream`)
+```
+event: gif.pending
+data: { "type": "gif.pending", "workspace": "rob", "requestId": 12, "platform": "twitch", "userId": "42", "login": "divak",
+        "messageId": "abc", "text": "hele lol", "media": { "url": "…", "kind": "mp4", "width": 498, "height": 280 },
+        "expiresAt": "2026-09-25T12:05:00.000Z" }
+event: gif.decided
+data: { "type": "gif.decided", "workspace": "rob", "requestId": 12, "platform": "twitch", "userId": "42", "login": "divak",
+        "status": "approved", "by": "twitch:modik" }
+```
+Původní zpráva přijde jako `chat.message` s `deleted: true` (bez textu) + `chat.deleted` s `reason: "gif_request"`.
+Propadnutí: kontrola každých 10 s (`status: expired`, `by: null`).
