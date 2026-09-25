@@ -230,3 +230,12 @@ do integračního streamu. Na platformě zpráva zůstává smazaná. Smazání 
 Odpověď navíc: `results.restore` = `'ok' | 'not_found' | 'error:no_channel' | 'error:db'` a `restored: boolean`
 (jen když přišlo `messageId`). Klient (addon `_unhideMessage(d, { restore: true })`, core `buildModRequest`)
 zprávu vykreslí na místě z `message`; hláška permitu doplní „zpráva obnovena“.
+
+## Integrace — permit (Chat Log Židolišty, 2026-09-25)
+`POST /integrations/:slug/moderation/permit` (X-Api-Key + X-UC-Signature) — tělo
+`{ platform, userId, durationSec: 30|60|120|300|600, messageId?, actor }`. Kanál a bot jen ze slugu.
+Uloží permit (i napříč platformami známého UC účtu), pošle `!permit <login>` botem workspace, s `messageId`
+obnoví zprávu smazanou filtrem odkazů (SSE `message-restored`, integrační `chat.restored`).
+Odpověď jako UC `/moderation/permit`: `{ ok, until, results: { permit, chat, restore? }, restored? }`;
+uživatel mimo kanál workspace → `200 { ok:true, result:'not_found' }`; chyby 400 body / bad_login,
+404 unknown_workspace | no_channel, 429 rate_limited.

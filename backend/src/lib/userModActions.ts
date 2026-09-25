@@ -228,7 +228,8 @@ export async function runWarn(input: WarnInput, deps: WarnDeps): Promise<Out> {
 
 // ---- permit ----
 export interface PermitInput {
-  channel: string; accountId: number; by: string; platform: Platform; userId: string; durationSec: number;
+  /** null = integrace (Chat Log Židolišty) — bez účtu moda, jen bot. */
+  channel: string; accountId: number | null; by: string; platform: Platform; userId: string; durationSec: number;
   /** Platformy, kde je mod modem (accountModIdentities) — tam se `!permit` posílá jeho účtem. */
   modPlatforms: Platform[];
 }
@@ -249,7 +250,7 @@ export interface PermitDeps {
 export async function runPermit(input: PermitInput, deps: PermitDeps): Promise<Out> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
-  if (targets.accountId === input.accountId) return self;
+  if (input.accountId != null && targets.accountId === input.accountId) return self;
   const p = targets.primary;
   // Login jde doslova do chatu — nic mimo běžné znaky loginu (mezera by přidala další argumenty).
   if (!PERMIT_LOGIN_RE.test(p.login)) return { status: 400, body: { ok: false, error: 'bad_login' } };

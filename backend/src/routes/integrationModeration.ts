@@ -23,7 +23,10 @@ import { publishDeleted, archivedMessageChannel, channelMatches, type PublishDel
 import { publishHidden, publishUnhidden, type HideParams, type HideResult } from '../lib/messageHides.js';
 import { deletePlatformMessage, banPlatformUser, unbanUser, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resultRecord } from './moderation.js';
-import { runUserAction, type UserActionDeps } from '../lib/userModActions.js';
+import { runUserAction, runPermit, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
+import { storePermits } from '../lib/linkFilter.js';
+import { restoreOnPermit, publishRestored } from '../lib/linkRestore.js';
+import { sendAsBot } from '../lib/botSend.js';
 import { resolveUserTargets, dbTargetDeps, makeTargetRole } from '../lib/moderationTargets.js';
 import { publishUserModerated, recordBan, clearBan, activeBan, expectEcho, forgetEcho } from '../lib/userModeration.js';
 import type { Ingest } from '../ingest/index.js';
@@ -155,6 +158,15 @@ export async function runIntegrationUserModeration(action: IntegrationUserModAct
   return out;
 }
 
+/** Permit z Chat Logu Židolišty: jako UC /moderation/permit, jen botem workspace (actor ze Židolišty). */
+export const IntegrationPermitBody = z.object({
+  platform: z.enum(['twitch', 'kick', 'youtube']),
+  userId: z.string().min(1).max(64),
+  durationSec: z.number().int().refine((n) => (PERMIT_DURATIONS as readonly number[]).includes(n)),
+  messageId: z.string().min(1).max(128).optional(),
+  actor: ActorSchema,
+});
+
 export default async function integrationModerationRoutes(app: FastifyInstance, opts: { ingest?: Ingest } = {}) {
   const limiter = new RateLimiter(20, 5); // per workspace — Chat Log může mazat dávkou, ale ne bez konce
   const deps: IntegrationModDeps = {
@@ -201,6 +213,45 @@ export default async function integrationModerationRoutes(app: FastifyInstance, 
       return reply.code(out.status).send(out.body);
     });
   }
+
+  app.post<{ Params: { slug: string } }>('/integrations/:slug/moderation/permit', async (req, reply) => {
+    if (!inboundAuthorized(req, reply)) return reply;
+    const slug = String(req.params.slug || '').toLowerCase();
+    if (!limiter.allow(slug)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const b = IntegrationPermitBody.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ ok: false, error: 'body' });
+    const ws = await workspaceBySlug(slug);
+    if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+    const channel = ws.channels.twitch?.toLowerCase();
+    if (!channel) return reply.code(404).send({ ok: false, error: 'no_channel' });
+    const by = `zidolista:${b.data.actor.userId}`;
+    // Kanály cíle i bot jen ze slugu (izolace workspaců), stejně jako timeout/ban.
+    const targets = dbTargetDeps(async (_channel, platform) => ws.channels[platform]);
+    const out = await runPermit({ channel, accountId: null, by, platform: b.data.platform, userId: b.data.userId, durationSec: b.data.durationSec, modPlatforms: [] }, {
+      resolveTargets: (ch, platform, userId) => resolveUserTargets(ch, platform, userId, targets),
+      insertPermits: (rows) => storePermits(rows),
+      sendAsMod: async () => { throw new Error('no mod account'); },
+      sendAsBot: async (platform, text) => { await sendAsBot({ workspace: ws.slug, platform, text }, { ingest: opts.ingest, log: req.log }); },
+      recordAction: async (v) => { await db.insert(moderationActions).values({ ...v, params: { ...(v.params as object || {}), actor: b.data.actor } }); },
+      now: Date.now,
+      log: req.log,
+    });
+    if (out.status === 404) return reply.send({ ok: true, result: 'not_found' });
+    if (out.status === 200 && b.data.messageId) {
+      const restore = await restoreOnPermit({ channel, platform: b.data.platform, userId: b.data.userId, messageId: b.data.messageId, by }, {
+        platformChannel: async (_ch, platform) => ws.channels[platform as Platform] ?? null,
+        publishRestored: (p) => publishRestored(p),
+        log: req.log,
+      });
+      if (restore) {
+        const results = (out.body.results ?? {}) as Record<string, unknown>;
+        out.body.results = { ...results, restore };
+        out.body.restored = restore === 'ok';
+      }
+    }
+    if (out.status === 200) req.log.info({ workspace: slug, platform: b.data.platform, results: out.body.results }, 'integration permit');
+    return reply.code(out.status).send(out.body);
+  });
 
   // Stav trestu uživatele pro Chat Log (Unban jen u potrestaných). GET = podpis nad prázdným tělem.
   app.get<{ Params: { slug: string }; Querystring: { platform?: string; userId?: string } }>('/integrations/:slug/moderation/user-state', async (req, reply) => {
