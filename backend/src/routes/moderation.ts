@@ -24,7 +24,9 @@ import { accountModIdentities, accountModPlatforms } from '../lib/chatRole.js';
 import { publishDeleted, archivedMessageChannel, channelMatches } from '../lib/messageDeletes.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, TIMEOUT_DURATIONS, type ModResult, type ModDeps } from '../lib/modActions.js';
-import { resolveUserTargets, dbTargetDeps, archivedUserByLogin } from '../lib/moderationTargets.js';
+import { resolveUserTargets, dbTargetDeps, archivedUserByLogin, makeTargetRole } from '../lib/moderationTargets.js';
+import { blacklistFor } from './blacklist.js';
+import { containsBlacklisted } from '../lib/blacklistMatch.js';
 import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
 import { runUserAction, runWarn, runPermit, runRename, PERMIT_DURATIONS, type UserActionDeps } from '../lib/userModActions.js';
 import { createWarning, sendToAccount, REASON_MAX } from '../lib/accountWarnings.js';
@@ -156,7 +158,7 @@ export const UserStateQuery = z.object({
   userId: UserIdField,
 });
 
-export type Gate = { channel: string; accountId: number; by: string; modPlatforms: Platform[] };
+export type Gate = { channel: string; accountId: number; by: string; modPlatforms: Platform[]; isBroadcaster: boolean };
 
 /**
  * Ověření moda pro routy části 2 (bez HTTP): kanál → lowercase + formát, pak accountModIdentities.
@@ -168,13 +170,13 @@ export async function resolveModGate(
   accountId: number,
   rawChannel: string | undefined,
   fallback: string,
-  modIdentities: (accountId: number, channel: string) => Promise<Array<{ platform: Platform; login: string }>>,
+  modIdentities: (accountId: number, channel: string) => Promise<Array<{ platform: Platform; login: string; role: 'moderator' | 'broadcaster' }>>,
 ): Promise<Gate | { error: 'channel' | 'not_mod' }> {
   const channel = parseChannel(rawChannel, fallback);
   if (!channel) return { error: 'channel' };
   const mods = await modIdentities(accountId, channel);
   if (mods.length === 0) return { error: 'not_mod' };
-  return { channel, accountId, by: `${mods[0].platform}:${mods[0].login}`, modPlatforms: mods.map((m) => m.platform) };
+  return { channel, accountId, by: `${mods[0].platform}:${mods[0].login}`, modPlatforms: mods.map((m) => m.platform), isBroadcaster: mods.some((m) => m.role === 'broadcaster') };
 }
 
 export default async function moderationRoutes(app: FastifyInstance, opts: { ingest?: Ingest } = {}) {
@@ -199,9 +201,11 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
 
   const modDeps: ModDeps = { log: app.log, youtubeVideoId: (pch) => opts.ingest?.videoIdFor('youtube', pch) ?? null };
   const targets = dbTargetDeps((channel, platform) => registryPlatformChannel(channel, platform));
+  const targetRole = makeTargetRole(targets.platformChannel);
   const recordAction = async (v: NewModerationAction) => { await db.insert(moderationActions).values(v); };
   const userActionDeps: UserActionDeps = {
     resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
+    targetRole,
     publish: (p) => publishUserModerated(p),
     ban: (p) => banPlatformUser(p, modDeps),
     unban: (p) => unbanUser(p, modDeps),
@@ -287,7 +291,7 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     const g = await modGate(req, reply, body.data.channel);
     if (!g) return reply;
     const out = await runUserAction({
-      channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId,
+      channel: g.channel, accountId: g.accountId, by: g.by, callerIsBroadcaster: g.isBroadcaster, platform: body.data.platform, userId: body.data.userId,
       action: body.data.action, durationSec: body.data.action === 'timeout' ? body.data.durationSec! : null, reason: body.data.reason || null,
     }, userActionDeps);
     if (out.status === 200) req.log.info({ accountId: g.accountId, channel: g.channel, action: body.data.action, results: out.body.results }, 'moderation user');
@@ -300,8 +304,9 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
     const g = await modGate(req, reply, body.data.channel);
     if (!g) return reply;
-    const out = await runWarn({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, userId: body.data.userId, reason: body.data.reason }, {
+    const out = await runWarn({ channel: g.channel, accountId: g.accountId, by: g.by, callerIsBroadcaster: g.isBroadcaster, platform: body.data.platform, userId: body.data.userId, reason: body.data.reason }, {
       resolveTargets: userActionDeps.resolveTargets,
+      targetRole,
       warnTwitch: (p) => warnUser(p, modDeps),
       createWarning, sendToAccount, recordAction,
       log: app.log,
@@ -337,11 +342,13 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body' });
     const g = await modGate(req, reply, body.data.channel);
     if (!g) return reply;
-    const out = await runRename({ channel: g.channel, accountId: g.accountId, by: g.by, platform: body.data.platform, login: body.data.login, nickname: body.data.nickname, color: body.data.color ?? null }, {
+    const out = await runRename({ channel: g.channel, accountId: g.accountId, by: g.by, callerIsBroadcaster: g.isBroadcaster, platform: body.data.platform, login: body.data.login, nickname: body.data.nickname, color: body.data.color ?? null }, {
       findUser: async (channel, platform, login) => {
         const pch = await registryPlatformChannel(channel, platform);
         return pch ? archivedUserByLogin(platform, pch, login) : null;
       },
+      targetRole,
+      blacklisted: async (channel, nickname) => containsBlacklisted(nickname, (await blacklistFor(channel, req.log)).terms),
       upsert: upsertNickname,
       remove: deleteNickname,
       recordAction,
@@ -355,7 +362,7 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     reply.header('Cache-Control', 'no-store');
     const q = UserStateQuery.safeParse(req.query);
     if (!q.success) return reply.code(400).send({ ok: false, error: 'query' });
-    const g = await modGate(req, reply, q.data.channel, false);
+    const g = await modGate(req, reply, q.data.channel);
     if (!g) return reply;
     let ban: Awaited<ReturnType<typeof activeBan>> = null;
     try { ban = await activeBan(g.channel, q.data.platform, q.data.userId); }

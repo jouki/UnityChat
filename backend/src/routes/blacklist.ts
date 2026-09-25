@@ -48,6 +48,28 @@ export async function invalidateBlacklist(slug: string, log: FastifyInstance['lo
   return channels;
 }
 
+/**
+ * Blacklist kanálu (Twitch login) z cache / Židolišty — sdílí GET /blacklist i server (přejmenování
+ * modem, moderace část 2). Výpadek Židolišty = poslední známý stav (stale), jinak prázdný seznam.
+ */
+export async function blacklistFor(channel: string, log: FastifyInstance['log']): Promise<{ terms: string[]; updatedAt: string | null; stale?: true }> {
+  const slug = (await workspaceForChannel('twitch', channel))?.slug;
+  if (!slug || !config.ZIDOLISTA_API_KEY) return { terms: [], updatedAt: null };
+  const hit = cache.get(slug);
+  if (hit && Date.now() - hit.at < CACHE_MS) return { terms: hit.terms, updatedAt: hit.updatedAt, ...(hit.error ? { stale: true as const } : {}) };
+  try {
+    const e = await fetchBlacklist(slug, hit);
+    cache.set(slug, e);
+    return { terms: e.terms, updatedAt: e.updatedAt };
+  } catch (err) {
+    const msg = (err as Error).message;
+    log.warn({ channel, slug, err: msg }, 'blacklist: zidolista fetch failed');
+    const stale: Entry = hit ? { ...hit, at: Date.now(), error: msg } : { at: Date.now(), terms: [], updatedAt: null, etag: null, error: msg };
+    cache.set(slug, stale);
+    return { terms: stale.terms, updatedAt: stale.updatedAt, stale: true };
+  }
+}
+
 export default async function blacklistRoutes(app: FastifyInstance) {
   const limiter = new RateLimiter(10, 10);
 
@@ -57,21 +79,6 @@ export default async function blacklistRoutes(app: FastifyInstance) {
     if (!/^[a-z0-9_]{1,40}$/.test(channel)) return reply.code(400).send({ ok: false, error: 'bad_channel' });
     // Bez HTTP cache: po SSE `blacklist-change` si klient seznam stáhne znovu.
     reply.header('Cache-Control', 'no-store');
-    const slug = (await workspaceForChannel('twitch', channel))?.slug;
-    if (!slug || !config.ZIDOLISTA_API_KEY) return { ok: true, channel, terms: [], updatedAt: null };
-
-    const hit = cache.get(slug);
-    if (hit && Date.now() - hit.at < CACHE_MS) return { ok: true, channel, terms: hit.terms, updatedAt: hit.updatedAt, ...(hit.error ? { stale: true } : {}) };
-    try {
-      const e = await fetchBlacklist(slug, hit);
-      cache.set(slug, e);
-      return { ok: true, channel, terms: e.terms, updatedAt: e.updatedAt };
-    } catch (err) {
-      const msg = (err as Error).message;
-      app.log.warn({ channel, slug, err: msg }, 'blacklist: zidolista fetch failed');
-      const stale: Entry = hit ? { ...hit, at: Date.now(), error: msg } : { at: Date.now(), terms: [], updatedAt: null, etag: null, error: msg };
-      cache.set(slug, stale);
-      return { ok: true, channel, terms: stale.terms, updatedAt: stale.updatedAt, stale: true };
-    }
+    return { ok: true, channel, ...(await blacklistFor(channel, app.log)) };
   });
 }

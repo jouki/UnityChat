@@ -54,6 +54,7 @@ export async function chatRole(platform: 'twitch' | 'kick' | 'youtube', login: s
 export interface AccountModIdentity {
   platform: Platform;
   login: string;
+  role: 'moderator' | 'broadcaster';
 }
 
 export interface AccountModDeps {
@@ -82,7 +83,7 @@ export async function accountModIdentities(
     const platformChannel = await deps.registryPlatformChannel(channel, i.platform);
     if (!platformChannel) continue;
     const role = await deps.chatRole(i.platform, i.login, platformChannel);
-    if (role === 'moderator' || role === 'broadcaster') out.push({ platform: i.platform, login: i.login });
+    if (role === 'moderator' || role === 'broadcaster') out.push({ platform: i.platform, login: i.login, role });
   }
   return out;
 }

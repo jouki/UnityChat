@@ -54,12 +54,13 @@ export default async function accountWarningRoutes(app: FastifyInstance) {
     });
     const remove = addAccountStream(accountId, reply);
     if (!remove) { raw.write('event: error\ndata: {"error":"too_many_streams"}\n\n'); raw.end(); return; }
+    // Úklid hned — klient se může odpojit i během načítání nepotvrzených varování níže.
+    req.raw.on('close', remove);
+    raw.on('error', remove);
     raw.write(': connected\n\n');
     // Nepotvrzená varování hned po připojení (klient nemusí zvlášť volat /account/warnings).
     try {
       for (const w of await pendingWarnings(accountId)) raw.write(`event: account-warning\ndata: ${JSON.stringify(w)}\n\n`);
     } catch (e) { req.log.warn({ err: (e as Error).message }, 'account stream: varování nenačtena'); }
-    req.raw.on('close', remove);
-    raw.on('error', remove);
   });
 }

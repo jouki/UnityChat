@@ -104,8 +104,10 @@ function userDeps() {
       return {
         resolveTargets: async (channel, platform, userId) => {
           seen.resolve.push({ channel, platform, userId });
-          return userId === '77' ? { primary: { platform: 'kick', userId: '77', login: 'k' }, all: [{ platform: 'kick', userId: '77', login: 'k' }], accountId: null } : null;
+          return userId === '77' ? { primary: { platform: 'kick', userId: '77', login: 'k' }, all: [{ platform: 'kick', userId: '77', login: 'k' }], accountId: null }
+            : userId === '88' ? { primary: { platform: 'kick', userId: '88', login: 'modk' }, all: [{ platform: 'kick', userId: '88', login: 'modk' }], accountId: null } : null;
         },
+        targetRole: async (_c, t) => (t.login === 'modk' ? 'moderator' : 'viewer'),
         publish: async (p) => { seen.published.push(p); },
         ban: async (p) => { seen.bans.push(p); return { result: 'bot' }; },
         unban: async () => 'bot',
@@ -140,4 +142,10 @@ test('integrace: timeout bez durationSec 400, neznámý slug 404, cíl mimo work
   assert.deepEqual(await runIntegrationUserModeration('ban', 'rob', { platform: 'twitch', userId: 'x', actor }, deps), { status: 200, body: { ok: true, result: 'not_found' } });
   assert.equal((await runIntegrationUserModeration('unban', 'rob', { platform: 'kick', userId: '77' }, deps)).status, 400);
   assert.equal(seen.published.length, 0);
+});
+
+test('integrace: mod cíle jen pro aktéra v roli majitele workspace', async () => {
+  const { deps } = userDeps();
+  assert.equal((await runIntegrationUserModeration('ban', 'rob', { platform: 'kick', userId: '88', actor: { ...actor, role: 'moderator' } }, deps)).status, 403);
+  assert.equal((await runIntegrationUserModeration('ban', 'rob', { platform: 'kick', userId: '88', actor }, deps)).status, 200);
 });

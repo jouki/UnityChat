@@ -30,13 +30,13 @@ test('accountModIdentities: mod na jedné z propojených platforem, ostatní vie
     ids,
     chatRole: async (p) => (p === 'twitch' ? 'moderator' : 'viewer'),
   }));
-  assert.deepEqual(r, [{ platform: 'twitch', login: 'jouki' }]);
+  assert.deepEqual(r, [{ platform: 'twitch', login: 'jouki', role: 'moderator' }]);
 });
 
 test('accountModIdentities: broadcaster role taky počítá jako mod', async () => {
   const ids = [ident('kick', 'robdiesalot')];
   const r = await accountModIdentities(1, 'robdiesalot', deps({ ids, chatRole: async () => 'broadcaster' }));
-  assert.deepEqual(r, [{ platform: 'kick', login: 'robdiesalot' }]);
+  assert.deepEqual(r, [{ platform: 'kick', login: 'robdiesalot', role: 'broadcaster' }]);
 });
 
 test('accountModIdentities: platforma bez registrovaného kanálu (Kick/YT nenamapované) se přeskočí', async () => {

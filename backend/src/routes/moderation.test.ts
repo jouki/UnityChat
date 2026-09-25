@@ -4,11 +4,12 @@ import { DeleteBody, parseChannel, resultRecord, meResponse, buildMissingScopes,
 
 test('resolveModGate: nemod → not_mod, neplatný kanál → channel (bez dotazu na role), mod → by + platformy', async () => {
   let asked = 0;
-  const ids = async (_a: number, channel: string) => { asked++; return channel === 'robdiesalot' ? [{ platform: 'kick' as const, login: 'modik' }, { platform: 'twitch' as const, login: 'modik' }] : []; };
+  const ids = async (_a: number, channel: string) => { asked++; return channel === 'robdiesalot' ? [{ platform: 'kick' as const, login: 'modik', role: 'moderator' as const }, { platform: 'twitch' as const, login: 'modik', role: 'moderator' as const }] : channel === 'modik' ? [{ platform: 'twitch' as const, login: 'modik', role: 'broadcaster' as const }] : []; };
   assert.deepEqual(await resolveModGate(1, 'x!', 'robdiesalot', ids), { error: 'channel' });
   assert.equal(asked, 0);
   assert.deepEqual(await resolveModGate(1, 'jouki', 'robdiesalot', ids), { error: 'not_mod' });
-  assert.deepEqual(await resolveModGate(1, 'RobDiesALot', 'x', ids), { channel: 'robdiesalot', accountId: 1, by: 'kick:modik', modPlatforms: ['kick', 'twitch'] });
+  assert.deepEqual(await resolveModGate(1, 'RobDiesALot', 'x', ids), { channel: 'robdiesalot', accountId: 1, by: 'kick:modik', modPlatforms: ['kick', 'twitch'], isBroadcaster: false });
+  assert.equal(((await resolveModGate(1, 'modik', 'x', ids)) as { isBroadcaster: boolean }).isBroadcaster, true, 'broadcaster jen vlastního kanálu');
 });
 
 test('UserActionBody: timeout jen s povolenou délkou, ban/unban bez ní', () => {

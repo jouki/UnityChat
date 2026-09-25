@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveUserTargets, type TargetDeps } from './moderationTargets.js';
+import { resolveUserTargets, makeTargetRole, type TargetDeps } from './moderationTargets.js';
 import type { Platform } from './zidolista.js';
 
 const channels: Record<Platform, string | null> = { twitch: 'robdiesalot', kick: 'robdiesalot', youtube: null };
@@ -43,4 +43,12 @@ test('resolveUserTargets: bez UC účtu jen platforma zprávy', async () => {
   const r = await resolveUserTargets('robdiesalot', 'twitch', 't1', deps({ accountOf: async () => null }));
   assert.equal(r!.all.length, 1);
   assert.equal(r!.accountId, null);
+});
+
+test('makeTargetRole: role na platformním kanálu platformy cíle; platforma bez kanálu = viewer', async () => {
+  const asked: string[] = [];
+  const tr = makeTargetRole(async (_c, p) => channels[p], async (platform, login, ch) => { asked.push(platform + ':' + login + '@' + ch); return 'moderator'; });
+  assert.equal(await tr('robdiesalot', { platform: 'kick', userId: '1', login: 'm' }), 'moderator');
+  assert.equal(await tr('robdiesalot', { platform: 'youtube', userId: 'U', login: 'y' }), 'viewer');
+  assert.deepEqual(asked, ['kick:m@robdiesalot']);
 });

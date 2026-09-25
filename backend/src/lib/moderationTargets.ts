@@ -9,7 +9,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, webIdentities } from '../db/schema.js';
-import { usernameEqualsCondition } from './chatRole.js';
+import { usernameEqualsCondition, chatRole, type ChatRole } from './chatRole.js';
 import { normPlatformChannel } from './ucChannel.js';
 import type { Platform } from './zidolista.js';
 
@@ -101,3 +101,15 @@ export async function accountIdentities(accountId: number): Promise<UserTarget[]
 export const dbTargetDeps = (platformChannel: TargetDeps['platformChannel']): TargetDeps => ({
   platformChannel, archivedLogin, accountOf, accountIdentities,
 });
+
+/**
+ * Role cíle v kanálu pro hierarchii (checkHierarchy): chatRole na platformním kanálu jeho platformy
+ * (broadcaster = login shodný s kanálem, jinak badge v archivu). Platforma bez kanálu = viewer.
+ */
+export const makeTargetRole = (
+  platformChannel: TargetDeps['platformChannel'],
+  role: (platform: Platform, login: string, channel: string) => Promise<ChatRole> = chatRole,
+) => async (channel: string, t: UserTarget): Promise<ChatRole> => {
+  const pch = await platformChannel(channel, t.platform);
+  return pch ? role(t.platform, t.login, pch) : 'viewer';
+};

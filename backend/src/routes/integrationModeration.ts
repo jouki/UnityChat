@@ -24,7 +24,7 @@ import { publishHidden, publishUnhidden, type HideParams, type HideResult } from
 import { deletePlatformMessage, banPlatformUser, unbanUser, type ModResult, type ModDeps } from '../lib/modActions.js';
 import { resultRecord } from './moderation.js';
 import { runUserAction, type UserActionDeps } from '../lib/userModActions.js';
-import { resolveUserTargets, dbTargetDeps } from '../lib/moderationTargets.js';
+import { resolveUserTargets, dbTargetDeps, makeTargetRole } from '../lib/moderationTargets.js';
 import { publishUserModerated, recordBan, clearBan, activeBan } from '../lib/userModeration.js';
 import type { Ingest } from '../ingest/index.js';
 import { RateLimiter } from './chat.js';
@@ -122,6 +122,9 @@ export async function runIntegrationModeration(action: IntegrationModAction, slu
 
 export type IntegrationUserModAction = 'timeout' | 'ban' | 'unban';
 
+/** Aktér Židolišty v roli majitele workspace = streamer (smí i na mody). Role ověřuje Židolišta (HMAC). */
+export const isOwnerRole = (role: string): boolean => ['owner', 'broadcaster', 'streamer'].includes(role.toLowerCase());
+
 export interface IntegrationUserModDeps {
   workspaceBySlug: (slug: string) => Promise<WorkspaceInfo | null>;
   /** Deps akce vázané na workspace (kanály platforem i bot JEN z tohoto workspace). */
@@ -144,7 +147,7 @@ export async function runIntegrationUserModeration(action: IntegrationUserModAct
   if (!channel) return { status: 404, body: { ok: false, error: 'no_channel' } };
 
   const out = await runUserAction({
-    channel, accountId: null, by: `zidolista:${b.actor.userId}`, platform: b.platform, userId: b.userId,
+    channel, accountId: null, by: `zidolista:${b.actor.userId}`, callerIsBroadcaster: isOwnerRole(b.actor.role), platform: b.platform, userId: b.userId,
     action, durationSec: action === 'timeout' ? b.durationSec! : null, reason: b.reason || null,
   }, deps.userActionDeps(ws));
   // Stejně jako mazání (část 1): uživatel mimo kanál workspace = 200 s výsledkem, ne chyba.
@@ -174,6 +177,7 @@ export default async function integrationModerationRoutes(app: FastifyInstance, 
       const targets = dbTargetDeps(async (_channel, platform) => ws.channels[platform]);
       return {
         resolveTargets: (channel, platform, userId) => resolveUserTargets(channel, platform, userId, targets),
+        targetRole: makeTargetRole(targets.platformChannel),
         publish: (p) => publishUserModerated(p),
         ban: (p) => banPlatformUser({ ...p, accountId: null }, modDeps),
         unban: (p) => unbanUser({ ...p, accountId: null }, modDeps),

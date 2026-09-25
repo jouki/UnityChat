@@ -50,14 +50,15 @@ const defaultDeps: UserModeratedDeps = {
 };
 
 const ECHO_MS = 30_000;
-// Klíč kanál:platforma:userId:akce. Twitch po vlastním banu přes Helix pošle CLEARCHAT — ten by
-// jinak přepsal `by` na null a mihnul UI druhou událostí.
+// Klíč kanál:platforma:userId:akce:délka. Twitch po vlastním banu přes Helix pošle CLEARCHAT — ten by
+// jinak přepsal `by` na null a mihnul UI druhou událostí. Délka v klíči: jiný (re)timeout odjinud
+// se nespolkne a evidence dostane nové until.
 const recent = new Map<string, number>();
 
 /** SSE `user-moderated` + `chat.user_moderated`. Vrací událost, nebo null, když šlo o echo vlastní akce. */
 export async function publishUserModerated(p: UserModeratedParams, deps: UserModeratedDeps = defaultDeps): Promise<UserModeratedEvent | null> {
   const t = deps.now();
-  const key = `${p.channel}:${p.platform}:${p.userId}:${p.action}`;
+  const key = `${p.channel}:${p.platform}:${p.userId}:${p.action}:${p.durationSec ?? ''}`;
   const last = recent.get(key);
   if (p.source === 'platform' && last !== undefined && t - last < ECHO_MS) return null;
   recent.set(key, t);

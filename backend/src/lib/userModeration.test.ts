@@ -40,6 +40,17 @@ test('user-moderated: CLEARCHAT echo vlastní akce do 30 s se přeskočí; vlast
   assert.equal(sent.length, 3);
 });
 
+test('user-moderated: re-timeout odjinud s JINOU délkou do 30 s se nespolkne (nové until)', async () => {
+  _resetUserModeratedDedup();
+  const t = { now: 5000 };
+  const sent: Array<{ event: string; data: Record<string, unknown> }> = [];
+  await publishUserModerated({ ...base, action: 'timeout', durationSec: 60, source: 'uc' }, deps(t, sent));
+  t.now += 1000;
+  const ev = await publishUserModerated({ ...base, by: null, action: 'timeout', durationSec: 600, source: 'platform' }, deps(t, sent));
+  assert.equal(ev?.until, 6000 + 600_000);
+  assert.equal(sent.length, 2);
+});
+
 test('user-moderated: chyba integrace nevyhodí', async () => {
   _resetUserModeratedDedup();
   const sent: Array<{ event: string; data: Record<string, unknown> }> = [];

@@ -1,10 +1,11 @@
 // Jádro akcí z kontextové nabídky moda (spec 2026-09-25 moderace, část 2) bez HTTP a auth:
 // timeout / ban / unban (UC route i integrace Židolišty), varování, permit, přejmenování.
 // Ověření moda / workspace dělá VOLAJÍCÍ (route) PŘED voláním — tady se nic nekontroluje.
-// Pořadí: cíl v archivu kanálu → SSE (UC strana hned) → platformy → DB. Chyba po SSE nikdy
-// nevyhodí (500), jen se promítne do výsledku po platformách.
+// Pořadí: cíl v archivu kanálu → hierarchie rolí → platformy → SSE jen pro platformy, kde akce
+// prošla → evidence. Chyba platformy nikdy nevyhodí (500), jen se promítne do výsledku.
 import type { NewModerationAction } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
+import type { ChatRole } from './chatRole.js';
 import type { ResolvedTargets, UserTarget } from './moderationTargets.js';
 import type { UserModAction, UserModeratedParams, BanRow } from './userModeration.js';
 import { kickMinutes, type BanOutcome, type BanParams, type ModResult } from './modActions.js';
@@ -15,9 +16,15 @@ export type Out = { status: number; body: Record<string, unknown> };
 
 /** Povolené délky permitu (s). */
 export const PERMIT_DURATIONS = [30, 60, 120, 300, 600] as const;
+/** Login do `!permit <login>` — nic, co by v chatu přidalo další argumenty / příkaz. */
+export const PERMIT_LOGIN_RE = /^[\w.-]{1,60}$/;
 
 const notFound: Out = { status: 404, body: { ok: false, error: 'not_found' } };
 const self: Out = { status: 400, body: { ok: false, error: 'self' } };
+const protectedTarget: Out = { status: 403, body: { ok: false, error: 'target_protected' } };
+
+/** Úspěch akce na platformě (účtem moda nebo botem). */
+export const succeeded = (r: ModResult | undefined): boolean => r === 'ok' || r === 'bot';
 
 /** Skutečná délka timeoutu na platformě (Kick = celé minuty). */
 export function effectiveDuration(platform: Platform, durationSec: number): number {
@@ -26,12 +33,30 @@ export function effectiveDuration(platform: Platform, durationSec: number): numb
 
 const targetsParam = (all: UserTarget[]) => all.map((t) => ({ platform: t.platform, userId: t.userId, login: t.login }));
 
+/** Role cíle v kanálu (chatRole přes platformní kanál jeho platformy). */
+export type TargetRole = (channel: string, t: UserTarget) => Promise<ChatRole>;
+
+/**
+ * Hierarchie: broadcastera nemoderuje nikdo; moda jen broadcaster. Kontrolují se všechny známé
+ * identity cíle (mod na Kicku je chráněný, i když se na něj klikne z Twitche). null = smí.
+ */
+export async function checkHierarchy(channel: string, targets: UserTarget[], callerIsBroadcaster: boolean, targetRole: TargetRole): Promise<Out | null> {
+  for (const t of targets) {
+    const role = await targetRole(channel, t);
+    if (role === 'broadcaster') return protectedTarget;
+    if (role === 'moderator' && !callerIsBroadcaster) return protectedTarget;
+  }
+  return null;
+}
+
 // ---- timeout / ban / unban ----
 export interface UserActionInput {
   channel: string;
   /** UC účet moda; null = integrace (jen bot workspace). */
   accountId: number | null;
   by: string;
+  /** Volající je broadcaster kanálu (smí i na mody). */
+  callerIsBroadcaster: boolean;
   platform: Platform;
   userId: string;
   action: UserModAction;
@@ -42,6 +67,7 @@ export interface UserActionInput {
 
 export interface UserActionDeps {
   resolveTargets: (channel: string, platform: Platform, userId: string) => Promise<ResolvedTargets | null>;
+  targetRole: TargetRole;
   publish: (p: UserModeratedParams) => Promise<unknown>;
   ban: (p: BanParams) => Promise<BanOutcome>;
   unban: (p: { accountId: number | null; channel: string; platform: Platform; userId: string; youtubeBanId: string | null }) => Promise<ModResult>;
@@ -57,23 +83,19 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
   if (input.accountId !== null && targets.accountId === input.accountId) return self;
+  const denied = await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
+  if (denied) return denied;
   const { channel, action, by } = input;
   const timeout = action === 'timeout';
   const dur = (t: UserTarget) => (timeout && input.durationSec ? effectiveDuration(t.platform, input.durationSec) : null);
 
-  // Unban na YouTube potřebuje id banu — načíst dřív, než se evidence smaže.
+  // Unban na YouTube potřebuje id banu z evidence.
   const banIds = new Map<Platform, string | null>();
   if (action === 'unban') {
     for (const t of targets.all) {
       try { banIds.set(t.platform, (await deps.activeBan(channel, t.platform, t.userId))?.youtubeBanId ?? null); }
       catch { banIds.set(t.platform, null); }
     }
-  }
-
-  // SSE hned — klienti UC aplikují styl smazaných zpráv / štítek okamžitě.
-  for (const t of targets.all) {
-    try { await deps.publish({ channel, platform: t.platform, userId: t.userId, login: t.login, action, durationSec: dur(t), by, source: 'uc' }); }
-    catch (e) { deps.log.warn({ err: (e as Error).message }, 'user moderation: SSE selhalo'); }
   }
 
   const results: Partial<Record<Platform, ModResult>> = {};
@@ -93,8 +115,16 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
     }
   }));
 
+  // SSE a evidence jen tam, kde akce na platformě opravdu prošla (klient by jinak ukázal štítek,
+  // který neplatí, a nabídka by nabízela Unban u neexistujícího banu).
+  const done = targets.all.filter((t) => succeeded(results[t.platform]));
+  for (const t of done) {
+    try { await deps.publish({ channel, platform: t.platform, userId: t.userId, login: t.login, action, durationSec: dur(t), by, source: 'uc' }); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'user moderation: SSE selhalo'); }
+  }
+
   const now = deps.now();
-  for (const t of targets.all) {
+  for (const t of done) {
     try {
       if (action === 'unban') await deps.clearBan(channel, t.platform, t.userId);
       else {
@@ -127,7 +157,7 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
     body: {
       ok: true,
       action,
-      until: primaryDur ? now + primaryDur * 1000 : null,
+      until: primaryDur && succeeded(results[targets.primary.platform]) ? now + primaryDur * 1000 : null,
       results,
       targets: targets.all.map((t) => ({ platform: t.platform, login: t.login })),
       ...(Object.keys(notes).length ? { notes } : {}),
@@ -136,10 +166,11 @@ export async function runUserAction(input: UserActionInput, deps: UserActionDeps
 }
 
 // ---- varování ----
-export interface WarnInput { channel: string; accountId: number | null; by: string; platform: Platform; userId: string; reason: string }
+export interface WarnInput { channel: string; accountId: number | null; by: string; callerIsBroadcaster: boolean; platform: Platform; userId: string; reason: string }
 
 export interface WarnDeps {
   resolveTargets: UserActionDeps['resolveTargets'];
+  targetRole: TargetRole;
   warnTwitch: (p: { accountId: number | null; channel: string; platform: Platform; userId: string; reason: string }) => Promise<ModResult>;
   createWarning: (p: { accountId: number; channel: string; reason: string; by: string | null }) => Promise<WarningView>;
   /** SSE `account-warning` JEN streamům dotčeného účtu (lib/accountWarnings.ts). */
@@ -156,6 +187,8 @@ export async function runWarn(input: WarnInput, deps: WarnDeps): Promise<Out> {
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
   if (input.accountId !== null && targets.accountId === input.accountId) return self;
+  const denied = await checkHierarchy(input.channel, targets.all, input.callerIsBroadcaster, deps.targetRole);
+  if (denied) return denied;
   const results: Record<string, ModResult | 'no_account'> = {};
 
   const tw = targets.all.find((t) => t.platform === 'twitch');
@@ -210,6 +243,9 @@ export async function runPermit(input: PermitInput, deps: PermitDeps): Promise<O
   const targets = await deps.resolveTargets(input.channel, input.platform, input.userId);
   if (!targets) return notFound;
   if (targets.accountId === input.accountId) return self;
+  const p = targets.primary;
+  // Login jde doslova do chatu — nic mimo běžné znaky loginu (mezera by přidala další argumenty).
+  if (!PERMIT_LOGIN_RE.test(p.login)) return { status: 400, body: { ok: false, error: 'bad_login' } };
   const until = new Date(deps.now() + input.durationSec * 1000);
   const results: Record<string, ModResult> = {};
 
@@ -221,7 +257,6 @@ export async function runPermit(input: PermitInput, deps: PermitDeps): Promise<O
     results.permit = 'error:db';
   }
 
-  const p = targets.primary;
   const text = `!permit ${p.login}`;
   let chat: ModResult | null = null;
   if (input.modPlatforms.includes(p.platform)) {
@@ -248,12 +283,15 @@ export async function runPermit(input: PermitInput, deps: PermitDeps): Promise<O
   return { status: 200, body: { ok: true, until: until.getTime(), results } };
 }
 
-// ---- přejmenování (přezdívka v UnityChatu) ----
-export interface RenameInput { channel: string; accountId: number; by: string; platform: Platform; login: string; nickname: string | null; color: string | null }
+// ---- přejmenování (přezdívka v UnityChatu, globální — nicknames nemají kanál) ----
+export interface RenameInput { channel: string; accountId: number; by: string; callerIsBroadcaster: boolean; platform: Platform; login: string; nickname: string | null; color: string | null }
 
 export interface RenameDeps {
   /** Uživatel podle loginu v archivu kanálu (archivedUserByLogin přes platformní kanál). */
   findUser: (channel: string, platform: Platform, login: string) => Promise<UserTarget | null>;
+  targetRole: TargetRole;
+  /** Obsahuje přezdívka slovo z blacklistu kanálu (Židolišta)? */
+  blacklisted: (channel: string, nickname: string) => Promise<boolean>;
   upsert: (platform: Platform, username: string, nickname: string, color: string | null) => Promise<void>;
   remove: (platform: Platform, username: string) => Promise<void>;
   recordAction: UserActionDeps['recordAction'];
@@ -264,6 +302,11 @@ export interface RenameDeps {
 export async function runRename(input: RenameInput, deps: RenameDeps): Promise<Out> {
   const u = await deps.findUser(input.channel, input.platform, input.login);
   if (!u) return notFound;
+  const denied = await checkHierarchy(input.channel, [u], input.callerIsBroadcaster, deps.targetRole);
+  if (denied) return denied;
+  if (input.nickname !== null && await deps.blacklisted(input.channel, input.nickname)) {
+    return { status: 400, body: { ok: false, error: 'nickname_blacklisted' } };
+  }
   if (input.nickname === null) await deps.remove(input.platform, u.login);
   else await deps.upsert(input.platform, u.login, input.nickname, input.color);
   try {

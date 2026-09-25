@@ -14,14 +14,17 @@
 - **Cíl** se určuje podle `(platform, userId)` zprávy a MUSÍ mít zprávu v serverovém archivu toho kanálu
   (login se bere z archivu, `login` z klienta je jen informativní). Jinak `404 { ok:false, error:'not_found' }`
   a nic se nestane (žádné SSE, platforma ani zápis). Akce na sebe (cíl je týž UC účet) → `400 { error:'self' }`.
-- **Rate limit** per účet (10, doplňuje 2/s) sdílený s `/moderation/delete` → `429 { error:'rate_limited' }`.
+- **Hierarchie** (timeout/ban/unban, varování, přejmenování): role cíle se ověří na serveru (`chatRole` na
+  platformním kanálu každé známé identity cíle). Broadcastera kanálu nemoderuje nikdo, moda jen broadcaster
+  → `403 { ok:false, error:'target_protected' }`, nic se nestane.
+- **Rate limit** per účet (10, doplňuje 2/s) sdílený s `/moderation/delete` a `/moderation/user-state` → `429 { error:'rate_limited' }`.
 - `userId` = ID na platformě: Twitch user id, Kick user id, YouTube channel id (`UC…`) — to, co nese zpráva
   (`platformUserId` / `userId` v `/chat/history` a `/chat/stream`).
 - **Výsledek po platformách** (`ModResult`): `'ok'` (účtem moda) · `'bot'` (botem workspace) · `'error:<kód>'`:
   `no_actor` (mod nemá scopes/není mod na té platformě a bot chybí nebo nemá scopes), `no_channel`,
   `not_live` (YouTube: stream neběží), `no_ban_id` (YouTube unban bez známého id banu), `unsupported`,
   `exception`, nebo HTTP status platformy (`error:403`, `error:401`, …).
-- Chyba platformy po SSE nikdy nevrací 500 — vždy `200` s `results`.
+- Chyba platformy nikdy nevrací 500 — vždy `200` s `results`.
 
 ## UC routy (Bearer)
 
@@ -34,7 +37,9 @@
   `5, 30, 60, 300, 600, 1800, 3600, 7200` (jinak `400 body`). `reason` volitelný (≤ 500 znaků, jde na platformu).
 - Platí na **všech platformách, kde člověka známe**: identity téhož UC účtu (`web_identities`) na platformách,
   které má kanál v registru; bez UC účtu jen platforma zprávy.
-- Pořadí: SSE `user-moderated` pro každou identitu → akce na platformách (paralelně) → `moderation_bans` → `moderation_actions`.
+- Pořadí: akce na platformách (paralelně) → SSE `user-moderated` **jen pro platformy, kde akce prošla**
+  (`ok`/`bot`) → `moderation_bans` (zápis / u unbanu smazání) také jen pro ně → `moderation_actions`.
+  Klient dostane výsledky všech platforem.
 - Odpověď `200`:
 ```json
 { "ok": true, "action": "timeout", "until": 1790000300000,
@@ -42,7 +47,7 @@
   "targets": [ { "platform": "twitch", "login": "spammer" }, { "platform": "kick", "login": "spammer_k" } ],
   "notes": { "kick": "rounded_to_minutes:1" } }
 ```
-  `until` = konec timeoutu (ms epoch) na platformě zprávy, jinak `null`. `notes.kick` jen když se Kick
+  `until` = konec timeoutu (ms epoch) na platformě zprávy, pokud tam prošel, jinak `null`. `notes.kick` jen když se Kick
   zaokrouhlil na celé minuty (5 s a 30 s = 1 min) — klient to uvede v hlášce.
 
 ### `POST /moderation/warn`
@@ -63,6 +68,8 @@
 - Pošle do chatu platformy zprávy `!permit <login z archivu>` — účtem moda, je-li na té platformě mod
   (přes stejnou logiku jako `/chat/send`), jinak / při selhání botem workspace (`sendAsBot`).
 - Uloží náš permit (`link_permits`) pro všechny známé identity (pro filtr odkazů v části 3).
+- Login cíle musí odpovídat `^[\w.-]{1,60}$` (jde doslova do chatu), jinak `400 { error:'bad_login' }`
+  a nic se nepošle ani neuloží. Hierarchie se u permitu nekontroluje.
 - `200 { ok:true, until: <ms>, results: { permit: 'ok'|'error:db', chat: 'ok'|'bot'|'error:<kód>' } }`
   (`chat` kódy bota: `no_actor`, `bot_unavailable`, `not_live`, `no_channel`, `send_failed`, …).
 
@@ -73,12 +80,16 @@
 - `nickname: null` = smazat přezdívku. Pravidla jako `PUT /nicknames` (1–30 znaků, `color` `#rrggbb` / null),
   ale bez 10s limitu a bez vlastnictví — jen mod kanálu a jen uživatel z archivu kanálu (přesná shoda loginu).
 - SSE `nickname-change` / `nickname-delete` rozešle trigger v DB (`nicknames_notify`), route sama nic nevysílá.
+- Přezdívky jsou **globální** (tabulka `nicknames` nemá kanál; rozhodnutí: stejní modi napříč podporovanými
+  streamery). Hierarchie platí (mod / broadcaster cíle → `403 target_protected`).
+- Přezdívka se kontroluje proti blacklistu slov kanálu (Židolišta, stejný zdroj a stejné pravidlo celého
+  slova jako `core/censor.js`) → `400 { error:'nickname_blacklisted' }`.
 - `200 { ok:true, login, nickname }`, neznámý login v kanálu `404 not_found`.
 
 ### `GET /moderation/user-state?channel=&platform=&userId=`
 - `200 { ok:true, banned: boolean, until: <ms>|null }` — `banned` = známý ban (until null) nebo běžící timeout
   (vlastní akce UC/Židolišty + Twitch CLEARCHAT). Podle toho nabídka ukáže **Unban** místo Timeout/Zabanovat.
-  Bez rate limitu, jen pro mody.
+  Jen pro mody, rate limit sdílený s ostatními routami moderace.
 
 ## Varování účtu (Bearer, jen vlastní účet)
 
@@ -113,8 +124,9 @@
   timeoutu v ms (u Kicku už zaokrouhlený), jinak `null`. `by`: `"<platforma>:<login>"` moda,
   `"zidolista:<id>"` z Chat Logu, `null` = odjinud (Twitch CLEARCHAT z ingestu).
 - **Nenese důvod.** Klient: styl smazaných zpráv (`deletedStyle`) na předchozí zprávy `(platform, userId)`
-  + štítek „Timeout (5 min)" / „Zabanován"; `unban` štítek sundá. CLEARCHAT, který je echem vlastní
-  akce, server do 30 s nevyšle podruhé.
+  + štítek „Timeout (5 min)" / „Zabanován"; `unban` štítek sundá. Chodí jen pro platformy, kde akce
+  prošla. CLEARCHAT, který je echem vlastní akce (stejná akce i délka), server do 30 s nevyšle podruhé;
+  re-timeout odjinud s jinou délkou projde (nové `until`).
 
 ## Integrace Židolišty (X-Api-Key + HMAC, `inboundAuthorized`)
 
@@ -126,6 +138,8 @@
 - `durationSec` povinné u `timeout` (1–1 209 600 s, Kick se zaokrouhlí na minuty), jinak ignorováno. `login` volitelný (ignoruje se).
 - Kanál JEN ze slugu (`ws.channels.twitch` = UC kanál), cíl musí mít zprávu v archivu platformního
   kanálu workspace; propojené identity jen na platformách workspace. Akce jen **botem workspace**.
+- Hierarchie jako u UC: broadcaster cíle nikdy; mod cíle jen když `actor.role` je `owner` / `broadcaster`
+  / `streamer` (role ověřuje Židolišta, požadavek je podepsaný HMAC) → jinak `403 target_protected`.
 - Odpovědi: `400 body` / `400 durationSec`, `404 unknown_workspace` / `no_channel`, `429 rate_limited`
   (per workspace, sdílené s delete/hide/unhide), cíl mimo workspace `200 { ok:true, result:'not_found' }`,
   jinak `200` stejné tělo jako `POST /moderation/user`.
