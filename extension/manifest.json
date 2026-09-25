@@ -10,7 +10,8 @@
     "scripting",
     "cookies",
     "downloads",
-    "identity"
+    "identity",
+    "notifications"
   ],
   "host_permissions": [
     "https://kick.com/*",

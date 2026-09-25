@@ -273,6 +273,14 @@ body.layout-large #settings details summary { font-size: 15px; }
   letter-spacing: 0.5px;
 }
 
+/* Krátká poznámka pod volbou (např. zakázaná oznámení prohlížeče) */
+.setting-note {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #ff8a80;
+}
+.setting-note.hidden { display: none; }
+
 .setting-row input[type="text"],
 .setting-row select {
   background: var(--bg-tertiary);

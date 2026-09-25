@@ -120,6 +120,17 @@ mluvilo jen o reakcích, museli bychom ho při rozšíření měnit a znovu ček
 `launchWebAuthFlow` jen otevře OAuth okno platformy; `identity.email` ani Google účet
 nežádáme.
 
+### `notifications`   ⚠️ NOVÉ ve v3.44.5 — před releasem vyplnit v dashboardu (jinak `:publish` → `INVALID_ITEM_METADATA`)
+
+```
+Optional and off by default. When the user turns on "Notify on mentions" in the panel settings, the extension shows a local notification when someone in the chat @mentions the user or replies directly to the user's message while the panel is in the background (hidden or not focused). The notification contains only the author's name, the message text and the platform and channel, all taken from the chat already displayed in the panel. Clicking it focuses the browser window with the panel. Notifications are created locally with chrome.notifications; nothing is sent to our server or to any third party, and no notification is shown for other messages or while the user is looking at the chat.
+```
+
+**Proč:** opt-in volba „Upozornit na zmínky (oznámení prohlížeče)" (výchozí vypnuto).
+Oznámení vytváří panel lokálně (`core/mention-notify.js` + `chrome.notifications.create`),
+jen na @zmínku / odpověď na moji zprávu, když panel není vidět nebo nemá fokus.
+Žádná data nikam neodcházejí → data-use disclosure se nemění. (696 znaků)
+
 ### Host permissions
 
 ⚠️ **Každé pole má limit 1 000 znaků.** Tahle verze (3.41.0, 2026-09-25) má 829 znaků —
