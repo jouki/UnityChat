@@ -276,8 +276,9 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
   const primary = targets.primary;
   const { byUc } = await mergeChannels(await deps.channelGroups([primary]), input.channel, deps.ucChannelOf);
   const here = byUc.get(input.channel) ?? [];
-  // Bez UC účtu nemůže mít dono spárované přes UC (matchedBy 'uc') → ucNamed je vždy 0, Židolišta se neptá.
-  const ids = targets.accountId !== null ? await historyIdentities(targets, deps) : [];
+  // Suma darů je veřejná a celková ze všech zdrojů (pokyn usera 2026-09-25): identity UC účtu, bez účtu
+  // aspoň kliknutá identita (dona spárovaná podle jména). Strop veřejných volání Židolišty drží deps.donations.
+  const ids = targets.accountId !== null ? await historyIdentities(targets, deps) : [primary];
   const [name, latest, nick, donationItems] = await Promise.all([
     deps.latestName(primary.platform, primary.userId),
     latestInChannel([primary], here, deps),
@@ -296,8 +297,11 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
     total: here.reduce((s, g) => s + g.count, 0),
   };
   const body: Record<string, unknown> = { ok: true, view: 'public', user, latest };
-  // Divák dostane JEN ucNamed (žádné czk celkem, uc, odhady ani položky).
-  if (donationItems) body.donations = { ucNamed: publicDonationSum(donationItems, [primary.login, name]) };
+  // Divák dostane jen celkovou sumu (žádné položky, texty, přezdívky ani rozpad na jisté / podle jména).
+  if (donationItems?.length) {
+    const t = donationTotals(donationItems);
+    body.donations = { total: t.total, count: t.count };
+  }
   return { status: 200, body };
 }
 

@@ -138,7 +138,7 @@ test('Profil veřejný: divák i nepřihlášený dostanou JEN veřejná pole (b
     assert.equal(b.view, 'public');
     assert.deepEqual(Object.keys(b.user).sort(), PUBLIC_USER, who);
     for (const k of ['identities', 'channels', 'moderation']) { assert.equal(b[k], undefined, `${who}: ${k}`); assert.equal(b.user[k], undefined, `${who}: user.${k}`); }
-    assert.deepEqual(b.donations, { ucNamed: { czk: 150, count: 1 } }, `${who}: jen ucNamed (bez czk, uc, guess, items)`);
+    assert.deepEqual(b.donations, { total: { czk: 299, byCurrency: { CZK: 299 } }, count: 3 }, `${who}: jen celková suma (bez uc, guess, items)`);
     assert.ok(!JSON.stringify(b).includes('anonym') && !JSON.stringify(b).includes('díky'), `${who}: žádné texty donů`);
     assert.ok(!calls.includes('moderation'), `${who}: moderace se ani nenačte`);
     if (who === 'divák') assert.deepEqual(modCalls, ['2:robdiesalot']); else assert.deepEqual(modCalls, []);

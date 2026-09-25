@@ -87,7 +87,7 @@ const summaryMod = (who) => who === 'other'
     donations: { total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } } };
 // Veřejný tvar (divák): jen tahle pole — stejně jako server (buildPublicSummary).
 const summaryPublic = { ok: true, view: 'public', user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, firstSeen: now - 86400000, lastSeen: now, total: 2 },
-  latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '' } }, donations: { ucNamed: { czk: 1000, count: 1 } } };
+  latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '' } }, donations: { total: { czk: 1000, byCurrency: { CZK: 1000 } }, count: 2 } };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 const pushAcc = (type, data) => {
@@ -324,7 +324,7 @@ check('H 2 badge u jména: Twitch vč. 7TV + Kick moderator, skupiny s logem pla
 const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img') + ':' + e.title).join(',')`);
 check('H 5 chipy identit = zobrazované jméno, login v title', idsTxt === 'Tester:true:Twitch: tester,Tester K:true:Kick: tester_k', idsTxt);
 const donSum = await ev(`(() => { const d = document.querySelector('.uc-uh-donsum'); return d && { amt: d.textContent, title: d.title, inTop: d.parentElement.classList.contains('uc-uh-top'), next: d.nextElementSibling?.className }; })()`);
-check('H 8 suma darů vpravo nahoře (jen částka, odhad v tooltipu)', donSum?.amt === '1\u00a0250\u00a0Kč + 20\u00a0€' && donSum.title === 'Celkem darováno 1\u00a0250\u00a0Kč + 20\u00a0€ (z toho 250\u00a0Kč jen podle jména)' && donSum.inTop && donSum.next === 'uc-uh-close'
+check('H 8 suma darů vpravo nahoře (jen celková částka)', donSum?.amt === '1\u00a0250\u00a0Kč + 20\u00a0€' && donSum.title === 'Celkem darováno 1\u00a0250\u00a0Kč + 20\u00a0€' && donSum.inTop && donSum.next === 'uc-uh-close'
   && await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-uh-donsum-main')).fontSize) >= parseFloat(getComputedStyle(document.querySelector('.uc-uh-name')).fontSize)`) === true, JSON.stringify(donSum));
 const statsTxt = await ev(`document.querySelector('.uc-uh-stats').textContent`);
 check('H statistika česky (3 tvary)', /^Poprvé viděn .+ · naposledy .+ · celkem 6 zpráv$/.test(statsTxt || ''), statsTxt);
@@ -458,6 +458,8 @@ check('B 10 divák: levý klik na jméno → Profil', await until(`document.quer
 const pub = await ev(`(() => { const q = (s) => document.querySelector(s); return { stats: q('.uc-uh-stats').textContent, don: q('.uc-uh-donsum-main')?.textContent, sub: !!q('.uc-uh-donsum-sub'), list: q('.uc-uh-list').hidden, tabs: q('.uc-uh-tabs').hidden, ids: q('.uc-uh-ids').children.length, mod: q('.uc-uh-mod').hidden, card: q('.uc-uh-card')?.textContent, b7: !!q('.uc-uh-badges .bdg-7tv') }; })()`);
 check('B divák: jen hlavička — statistika kanálu, suma jen ucNamed, karta platformy', pub?.stats.startsWith('V tomto kanálu: poprvé viděn ') && /celkem 2 zprávy$/.test(pub.stats) && pub.don === '1 000 Kč' && !pub.sub
   && pub.list && pub.tabs && pub.ids === 0 && pub.mod && pub.card === 'Karta na Twitchi' && pub.b7, JSON.stringify(pub));
+const pubH = await ev(`(() => { const p = document.querySelector('.uc-uh').getBoundingClientRect(), w = document.getElementById('chat-wrapper').getBoundingClientRect(); return { p: Math.round(p.height), w: Math.round(w.height) }; })()`);
+check('B divák: Profil jen výška hlavičky, pod ním je vidět chat', pubH && pubH.p < pubH.w * 0.6, JSON.stringify(pubH));
 await sleep(600);
 check('B divák: žádný dotaz na zprávy ani dona', posts.hist.slice(nHistB).every((x) => /\/summary\?/.test(x)) && posts.hist.slice(nHistB).length === 1, posts.hist.slice(nHistB).join(' | '));
 await ev(`document.querySelector('.uc-uh-close').click()`);

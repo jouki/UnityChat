@@ -186,7 +186,7 @@ test('mergeDonations / donationTotals: dedup podle id (jistá shoda má přednos
   assert.deepEqual(donationTotals([]), { total: { czk: 0, byCurrency: {} }, count: 0, uc: { czk: 0, count: 0 }, guess: { czk: 0, byCurrency: {}, count: 0 } });
 });
 
-test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanálu a jen kliknuté identity, dona jen ucNamed', async () => {
+test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanálu a jen kliknuté identity, dona jen celková suma', async () => {
   const all = await deps().channelGroups([]);
   const dd = deps({
     channelGroups: async (ids) => all.filter((g) => ids.some((i) => i.platform === g.platform)),
@@ -201,14 +201,14 @@ test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanál
   assert.deepEqual(Object.keys(b.user).sort(), ['color', 'displayName', 'firstSeen', 'lastSeen', 'login', 'nickname', 'platform', 'total', 'userId']);
   assert.equal(b.user.total, 5, 'jen Twitch identita v robdiesalot (Kick propojeného účtu se nepočítá)');
   assert.deepEqual(Object.keys(b.latest), ['twitch'], 'badge jen kliknuté identity');
-  assert.deepEqual(b.donations, { ucNamed: { czk: 1000, count: 1 } }, 'bez czk celkem, uc, odhadů a položek');
+  assert.deepEqual(b.donations, { total: { czk: 1550, byCurrency: { CZK: 1550 } }, count: 3 }, 'celková suma ze všech zdrojů, bez položek a rozpadu');
   assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '999' }, dd)).status, 404);
   assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: null, login: 'cizi' }, dd)).status, 404);
   const noDon = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps());
   assert.equal((noDon.body as Record<string, unknown>).donations, undefined);
 });
 
-test('buildPublicSummary: cíl bez UC účtu → Židolišta se vůbec neptá (ucNamed by byl 0); s účtem dotaz jako veřejný', async () => {
+test('buildPublicSummary: cíl bez UC účtu → Židolišta se ptá za kliknutou identitu (dona podle jména); dotaz jako veřejný', async () => {
   let asked = 0;
   let opts: unknown = null;
   const noAcc = deps({
@@ -217,10 +217,10 @@ test('buildPublicSummary: cíl bez UC účtu → Židolišta se vůbec neptá (u
   });
   const out = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, noAcc);
   assert.equal(out.status, 200);
-  assert.equal(asked, 0);
-  assert.equal((out.body as Record<string, unknown>).donations, undefined);
-  await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async (_c, _i, o) => { asked++; opts = o; return []; } }));
   assert.equal(asked, 1);
+  assert.deepEqual((out.body as Record<string, unknown>).donations, { total: { czk: 10, byCurrency: { CZK: 10 } }, count: 1 });
+  await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async (_c, _i, o) => { asked++; opts = o; return []; } }));
+  assert.equal(asked, 2);
   assert.deepEqual(opts, { public: true }, 'veřejná volání jdou přes globální strop');
 });
 

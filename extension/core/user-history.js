@@ -101,16 +101,10 @@ export function fmtMoney(total) {
  */
 export function donationsSummary(don) {
   if (!don || typeof don !== 'object') return null;
-  // V hlavičce jen částka (vpravo, gradient jako QR dono); popis a odhad podle jména do tooltipu.
-  if (don.ucNamed) {
-    if (!(don.ucNamed.count > 0)) return null;
-    const amount = fmtAmount(don.ucNamed.czk, 'CZK');
-    return { amount, title: `Celkem darováno ${amount}` };
-  }
+  // V hlavičce jen celková částka ze všech zdrojů (vpravo, gradient jako QR dono), stejná pro všechny.
   if (!(don.count > 0) || !don.total) return null;
   const amount = fmtMoney(don.total);
-  const guess = don.guess?.count > 0 ? ` (z toho ${fmtMoney(don.guess)} jen podle jména)` : '';
-  return { amount, title: `Celkem darováno ${amount}${guess}`, guess: !!guess };
+  return { amount, title: `Celkem darováno ${amount}` };
 }
 
 /** Řádek dona v logu: „poslal QR dono 150 Kč“ / „poslal dono přes Fourthwall 20 €“. */
@@ -522,7 +516,6 @@ export class UserHistoryPanel {
     this._donSum.replaceChildren();
     this._donSum.hidden = !don;
     this._donSum.title = don?.title || '';
-    this._donSum.classList.toggle('uc-uh-donsum--guess', !!don?.guess);
     if (don) {
       const main = doc.createElement('div');
       main.className = 'uc-uh-donsum-main';
