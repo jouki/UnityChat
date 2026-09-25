@@ -14,6 +14,7 @@ import {
   requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity, signOutAccount,
   needsRefresh, type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
+import { refreshTokens } from '../lib/platformTokens.js';
 import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
 import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
@@ -170,10 +171,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
 
     const refresh = async () => {
       if (!ident?.refreshToken) throw new SendError(`${platform}: token expired, login again`, 401);
-      let t: TokenSet;
-      if (platform === 'twitch') { const r = await twitch.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope }; }
-      else if (platform === 'kick') { const r = await kick.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
-      else { const r = await youtube.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
+      const t = await refreshTokens(platform, ident.refreshToken);
       await storeRefreshedTokens(accountId, platform, t);
       ident = { ...ident!, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
     };
