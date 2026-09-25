@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeLimits, limitError, mapUpstreamError, mergeRequests, normalizeRequests, PrepareBody, pragueDay, rangeError, SubmitBody } from './sfxRequests.js';
+import { computeLimits, limitError, mapUpstreamError, mergeRequests, normalizePrepared, normalizeRequests, PrepareBody, pragueDay, rangeError, SubmitBody } from './sfxRequests.js';
 import { normalizeCatalog } from './soundboard.js';
 
 test('pragueDay: hranice dne podle Europe/Prague (léto +2, zima +1)', () => {
@@ -83,6 +83,17 @@ test('zod těla: prepare a submit', () => {
   assert.equal(SubmitBody.safeParse({ ...ok, name: 'x'.repeat(41) }).success, false);
   assert.equal(SubmitBody.safeParse({ ...ok, startMs: 1.5 }).success, false);
   assert.equal(SubmitBody.safeParse({ ...ok, note: 'x'.repeat(301) }).success, false);
+});
+
+test('normalizePrepared: režim server (mp3/YouTube stažený) a embed (YouTube blokuje server)', () => {
+  const srv = normalizePrepared({ ok: true, previewId: 'p1', durationMs: 12345.6, peaks: [0.5, 2, 'x', -1], previewUrl: 'https://api-zidolista.jouki.cz/sfx-preview/ab.mp3', expiresAt: '2026-09-25T12:00:00Z', source: 'mp3' });
+  assert.deepEqual(srv, { previewId: 'p1', source: 'mp3', durationMs: 12346, expiresAt: '2026-09-25T12:00:00Z', title: null, mode: 'server', peaks: [0.5, 1, 0, 0], previewUrl: 'https://api-zidolista.jouki.cz/sfx-preview/ab.mp3', videoId: null });
+  assert.equal(normalizePrepared({ previewId: 'p1', durationMs: 1000, peaks: [], previewUrl: 'http://x/a.mp3' }), null, 'jen https náhled');
+  assert.equal(normalizePrepared({ previewId: 'p1', peaks: [], previewUrl: 'https://x/a.mp3' }), null, 'server režim bez délky ne');
+  const emb = normalizePrepared({ ok: true, previewId: 'p2', mode: 'embed', source: 'youtube', videoId: 'dQw4w9WgXcQ', title: 'Rick', durationMs: null, peaks: null, previewUrl: null, expiresAt: '2026-09-25T12:00:00Z' });
+  assert.deepEqual(emb, { previewId: 'p2', source: 'youtube', durationMs: null, expiresAt: '2026-09-25T12:00:00Z', title: 'Rick', mode: 'embed', peaks: null, previewUrl: null, videoId: 'dQw4w9WgXcQ' });
+  assert.equal(normalizePrepared({ previewId: 'p2', mode: 'embed', videoId: 'x"><script>' }), null, 'videoId jen 11 znaků [A-Za-z0-9_-]');
+  assert.equal(normalizePrepared({ previewId: 'p2', mode: 'embed', videoId: 'dQw4w9WgXcQ', durationMs: 212000 })?.durationMs, 212000);
 });
 
 test('normalizeCatalog: gainDb se propíše (0 = beze změny, ořez ±20 dB)', () => {

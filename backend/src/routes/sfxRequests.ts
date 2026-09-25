@@ -99,6 +99,34 @@ export function rangeError(startMs: number, endMs: number): 'bad_range' | 'too_l
   return null;
 }
 
+export interface Prepared {
+  previewId: string; mode: 'server' | 'embed'; source: 'youtube' | 'mp3'; durationMs: number | null;
+  peaks: number[] | null; previewUrl: string | null; videoId: string | null; expiresAt: string | null; title: string | null;
+}
+
+/**
+ * Odpověď prepare ze Židolišty → tvar pro klienta; neplatná = null.
+ * mode 'server' = stáhnuto (peaks + previewUrl povinné); 'embed' = YouTube blokuje server,
+ * klient přehrává video přímo z YouTube (videoId povinné, délka může chybět).
+ */
+export function normalizePrepared(j: Record<string, unknown>): Prepared | null {
+  if (typeof j.previewId !== 'string' || !j.previewId || j.previewId.length > 64) return null;
+  const embed = j.mode === 'embed';
+  const durationMs = Number.isFinite(j.durationMs) && (j.durationMs as number) > 0 ? Math.round(j.durationMs as number) : null;
+  const base = {
+    previewId: j.previewId, source: (j.source === 'youtube' || embed ? 'youtube' : 'mp3') as Prepared['source'], durationMs,
+    expiresAt: typeof j.expiresAt === 'string' ? j.expiresAt : null, title: typeof j.title === 'string' ? j.title.slice(0, 200) : null,
+  };
+  if (embed) {
+    const videoId = typeof j.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(j.videoId) ? j.videoId : null;
+    return videoId ? { ...base, mode: 'embed', peaks: null, previewUrl: null, videoId } : null;
+  }
+  const previewUrl = typeof j.previewUrl === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(j.previewUrl) ? j.previewUrl : null;
+  if (!previewUrl || durationMs === null) return null;
+  const peaks = (Array.isArray(j.peaks) ? j.peaks : []).map((v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v as number)) : 0));
+  return { ...base, mode: 'server', peaks, previewUrl, videoId: null };
+}
+
 const Channel = z.string().transform((s) => s.toLowerCase().replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9_]{1,40}$/));
 const PlatformZ = z.enum(['twitch', 'kick', 'youtube']);
 export const PrepareBody = z.object({ channel: Channel, platform: PlatformZ, url: z.string().trim().min(8).max(2000) }).strict();
@@ -217,16 +245,10 @@ export default async function sfxRequestRoutes(app: FastifyInstance) {
     try { u = await zidolista(`/integrations/${encodeURIComponent(ctx.slug)}/sfx-requests/prepare`, { method: 'POST', body: { url: body.data.url, requester: ctx.requester }, timeoutMs: 120_000 }); }
     catch (e) { return down(reply, e, 'prepare'); }
     if (u.status >= 400 || u.json.ok === false) { const m = mapUpstreamError(u.status, u.json); return bad(reply, m.status, m.error); }
-    const j = u.json;
-    const peaks = (Array.isArray(j.peaks) ? j.peaks : []).map((v) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v as number)) : 0));
-    const previewUrl = typeof j.previewUrl === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(j.previewUrl) ? j.previewUrl : null;
-    if (typeof j.previewId !== 'string' || !Number.isFinite(j.durationMs) || !previewUrl) return bad(reply, 502, 'zidolista_unavailable');
-    app.log.info({ slug: ctx.slug, platform: ctx.requester.platform, source: j.source, durationMs: j.durationMs }, 'sfx-request: prepare ok');
-    return {
-      ok: true, previewId: j.previewId, durationMs: Math.round(j.durationMs as number), peaks, previewUrl,
-      expiresAt: typeof j.expiresAt === 'string' ? j.expiresAt : null, source: j.source === 'youtube' ? 'youtube' : 'mp3',
-      title: typeof j.title === 'string' ? j.title.slice(0, 200) : null, limits: ctx.limits,
-    };
+    const out = normalizePrepared(u.json);
+    if (!out) return bad(reply, 502, 'zidolista_unavailable');
+    app.log.info({ slug: ctx.slug, platform: ctx.requester.platform, source: out.source, mode: out.mode, durationMs: out.durationMs }, 'sfx-request: prepare ok');
+    return { ok: true, ...out, limits: ctx.limits };
   });
 
   app.post('/soundboard/requests', { preHandler: requireWebSession }, async (req, reply) => {
