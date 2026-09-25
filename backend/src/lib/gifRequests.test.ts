@@ -35,7 +35,7 @@ function memStore(now: () => number) {
       for (const r of reqs.values()) if (r.status === 'pending' && r.expiresAt.getTime() <= at.getTime()) { r.status = 'expired'; out.push(r); }
       return out;
     },
-    async listPending(at) { return [...reqs.values()].filter((r) => r.status === 'pending' && r.expiresAt > at); },
+    async listPending(at) { return [...reqs.values()].filter((r) => r.status === 'pending' && r.expiresAt > at && !(r.meta as Record<string, unknown>)?.auto); },
     async markDeletedByMessage(messageId) { const r = reqs.get(Number(messageId.slice(4))); if (r?.status === 'approved') { r.status = 'deleted'; return r; } return null; },
     async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); return toClientMessage(approvedMessageRow(r, at), false); },
     async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); return retagOk; },
@@ -259,6 +259,9 @@ test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, coold
   const out = await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
   assert.deepEqual(out.body, { ok: true, requestId: 1, status: 'approved', published: false });
   assert.equal(tries, 2);
+  // Původní zpráva nezůstane navždy schovaná: gif_request → gif_rejected + message-deleted.
+  assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'), s.mem.log.join(' | '));
+  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: 'twitch:moda', reason: 'gif_rejected', at: 1_000_000 });
   assert.equal(names(s.calls).some((n) => n === 'broadcast:gif-message' || n === 'publishChat' || n === 'warm'), false);
   assert.equal(names(s.calls).includes('used'), true);
 
@@ -289,7 +292,7 @@ test('intercept auto (mod): schváleno hned, bez Židolišty, bez gif-used, bez 
   const n = names(s.calls);
   assert.deepEqual(n.filter((x) => x.startsWith('notify:') || x.startsWith('integration:')), [], 'nikdo nic neschvaluje');
   assert.equal(n.includes('used'), false, 'mod bez cooldownu');
-  assert.ok(n.indexOf('deletePlatform') >= 0 && n.indexOf('deletePlatform') < n.indexOf('broadcast:gif-message'), 'původní zpráva pryč i z platformy');
+  assert.ok(n.indexOf('deletePlatform') > n.indexOf('broadcast:gif-message'), 'původní zpráva pryč i z platformy (až po schválení)');
   const pub = s.calls.find((c) => c[0] === 'broadcast:gif-message')![1] as { message: Record<string, unknown> };
   assert.equal(pub.message.replaces, 'twitch:m1');
   assert.equal(pub.message.timestamp, 1_000_000 - 500);
@@ -313,4 +316,29 @@ test('intercept auto: převod selže → původní zpráva se v UC obnoví (mod 
   const s = setup({ resolve: async () => { throw new GifError('no_media'); } });
   assert.equal(await s.flow.intercept(params({ auto: true })), 'failed');
   assert.deepEqual(names(s.calls), ['publishDeleted', 'restore']);
+});
+
+test('intercept auto: schválení hned po insertu, před mazáním na platformě; auto žádost není v listPending (jiný mod ji nevidí)', async () => {
+  let seenByOtherMod: unknown[] | null = null;
+  let statusAtDelete: string | null = null;
+  const s = setup({
+    deletePlatform: async () => { statusAtDelete = s.mem.reqs.get(1)!.status; s.calls.push(['deletePlatform', null]); return 'bot'; },
+  });
+  const orig = s.mem.store.insertRequest.bind(s.mem.store);
+  s.mem.store.insertRequest = async (v) => {
+    const r = await orig(v);
+    // Jiný mod v tu chvíli otevře GET /moderation/gif/pending.
+    seenByOtherMod = await s.mem.store.listPending(new Date(s.now()), 'robdiesalot');
+    return r;
+  };
+  assert.equal(await s.flow.intercept(params({ auto: true })), 'approved');
+  assert.deepEqual(seenByOtherMod, [], 'auto žádost se v pending neukáže');
+  assert.equal(statusAtDelete, 'approved', 'na platformě se maže až po schválení');
+  const n = names(s.calls);
+  assert.ok(n.indexOf('broadcast:gif-message') < n.indexOf('deletePlatform'), n.join(','));
+  assert.deepEqual((s.mem.reqs.get(1)!.meta as Record<string, unknown>).auto, true);
+  // Běžná (neauto) žádost v pending je.
+  const b = setup();
+  await b.flow.intercept(params());
+  assert.equal((await b.mem.store.listPending(new Date(b.now()))).length, 1);
 });

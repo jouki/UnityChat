@@ -19,7 +19,7 @@
 //   Převod selže → zpráva se bere jako běžný odkaz (filtr ji smaže, nebo se v UC obnoví, když by ji filtr pustil).
 // Nic tady nesmí shodit ingest. NIKDY nelogovat tokeny.
 import { randomBytes, createHash } from 'node:crypto';
-import { and, eq, inArray, isNull, lte, gt } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, gt, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { gifMedia, gifRequests, messages, webIdentities, type GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
@@ -125,7 +125,7 @@ export interface GifStore {
   decide(id: number, status: 'approved' | 'rejected', by: string, at: Date): Promise<GifRequest | null>;
   get(id: number): Promise<GifRequest | null>;
   expireDue(at: Date): Promise<GifRequest[]>;
-  /** Čekající a nepropadlé; `channel` = jen UC kanál (filtr v SQL). */
+  /** Čekající a nepropadlé, BEZ auto-schválení modem (meta.auto — schvaluje se hned, nikdo jiný je nerozhoduje); `channel` = jen UC kanál (filtr v SQL). */
   listPending(at: Date, channel?: string): Promise<GifRequest[]>;
   /** Schválený GIF smazaný modem (část 1) → status deleted. */
   markDeletedByMessage(messageId: string): Promise<GifRequest | null>;
@@ -159,7 +159,7 @@ export const dbGifStore: GifStore = {
   },
   async listPending(at, channel) {
     return db.select().from(gifRequests)
-      .where(and(eq(gifRequests.status, 'pending'), gt(gifRequests.expiresAt, at), channel !== undefined ? eq(gifRequests.channel, channel) : undefined))
+      .where(and(eq(gifRequests.status, 'pending'), gt(gifRequests.expiresAt, at), sql`(${gifRequests.meta}->>'auto') is null`, channel !== undefined ? eq(gifRequests.channel, channel) : undefined))
       .limit(500);
   },
   async markDeletedByMessage(messageId) {
@@ -389,6 +389,8 @@ export function createGifFlow(deps: GifFlowDeps) {
       } else {
         published = false;
         deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán');
+        // Původní zpráva nesmí zůstat navždy schovaná (gif_request) → běžně smazaná (gif_rejected + message-deleted).
+        await rejectOriginal(r, p.by);
       }
       await usedP;
     } else if (r.mediaId) {
@@ -487,6 +489,16 @@ export function createGifFlow(deps: GifFlowDeps) {
           return 'failed';
         }
 
+        // Mod / broadcaster: schválit HNED po insertu (stejná cesta jako decide approve), bez cooldownu a bez karet —
+        // dřív, než by žádost mohl uvidět a rozhodnout jiný mod (listPending auto žádosti navíc vynechává).
+        // Mazání na platformě až potom (níž).
+        let autoOut: { status: number } | null = null;
+        if (auto) {
+          const by = `${m.platform}:${m.username.toLowerCase()}`;
+          autoOut = await approveCore(created.id, by, null, { auto: true });
+          deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id, status: autoOut.status }, 'gif: mod → schváleno rovnou');
+        }
+
         // Původní zpráva: v UC smazat (pokud ještě není), na platformě botem (filtr to už udělal, když ji mazal on;
         // přeznačení na gif_request proběhlo výš).
         if (p.preDeleted !== 'link_filter') {
@@ -496,14 +508,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání původní zprávy na platformě vyhodilo výjimku'); }
           deps.log.info({ channel: p.ucChannel, platform: m.platform, result }, 'gif: původní zpráva smazána');
         }
-
-        if (auto) {
-          // Mod / broadcaster: schválit hned (stejná cesta jako decide approve), bez cooldownu a bez karet.
-          const by = `${m.platform}:${m.username.toLowerCase()}`;
-          const out = await approveCore(created.id, by, null, { auto: true });
-          deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id, status: out.status }, 'gif: mod → schváleno rovnou');
-          return out.status === 200 ? 'approved' : 'requested';
-        }
+        if (autoOut) return autoOut.status === 200 ? 'approved' : 'requested';
 
         const view = pendingView(created);
         // Rozhodnuto dřív, než jsme stihli ohlásit (mod ji viděl v GET /moderation/gif/pending) → gif-pending neposílat,

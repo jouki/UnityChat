@@ -537,7 +537,8 @@ data: { "requestId": 12, "channel": "robdiesalot", "approved": false, "status": 
   rate limit per účet. `200 { ok, requestId, status }`; `404 not_found`; `403 not_mod`; už rozhodnuto nebo propadlo
   `409 { ok:false, error:'already_decided', status }` (první rozhodnutí vyhrává, podmíněný UPDATE); `400 body`.
   Schválení, jehož syntetickou zprávu se nepodaří zapsat do archivu ani napodruhé, se nerozešle (`gif-message` ani
-  `/chat/stream`) a odpověď nese `published: false` (log `gif: schválený GIF se nezapsal do archivu`).
+  `/chat/stream`) a odpověď nese `published: false` (log `gif: schválený GIF se nezapsal do archivu`). Původní zpráva
+  se pak přeznačí na `gif_rejected` + SSE `message-deleted` (jinak by zůstala navždy schovaná jako `gif_request`).
 - `GET /moderation/gif/pending?channel=` — mod; `{ ok, requests: [<tvar gif-pending bez own>] }`.
 
 ### Médium
@@ -588,6 +589,9 @@ data: { "channel": "robdiesalot", "requestId": 12,
   povoleno** (Židolišta `gif-access` se neptá, odměnu nepotřebuje) a **cooldown se neuplatňuje** (`gif-used` se
   nevolá). Nikdo nic neschvaluje → `gif-pending`, `gif.pending`, `gif-decided` ani `gif.decided` se neposílají.
   Převod selže → zpráva se v UC obnoví (`message-restored`, mod filtr nemá).
+  Schválení proběhne **hned po insertu žádosti, před mazáním na platformě**; auto žádost (`meta.auto`) se nevrací
+  v `listPending` (`GET /moderation/gif/pending`, připojení `/account/stream`, načtení po startu), takže ji jiný mod
+  nevidí ani nerozhodne.
 - **Výjimka Dev mód:** mod, který píše z UnityChatu se zapnutým Dev módem, jde přes schvalování jako divák (testování).
   Klient pošle `gifReview: true` v `POST /chat/send` (server nahlásí před odesláním) nebo v `POST /chat/uc-sent`
   (záložní cesta přes kartu, po odeslání); backend páruje s echem jako `ucSends` / `ucReplies`
