@@ -10,6 +10,7 @@ const base: Message = {
   channel: 'robdiesalot', isUnitychatUser: false, isReply: true, replyToMessageId: 'p1',
   sentAt: new Date(1789820014396), createdAt: new Date(),
   deletedAt: null, deletedBy: null, deletedReason: null,
+  hiddenAt: null, hiddenBy: null,
 };
 
 test('toClientMessage: twitch', () => {
@@ -66,4 +67,23 @@ test('toClientMessage: smazaná zpráva nenese obsah', () => {
   assert.equal(m.deleted, true);
   assert.equal(m.message, '');
   assert.ok(!JSON.stringify(m).includes('evil'));
+});
+
+test('toClientMessage: skrytá zpráva (Jen UC skrýt) = bez obsahu, hidden: true', () => {
+  const row = { ...base, content: 'tajne', contentRaw: { emotes: 'x' }, hiddenAt: new Date(), hiddenBy: 'zidolista:7' };
+  const m = toClientMessage(row as any, true);
+  assert.equal(m.hidden, true);
+  assert.equal(m.deleted, undefined);
+  assert.equal(m.message, '');
+  assert.deepEqual(m.segments, []);
+  assert.equal(m.id, 'abc');
+  assert.equal(m.historical, true);
+  assert.ok(!JSON.stringify(m).includes('tajne'));
+  assert.ok(!JSON.stringify(m).includes('zidolista'), 'kdo skryl, klient nedostane');
+});
+
+test('toClientMessage: smazaná i skrytá → deleted má přednost', () => {
+  const m = toClientMessage({ ...base, deletedAt: new Date(), deletedReason: 'mod', hiddenAt: new Date() } as any);
+  assert.equal(m.deleted, true);
+  assert.equal(m.hidden, undefined);
 });

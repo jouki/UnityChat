@@ -6,6 +6,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
+import { publishModIntegration } from '../sse/integrationStream.js';
 import type { Platform } from './zidolista.js';
 
 export type DeleteReason = 'mod' | 'platform' | 'link_filter';
@@ -69,16 +70,26 @@ export interface PublishDeletedDeps {
   markDeleted: (p: MarkDeletedParams) => Promise<MarkDeletedResult>;
   broadcast: (event: string, data: object) => void;
   now: () => number;
+  /** Integrační stream Židolišty (`chat.deleted`); chybí-li v deps, nic se neposílá (testy). */
+  integration?: (ev: DeletedEvent) => Promise<unknown> | unknown;
 }
 
-const defaultDeps: PublishDeletedDeps = { markDeleted, broadcast, now: Date.now };
+const defaultDeps: PublishDeletedDeps = {
+  markDeleted,
+  broadcast,
+  now: Date.now,
+  integration: (ev) => publishModIntegration(ev.channel, 'chat.deleted', ev),
+};
 
 const DEDUP_MS = 60_000;
 // Modul-level: jeden proces, jeden zdroj pravdy. Klíč platform:messageId — Twitch CLEARMSG
 // z ingestu dorazí i po vlastním /moderation/delete, druhý broadcast by jen zbytečně mihnul UI.
 const recentlyPublished = new Map<string, number>();
 
-/** markDeleted + broadcast('message-deleted', …) s p.channel (UC kanál), s dedup 60 s per platform:messageId. */
+/**
+ * markDeleted + broadcast('message-deleted', …) s p.channel (UC kanál) + `chat.deleted` do integračního
+ * streamu Židolišty — jediné místo pro všechna smazání (UC route, ingest, integrace), dedup 60 s per platform:messageId.
+ */
 export async function publishDeleted(p: PublishDeletedParams, deps: PublishDeletedDeps = defaultDeps): Promise<void> {
   const key = `${p.platform}:${p.messageId}`;
   const t = deps.now();
@@ -89,5 +100,8 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
     for (const [k, at] of recentlyPublished) if (t - at >= DEDUP_MS) recentlyPublished.delete(k);
   }
   await deps.markDeleted({ platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason });
-  deps.broadcast('message-deleted', deletedEvent({ channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t }));
+  const ev = deletedEvent({ channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t });
+  deps.broadcast('message-deleted', ev);
+  // Výpadek registru workspaců nesmí shodit mazání (route už poslala SSE, ingest jede dál).
+  try { await deps.integration?.(ev); } catch { /* ignore */ }
 }

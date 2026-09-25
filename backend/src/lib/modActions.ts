@@ -75,9 +75,11 @@ async function callDelete(platform: Platform, token: string, url: string, f: typ
  * PŘEDPOKLAD: volající MUSÍ předem ověřit, že UC účet smí v kanálu moderovat
  * (accountModPlatforms / isModOrBroadcaster). Tahle funkce to nekontroluje — bez
  * toho by kterýkoli přihlášený divák mohl nechat bota mazat zprávy.
+ * `accountId: null` = jen bot workspace (integrace Židolišty — UC účet moda tam není;
+ * autorizaci tam dělá inbound klíč + HMAC a mapování slug → kanál).
  */
 export async function deletePlatformMessage(
-  p: { accountId: number; channel: string; platform: Platform; messageId: string },
+  p: { accountId: number | null; channel: string; platform: Platform; messageId: string },
   deps: ModDeps = {},
 ): Promise<ModResult> {
   const f = deps.fetch ?? fetch;
@@ -99,7 +101,7 @@ export async function deletePlatformMessage(
   // 1) vlastní účet moda
   let actor: ModIdent | null = null;
   let kind: 'mod' | 'bot' = 'mod';
-  const mod = await getMod(p.accountId, p.platform);
+  const mod = p.accountId === null ? null : await getMod(p.accountId, p.platform);
   if (mod && missingModScopes(p.platform, mod.scopes).length === 0) {
     const role = await getRole(p.platform, mod.login, pch);
     if (role === 'moderator' || role === 'broadcaster') actor = mod;
@@ -117,7 +119,7 @@ export async function deletePlatformMessage(
     let t: TokenSet;
     try { t = await refresh(p.platform, a.refreshToken); }
     catch (e) { throw new HttpFail(refreshStatus(e)); }
-    if (kind === 'mod') await storeMod(p.accountId, p.platform, t);
+    if (kind === 'mod') await storeMod(p.accountId!, p.platform, t);
     else await storeBot(a.workspace!, p.platform, t);
     a = { ...a, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
   };

@@ -52,6 +52,18 @@ test('publishDeleted: dedup 60 s per platform:messageId (Twitch CLEARMSG po vlas
   assert.equal(broadcasts, 2);
 });
 
+test('publishDeleted: každé smazání jde i do integračního streamu (dep integration), chyba integrace nevadí', async () => {
+  const seen: object[] = [];
+  const deps: PublishDeletedDeps = {
+    markDeleted: async () => ({ channel: null, login: null }),
+    broadcast: () => {},
+    now: () => 1700000000000,
+    integration: async (ev) => { seen.push(ev); throw new Error('boom'); },
+  };
+  await publishDeleted({ channel: 'robdiesalot', platform: 'youtube', messageId: 'pd-int-1', by: null, reason: 'platform' }, deps);
+  assert.deepEqual(seen, [{ channel: 'robdiesalot', platform: 'youtube', messageId: 'pd-int-1', by: null, reason: 'platform', at: 1700000000000 }]);
+});
+
 test('markDeleted: nastaví deleted_* jen když ještě není smazaná; vrátí channel+login', { skip: !url && 'TEST_DATABASE_URL není nastavené' }, async () => {
   process.env.DATABASE_URL = url!;
   const { markDeleted } = await import('./messageDeletes.js');

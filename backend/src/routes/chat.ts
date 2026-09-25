@@ -37,6 +37,9 @@ export interface ClientMessage {
   /** Smazáno modem/platformou/link filtrem (lib/messageDeletes.ts) — obsah pod tímto se nikdy neposílá. */
   deleted?: boolean;
   deletedReason?: string | null;
+  /** „Jen UC skrýt“ (lib/messageHides.ts) — na platformě zpráva zůstává, UC ji nevykreslí; obsah se neposílá. */
+  hidden?: boolean;
+  segments?: unknown[];
 }
 
 /**
@@ -51,24 +54,23 @@ export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platfo
   isUnitychatUser?: boolean | null;
   deletedAt?: Date | null;
   deletedReason?: string | null;
+  hiddenAt?: Date | null;
 };
 
 /** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
 export function toClientMessage(row: ClientRow, historical = true): ClientMessage {
-  if (row.deletedAt) {
-    // Smazaná zpráva: text, emoty i reply-to zůstávají jen v DB (audit) — klient nikdy nedostane obsah.
-    return {
-      platform: row.platform,
-      id: row.platformMessageId,
-      username: row.platformUsername,
-      userId: row.platformUserId,
-      message: '',
-      timestamp: row.sentAt.getTime(),
-      historical,
-      deleted: true,
-      deletedReason: row.deletedReason,
-    };
-  }
+  // Smazaná / skrytá zpráva: text, emoty i reply-to zůstávají jen v DB (audit) — klient nikdy nedostane obsah.
+  const meta = {
+    platform: row.platform,
+    id: row.platformMessageId,
+    username: row.platformUsername,
+    userId: row.platformUserId,
+    message: '',
+    timestamp: row.sentAt.getTime(),
+    historical,
+  };
+  if (row.deletedAt) return { ...meta, deleted: true, deletedReason: row.deletedReason };
+  if (row.hiddenAt) return { ...meta, hidden: true, segments: [] };
   const out = toClientMessageBase(row, historical);
   // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
   const ur = ((row.contentRaw || {}) as Record<string, unknown>).ucReply as Record<string, unknown> | undefined;

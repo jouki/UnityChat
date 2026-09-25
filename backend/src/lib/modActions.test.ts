@@ -127,3 +127,21 @@ test('proaktivní refresh s neplatným refresh tokenem (400) → error:401 bez v
   assert.equal(r, 'error:401');
   assert.equal(calls.length, 0);
 });
+
+test('accountId null (jen bot, integrace Židolišty) → účet moda se vůbec nehledá, maže bot', async () => {
+  const calls: Call[] = [];
+  let modLookups = 0;
+  const r = await deletePlatformMessage({ accountId: null, channel: 'robdiesalot', platform: 'twitch', messageId: 'msg-z' },
+    deps({ calls, identities: { mod: async () => { modLookups++; return modIdent('twitch'); }, bot: async () => botIdent('twitch'), role: async () => 'moderator' } }));
+  assert.equal(r, 'bot');
+  assert.equal(modLookups, 0);
+  assert.equal(auth(calls[0]), 'Bearer bottok');
+});
+
+test('accountId null a bot chybí → error:no_actor', async () => {
+  const calls: Call[] = [];
+  const r = await deletePlatformMessage({ accountId: null, channel: 'robdiesalot', platform: 'kick', messageId: 'k-z' },
+    deps({ calls, identities: { mod: async () => modIdent('kick'), bot: async () => null, role: async () => 'broadcaster' } }));
+  assert.equal(r, 'error:no_actor');
+  assert.equal(calls.length, 0);
+});

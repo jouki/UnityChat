@@ -66,6 +66,9 @@ export const messages = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     deletedBy: text('deleted_by'),
     deletedReason: text('deleted_reason'),
+    // „Jen UC skrýt“ — na platformě zpráva zůstává, klientům UC jde bez obsahu (hidden: true).
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
+    hiddenBy: text('hidden_by'),
   },
   (t) => ({
     platformMessageUnique: uniqueIndex('messages_platform_message_unique').on(

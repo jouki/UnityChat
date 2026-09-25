@@ -4,9 +4,11 @@
 // `event: chat.message` s `id:` = monotónní kurzor; ring buffer 5 min umožní
 // replay přes Last-Event-ID (klient po reconnectu nepropásne `!command`).
 // Heartbeat `: ping` každých 15 s.
+// Moderace (2026-09-25): chat.deleted / chat.hidden / chat.unhidden jdou stejným kanálem
+// (společný kurzor i replay), jen pro kanály namapované na workspace.
 import type { FastifyReply } from 'fastify';
 import type { IngestMessage } from '../ingest/types.js';
-import { workspaceForChannelSync, type Platform } from '../lib/zidolista.js';
+import { workspaceForChannel, workspaceForChannelSync, type Platform, type WorkspaceInfo } from '../lib/zidolista.js';
 import { isBotAuthor } from '../lib/botIdentities.js';
 
 export interface ChatEvent {
@@ -82,12 +84,52 @@ let counter = 0;
 const clients = new Set<FastifyReply>();
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 
-function frameOf(id: number, ev: ChatEvent): string {
-  return `id: ${id}\nevent: chat.message\ndata: ${JSON.stringify(ev)}\n\n`;
+// ---- moderační události (moderace část 1, Task 6b) ----
+export type ModEventType = 'chat.deleted' | 'chat.hidden' | 'chat.unhidden';
+
+export interface ModIntegrationEvent {
+  type: ModEventType;
+  workspace: string;
+  platform: Platform;
+  messageId: string;
+  by: string | null;
+  /** Jen u chat.deleted: 'mod' | 'platform' | 'link_filter'. */
+  reason?: string;
+}
+
+/** Tvar moderační události pro Židolištu; `reason` nese jen chat.deleted. */
+export function modIntegrationEvent(
+  type: ModEventType,
+  workspace: string,
+  p: { platform: Platform; messageId: string; by: string | null; reason?: string },
+): ModIntegrationEvent {
+  const ev: ModIntegrationEvent = { type, workspace, platform: p.platform, messageId: p.messageId, by: p.by };
+  if (type === 'chat.deleted') ev.reason = p.reason;
+  return ev;
+}
+
+type IntegrationEvent = ChatEvent | ModIntegrationEvent;
+
+function frameOf(id: number, ev: IntegrationEvent): string {
+  return `id: ${id}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`;
 }
 
 function write(reply: FastifyReply, s: string): void {
   try { reply.raw.write(s); } catch { clients.delete(reply); }
+}
+
+/** Jakákoli událost do integračního streamu: společný kurzor, ring buffer (replay) a rozeslání. Vrací id. */
+export function publishIntegrationEvent(ev: IntegrationEvent): number {
+  const now = Date.now();
+  // Kurzor musí růst i přes restart serveru: klient po reconnectu posílá Last-Event-ID
+  // z minulého běhu; kdyby id začínalo od 1, replay by nic nevrátil (2026-09-22, Kick !test
+  // 14 s před reconnectem Židolišty). Proto id = ms času, při shodě +1.
+  const id = counter = Math.max(counter + 1, now);
+  const frame = frameOf(id, ev);
+  ring.push({ id, at: now, frame });
+  while (ring.length && (ring.length > RING_MAX || now - ring[0].at > RING_MS)) ring.shift();
+  for (const c of clients) write(c, frame);
+  return id;
 }
 
 /** Z ingest onLive: publikovat, když je kanál namapovaný na workspace. */
@@ -95,14 +137,32 @@ export function publishIntegration(m: IngestMessage): ChatEvent | null {
   const ws = workspaceForChannelSync(m.platform, m.channel);
   if (!ws) return null;
   const ev = toChatEvent(m, ws.slug);
-  const now = Date.now();
-  // Kurzor musí růst i přes restart serveru: klient po reconnectu posílá Last-Event-ID
-  // z minulého běhu; kdyby id začínalo od 1, replay by nic nevrátil (2026-09-22, Kick !test
-  // 14 s před reconnectem Židolišty). Proto id = ms času, při shodě +1.
-  const id = counter = Math.max(counter + 1, now);
-  ring.push({ id, at: now, frame: frameOf(id, ev) });
-  while (ring.length && (ring.length > RING_MAX || now - ring[0].at > RING_MS)) ring.shift();
-  for (const c of clients) write(c, ring[ring.length - 1].frame);
+  publishIntegrationEvent(ev);
+  return ev;
+}
+
+export interface ModIntegrationDeps {
+  workspaceFor: (platform: Platform, channel: string) => Promise<WorkspaceInfo | null>;
+  publish: (ev: ModIntegrationEvent) => number;
+}
+
+const defaultModDeps: ModIntegrationDeps = { workspaceFor: workspaceForChannel, publish: publishIntegrationEvent };
+
+/**
+ * Moderační událost pro UC kanál (Twitch login streamera). Workspace se hledá podle Twitche;
+ * když ucChannelFor spadl na platformní kanál (Kick slug / YT handle bez mapování v streamers),
+ * ještě podle platformy zprávy. Nenamapovaný kanál → nic (stejně jako chat.message).
+ */
+export async function publishModIntegration(
+  ucChannel: string,
+  type: ModEventType,
+  p: { platform: Platform; messageId: string; by: string | null; reason?: string },
+  deps: ModIntegrationDeps = defaultModDeps,
+): Promise<ModIntegrationEvent | null> {
+  const ws = (await deps.workspaceFor('twitch', ucChannel)) ?? (p.platform !== 'twitch' ? await deps.workspaceFor(p.platform, ucChannel) : null);
+  if (!ws) return null;
+  const ev = modIntegrationEvent(type, ws.slug, p);
+  deps.publish(ev);
   return ev;
 }
 
