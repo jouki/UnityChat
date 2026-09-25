@@ -4619,6 +4619,7 @@ class UnityChat {
       userId: this._msgUserId(msg),
       login,
       displayName: un.textContent || login,
+      nameColor: un.style.color || null,
       messageId: confirmed ? id : null,
       nickname: nick?.nickname || null,
       color: nick?.color || null,

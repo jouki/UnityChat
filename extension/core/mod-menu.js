@@ -333,6 +333,8 @@ export class ModMenu {
     const name = doc.createElement('span');
     name.className = 'uc-mm-name';
     name.textContent = target.displayName || target.login;
+    // Jméno v barvě uživatele z chatu (hostitel pošle už čitelnou barvu jména z .un).
+    if (target.nameColor && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\))$/i.test(String(target.nameColor))) name.style.color = target.nameColor;
     const plat = doc.createElement('span');
     plat.className = `uc-mm-plat uc-mm-plat--${target.platform}`;
     plat.textContent = PLATFORM_NAMES[target.platform] || target.platform;
