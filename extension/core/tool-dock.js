@@ -1,5 +1,5 @@
-// Tlačítka u pole pro psaní podle šířky chatu — addon i web (pokyn usera 2026-09-25).
-// Každé tlačítko má práh šířky: od něj výš zůstává v poli pro psaní, pod ním se přesune do
+// Tlačítka u pole pro psaní podle šířky POLE PRO PSANÍ — addon i web (pokyn usera 2026-09-25).
+// Každé tlačítko má práh šířky pole: od něj výš zůstává v poli, pod ním se přesune do
 // řádku nad polem (řádek vyjede zespodu). Prahy hostitelů: QR dono 330 px, nota 310 px,
 // smajlík 290 px — v řádku stojí zleva doprava v pořadí položek. Tlačítka, která už v řádku
 // jsou, se při příchodu dalšího plynule posunou (FLIP), přesunuté se objeví fade inem.
@@ -21,17 +21,17 @@ export function rowShut(places, rowHasOther) {
 /**
  * @param {object} o
  * @param {HTMLElement} o.row            řádek nad polem pro psaní (dostane třídu uc-dock-row)
- * @param {HTMLElement} o.inlineParent   kontejner pole pro psaní (.msg-input-wrap)
- * @param {HTMLElement} o.container      měřený kontejner (šířka chatu)
+ * @param {HTMLElement} o.inlineParent   kontejner pole pro psaní (.msg-input-wrap) — jeho šířka
+ *        rozhoduje (tlačítka v něm jsou absolutně, šířku pole nemění)
  * @param {Array<{ button: HTMLElement, minWidth: number, available?: () => boolean }>} o.items
  *        v pořadí zleva doprava v řádku. S `available` dock tlačítko i skrývá (atribut hidden);
  *        bez něj je vždy dostupné a skrytí řeší hostitel (nota bez soundboardu má třídu hidden).
  * @param {() => boolean} [o.rowHasOther] řádek má i jiný viditelný obsah
  * @param {() => boolean} [o.inlineVisible] pole pro psaní je vidět (výchozí: inlineParent má rozměry)
  */
-export function createToolDock({ row, inlineParent, container, items, rowHasOther = () => false,
+export function createToolDock({ row, inlineParent, items, rowHasOther = () => false,
   inlineVisible = () => inlineParent.getClientRects().length > 0 }) {
-  const win = container.ownerDocument.defaultView;
+  const win = inlineParent.ownerDocument.defaultView;
   // Návrat do pole na původní místo: před původního souseda zprava (smajlík je v poli poslední).
   // Položka, která začíná mimo pole (QR v řádku), se vrací před další položku.
   const home = items.map((it, i) => ({
@@ -41,7 +41,7 @@ export function createToolDock({ row, inlineParent, container, items, rowHasOthe
   row.classList.add('uc-dock-row', 'uc-dock-noanim');
 
   function update() {
-    const width = container.getBoundingClientRect().width;
+    const width = inlineParent.getBoundingClientRect().width;
     const vis = inlineVisible();
     const before = new Map();
     for (const it of home) if (it.button.parentNode === row) before.set(it.button, it.button.getBoundingClientRect().left);
@@ -87,7 +87,7 @@ export function createToolDock({ row, inlineParent, container, items, rowHasOthe
   }
 
   const ro = new win.ResizeObserver(() => update());
-  ro.observe(container);
+  ro.observe(inlineParent);
   update();
   // První umístění bez animace, další změny animované.
   win.requestAnimationFrame(() => win.requestAnimationFrame(() => row.classList.remove('uc-dock-noanim')));

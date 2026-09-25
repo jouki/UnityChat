@@ -1204,12 +1204,12 @@ class UnityChat {
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
     }
-    // Tlačítka podle šířky chatu: pod 330 px QR, pod 310 px i nota, pod 290 px i smajlík
+    // Tlačítka podle šířky pole pro psaní: pod 330 px QR, pod 310 px i nota, pod 290 px i smajlík
     // do řádku nad polem (pokyn usera 2026-09-25).
     const row = document.getElementById('tw-credits');
     if (row && core.createToolDock) {
       this._qdDock = core.createToolDock({
-        row, container: document.body,
+        row,
         inlineParent: document.querySelector('#input-area .msg-input-wrap'),
         items: [
           { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
