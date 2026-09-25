@@ -15,10 +15,15 @@ import { gifAccess, type GifAccess, type GifAccessQuery } from '../lib/gifAccess
 import { workspaceForChannel, type Platform } from '../lib/zidolista.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { MEDIA_ID_RE } from '../lib/gifIds.js';
-import { pendingView, type GifFlow, type GifStore } from '../lib/gifRequests.js';
+import { pendingView, GIF_REJECTED_REASON, type GifFlow, type GifStatus, type GifStore } from '../lib/gifRequests.js';
 import { parseChannel } from './moderation.js';
-import { RateLimiter } from './chat.js';
+import { RateLimiter, toClientMessage, type ClientMessage } from './chat.js';
 import { config } from '../config.js';
+import { and, eq } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { messages, type Message } from '../db/schema.js';
+import { channelMatches } from '../lib/messageDeletes.js';
+import { publishRestored } from '../lib/linkRestore.js';
 
 export type MediaEntry = { bytes: Buffer; contentType: string; status: 'pending' | 'approved' };
 
@@ -29,6 +34,8 @@ export interface GifRouteOpts {
   media: MediaServer;
   /** GET /gif/state (testy); chybí = DB, registr Židolišty, gifAccess. */
   stateDeps?: GifStateDeps;
+  /** GET /gif/held (testy); chybí = flow, store, DB, registr. */
+  heldDeps?: GifHeldDeps;
 }
 
 const DecideBody = z.object({ approve: z.boolean() });
@@ -164,6 +171,82 @@ const defaultStateDeps: GifStateDeps = {
   now: Date.now,
 };
 
+// ---------------------------------------------------------------------------
+// GET /gif/held — pojistka klientů: zpráva schovaná jako gif_request bez rozhodnutí (core GifHoldWatch)
+// ---------------------------------------------------------------------------
+
+/** Max zpráv v jednom dotazu. */
+export const GIF_HELD_BATCH = 50;
+
+export type GifHeldState = 'held' | 'visible' | 'deleted' | 'replaced' | 'unknown';
+export interface GifHeldItem { platform: Platform; messageId: string; state: GifHeldState; reason?: string; message?: ClientMessage }
+
+export interface GifHeldDeps {
+  inFlight: (platform: Platform, messageId: string) => boolean;
+  requestStatus: (platform: Platform, messageId: string) => Promise<GifStatus | null>;
+  row: (platform: Platform, messageId: string) => Promise<Message | null>;
+  platformChannel: (channel: string, platform: Platform) => Promise<string | null>;
+  /** Obnovení zaseknutého gif_request (publishRestored — message-restored všem). */
+  restore: (p: { channel: string; platform: Platform; messageId: string; platformChannel: string }) => Promise<string>;
+  /** Přeznačení gif_request → gif_rejected (žádost rozhodnutá, archiv pozadu). */
+  retag: (platform: Platform, messageId: string, from: string, to: string) => Promise<boolean>;
+  log?: { info: (o: object, m: string) => void };
+}
+
+/** `twitch:abc,kick:def` → klíče (nejvýš GIF_HELD_BATCH, bez duplicit, jen platné). */
+export function parseHeldIds(raw: string | undefined): Array<{ platform: Platform; messageId: string }> {
+  const out: Array<{ platform: Platform; messageId: string }> = [];
+  const seen = new Set<string>();
+  for (const part of String(raw || '').split(',')) {
+    const m = /^(twitch|kick|youtube):([\w.:-]{1,200})$/.exec(part.trim());
+    if (!m || seen.has(part.trim())) continue;
+    seen.add(part.trim());
+    out.push({ platform: m[1] as Platform, messageId: m[2] });
+    if (out.length >= GIF_HELD_BATCH) break;
+  }
+  return out;
+}
+
+/**
+ * Stav zpráv, které klient drží schované jako gif_request déle než 30 s (server rozhodnutí neposlal, nebo
+ * se ztratilo — výpadek SSE):
+ *  - zachycení ještě běží / žádost čeká → `held` (klient se zeptá znovu);
+ *  - žádost schválena → `replaced` (GIF ji nahradil, zůstává schovaná); zamítnuta/propadla → `deleted` gif_rejected;
+ *  - řádek v archivu nesmazaný → `visible` + celá zpráva; smazaný jiným důvodem → `deleted` + důvod;
+ *  - zaseknutý gif_request bez žádosti a bez běžícího zachycení (převod selhal a rozhodnutí se neuložilo,
+ *    restart serveru) → obnovit (fail-open: na platformě zpráva zůstala, bot maže až po úspěšném převodu)
+ *    a `visible`; message-restored jde zároveň všem;
+ *  - zpráva mimo kanál / v archivu není → `unknown`.
+ */
+export async function gifHeldState(channel: string, keys: Array<{ platform: Platform; messageId: string }>, deps: GifHeldDeps): Promise<GifHeldItem[]> {
+  const pcs = new Map<Platform, string | null>();
+  const pcFor = async (p: Platform) => { if (!pcs.has(p)) pcs.set(p, await deps.platformChannel(channel, p)); return pcs.get(p)!; };
+  const out: GifHeldItem[] = [];
+  for (const { platform, messageId } of keys) {
+    const base = { platform, messageId };
+    if (deps.inFlight(platform, messageId)) { out.push({ ...base, state: 'held' }); continue; }
+    const pc = await pcFor(platform);
+    const row = pc ? await deps.row(platform, messageId) : null;
+    if (!row || !channelMatches(row.channel, pc)) { out.push({ ...base, state: 'unknown' }); continue; }
+    const st = await deps.requestStatus(platform, messageId);
+    if (st === 'pending') { out.push({ ...base, state: 'held' }); continue; }
+    if (st === 'approved' || st === 'deleted') { out.push({ ...base, state: 'replaced' }); continue; }
+    if (st === 'rejected' || st === 'expired') {
+      if (row.deletedReason === GIF_HELD) await deps.retag(platform, messageId, GIF_HELD, GIF_REJECTED_REASON).catch(() => false);
+      out.push({ ...base, state: 'deleted', reason: GIF_REJECTED_REASON });
+      continue;
+    }
+    if (!row.deletedAt) { out.push({ ...base, state: 'visible', message: toClientMessage(row, true) }); continue; }
+    if (row.deletedReason !== GIF_HELD) { out.push({ ...base, state: 'deleted', reason: row.deletedReason ?? 'mod' }); continue; }
+    deps.log?.info({ channel, platform }, 'gif/held: zaseknutý gif_request bez žádosti → obnoveno');
+    await deps.restore({ channel, platform, messageId, platformChannel: row.channel }).catch(() => 'error');
+    out.push({ ...base, state: 'visible', message: toClientMessage({ ...row, deletedAt: null, deletedReason: null }, true) });
+  }
+  return out;
+}
+
+const GIF_HELD = 'gif_request';
+
 export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts) {
   const mediaLimiter = new RateLimiter(60, 10);
   const modLimiter = new RateLimiter(20, 4);
@@ -224,6 +307,32 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
       return await gifStateFor(accountId, { channel, platform, review: req.query.review === '1' }, opts.stateDeps ?? { ...defaultStateDeps, access: (q) => gifAccess(q, { log: app.log }) });
     } catch (e) {
       app.log.warn({ err: (e as Error).message }, 'gif/state selhalo');
+      return reply.code(503).send({ ok: false, error: 'unavailable' });
+    }
+  });
+
+  // Veřejné (divák nemá účet): stav zpráv schovaných jako gif_request, které klient drží déle než 30 s.
+  const heldLimiter = new RateLimiter(10, 1);
+  const heldDeps: GifHeldDeps = opts.heldDeps ?? {
+    inFlight: (platform, messageId) => opts.flow.isInFlight(platform, messageId),
+    requestStatus: (platform, messageId) => opts.store.statusByMessage(platform, messageId),
+    row: async (platform, messageId) => (await db.select().from(messages).where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId))).limit(1))[0] ?? null,
+    platformChannel: (channel, platform) => registryPlatformChannel(channel, platform),
+    restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),
+    retag: (platform, messageId, from, to) => opts.store.retagDeleted(platform, messageId, from, to),
+    log: app.log,
+  };
+  app.get<{ Querystring: { channel?: string; ids?: string } }>('/gif/held', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!heldLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const channel = parseChannel(req.query.channel, DEFAULT_CHANNEL);
+    if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
+    const keys = parseHeldIds(req.query.ids);
+    if (!keys.length) return reply.code(400).send({ ok: false, error: 'ids' });
+    try {
+      return { ok: true, messages: await gifHeldState(channel, keys, heldDeps) };
+    } catch (e) {
+      app.log.warn({ err: (e as Error).message }, 'gif/held selhalo');
       return reply.code(503).send({ ok: false, error: 'unavailable' });
     }
   });

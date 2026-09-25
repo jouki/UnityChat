@@ -19,10 +19,11 @@
 //   Převod selže → zpráva se bere jako běžný odkaz (filtr ji smaže, nebo se v UC obnoví, když by ji filtr pustil).
 // Nic tady nesmí shodit ingest. NIKDY nelogovat tokeny.
 import { randomBytes, createHash } from 'node:crypto';
-import { and, eq, inArray, isNull, lte, gt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, gt, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { gifMedia, gifRequests, messages, webIdentities, type GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
+import { toRow } from '../ingest/normalize.js';
 import { toClientMessage, type ClientMessage } from '../routes/chat.js';
 import type { GifAccess, GifAccessQuery } from './gifAccess.js';
 import { gifUsable } from './gifAccess.js';
@@ -132,6 +133,8 @@ export interface GifStore {
   insertApprovedMessage(r: GifRequest, at: Date): Promise<ClientMessage>;
   /** deleted_reason původní zprávy from → to (jen když je smazaná s from). false = řádek nenalezen. */
   retagDeleted(platform: Platform, messageId: string, from: string, to: string): Promise<boolean>;
+  /** Stav poslední žádosti k původní zprávě (GET /gif/held); null = žádná žádost. */
+  statusByMessage(platform: Platform, messageId: string): Promise<GifStatus | null>;
 }
 
 export const dbGifStore: GifStore = {
@@ -179,6 +182,12 @@ export const dbGifStore: GifStore = {
       .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, messageId), eq(messages.deletedReason, from)))
       .returning({ id: messages.id });
     return rows.length > 0;
+  },
+  async statusByMessage(platform, messageId) {
+    const rows = await db.select({ status: gifRequests.status }).from(gifRequests)
+      .where(and(eq(gifRequests.platform, platform), eq(gifRequests.messageId, messageId)))
+      .orderBy(desc(gifRequests.id)).limit(1);
+    return (rows[0]?.status as GifStatus | undefined) ?? null;
   },
 };
 
@@ -278,8 +287,14 @@ export interface GifFlowDeps {
   publishDeleted: (p: { channel: string; platform: Platform; messageId: string; by: string; reason: 'gif_request' }) => Promise<void>;
   /** deletePlatformMessage botem workspace (accountId null). */
   deletePlatform: (p: { accountId: null; channel: string; platform: Platform; messageId: string }) => Promise<string>;
-  /** Převod selhal a filtr by zprávu pustil → obnovit v UC (publishRestored pro deleted_reason gif_request). */
+  /**
+   * Převod selhal a filtr by zprávu pustil → obnovit v UC (publishRestored pro deleted_reason gif_request).
+   * 'ok' = řádek obnoven a message-restored odešlo; cokoli jiného (not_found = řádek ještě není v archivu) →
+   * flow pošle message-restored sám ze zprávy (settleHeld).
+   */
   restore: (p: { channel: string; platform: Platform; messageId: string; userId: string; platformChannel: string }) => Promise<string>;
+  /** Zapomenout dedup smazání (messageDeletes forgetPublished) — jinak by message-deleted link_filter do 60 s po gif_request spolklo. */
+  forgetDeleted?: (platform: Platform, messageId: string) => void;
   broadcast: (event: string, data: object) => void;
   publishChat: (platformChannel: string, platform: string, msg: ClientMessage) => void;
   notify: (r: GifRequest, event: string, data: object) => Promise<unknown>;
@@ -326,8 +341,23 @@ export interface GifInterceptParams {
  */
 export const FLUSH_WAIT_MS = 1500;
 
+/**
+ * Druhý pokus o dorovnání archivu po rozhodnutí o schované zprávě (zápis dávky mohl běžet souběžně
+ * s prvním pokusem — toRow už zprávu převedl i se smazáním gif_request).
+ */
+export const SETTLE_RETRY_MS = 5000;
+
 export function createGifFlow(deps: GifFlowDeps) {
   const busy = new Set<string>();
+  // Původní zprávy právě v interceptu (`platform:messageId`) — GET /gif/held je hlásí jako „čeká".
+  const inflight = new Set<string>();
+  // Dorovnání archivu na pozadí (testy na ně čekají přes _idle).
+  const background = new Set<Promise<unknown>>();
+  const later = (fn: () => Promise<unknown>) => {
+    const p = Promise.resolve().then(() => deps.sleep(SETTLE_RETRY_MS)).then(fn).catch(() => {});
+    background.add(p);
+    void p.finally(() => background.delete(p));
+  };
   const pending = new Map<string, number>();
   // Žádosti už rozhodnuté/propadlé (v tomto procesu): zámek uživatele se nesmí nastavit zpětně, když mod
   // rozhodl dřív, než intercept došel k pending.set (GET /moderation/gif/pending žádost ukáže hned po insertu).
@@ -355,6 +385,42 @@ export function createGifFlow(deps: GifFlowDeps) {
   const rejectOriginal = async (r: GifRequest, by: string | null) => {
     await safe('přeznačení původní zprávy na gif_rejected', () => deps.store.retagDeleted(r.platform as Platform, r.messageId, 'gif_request', GIF_REJECTED_REASON));
     await safe('message-deleted gif_rejected', async () => deps.broadcast('message-deleted', { channel: r.channel, platform: r.platform, messageId: r.messageId, by: by ?? 'filter', reason: GIF_REJECTED_REASON, at: deps.now() }));
+  };
+
+  /**
+   * Převod selhal (nebo zachycení spadlo) a původní zpráva je v UC schovaná jako gif_request → klienti VŽDY
+   * dostanou rozhodnutí, nezávisle na tom, jestli už je řádek v archivu (ingest dávkuje po 500 ms):
+   *  - filtr by ji smazal → link_filter: v paměti (nezapsaná dávka se zapíše už takhle), v archivu přeznačit,
+   *    zapomenout dedup smazání (gif_request před chvílí by message-deleted link_filter spolkl) a akce filtru;
+   *  - jinak obnovit: smazání pryč z paměti, publishRestored; bez řádku / při chybě DB → message-restored
+   *    s celou zprávou z `m` i tak.
+   * Archiv se po SETTLE_RETRY_MS dorovná ještě jednou (zápis dávky mohl běžet souběžně).
+   */
+  const settleHeld = async (p: GifInterceptParams) => {
+    const { m } = p;
+    const pl = m.platform, id = m.platformMessageId;
+    if (p.filterAct) {
+      m.deleted = { by: 'filter', reason: 'link_filter' };
+      await safe('přeznačení na link_filter', () => deps.store.retagDeleted(pl, id, 'gif_request', 'link_filter'));
+      deps.forgetDeleted?.(pl, id);
+      await safe('filtr odkazů', () => p.filterAct!());
+      later(() => deps.store.retagDeleted(pl, id, 'gif_request', 'link_filter'));
+      return;
+    }
+    if (m.deleted?.reason === 'gif_request') delete m.deleted;
+    const rp = { channel: p.ucChannel, platform: pl, messageId: id, userId: m.platformUserId, platformChannel: m.channel };
+    let res = 'error:exception';
+    try { res = await deps.restore(rp); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: obnovení zprávy selhalo'); }
+    if (res !== 'ok') {
+      deps.log.info({ channel: p.ucChannel, platform: pl, result: res }, 'gif: řádek k obnovení v archivu není → message-restored ze zprávy');
+      deps.forgetDeleted?.(pl, id);
+      await safe('message-restored ze zprávy', async () => deps.broadcast('message-restored', {
+        channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', at: deps.now(), message: toClientMessage(toRow(m), true),
+      }));
+      // Řádek se mohl zapsat se smazáním gif_request (dávka běžela souběžně) → zkusit znovu (další message-restored neškodí).
+      later(() => deps.restore(rp));
+    }
   };
 
   /**
@@ -417,7 +483,12 @@ export function createGifFlow(deps: GifFlowDeps) {
       const { m } = p;
       let auto = !!p.auto;
       const k = userKey(p.ucChannel, m.platform, m.platformUserId);
+      const mk = `${m.platform}:${m.platformMessageId}`;
       busy.add(k);
+      inflight.add(mk);
+      // Žádost vznikla (o původní zprávě pak rozhoduje mod / propadnutí) / o schované zprávě už je rozhodnuto.
+      let created: GifRequest | null = null;
+      let settled = false;
       try {
         // Addon čte Twitch IRC napřímo → původní zprávu schovat hned, ne až po stažení média.
         if (p.preDeleted === 'gif_request') await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
@@ -434,7 +505,6 @@ export function createGifFlow(deps: GifFlowDeps) {
           auto = false;
           deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: mod v Dev módu → žádost ke schválení (pozdní hlášení)');
         }
-        let created: GifRequest | null = null;
         if (res.ok && p.preDeleted === 'link_filter') {
           // Zprávu smazal filtr; mezitím ji mohl obnovit permit (deleted_reason zrušen) → žádost nevytvářet.
           let retagged = false;
@@ -475,12 +545,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         if (!created) {
           // Převod selhal → běžný odkaz: filtr ho smaže, jinak se v UC obnoví (smazali jsme ho my).
           if (p.preDeleted === 'gif_request') {
-            if (p.filterAct) {
-              await safe('přeznačení na link_filter', () => deps.store.retagDeleted(m.platform, m.platformMessageId, 'gif_request', 'link_filter'));
-              await safe('filtr odkazů', () => p.filterAct!());
-            } else {
-              await safe('obnovení zprávy', () => deps.restore({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, userId: m.platformUserId, platformChannel: m.channel }));
-            }
+            settled = true;
+            await settleHeld(p);
           } else if (p.preDeleted === 'link_filter' && res.ok) {
             // Přeznačení na gif_request proběhlo (výš), ale médium/žádost se neuložily → vrátit link_filter,
             // jinak by zpráva zůstala smazaná bez žádosti a permit by ji už neobnovil.
@@ -521,9 +587,12 @@ export function createGifFlow(deps: GifFlowDeps) {
         return 'requested';
       } catch (e) {
         deps.log.warn({ err: (e as Error).message }, 'gif: zachycení selhalo');
+        // Schovaná zpráva bez žádosti nesmí zůstat bez rozhodnutí (s žádostí rozhodne mod / propadnutí).
+        if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', () => settleHeld(p));
         return 'failed';
       } finally {
         busy.delete(k);
+        inflight.delete(mk);
       }
     },
 
@@ -559,7 +628,12 @@ export function createGifFlow(deps: GifFlowDeps) {
       await safe('označení smazaného GIFu', () => deps.store.markDeletedByMessage(messageId));
     },
 
+    /** Běží zachycení původní zprávy (převod / rozhodování)? GET /gif/held ji pak hlásí jako „čeká". */
+    isInFlight(platform: string, messageId: string): boolean { return inflight.has(`${platform}:${messageId}`); },
+
     _pendingSize: () => pending.size,
+    /** Testy: počkat na dorovnání archivu na pozadí. */
+    _idle: async () => { while (background.size) await Promise.all([...background]); },
   };
 }
 

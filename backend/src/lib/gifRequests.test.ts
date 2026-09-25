@@ -39,6 +39,7 @@ function memStore(now: () => number) {
     async markDeletedByMessage(messageId) { const r = reqs.get(Number(messageId.slice(4))); if (r?.status === 'approved') { r.status = 'deleted'; return r; } return null; },
     async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); return toClientMessage(approvedMessageRow(r, at), false); },
     async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); return retagOk; },
+    async statusByMessage(_p, id) { const r = [...reqs.values()].reverse().find((x) => x.messageId === id); return (r?.status as never) ?? null; },
   };
   return { store, reqs, media, log, setRetag: (v: boolean) => { retagOk = v; } };
 }
@@ -341,4 +342,72 @@ test('intercept auto: schválení hned po insertu, před mazáním na platformě
   const b = setup();
   await b.flow.intercept(params());
   assert.equal((await b.mem.store.listPending(new Date(b.now()))).length, 1);
+});
+
+// ---- Převod selže: klienti VŽDY dostanou rozhodnutí (živě 2026-09-26: mod, 4chan CDN → http_403) ----
+
+test('převod selže, řádek ještě není v archivu (restore not_found) → message-restored s celou zprávou ze `m`, smazání pryč z paměti, archiv se dorovná', async () => {
+  const restores: unknown[] = [];
+  const s = setup({
+    resolve: async () => { throw new GifError('http_403'); },
+    restore: async (p) => { restores.push(p); s.calls.push(['restore', p]); return restores.length === 1 ? 'not_found' : 'ok'; },
+    forgetDeleted: (pl, id) => { s.calls.push(['forget', `${pl}:${id}`]); },
+  });
+  const m = msg({ content: 'https://i.4pcdn.org/pol/1562850136932.gif', deleted: { by: 'filter', reason: 'gif_request' } });
+  assert.equal(await s.flow.intercept(params({ m, auto: true })), 'failed');
+  assert.equal(m.deleted, undefined, 'nezapsaná dávka půjde do archivu jako viditelná');
+  const ev = s.calls.find((c) => c[0] === 'broadcast:message-restored')?.[1] as Record<string, unknown>;
+  assert.ok(ev, names(s.calls).join(','));
+  assert.equal(ev.channel, 'robdiesalot');
+  assert.equal(ev.messageId, 'm1');
+  const cm = ev.message as Record<string, unknown>;
+  assert.equal(cm.message, 'https://i.4pcdn.org/pol/1562850136932.gif');
+  assert.equal(cm.deleted, undefined);
+  assert.equal(cm.id, 'm1');
+  assert.ok(names(s.calls).includes('forget'));
+  await s.flow._idle();
+  assert.equal(restores.length, 2, 'druhý pokus o obnovení v archivu');
+  assert.equal(s.flow.isInFlight('twitch', 'm1'), false);
+});
+
+test('převod selže, restore vyhodí (DB) → message-restored ze zprávy i tak', async () => {
+  const s = setup({ resolve: async () => { throw new GifError('http_403'); }, restore: async () => { throw new Error('db down'); } });
+  assert.equal(await s.flow.intercept(params()), 'failed');
+  assert.ok(names(s.calls).includes('broadcast:message-restored'));
+  await s.flow._idle();
+});
+
+test('převod selže, restore ok → message-restored posílá publishRestored (flow už ne), bez druhého pokusu', async () => {
+  let n = 0;
+  const s = setup({ resolve: async () => { throw new GifError('http_403'); }, restore: async () => { n++; return 'ok'; } });
+  await s.flow.intercept(params());
+  await s.flow._idle();
+  assert.equal(n, 1);
+  assert.equal(names(s.calls).includes('broadcast:message-restored'), false);
+});
+
+test('převod selže, filtr by smazal → link_filter v paměti i archivu, dedup smazání zapomenut PŘED akcí filtru (jinak by message-deleted link_filter spolkl)', async () => {
+  const order: string[] = [];
+  const s = setup({ resolve: async () => { throw new GifError('http_403'); }, forgetDeleted: () => { order.push('forget'); } });
+  const m = msg({ deleted: { by: 'filter', reason: 'gif_request' } });
+  assert.equal(await s.flow.intercept(params({ m, filterAct: async () => { order.push('filter'); } })), 'failed');
+  assert.deepEqual(m.deleted, { by: 'filter', reason: 'link_filter' });
+  assert.deepEqual(order, ['forget', 'filter']);
+  await s.flow._idle();
+  assert.deepEqual(s.mem.log, ['retag:m1:gif_request->link_filter', 'retag:m1:gif_request->link_filter'], 'archiv se dorovná i po souběžném zápisu dávky');
+  assert.equal(names(s.calls).includes('restore'), false);
+});
+
+test('zachycení spadne výjimkou (bez žádosti) → schovaná zpráva se i tak obnoví', async () => {
+  const s = setup({ sleep: async () => { throw new Error('boom'); } });
+  assert.equal(await s.flow.intercept(params()), 'failed');
+  assert.deepEqual(names(s.calls), ['publishDeleted', 'restore']);
+});
+
+test('isInFlight: během zachycení true, po něm false', async () => {
+  let during = false;
+  const s = setup({ resolve: async () => { during = s.flow.isInFlight('twitch', 'm1'); return resolved; } });
+  await s.flow.intercept(params());
+  assert.equal(during, true);
+  assert.equal(s.flow.isInFlight('twitch', 'm1'), false);
 });

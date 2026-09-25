@@ -57,7 +57,7 @@ import { isGifMessageId } from './lib/gifIds.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
 import { publishRestored } from './lib/linkRestore.js';
-import { onMessageDeleted } from './lib/messageDeletes.js';
+import { onMessageDeleted, forgetPublished } from './lib/messageDeletes.js';
 import { broadcast } from './sse/bus.js';
 import { publishIntegrationEvent } from './sse/integrationStream.js';
 
@@ -108,6 +108,7 @@ const gifFlow = createGifFlow({
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
   restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),
+  forgetDeleted: (platform, messageId) => forgetPublished(platform, messageId),
   broadcast,
   publishChat: (platformChannel, platform, msg) => publishChat(platformChannel, platform, msg),
   notify: (r, event, data) => gifNotifier.notify(r, event, data),
