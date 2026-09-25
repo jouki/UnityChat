@@ -84,7 +84,26 @@ Promise.all([
   check('menuModel podnabídka permitu', eq(mm.menuModel({}).find((i) => i.id === 'permit').sub.map((s) => s.durationSec), [30, 60, 120, 300, 600]));
 
   // --- Chat historie (core/user-history.js) ---
-  check('menuModel s historií → za Přejmenovat', ids(mm.menuModel({ history: true })) === 'delete,timeout,ban,rename,history,warn,permit');
+  check('menuModel s historií → Profil první', ids(mm.menuModel({ history: true })) === 'history,delete,timeout,ban,rename,warn,permit');
+  check('menuModel smazaná zpráva → Odkrýt místo Smazat', ids(mm.menuModel({ history: true, deleted: true })) === 'history,restore,timeout,ban,rename,warn,permit'
+    && mm.menuModel({ deleted: true })[0].label === 'Odkrýt zprávu');
+  check('menuModel smazaná bez potvrzené zprávy → ani Odkrýt', !mm.menuModel({ deleted: true, canDelete: false }).some((i) => i.id === 'restore' || i.id === 'delete'));
+  check('buildModRequest restore', eq(mm.buildModRequest('restore', { channel: 'RobDiesALot', platform: 'kick', login: 'x', messageId: 42 }), { path: '/moderation/restore', method: 'POST', body: { channel: 'robdiesalot', platform: 'kick', messageId: '42' } }));
+  check('summarize restore ok / not_deleted', mm.summarizeModResult('restore', { login: 'spammer' }, { result: 'ok' }) === 'Zpráva od spammer odkryta v UnityChatu (na platformě zůstává smazaná).'
+    && mm.summarizeModResult('restore', { login: 'spammer' }, { result: 'not_deleted' }) === 'Zpráva od spammer není v archivu smazaná ani skrytá.');
+  check('modErrorText gif_pending', mm.modErrorText({ error: 'gif_pending', status: 409 }) === 'O zprávě s GIFem rozhoduje karta ke schválení.');
+  {
+    const calls = [];
+    const menu = new mm.ModMenu({ doc: {}, api: async (path, o) => { calls.push([path, o]); const e = { error: 'not_found', status: 404 }; throw e; } });
+    const texts = [];
+    menu.notify = (t, info) => texts.push([t, info.ok]);
+    await menu.run('restore', { platform: 'twitch', login: 'x', messageId: 'm1' });
+    check('ModMenu.run restore 404 → „Zpráva v archivu chatu není.“', texts[0]?.[0] === 'Zpráva v archivu chatu není.' && texts[0][1] === false && calls[0][0] === '/moderation/restore');
+    const m2 = new mm.ModMenu({ doc: {}, api: async () => ({}) });
+    m2.target = { platform: 'twitch', login: 'x', messageId: 'm1', userId: '1', deleted: true };
+    m2._state = { banned: false };
+    check('ModMenu model: target.deleted → restore', m2._model().some((i) => i.id === 'restore') && !m2._model().some((i) => i.id === 'delete'));
+  }
   check('menuModel historie bez userId → neaktivní', mm.menuModel({ history: true, hasUserId: false }).find((i) => i.id === 'history').disabled === true);
   {
     const uh = await import('../extension/core/user-history.js');

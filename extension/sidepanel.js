@@ -4621,6 +4621,11 @@ class UnityChat {
     const fresh = d.message && typeof d.message === 'object' ? d.message : null;
     const msg = this.store.get(String(d.messageId));
     if (restore) this._serverDeleted?.delete(String(d.messageId));
+    if (msg && fresh) {
+      // Obsah je teď veřejný (přišel se zprávou) — ne jen dotažený jako mod, po ztrátě role ho nezahazovat.
+      delete msg._modOrig;
+      msg._modContent = false;
+    }
     if (msg) {
       if (restore) {
         msg._deleted = false; msg.deleted = false; delete msg.deletedReason;
@@ -4720,6 +4725,7 @@ class UnityChat {
         },
         onHistory: (t) => this._userHistory().open(t),
         notify: (text, info) => {
+          if (info?.ok && info.kind === 'restore') this._applyRestored(info.target, info.res);
           if (info?.error?.status === 401) { this._sys(text); this._refreshAccount(); return; }
           if (info?.error?.status === 403 && info.error.error === 'not_mod') this._loadModState();
           this._sys(text);
@@ -4817,26 +4823,51 @@ class UnityChat {
     this._ucLog('Profile', `zavřeno: ${why}`);
   }
 
-  /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
-  _openModMenu(el, un, x, y) {
-    const id = el.dataset.msgId || null;
+  /** Cíl akce moda (core ModMenu) ze zprávy `el`; `un` = jméno (.un). null = zprávu nejde určit. */
+  _modTarget(el, un = el?.querySelector('.un')) {
+    const id = el?.dataset.msgId || null;
     const msg = id ? this.store.get(id) : null;
-    const platform = el.dataset.platform || msg?.platform;
-    const login = msg?.username || un.dataset.username || '';
-    if (!platform || !login) return;
+    const platform = el?.dataset.platform || msg?.platform;
+    const login = msg?.username || un?.dataset.username || '';
+    if (!platform || !login) return null;
     const nick = this.nicknames.get(platform, login);
     const confirmed = id && !String(id).startsWith('sent-') && !msg?._optimistic;
-    this._modMenu().open({
+    return {
       channel: (this.config.channel || '').toLowerCase(),
       platform,
       userId: this._msgUserId(msg),
       login,
-      displayName: un.textContent || login,
-      nameColor: un.style.color || null,
+      displayName: un?.textContent || login,
+      nameColor: un?.style.color || null,
       messageId: confirmed ? id : null,
       nickname: nick?.nickname || null,
       color: nick?.color || null,
-    }, { x, y });
+      // Smazaná / skrytá zpráva → v nabídce „Odkrýt zprávu“ místo „Smazat zprávu“.
+      deleted: !!el?.classList.contains('uc-deleted'),
+    };
+  }
+
+  /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
+  _openModMenu(el, un, x, y) {
+    const t = this._modTarget(el, un);
+    if (t) this._modMenu().open(t, { x, y });
+  }
+
+  /** Oko v hover akcích: odkrýt smazanou / skrytou zprávu jen v UnityChatu (POST /moderation/restore přes ModMenu). */
+  _restoreDeleted(el) {
+    const t = this._modTarget(el);
+    if (!t?.messageId) { this._sys('Zprávu nejde určit.'); return; }
+    this._ucLog('Mod', `restore ← ${t.platform}:${t.messageId}`);
+    this._modMenu().run('restore', t);
+  }
+
+  /** Odpověď /moderation/restore (result ok + message) → zprávu hned vykreslit zpátky; SSE message-restored dorazí taky. */
+  _applyRestored(t, res) {
+    if (res?.result !== 'ok' || !t?.messageId || !res.message) return;
+    const msg = this.store.get(String(t.messageId));
+    if (msg) { msg._hidden = false; msg.hidden = false; }
+    const n = this._unhideMessage({ platform: t.platform, messageId: t.messageId, message: res.message }, { restore: true });
+    this._ucLog('Mod', `restore → ${t.platform}:${t.messageId} (${n} el)`);
   }
 
   /** SSE user-moderated z /nicknames/stream. */
@@ -7812,6 +7843,18 @@ class UnityChat {
       this._deleteMessage(delBtn.closest('.msg'));
     });
     actions.insertBefore(delBtn, poopBtn);
+    // Odkrýt zprávu (mod, jen v UnityChatu) — vykreslené vždy vlevo od koše; CSS ukáže oko místo koše
+    // (tj. hned vlevo od 💩), jen když má zpráva třídu .uc-deleted (smazaná / skrytá).
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'msg-action-btn';
+    restoreBtn.dataset.act = 'restore';
+    restoreBtn.title = window.UC_CORE.RESTORE_TITLE;
+    restoreBtn.innerHTML = window.UC_CORE.EYE_ICON_SVG;
+    restoreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._restoreDeleted(restoreBtn.closest('.msg'));
+    });
+    actions.insertBefore(restoreBtn, delBtn);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

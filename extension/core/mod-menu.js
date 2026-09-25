@@ -1,6 +1,6 @@
 // Kontextová nabídka moderátora na jméno (moderace část 2) — sdílená addonem i webem.
-// Pravé tlačítko na jméno (jen mod; divák má nativní menu prohlížeče) → Smazat zprávu,
-// Timeout ▸, Zabanovat / Unban, Přejmenovat…, Profil, Varovat…, Permit ▸. Kontrakt backendu:
+// Pravé tlačítko na jméno (jen mod; divák má nativní menu prohlížeče) → Profil, Smazat zprávu
+// (u smazané/skryté zprávy Odkrýt zprávu), Timeout ▸, Zabanovat / Unban, Přejmenovat…, Varovat…, Permit ▸. Kontrakt backendu:
 // docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md.
 //
 // Host dodá DOM (`doc`) a `api(path, { method, body })` → JSON, při chybě throw { error, status }
@@ -42,6 +42,8 @@ const MOD_ERRORS = {
   body: 'Neplatný požadavek.',
   channel: 'Neplatný kanál.',
   query: 'Neplatný požadavek.',
+  gif_pending: 'O zprávě s GIFem rozhoduje karta ke schválení.',
+  not_restorable: 'Tuhle zprávu odkrýt nejde.',
 };
 
 /** Chyba z api (throw { error, status }) → česká hláška. */
@@ -138,7 +140,7 @@ export function modScopePrompt(platform, result) {
 
 /**
  * Požadavek na backend pro akci z nabídky (čistá funkce, testovaná).
- * @param {'state'|'delete'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
+ * @param {'state'|'delete'|'restore'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
  * @param {{channel?: string, platform: string, userId?: string, login: string, messageId?: string|null}} t  cíl
  * @param {{durationSec?: number, reason?: string, nickname?: string|null, color?: string|null}} [x]
  * @returns {{path: string, method: string, body?: object}}
@@ -151,6 +153,9 @@ export function buildModRequest(kind, t, x = {}) {
       return { path: `/moderation/user-state?${t.channel ? `channel=${enc(String(t.channel).toLowerCase())}&` : ''}platform=${enc(t.platform)}&userId=${enc(String(t.userId ?? ''))}`, method: 'GET' };
     case 'delete':
       return { path: '/moderation/delete', method: 'POST', body: { ...ch, platform: t.platform, messageId: String(t.messageId ?? '') } };
+    case 'restore':
+      // Odkrýt smazanou/skrytou zprávu jen v UnityChatu (na platformě zůstává smazaná).
+      return { path: '/moderation/restore', method: 'POST', body: { ...ch, platform: t.platform, messageId: String(t.messageId ?? '') } };
     case 'timeout':
       return { path: '/moderation/user', method: 'POST', body: { ...base, action: 'timeout', durationSec: x.durationSec } };
     case 'ban':
@@ -172,20 +177,21 @@ export function buildModRequest(kind, t, x = {}) {
 
 /**
  * Položky nabídky (čistá funkce). `banned` → Unban místo Timeout/Zabanovat.
- * Bez userId jde jen Přejmenovat (a Smazat zprávu, pokud je zpráva potvrzená).
- * `history` = hostitel umí otevřít Profil (core/user-history.js) → položka za Přejmenovat.
+ * Bez userId jde jen Přejmenovat (a Smazat / Odkrýt zprávu, pokud je zpráva potvrzená).
+ * `history` = hostitel umí otevřít Profil (core/user-history.js) → první položka.
+ * `deleted` = zpráva je smazaná nebo skrytá → místo „Smazat zprávu“ „Odkrýt zprávu“ (jen v UnityChatu).
  */
-export function menuModel({ banned = false, canDelete = true, hasUserId = true, history = false } = {}) {
+export function menuModel({ banned = false, canDelete = true, hasUserId = true, history = false, deleted = false } = {}) {
   const noId = !hasUserId;
   const items = [];
-  if (canDelete) items.push({ id: 'delete', label: 'Smazat zprávu' });
+  if (history) items.push({ id: 'history', label: 'Profil', disabled: noId });
+  if (canDelete) items.push(deleted ? { id: 'restore', label: 'Odkrýt zprávu', title: 'Zpráva se znovu zobrazí jen v UnityChatu, na platformě zůstane smazaná.' } : { id: 'delete', label: 'Smazat zprávu' });
   if (banned) items.push({ id: 'unban', label: 'Unban', disabled: noId });
   else {
     items.push({ id: 'timeout', label: 'Timeout', disabled: noId, sub: TIMEOUT_OPTIONS.map((s) => ({ id: `timeout:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_TIMEOUT_SEC } });
     items.push({ id: 'ban', label: 'Zabanovat…', danger: true, disabled: noId });
   }
   items.push({ id: 'rename', label: 'Přejmenovat…' });
-  if (history) items.push({ id: 'history', label: 'Profil', disabled: noId });
   items.push({ id: 'warn', label: 'Varovat…', disabled: noId });
   items.push({ id: 'permit', label: 'Permit', disabled: noId, sub: PERMIT_OPTIONS.map((s) => ({ id: `permit:${s}`, label: fmtDuration(s), durationSec: s })), custom: { max: MAX_PERMIT_SEC } });
   return items;
@@ -196,6 +202,9 @@ export function summarizeModResult(kind, target, res = {}, x = {}) {
   const who = target.displayName || target.login;
   switch (kind) {
     case 'delete': return `Zpráva od ${who} smazána: ${formatResults({ [target.platform]: res.result })}`;
+    case 'restore': return res.result === 'not_deleted'
+      ? `Zpráva od ${who} není v archivu smazaná ani skrytá.`
+      : `Zpráva od ${who} odkryta v UnityChatu (na platformě zůstává smazaná).`;
     case 'timeout': return `Timeout ${fmtDuration(x.durationSec)} pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'ban': return `Ban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
     case 'unban': return `Unban pro ${who}: ${formatResults(res.results, { notes: res.notes })}`;
@@ -374,13 +383,13 @@ export class ModMenu {
   }
 
   /**
-   * Akce rovnou bez hlavní nabídky (ikony u zprávy v Profilu): delete = hned, ban = potvrzení,
+   * Akce rovnou bez hlavní nabídky (ikony u zprávy v Profilu): delete / restore = hned, ban = potvrzení,
    * timeout / permit = nabídka otevřená rovnou v podnabídce délek (u místa kliknutí).
-   * @param {'delete'|'timeout'|'ban'|'permit'} kind
+   * @param {'delete'|'restore'|'timeout'|'ban'|'permit'} kind
    */
   openAction(kind, target, at = {}) {
     this.log('ModMenu', `akce z Profilu ${kind} → ${target.platform}:${target.userId || '?'} ${target.login}`);
-    if (kind === 'delete') return this.run('delete', target);
+    if (kind === 'delete' || kind === 'restore') return this.run(kind, target);
     if (kind === 'ban') return this._confirmBan(target);
     if (kind === 'timeout' || kind === 'permit') {
       this.open(target, at);
@@ -393,7 +402,8 @@ export class ModMenu {
 
   /**
    * @param {{channel?: string, platform: string, userId?: string|null, login: string, displayName?: string,
-   *          messageId?: string|null, nickname?: string|null, color?: string|null}} target
+   *          messageId?: string|null, nickname?: string|null, color?: string|null, deleted?: boolean}} target
+   *   deleted = zpráva je smazaná / skrytá (hostitel např. `el.classList.contains('uc-deleted')`) → Odkrýt místo Smazat
    * @param {{x: number, y: number}} at  souřadnice kliknutí (clientX/Y)
    */
   open(target, { x = 0, y = 0 } = {}) {
@@ -480,7 +490,7 @@ export class ModMenu {
 
   _model() {
     const t = this.target;
-    return menuModel({ banned: this._state.banned, canDelete: !!t.messageId, hasUserId: !!t.userId, history: typeof this.onHistory === 'function' });
+    return menuModel({ banned: this._state.banned, canDelete: !!t.messageId, hasUserId: !!t.userId, history: typeof this.onHistory === 'function', deleted: !!t.deleted });
   }
 
   _render() {
@@ -510,6 +520,7 @@ export class ModMenu {
       b.tabIndex = -1;
       b.dataset.id = it.id;
       if (it.disabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); b.title = 'Uživatele nejde určit (chybí jeho ID na platformě).'; }
+      else if (it.title) b.title = it.title;
       const label = doc.createElement('span');
       label.textContent = it.label;
       b.appendChild(label);
@@ -717,6 +728,7 @@ export class ModMenu {
     this.close();
     switch (kind) {
       case 'delete': this.onDelete?.(t); break;
+      case 'restore': this.run('restore', t); break;
       case 'timeout': this.run('timeout', t, { durationSec: Number(arg) }); break;
       case 'permit': this.run('permit', t, { durationSec: Number(arg) }); break;
       case 'unban': this.run('unban', t); break;
@@ -737,7 +749,8 @@ export class ModMenu {
       return res;
     } catch (e) {
       this.log('ModMenu', `${kind} ${t.platform}:${t.userId || '?'} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
-      const err = new Error(modErrorText(e));
+      // 404 u odkrytí = zpráva (ne uživatel) v archivu kanálu není.
+      const err = new Error(kind === 'restore' && e?.error === 'not_found' ? 'Zpráva v archivu chatu není.' : modErrorText(e));
       err.code = e?.error; err.status = e?.status;
       throw err;
     }

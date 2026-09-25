@@ -67,7 +67,7 @@ const mock = {
   deleteResult: 'ok',                                       // /moderation/delete result
 };
 const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera', 3)];
-const posts = { user: [], ack: [], send: [], tickets: 0, hist: [], del: [], seventv: 0 };
+const posts = { user: [], ack: [], send: [], tickets: 0, hist: [], del: [], restore: [], seventv: 0 };
 const DAY = 86400000;
 // Profil: dona (d1 mezi dvěma zprávami, d2 před dvěma dny = jen podle jména), odpověď na zprávu jiného uživatele.
 const DONS = [
@@ -126,6 +126,12 @@ s.onevent = async (d) => {
     return json({ ok: true, available: true, items: [...DONS].reverse() });
   }
   if (u.includes('/moderation/delete')) { posts.del.push(body); return json({ ok: true, result: mock.deleteResult }); }
+  // Odkrýt zprávu: odpověď s celou zprávou (tvar /chat/history), jako server po úplném odkrytí.
+  if (u.includes('/moderation/restore')) {
+    posts.restore.push(body);
+    const orig = [...H1, HREP].find((m) => m.id === body?.messageId);
+    return json(orig ? { ok: true, result: 'ok', message: { ...orig, historical: true } } : { ok: false, error: 'not_found', result: 'not_found' }, orig ? 200 : 404);
+  }
   if (u.includes('/moderation/user-history/messages')) {
     posts.hist.push(u);
     const inCh = new URL(u).searchParams.get('inChannel');
@@ -196,8 +202,10 @@ const head = await ev(`document.querySelector('.uc-mod-menu .uc-mm-head')?.textC
 check('A hlavička: jméno + platforma', /Tester/.test(head || '') && /Twitch/.test(head || ''), head);
 await until(`!!document.querySelector('.uc-mod-menu')`, 1000);
 const items = await menuItems();
-check('A položky nabídky (1: „Profil“ místo „Chat historie“)', JSON.stringify(items) === JSON.stringify(['Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Profil', 'Varovat…', 'Permit']), JSON.stringify(items));
-check('A fokus na první položce', await ev(`document.activeElement?.dataset?.id === 'delete'`) === true);
+check('A položky nabídky (Profil první)', JSON.stringify(items) === JSON.stringify(['Profil', 'Smazat zprávu', 'Timeout', 'Zabanovat…', 'Přejmenovat…', 'Varovat…', 'Permit']), JSON.stringify(items));
+check('A fokus na první položce (Profil)', await ev(`document.activeElement?.dataset?.id === 'history'`) === true);
+await key('ArrowDown');
+check('A šipka dolů → Smazat zprávu', await ev(`document.activeElement?.dataset?.id === 'delete'`) === true);
 await key('ArrowDown');
 check('A šipka dolů → Timeout', await ev(`document.activeElement?.dataset?.id === 'timeout'`) === true);
 await key('ArrowRight');
@@ -216,7 +224,7 @@ check('A hláška výsledku po platformách', (await lastSys()) === 'Timeout 5 m
 
 // Vlastní délka: kolečko nad polem (nejméně 1) + jednotka → akce s n × jednotka
 await rightClick('e2e-a1');
-await key('ArrowDown'); await key('ArrowRight');
+await key('ArrowDown'); await key('ArrowDown'); await key('ArrowRight');
 check('A podnabídka má řádek vlastní délky s/m/h', await ev(`JSON.stringify([...document.querySelectorAll('.uc-mod-menu .uc-mm-fly .uc-mm-custom .uc-mm-unit')].map(b => b.textContent))`) === JSON.stringify(['s', 'm', 'h']));
 const wheel = await ev(`(() => { const i = document.querySelector('.uc-mod-menu .uc-mm-fly .uc-mm-custom-num');
   const w = (dy) => i.dispatchEvent(new WheelEvent('wheel', { deltaY: dy, bubbles: true, cancelable: true }));
@@ -236,7 +244,7 @@ await key('Escape'); await key('Escape'); await key('Escape');
 
 // Esc zavře, Esc v podnabídce se vrátí
 await rightClick('e2e-a1');
-await key('ArrowDown');
+await key('ArrowDown'); await key('ArrowDown');
 await ev(`document.activeElement.click()`);   // Enter v headless neklikne → klik na fokusovaný „Timeout"
 check('A v podnabídce', await ev(`!!document.querySelector('.uc-mod-menu .uc-mm-fly')`) === true);
 await key('Escape');
@@ -272,6 +280,32 @@ await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`)
 check('A varování bez důvodu → chyba v dialogu', await until(`document.querySelector('.uc-mod-dialog-err')?.hidden === false`, 2000));
 await ev(`document.querySelector('.uc-mod-dialog button[type=button]').click()`);
 check('A Zrušit zavře dialog', await ev(`!document.querySelector('.uc-mod-dialog')`) === true);
+
+// ---- Odkrýt zprávu (smazaná / skrytá → jen v UnityChatu zpátky) ----
+const actDisp = (id, act) => ev(`getComputedStyle(document.querySelector('.msg[data-msg-id="${id}"] .msg-action-btn[data-act="${act}"]')).display`);
+check('R nesmazaná zpráva: koš vidět, oko ne', await actDisp('e2e-b1', 'delete') === 'flex' && await actDisp('e2e-b1', 'restore') === 'none');
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'twitch:jinymod', reason: 'mod', at: Date.now() }]);
+check('R SSE message-deleted → zpráva smazaná', await until(`document.querySelector('.msg[data-msg-id="e2e-b1"]')?.classList.contains('uc-deleted')`, 6000));
+check('R smazaná zpráva: oko místo koše + tooltip', await actDisp('e2e-b1', 'delete') === 'none' && await actDisp('e2e-b1', 'restore') === 'flex'
+  && await ev(`document.querySelector('.msg[data-msg-id="e2e-b1"] .msg-action-btn[data-act="restore"]').title`) === 'Odkrýt zprávu (jen v UnityChatu)');
+await rightClick('e2e-b1');
+const rItems = await menuItems();
+check('R nabídka u smazané: Profil, Odkrýt zprávu, bez Smazat', rItems[0] === 'Profil' && rItems[1] === 'Odkrýt zprávu' && !rItems.includes('Smazat zprávu'), JSON.stringify(rItems));
+await ev(`document.querySelector('.uc-mod-menu [data-id="restore"]').click()`);
+check('R Odkrýt → POST /moderation/restore', await (async () => { for (let i = 0; i < 20 && !posts.restore.length; i++) await sleep(150); const b = posts.restore[0]; return b?.channel === 'robdiesalot' && b.platform === 'twitch' && b.messageId === 'e2e-b1'; })(), JSON.stringify(posts.restore[0]));
+check('R zpráva zpět (text, bez smazání) + koš místo oka', await until(`(() => { const el = document.querySelector('.msg[data-msg-id="e2e-b1"]'); return !el.classList.contains('uc-deleted') && el.querySelector('.tx').textContent === 'zpráva jiného'; })()`, 3000)
+  && await actDisp('e2e-b1', 'delete') === 'flex' && await actDisp('e2e-b1', 'restore') === 'none', JSON.stringify(await msgState('e2e-b1')));
+check('R hláška „odkryta v UnityChatu"', await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent === 'Zpráva od Other odkryta v UnityChatu (na platformě zůstává smazaná).')`, 3000), await lastSys());
+// Skrytá zpráva + oko v hover akcích
+mock.sse.push(['message-hidden', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'zidolista:1', at: Date.now() }]);
+check('R skrytá zpráva: oko místo koše', await until(`document.querySelector('.msg[data-msg-id="e2e-b1"]')?.classList.contains('uc-deleted')`, 6000) && await actDisp('e2e-b1', 'restore') === 'flex');
+await ev(`document.querySelector('.msg[data-msg-id="e2e-b1"] .msg-action-btn[data-act="restore"]').click()`);
+check('R oko → POST restore + zpráva zpět', await until(`!document.querySelector('.msg[data-msg-id="e2e-b1"]').classList.contains('uc-deleted')`, 3000) && posts.restore.length === 2 && posts.restore[1].messageId === 'e2e-b1', JSON.stringify(posts.restore));
+// Odkrytí jiným modem (SSE message-restored) → zpráva zpět i tady, koš se vrátí.
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'twitch:jinymod', reason: 'mod', at: Date.now() }]);
+await until(`document.querySelector('.msg[data-msg-id="e2e-b1"]')?.classList.contains('uc-deleted')`, 6000);
+mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'twitch:jinymod', at: Date.now(), message: { ...H1[1], historical: true } }]);
+check('R SSE message-restored od jiného moda → zpráva zpět, koš', await until(`!document.querySelector('.msg[data-msg-id="e2e-b1"]').classList.contains('uc-deleted')`, 6000) && await actDisp('e2e-b1', 'delete') === 'flex');
 
 // ---- Profil (mod) ----
 check('H 7TV badge Testera i u zprávy v chatu (stejný render badge)', await until(`!!document.querySelector('.msg[data-msg-id="e2e-a1"] .bdg .bdg-7tv')`, 8000), `7tv dotazů=${posts.seventv}`);
@@ -325,9 +359,14 @@ check('H 9 ikony akcí u zprávy: smazat / timeout / ban / permit', acts === 'de
 mock.deleteResult = 'error:no_actor';
 await ev(`document.querySelector('.uc-uh-msg[data-id="e2e-a1"] .uc-uh-act[data-act="delete"]').click()`);
 check('H 9 smazání z Profilu → POST /moderation/delete', await until(`true`, 10) && await (async () => { for (let i = 0; i < 20 && !posts.del.length; i++) await sleep(150); return posts.del[0]?.messageId === 'e2e-a1' && posts.del[0]?.platform === 'twitch' && posts.del[0]?.channel === 'robdiesalot'; })(), JSON.stringify(posts.del[0]));
-check('H 9 řádek po smazání = styl smazané zprávy (mod: štítek + ztlumení)', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return r.classList.contains('uc-deleted') && r.classList.contains('uc-deleted--dimmed') && !!r.querySelector('.uc-deleted-tag') && !r.querySelector('.uc-uh-act[data-act="delete"]'); })()`, 3000));
+check('H 9 řádek po smazání = styl smazané zprávy (mod: štítek + ztlumení), oko místo koše', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return r.classList.contains('uc-deleted') && r.classList.contains('uc-deleted--dimmed') && !!r.querySelector('.uc-deleted-tag') && !r.querySelector('.uc-uh-act[data-act="delete"]') && r.querySelector('.uc-uh-act')?.dataset.act === 'restore'; })()`, 3000));
 const sysDel = await ev(`(() => { const a = [...document.querySelectorAll('#chat .sys')]; const s = a[a.length - 1]; return s ? s.textContent + '|' + (s.querySelector('.sys-action')?.textContent || '-') : null; })()`);
 check('H 6 no_actor + chybějící scopes → „Obnovit přihlášení (moderace)" (Twitch)', sysDel === 'Na Twitchi se akce nepovedla — tvůj účet nemá oprávnění moderovat. Obnovit přihlášení (moderace)|Obnovit přihlášení (moderace)', sysDel);
+// Oko v Profilu → POST restore → řádek znovu s textem a košem (odpověď nese celou zprávu).
+const nRestore = posts.restore.length;
+await ev(`document.querySelector('.uc-uh-msg[data-id="e2e-a1"] .uc-uh-act[data-act="restore"]').click()`);
+check('H oko v Profilu → POST restore, řádek zpět s textem a košem', await until(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return !!r && !r.classList.contains('uc-deleted') && r.querySelector('.uc-uh-tx').textContent === 'první zpráva testera' && r.querySelector('.uc-uh-act')?.dataset.act === 'delete'; })()`, 3000)
+  && posts.restore.length === nRestore + 1 && posts.restore.at(-1).messageId === 'e2e-a1', JSON.stringify(posts.restore.at(-1)));
 mock.userResults = { twitch: 'error:no_actor' };
 const nUser2 = posts.user.length;
 await ev(`document.querySelector('.uc-uh-msg[data-id="h-rep"] .uc-uh-act[data-act="timeout"]').click()`);

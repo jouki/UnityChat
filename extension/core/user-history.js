@@ -11,7 +11,7 @@
 // chatu pro vykreslení (tělo zprávy, badge, citace odpovědi, barva jména) — panel nemá vlastní kopie.
 // Cizí text (jména, důvody, zprávy donů) jen přes textContent. Žádné chrome.*, žádné globální stavy.
 
-import { fmtDuration, deletedView, applyDeleted, applyModTag, modTagText } from './moderation.js';
+import { fmtDuration, deletedView, applyDeleted, applyModTag, modTagText, EYE_ICON_SVG, RESTORE_TITLE } from './moderation.js';
 import { PLATFORM_NAMES } from './soundboard.js';
 import { escapeHtml } from './html.js';
 import { modErrorText, openModDialog, PLATFORM_LOC } from './mod-menu.js';
@@ -195,8 +195,9 @@ const ICONS = {
   timeout: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>',
   ban: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>',
   permit: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>',
+  restore: EYE_ICON_SVG.replace(/width="14" height="14"/, 'width="13" height="13"'),
 };
-const ACTION_TITLES = { delete: 'Smazat zprávu', timeout: 'Timeout…', ban: 'Zabanovat…', permit: 'Permit…' };
+const ACTION_TITLES = { delete: 'Smazat zprávu', restore: RESTORE_TITLE, timeout: 'Timeout…', ban: 'Zabanovat…', permit: 'Permit…' };
 
 const toNode = (doc, v) => {
   if (v == null || v === '') return null;
@@ -803,6 +804,7 @@ export class UserHistoryPanel {
     row.dataset.platform = m.platform;
     row.dataset.ts = String(Number(m.timestamp) || 0);
     if (m.userId != null) row.dataset.userId = String(m.userId);
+    row._uhMsg = m;
     const tx = doc.createElement('span');
     tx.className = 'uc-uh-tx tx';
     const { msg, uc } = stripUcMarker(m);
@@ -827,7 +829,10 @@ export class UserHistoryPanel {
     const view = deletedView({ style, isMod: true, hidden: !deleted && hidden });
     applyDeleted(row, { ...view, hidden: !deleted && hidden, hasContent });
     row.classList.add('uc-uh-msg--gone');
-    row.querySelector('.uc-uh-act[data-act="delete"]')?.remove();
+    // Koš → oko (Odkrýt zprávu jen v UnityChatu).
+    const del = row.querySelector('.uc-uh-act[data-act="delete"]');
+    if (del && row._uhMsg) del.replaceWith(this._actBtn('restore', row._uhMsg));
+    else del?.remove();
   }
 
   /** Citace odpovědi (render chatu) na jeden řádek; klik = celý text, klik na jméno = Profil autora. */
@@ -890,26 +895,27 @@ export class UserHistoryPanel {
   }
 
   _actions(m, gone) {
-    const doc = this.doc;
-    const box = doc.createElement('div');
+    const box = this.doc.createElement('div');
     box.className = 'uc-uh-acts';
-    for (const kind of ['delete', 'timeout', 'ban', 'permit']) {
-      if (kind === 'delete' && gone) continue;
-      const b = doc.createElement('button');
-      b.type = 'button';
-      b.className = `uc-uh-act uc-uh-act--${kind}`;
-      b.dataset.act = kind;
-      b.title = ACTION_TITLES[kind];
-      b.setAttribute('aria-label', ACTION_TITLES[kind]);
-      b.innerHTML = ICONS[kind];
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const r = b.getBoundingClientRect?.() || { left: 0, bottom: 0 };
-        this.modMenu.openAction(kind, messageTarget(m, this.target), { x: r.left, y: r.bottom });
-      });
-      box.appendChild(b);
-    }
+    // Smazaná / skrytá zpráva: místo koše oko (Odkrýt zprávu jen v UnityChatu).
+    for (const kind of [gone ? 'restore' : 'delete', 'timeout', 'ban', 'permit']) box.appendChild(this._actBtn(kind, m));
     return box;
+  }
+
+  _actBtn(kind, m) {
+    const b = this.doc.createElement('button');
+    b.type = 'button';
+    b.className = `uc-uh-act uc-uh-act--${kind}`;
+    b.dataset.act = kind;
+    b.title = ACTION_TITLES[kind];
+    b.setAttribute('aria-label', ACTION_TITLES[kind]);
+    b.innerHTML = ICONS[kind];
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const r = b.getBoundingClientRect?.() || { left: 0, bottom: 0 };
+      this.modMenu.openAction(kind, messageTarget(m, this.target), { x: r.left, y: r.bottom });
+    });
+    return b;
   }
 
   /** Akce moda proběhla → smazaná zpráva / zprávy uživatele po timeoutu či banu jako v chatu. */
@@ -920,6 +926,16 @@ export class UserHistoryPanel {
       for (const row of this._rows()) {
         if (row.dataset.id !== String(t.messageId) || row.dataset.platform !== t.platform) continue;
         this._paintGone(row, { deleted: true, hasContent: !!row.querySelector('.tx')?.textContent });
+        n++;
+      }
+    } else if (kind === 'restore' && t.messageId && res?.result === 'ok') {
+      // Odkrytá zpráva: řádek znovu z odpovědi serveru (celá zpráva s textem), koš místo oka.
+      for (const row of this._rows()) {
+        if (row.dataset.id !== String(t.messageId) || row.dataset.platform !== t.platform) continue;
+        const fresh = res.message && typeof res.message === 'object' ? res.message : null;
+        if (!fresh) continue;
+        const { deleted, deletedReason, hidden, ...rest } = row._uhMsg || {};
+        row.replaceWith(this._row({ ...rest, ...fresh, deleted: false, hidden: false }));
         n++;
       }
     } else if ((kind === 'timeout' || kind === 'ban') && t.userId) {
