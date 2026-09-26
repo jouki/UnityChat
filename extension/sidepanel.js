@@ -1152,6 +1152,8 @@ class UnityChat {
     try { window.ucDump = () => this._dumpLogs(); } catch {}
     // Ladění / e2e: pojistka schovaných GIF zpráv (delayMs, size).
     try { window.ucGifHold = () => this._gifHold(); } catch {}
+    // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker }; } catch {}
 
     this._init();
   }
@@ -1191,7 +1193,95 @@ class UnityChat {
         save: (list) => localStorage.setItem('uc_recent_emotes', JSON.stringify(list)),
       },
       log: (tag, text) => this._ucLog(tag, text),
+      // Boční záložka GIFy (GIF knihovna, core/gif-library.js).
+      tabs: core.createGifPanel ? [{ key: 'gif', label: 'GIFy', icon: core.GIF_TAB_SVG, mount: (pane) => this._mountGifPanel(pane) }] : [],
     });
+    this._gifPanel?.update();
+  }
+
+  /** Záložka „GIFy“ v panelu emotů: knihovna schválených GIFů, mod navíc zamítnuté a návrhy duplikátů. */
+  _mountGifPanel(pane) {
+    const core = window.UC_CORE;
+    this._gifPanel = core.createGifPanel({
+      pane,
+      api: (path, opts) => this._ucApi(path, opts),
+      channel: () => (this.config.channel || '').toLowerCase(),
+      canModerate: () => !!this._canModerate,
+      reward: () => this._gifRewardView(),
+      // Otevření záložky / zamčený výběr: zeptat se jen když stav není čerstvý (GET /gif/state má rate limit).
+      refreshReward: () => { if (this._account && !this._gifCd()._fresh()) this._gifCd().fetchState(); },
+      onPick: (url) => {
+        this._emotePicker?.close();
+        this._sendMessage({ text: url, gif: true });
+      },
+      onIndicator: (v) => this._emotePicker?.setIndicator('gif', v),
+      tokens: this._gifTokens(),
+      origins: UC_GIF_ORIGINS,
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    return this._gifPanel;
+  }
+
+  /** Stav odměny „Posílání GIFů“ pro GIF záložku a indikátor (core gifRewardView nad GifCooldown.snapshot). */
+  _gifRewardView() {
+    return window.UC_CORE.gifRewardView(this._gifCdInst?.snapshot() || null, Date.now(), { loggedIn: !!this._account });
+  }
+
+  /** Token moda pro náhledy zamítnutých GIFů — jen paměť + chrome.storage.session (nikdy log / localStorage). */
+  _gifTokens() {
+    if (!this._gifTokensInst) {
+      const KEY = 'uc_gif_token';
+      const ses = chrome.storage?.session;
+      this._gifTokensInst = new window.UC_CORE.GifAccessToken({
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        store: ses ? {
+          load: async () => (await ses.get(KEY))?.[KEY] || null,
+          save: (t) => ses.set({ [KEY]: t }),
+          clear: () => ses.remove(KEY),
+        } : null,
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifTokensInst;
+  }
+
+  /** Stav vlastních GIF zpráv (kolečko %, „Schvalování moderátorem“, zamítnuto) — core GifOutbox. */
+  _gifOut() {
+    if (!this._gifOutInst) {
+      const core = window.UC_CORE;
+      this._gifOutInst = new core.GifOutbox({
+        channel: () => (this.config.channel || '').toLowerCase(),
+        log: (tag, text) => this._ucLog(tag, text),
+        hasMessage: (platform, id) => this._msgEls(id, platform).length > 0,
+        onChange: (keys) => this._paintGifOwn(keys),
+        onNotice: (kind) => { if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT); },
+      });
+    }
+    return this._gifOutInst;
+  }
+
+  /** Překreslit štítky vlastních GIF zpráv s danými klíči (`platform:id`). */
+  _paintGifOwn(keys) {
+    const out = this._gifOutInst;
+    if (!out) return;
+    for (const key of keys) {
+      const platform = key.slice(0, key.indexOf(':'));
+      for (const id of out.idsFor(key)) {
+        for (const el of this._msgEls(id, platform)) this._applyGifOwn(el, this.store.get(id) || this.store.get(el.dataset.msgId));
+      }
+    }
+  }
+
+  /**
+   * Štítek vlastní GIF zprávy (odesílatel). Smazaná / schovaná zpráva jde přes _paintDeleted (ten štítek řeší sám),
+   * jinak jen štítek (průběh před schováním zprávy serverem).
+   */
+  _applyGifOwn(el, msg) {
+    if (!el) return;
+    if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); return; }
+    const platform = el.dataset.platform || msg?.platform;
+    window.UC_CORE.paintGifStatus(document, el, this._gifOutInst?.view(platform, el.dataset.msgId) || null);
   }
 
   /** Dev mode (pamatuje se v configu): nástroje, editace jména; QR dono ukáže i u kanálu bez darů. */
@@ -3875,6 +3965,9 @@ class UnityChat {
     const wireText = this._resolveNicknameMentions(text, platform);
     const markedText = isCmd ? wireText : wireText + ' ' + UC_MARKER;
     const reply = !external && this._reply ? { ...this._reply } : null;
+    // GIF odkaz: stav odměny PŘED lokálním cooldownem (onSent níž), ať kolečko průběhu ví, že GIF odejde přes odměnu.
+    const hasGif = !isCmd && window.UC_CORE.hasGifLink(text);
+    const gifRv = hasGif ? window.UC_CORE.gifRewardView(this._gifCd().snapshot(), Date.now(), { loggedIn: !!this._account }) : null;
 
     if (!external) {
       // Save to message history (max 50)
@@ -3890,6 +3983,9 @@ class UnityChat {
       // Cooldown GIFu lokálně od odeslání (cooldownSec ze /gif/state); prázdné pole bublinu schová.
       this._gifCd().onSent(text);
       this._gifCd().onInput('');
+    } else if (opts.gif) {
+      // GIF z knihovny (panel emotů): cooldown odměny lokálně stejně jako u odkazu z pole.
+      this._gifCd().onSent(text);
     }
 
     // Optimistic UI: show message instantly
@@ -3914,6 +4010,10 @@ class UnityChat {
     // Id si držíme stranou: když odeslání selže, musí se tahle optimistická
     // zpráva označit jako neodeslaná a vypadnout z cache (viz _markSendFailed).
     const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    // GIF odkaz: kolečko s % u optimistické zprávy hned (jen když odměnu mám / jsem mod), průběh pak ze SSE gif-progress.
+    if (hasGif) {
+      this._gifOut().noteOptimistic(optId, platform, { show: gifRv.canSend || gifRv.mode === 'unknown' });
+    }
     this._addMessage({
       id: optId,
       platform,
@@ -4058,6 +4158,8 @@ class UnityChat {
         this._sys(`Chyba: ${reason}`);
         return;
       }
+      // GIF odkaz: id zprávy na platformě = klíč průběhu (gif-progress requestKey) → spárovat s optimistickou.
+      if (j.id && raw && !raw.startsWith('!') && window.UC_CORE.hasGifLink(raw)) this._gifOut().alias(optId, platform, j.id);
       // Kick odpověď odmítl (odpověď na starou zprávu) a server poslal „@login text" → optimistická
       // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
       if (j.fallback === 'mention') this._dropOptimistic(optId);
@@ -4616,6 +4718,20 @@ class UnityChat {
     // Původní zpráva s GIFem čeká na schválení (gif_request): nevykreslovat vůbec (divák ani mod) — odesílatel
     // má kartu, po schválení ji nahradí GIF (replaces), po zamítnutí přijde gif_rejected = běžně smazaná.
     const held = deleted && core.isGifHeldReason?.(msg.deletedReason);
+    // Vlastní GIF (odesílatel, GIF knihovna 2026-09-26): zpráva zůstává vidět se štítkem — kolečko %, „Schvalování
+    // moderátorem ( )“, po zamítnutí / vypršení červený štítek natrvalo (zpráva nezmizí). Schváleno → GIF je na konci
+    // chatu, původní zpráva se schová jako u ostatních.
+    const own = this._gifOutInst?.view(msg?.platform || el.dataset?.platform, el.dataset?.msgId);
+    if (own && own.kind !== 'approved' && (held || (deleted && String(msg.deletedReason || '').startsWith('gif_')))) {
+      el.classList.remove('uc-gif-held');
+      core.clearDeleted?.(el);
+      const otx = el.querySelector('.tx');
+      if (otx && otx.querySelector('.uc-deleted-label') && this._msgHasContent(msg)) { otx.innerHTML = this._renderMsgBody(msg); this._processMentions(otx, msg.platform); }
+      core.paintGifStatus(document, el, own);
+      if (held) this._gifHold().hold(msg?.platform || el.dataset?.platform, msg?.id != null ? String(msg.id) : el.dataset?.msgId);
+      return;
+    }
+    core.paintGifStatus?.(document, el, null);
     el.classList.toggle('uc-gif-held', !!held);
     // Pojistka: schovaná bez rozhodnutí serveru → po 30 s se zeptat GET /gif/held (core GifHoldWatch).
     const holdId = msg?.id != null ? String(msg.id) : el.dataset?.msgId;
@@ -4907,6 +5023,8 @@ class UnityChat {
     if (changed) this._reapplyDeleted();
     // GIFy ke schválení (část 4): mod si dotáhne čekající žádosti kanálu, karty přebarví tlačítka podle role.
     if (this._gifInst || can) { this._gifs().repaint(); if (can) this._gifs().loadPending(); }
+    // GIF záložka: taby Zamítnuté + duplikáty jen modovi.
+    this._gifPanel?.update();
     this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
   }
 
@@ -5028,6 +5146,8 @@ class UnityChat {
         review: () => this._gifReviewMode(),
         enabled: () => !!this.activePlatform && !!this._identity(this.activePlatform),
         log: (tag, text) => this._ucLog(tag, text),
+        // Stav odměny → GIF záložka (hlavička, zamčení výběru) a pásek pod tlačítkem emotů.
+        onState: () => this._gifPanel?.update(),
       });
     }
     return this._gifCdInst;
@@ -5043,6 +5163,10 @@ class UnityChat {
     const m = window.UC_CORE.gifMessageFromEvent(d, this.config.channel || '', { origins: UC_GIF_ORIGINS });
     if (!m) { this._ucLog('Gif', `gif-message ignorováno (${d?.channel || '?'} ${d?.message?.id || '?'})`); return; }
     if (this.store.get(m.id)) { this._ucLog('Gif', `gif-message ${m.id} už v chatu`); return; }
+    // Můj GIF (gifOrigin = klíč mé zprávy): štítek pryč, původní zpráva se schová. Pořadí podle času schválení
+    // (message.timestamp) — gifOrigin je jen k párování, zpráva se NEvkládá na místo původní (GIF knihovna 2026-09-26).
+    if (m.gifOrigin) this._gifOutInst?.onGifMessage(m);
+    this._ucLog('Gif', `gif-message ${m.id} čas ${m.timestamp}${m.gifOrigin ? ` origin ${m.gifOrigin}` : ''}${m.replaces ? ` replaces ${m.replaces}` : ''}`);
     this._addMessage({ ...m, historical: false });
   }
 
@@ -5365,8 +5489,11 @@ class UnityChat {
     this._loadModState();
     // Varování účtu: SSE jen pro tento účet (ticket); bez přihlášení pryč.
     if (this._signedIn) this._startAccountStream();
-    else { this._stopAccountStream(); this._warnings?.clear(); this._gifInst?.clear(); }
+    else { this._stopAccountStream(); this._warnings?.clear(); this._gifInst?.clear(); this._gifOutInst?.clear(); this._gifTokensInst?.clear(); }
     this._gifCdInst?.reset();
+    // Stav odměny GIFů hned (indikátor pod tlačítkem emotů, GIF záložka).
+    if (this._signedIn) this._gifCd().fetchState();
+    this._gifPanel?.update();
   }
 
   /** Okno varování od moderátora (core/account-warnings.js), lazy. */
@@ -5391,8 +5518,12 @@ class UnityChat {
       onAck: (id) => this._warn().remove(id),
       // GIFy ke schválení (moderace část 4) — jen modům kanálu a odesílateli.
       handlers: {
-        'gif-pending': (d) => this._gifs().onPending(d),
-        'gif-decided': (d) => { this._gifs().onDecided(d); this._gifCdInst?.onDecided(d); },
+        'gif-pending': (d) => { this._gifs().onPending(d); if (d?.own) this._gifOut().onOwnPending(d); },
+        'gif-decided': (d) => { this._gifs().onDecided(d); this._gifCdInst?.onDecided(d); if (d?.own) this._gifOut().onDecided(d); },
+        // GIF knihovna: fronta (FIFO karta modům), průběh stahování a hlášky odesílateli.
+        'gif-queue': (d) => this._gifs().onQueue(d),
+        'gif-progress': (d) => this._gifOut().onProgress(d),
+        'gif-notice': (d) => this._gifOut().onNotice(d),
       },
       log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
     });
@@ -8103,6 +8234,8 @@ class UnityChat {
 
     // Smazaná / skrytá zpráva (historie, nebo uzel vykreslený znovu z dat ve store).
     if (this._isModerated(msg)) this._paintDeleted(el, msg);
+    // Vlastní GIF zpráva (odesílatel): kolečko % / „Schvalování moderátorem“ / zamítnuto (core GifOutbox).
+    else if (this._gifOutInst?.size && this._gifOutInst.has(msg.platform, msg.id)) this._applyGifOwn(el, msg);
     // Štítek timeoutu / banu uživatele (SSE user-moderated / CLEARCHAT) u uzlu vykresleného znovu z dat.
     if (msg._modTag) window.UC_CORE.applyModTag(el, msg._modTag);
 
@@ -8287,6 +8420,8 @@ class UnityChat {
     // Karty GIFů patří kanálu (mod si po _loadModState dotáhne čekající nového kanálu).
     this._gifInst?.clear();
     this._gifCdInst?.reset();
+    this._gifOutInst?.clear();
+    this._gifPanel?.reset();
     // Obsah smazaných zpráv pro moda patří kanálu — rozpracované dotazy zahodit.
     this._deletedLoaderInst?.reset();
     this._gifHoldInst?.clear();
@@ -8429,6 +8564,12 @@ class UnityChat {
     }
 
     this.store.markFailed(optId);
+    // Neodeslaný GIF odkaz: kolečko průběhu pryč.
+    if (this._gifOutInst) {
+      const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+      this._gifOutInst.drop(el?.dataset.platform || '', optId);
+      if (el) window.UC_CORE.paintGifStatus(document, el, null);
+    }
 
     // Uvolnit párovací klíč — pozdější reálná zpráva se stejným textem
     // (třeba po ručním poslání ve vanilla chatu) by jinak tuhle mrtvou
@@ -8450,6 +8591,9 @@ class UnityChat {
       realMsg = window.UC_CORE.stripReplyMention({ ...realMsg, replyTo: { username: el.dataset.ucReplyUser } });
     }
     if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
+    // Vlastní GIF odkaz: echo = skutečné id zprávy (klíč gif-progress) → spárovat se štítkem optimistické zprávy.
+    if (realMsg.id && this._gifOutInst?.has(realMsg.platform, optId)) this._gifOutInst.alias(optId, realMsg.platform, realMsg.id);
+    else if (realMsg.id && this._gifOutInst && window.UC_CORE.hasGifLink(realMsg.message || '')) this._gifOutInst.alias(optId, realMsg.platform, realMsg.id);
     // uc-mark mohl přijít dřív než echo (server byl rychlejší) → teď, když má element skutečné id.
     if (el && this._ucMarkedIds?.has(realMsg.id)) this._applyUcMark({ platform: realMsg.platform, id: realMsg.id });
 
