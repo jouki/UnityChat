@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { zidolistaDonations, normalizeDonationsPage, _resetDonationsCache, DONATIONS_MAX_PAGES, zidolistaSignature, signedGetPath, zidolistaGetHeaders } from './zidolista.js';
+import { zidolistaDonations, normalizeDonationsPage, _resetDonationsCache, DONATIONS_MAX_PAGES, zidolistaSignature, signedGetPath } from './zidolista.js';
 import { verifySignature } from './inboundAuth.js';
 
 test('podpis UC → Židolišta: t=<s>,v1=<hex HMAC(klíč, t + "." + "GET /cesta?query")>, query přesně jak se posílá', () => {
@@ -15,9 +15,6 @@ test('podpis UC → Židolišta: t=<s>,v1=<hex HMAC(klíč, t + "." + "GET /cest
   assert.equal(verifySignature(sig, signedGetPath(url), 'tajny', 1_790_000_100), 'ok');
   assert.equal(verifySignature(sig, signedGetPath(url).replace('limit=100', 'limit=200'), 'tajny', 1_790_000_100), 'mismatch', 'podpis kryje query');
   assert.equal(verifySignature(sig, signedGetPath(url), 'tajny', 1_790_000_400), 'expired');
-  const h = zidolistaGetHeaders(url, 'tajny', 1_790_000_000);
-  assert.deepEqual(Object.keys(h).sort(), ['Accept', 'X-Api-Key', 'X-UC-Signature']);
-  assert.equal(h['X-UC-Signature'], sig);
 });
 
 const quiet = { warn: () => {} };

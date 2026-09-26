@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
 import { chatRole } from '../lib/chatRole.js';
-import { twitchChannelsOf, workspaceForChannel, zidolistaBase, type Platform } from '../lib/zidolista.js';
+import { twitchChannelsOf, workspaceForChannel, zidolistaBase, zidolistaFetch, type Platform } from '../lib/zidolista.js';
 import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
 
@@ -145,9 +145,9 @@ export const SubmitBody = z.object({
 interface Upstream { status: number; json: Record<string, unknown> }
 
 async function zidolista(path: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<Upstream> {
-  const r = await fetch(`${zidolistaBase()}${path}`, {
+  const r = await zidolistaFetch(`${zidolistaBase()}${path}`, {
     method: init.method ?? 'GET',
-    headers: { Accept: 'application/json', 'X-Api-Key': config.ZIDOLISTA_API_KEY, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: init.body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     signal: AbortSignal.timeout(init.timeoutMs ?? 10_000),
   });

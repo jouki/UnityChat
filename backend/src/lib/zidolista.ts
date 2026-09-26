@@ -10,27 +10,75 @@
 // kterou drží čerstvou `startWorkspaceRefresh()` ze serveru.
 import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
+import { signV2Headers } from './signatureV2.js';
 
-// ---- Podpis volání UnityChat → Židolišta (2026-09-25; zatím /donations, časem všechna) ----
-// X-UC-Signature: t=<unix s>,v1=<hex HMAC-SHA256(klíč, t + "." + signed)>, klíč = X-Api-Key (ZIDOLISTA_API_KEY),
-// okno Židolišty ±300 s. U GET je `signed` = "GET " + cesta s query PŘESNĚ tak, jak se posílá (bez hostu) —
-// cesta = pathname + search výsledné URL, tj. i s případným prefixem z ZIDOLISTA_API_BASE (výchozí base prefix
-// nemá; Židolišta vidí cestu tak, jak ji posíláme). Stejný tvar hlavičky jako příchozí podpis (lib/inboundAuth.ts).
+// ---- Volání UnityChat → Židolišta: jediná cesta = zidolistaFetch ----
+// Podpis v2 (docs/superpowers/plans/2026-09-26-podpis-v2-kontrakt.md, lib/signatureV2.ts): když je nastavený
+// UC_TO_ZIDOLISTA_SIGNING_KEY, jde podepsané KAŽDÉ volání (METHOD + cesta?query přesně jak odchází, vč. prefixu
+// z ZIDOLISTA_API_BASE + t + nonce + sha256 těla). Bez klíče zůstává dosavadní v1 jen u /donations:
+//   X-UC-Signature: t=<unix s>,v1=<hex HMAC-SHA256(ZIDOLISTA_API_KEY, t + "." + "GET /cesta?query")>
+// Přesměrování se NEsleduje (redirect: 'manual', 3xx kromě 304 = chyba) — X-Api-Key ani podpis nesmí odejít na jiný host.
 
-/** Hodnota hlavičky X-UC-Signature nad libovolným podepisovaným řetězcem. */
+/** Hodnota hlavičky X-UC-Signature v1 nad libovolným podepisovaným řetězcem. */
 export function zidolistaSignature(key: string, signed: string, nowS = Math.floor(Date.now() / 1000)): string {
   return `t=${nowS},v1=${createHmac('sha256', key).update(`${nowS}.${signed}`).digest('hex')}`;
 }
 
-/** Podepisovaný řetězec GET požadavku: "GET /cesta?query" z plné URL. */
-export function signedGetPath(url: string): string {
+/** Cesta+query přesně tak, jak fetch pošle (bez schématu a hostu, s prefixem z base). */
+export function pathAndQueryOf(url: string): string {
   const u = new URL(url);
-  return `GET ${u.pathname}${u.search}`;
+  return `${u.pathname}${u.search}`;
 }
 
-/** Hlavičky podepsaného GET na Židolištu (klíč nikdy do logu). */
-export function zidolistaGetHeaders(url: string, key: string, nowS?: number): Record<string, string> {
-  return { 'X-Api-Key': key, 'X-UC-Signature': zidolistaSignature(key, signedGetPath(url), nowS), Accept: 'application/json' };
+/** Podepisovaný řetězec v1 GET požadavku: "GET /cesta?query" z plné URL. */
+export function signedGetPath(url: string): string {
+  return `GET ${pathAndQueryOf(url)}`;
+}
+
+export interface ZidolistaInit {
+  method?: string;
+  /** Doplňkové hlavičky (If-None-Match, X-UC-Client-Ip, Content-Type…); X-Api-Key a podpis doplní helper. */
+  headers?: Record<string, string>;
+  /** Tělo jako řetězec — podepisují se přesně tyhle bajty (UTF-8). */
+  body?: string;
+  signal?: AbortSignal;
+  /** Bez v2 klíče podepsat v1 (dosavadní chování /donations). */
+  legacyV1?: boolean;
+}
+export interface ZidolistaFetchDeps {
+  fetch?: typeof fetch;
+  apiKey?: string;
+  /** Podpisový klíč v2 (hex); výchozí config.UC_TO_ZIDOLISTA_SIGNING_KEY, '' = bez v2. */
+  signingKey?: string;
+  /** Čas podpisu (unix s) — testy. */
+  nowS?: number;
+  /** Nonce — testy. */
+  nonce?: string;
+}
+
+/** Přesměrování od Židolišty se nesleduje (3xx kromě 304 Not Modified). */
+export class ZidolistaRedirectError extends Error {
+  constructor(public status: number) { super(`zidolista redirect HTTP ${status} (nesleduje se)`); this.name = 'ZidolistaRedirectError'; }
+}
+
+/**
+ * Jediný způsob, jak volat Židolištu: X-Api-Key + podpis (v2, jinak v1 u legacyV1) + bez sledování přesměrování.
+ * Klíče se nikam nelogují a nejsou ani v chybách.
+ */
+export async function zidolistaFetch(url: string, init: ZidolistaInit = {}, deps: ZidolistaFetchDeps = {}): Promise<Response> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
+  const signingKey = deps.signingKey ?? config.UC_TO_ZIDOLISTA_SIGNING_KEY;
+  const path = pathAndQueryOf(url);
+  const headers: Record<string, string> = { Accept: 'application/json', ...(init.headers ?? {}), 'X-Api-Key': apiKey };
+  if (signingKey) Object.assign(headers, signV2Headers(signingKey, method, path, init.body ?? '', { nowS: deps.nowS, nonce: deps.nonce }));
+  else if (init.legacyV1) headers['X-UC-Signature'] = zidolistaSignature(apiKey, `${method} ${path}`, deps.nowS);
+  const r = await (deps.fetch ?? fetch)(url, { method, headers, body: init.body, signal: init.signal, redirect: 'manual' });
+  if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400 && r.status !== 304)) {
+    try { await r.body?.cancel(); } catch { /* tělo přesměrování nás nezajímá */ }
+    throw new ZidolistaRedirectError(r.status);
+  }
+  return r;
 }
 
 export type Platform = 'twitch' | 'kick' | 'youtube';
@@ -98,10 +146,7 @@ export function workspacesFromEnv(csv: string): WorkspaceInfo[] {
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
-  const r = await fetch(`${zidolistaBase()}/integrations/workspaces`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
+  const r = await zidolistaFetch(`${zidolistaBase()}/integrations/workspaces`, { signal: AbortSignal.timeout(8000) });
   if (!r.ok) throw new Error(`zidolista workspaces HTTP ${r.status}`);
   const j = (await r.json()) as { ok?: boolean };
   if (!j.ok) throw new Error('zidolista workspaces not ok');
@@ -156,7 +201,7 @@ export async function twitchChannelsOf(slug: string): Promise<string[]> {
 // GET <ZIDOLISTA_API_BASE>/integrations/:slug/donations?platform=&userId=&login=&limit=1..200&before=<ISO>
 //   → { ok, workspace, total: { czk, byCurrency }, count, items: [{ id, amount, currency, amountCzk, paidAt, via,
 //       matchedBy: 'uc'|'nickname', nickname, message? }], nextBefore: ISO|null }
-// Hlavičky X-Api-Key + X-UC-Signature (zidolistaGetHeaders); limit Židolišty 300/min na klíč → cache 60 s na identitu nutná.
+// Hlavičky X-Api-Key + X-UC-Signature (zidolistaFetch: v2, bez klíče v2 dosavadní v1); limit Židolišty 300/min na klíč → cache 60 s na identitu nutná.
 // `total`/`count` jsou za všechna dona diváka, ale jistou a odhadnutou (matchedBy 'nickname') část nerozlišují
 // a víc identit téhož člověka by se sečetlo dvakrát → UnityChat stáhne položky (max DONATIONS_MAX_PAGES stránek)
 // a součty počítá sám po dedupu podle id (lib/userHistory.ts donationTotals).
@@ -210,6 +255,8 @@ export interface DonationsQuery { workspace: string; platform: Platform; userId:
 type WarnLog = { warn: (o: object, m: string) => void };
 export interface DonationsDeps {
   fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; /** Čas podpisu (unix s) — testy. */ nowS?: () => number; log?: WarnLog;
+  /** Podpisový klíč v2 — testy (výchozí z configu). */
+  signingKey?: string;
   /**
    * Strop necachovaných volání (veřejný Profil): zavolá se jen při skutečném dotazu na Židolištu (cache miss),
    * false = dotaz se neudělá a vrátí se null (nic se necachuje, další volání to zkusí znovu).
@@ -249,10 +296,7 @@ export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps 
         const qs = new URLSearchParams({ platform: q.platform, userId: q.userId, login: q.login.toLowerCase(), limit: String(DONATIONS_PAGE) });
         if (before) qs.set('before', before);
         const url = `${base}/integrations/${encodeURIComponent(q.workspace.toLowerCase())}/donations?${qs}`;
-        const r = await f(url, {
-          headers: zidolistaGetHeaders(url, apiKey, deps.nowS?.()),
-          signal: AbortSignal.timeout(5000),
-        });
+        const r = await zidolistaFetch(url, { signal: AbortSignal.timeout(5000), legacyV1: true }, { fetch: f, apiKey, signingKey: deps.signingKey, nowS: deps.nowS?.() });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { ok?: boolean };
         if (!j || j.ok === false) throw new Error('not ok');

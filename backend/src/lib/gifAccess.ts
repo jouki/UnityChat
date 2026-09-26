@@ -7,7 +7,7 @@
 // Cache 60 s per (workspace, platforma, uživatel, role). Čas Židolišty se převádí na lokální přes serverNow
 // (posun hodin mezi servery nevadí). Chyba / chybějící klíč = odemčené není (zpráva je běžný odkaz).
 import { config } from '../config.js';
-import { zidolistaBase, type Platform } from './zidolista.js';
+import { zidolistaBase, zidolistaFetch, type Platform } from './zidolista.js';
 
 export type GifRole = 'broadcaster' | 'moderator' | 'vip' | 'sub' | 'viewer';
 
@@ -65,7 +65,7 @@ const cache = new Map<string, Entry>();
 const keyOf = (q: GifAccessQuery): string => `${q.workspace.toLowerCase()}|${q.platform}|${q.userId || `login:${q.login.toLowerCase()}`}|${q.role}`;
 
 type Log = { warn: (o: object, m: string) => void };
-export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; log?: Log; sleep?: (ms: number) => Promise<void> }
+export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; log?: Log; sleep?: (ms: number) => Promise<void>; /** Podpisový klíč v2 — testy. */ signingKey?: string }
 
 /**
  * Lokální cooldown (uživatel bez role): od schválení GIFu, dokud Židolišta `gif-used` nepotvrdí (a když ho
@@ -108,10 +108,8 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
   entry.inflight = (async () => {
     try {
       const qs = new URLSearchParams({ platform: q.platform, userId: q.userId, login: q.login.toLowerCase(), role: q.role });
-      const r = await f(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(q.workspace.toLowerCase())}/gif-access?${qs}`, {
-        headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
-        signal: AbortSignal.timeout(5000),
-      });
+      const r = await zidolistaFetch(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(q.workspace.toLowerCase())}/gif-access?${qs}`,
+        { signal: AbortSignal.timeout(5000) }, { fetch: f, apiKey, signingKey: deps.signingKey });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { ok?: boolean };
       if (!j || j.ok === false) throw new Error('not ok');
@@ -161,12 +159,12 @@ export async function gifUsed(p: { workspace: string; platform: Platform; userId
   for (let attempt = 0; apiKey && attempt < 2 && !confirmed; attempt++) {
     if (attempt) await (deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(GIF_USED_RETRY_MS);
     try {
-      const r = await (deps.fetch ?? fetch)(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(p.workspace.toLowerCase())}/gif-used`, {
+      const r = await zidolistaFetch(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(p.workspace.toLowerCase())}/gif-used`, {
         method: 'POST',
-        headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platform: p.platform, userId: p.userId }),
         signal: AbortSignal.timeout(5000),
-      });
+      }, { fetch: deps.fetch, apiKey, signingKey: deps.signingKey });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { cooldownUntil?: unknown; serverNow?: unknown };
       const cd = toMs(j?.cooldownUntil);

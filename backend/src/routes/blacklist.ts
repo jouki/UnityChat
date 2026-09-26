@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
-import { twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { twitchChannelsOf, workspaceForChannel, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 
 /**
  * GET /blacklist?channel=<twitch login> — blacklist slov pro cenzuru v UnityChatu
@@ -24,8 +24,8 @@ export function normalizeTerms(v: unknown): string[] {
 }
 
 async function fetchBlacklist(slug: string, prev?: Entry): Promise<Entry> {
-  const r = await fetch(`${config.ZIDOLISTA_API_BASE.replace(/\/$/, '')}/integrations/${encodeURIComponent(slug)}/blacklist`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json', ...(prev?.etag ? { 'If-None-Match': prev.etag } : {}) },
+  const r = await zidolistaFetch(`${zidolistaBase()}/integrations/${encodeURIComponent(slug)}/blacklist`, {
+    headers: prev?.etag ? { 'If-None-Match': prev.etag } : {},
     signal: AbortSignal.timeout(8000),
   });
   if (r.status === 304 && prev) return { ...prev, at: Date.now(), error: undefined };

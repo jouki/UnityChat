@@ -18,7 +18,7 @@ import { linkPermits } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { rolesFromBadges, type Roles } from '../sse/integrationStream.js';
 import { hostAllowed, linkHosts, normalizeDomain } from './links.js';
-import { zidolistaBase, type Platform, type WorkspaceInfo } from './zidolista.js';
+import { zidolistaBase, zidolistaFetch, type Platform, type WorkspaceInfo } from './zidolista.js';
 import { gifCandidate, type GifCandidate } from './gifMedia.js';
 import { highestRole } from './chatRole.js';
 import type { GifAccessQuery } from './gifAccess.js';
@@ -59,7 +59,7 @@ const SETTINGS_TTL_MS = 60_000;
 interface SettingsEntry { at: number; etag: string | null; value: LinkFilterSettings; inflight: Promise<LinkFilterSettings> | null }
 const settingsCache = new Map<string, SettingsEntry>();
 
-export interface FetchSettingsDeps { fetch?: typeof fetch; log?: Log; apiKey?: string; base?: string }
+export interface FetchSettingsDeps { fetch?: typeof fetch; log?: Log; apiKey?: string; base?: string; /** Podpisový klíč v2 — testy. */ signingKey?: string }
 
 /**
  * Načte nastavení workspace (If-None-Match → 304 = beze změny). Při chybě zůstává poslední známý stav;
@@ -78,9 +78,10 @@ export async function refreshLinkFilter(slug: string, opts: { force?: boolean } 
   const f = opts.fetch ?? fetch;
   entry.inflight = (async () => {
     try {
-      const headers: Record<string, string> = { 'X-Api-Key': apiKey, Accept: 'application/json' };
+      const headers: Record<string, string> = {};
       if (entry.etag && !opts.force) headers['If-None-Match'] = entry.etag;
-      const r = await f(`${(opts.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(s)}/link-filter`, { headers, signal: AbortSignal.timeout(8000) });
+      const r = await zidolistaFetch(`${(opts.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(s)}/link-filter`,
+        { headers, signal: AbortSignal.timeout(8000) }, { fetch: f, apiKey, signingKey: opts.signingKey });
       if (r.status === 304) { entry.at = Date.now(); return entry.value; }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { ok?: boolean };

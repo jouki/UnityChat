@@ -16,7 +16,7 @@ import { db } from '../db/index.js';
 import { soundboardFavorites, soundboardUsage, webIdentities } from '../db/schema.js';
 import { bearerToken, listIdentities, requireWebSession, validateWebSession } from '../lib/webAuth.js';
 import { chatRole } from '../lib/chatRole.js';
-import { twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { twitchChannelsOf, workspaceForChannel, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
 import { handleSfxRequestWebhook } from './sfxRequests.js';
@@ -96,12 +96,12 @@ export function normalizeState(raw: unknown): { role: string; tiers: StateTier[]
   return { role: typeof j.role === 'string' ? j.role : 'viewer', tiers, cooldown: { globalReadyAt: iso(cd.globalReadyAt), userReadyAt: iso(cd.userReadyAt) } };
 }
 
-const base = () => config.ZIDOLISTA_API_BASE.replace(/\/$/, '');
+const base = zidolistaBase;
 const catalogs = new Map<string, Catalog>();   // klíč = slug workspace
 
 async function fetchCatalog(slug: string, prev?: Catalog): Promise<Catalog> {
-  const r = await fetch(`${base()}/integrations/${encodeURIComponent(slug)}/sound-effects`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json', ...(prev?.etag ? { 'If-None-Match': prev.etag } : {}) },
+  const r = await zidolistaFetch(`${base()}/integrations/${encodeURIComponent(slug)}/sound-effects`, {
+    headers: prev?.etag ? { 'If-None-Match': prev.etag } : {},
     signal: AbortSignal.timeout(8000),
   });
   if (r.status === 304 && prev) return { ...prev, at: Date.now(), error: undefined };
@@ -148,10 +148,7 @@ function dropStates(slug: string): void {
 
 async function fetchState(slug: string, platform: Platform, userId: string, role: string) {
   const q = new URLSearchParams({ platform, userId, role });
-  const r = await fetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
+  const r = await zidolistaFetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, { signal: AbortSignal.timeout(8000) });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`zidolista HTTP ${r.status}`);
   return (await r.json()) as Record<string, unknown>;

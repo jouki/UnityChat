@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
-import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel, workspaceBySlug } from '../lib/zidolista.js';
+import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel, workspaceBySlug, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { invalidateLinkFilter } from '../lib/linkFilter.js';
 import { invalidateGifAccess } from '../lib/gifAccess.js';
 import { invalidateBlacklist } from './blacklist.js';
@@ -120,10 +120,7 @@ interface CacheEntry { at: number; commands: PublicCommand[]; error?: string }
 const cache = new Map<string, CacheEntry>();
 
 async function fetchZidolista(slug: string): Promise<PublicCommand[]> {
-  const r = await fetch(`${config.ZIDOLISTA_API_BASE.replace(/\/$/, '')}/integrations/${encodeURIComponent(slug)}/chat-commands`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
+  const r = await zidolistaFetch(`${zidolistaBase()}/integrations/${encodeURIComponent(slug)}/chat-commands`, { signal: AbortSignal.timeout(8000) });
   if (!r.ok) throw new Error(`zidolista HTTP ${r.status}`);
   const j = (await r.json()) as { ok?: boolean; commands?: unknown };
   if (!j.ok) throw new Error('zidolista not ok');

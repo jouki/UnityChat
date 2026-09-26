@@ -14,14 +14,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { config } from '../config.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { EMAIL_RE, normEmail } from '../lib/emailVerify.js';
 import { rememberDonateNickname, verifiedEmail } from './account.js';
-import { workspaceForChannel } from '../lib/zidolista.js';
+import { workspaceForChannel, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
 
-const base = () => config.ZIDOLISTA_API_BASE.replace(/\/$/, '');
+const base = zidolistaBase;
 const Channel = z.string().transform((s) => s.toLowerCase().replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9_]{1,40}$/));
 const Platform = z.enum(['twitch', 'kick', 'youtube']);
 
@@ -57,11 +56,9 @@ async function slugFor(channel: string): Promise<string | null> {
 
 /** Požadavek na Židolištu: klíč UnityChatu + IP diváka; odpověď (status + JSON) se přepošle beze změny. */
 async function upstream(req: FastifyRequest, path: string, init: { method?: string; body?: unknown } = {}) {
-  const r = await fetch(`${base()}${path}`, {
+  const r = await zidolistaFetch(`${base()}${path}`, {
     method: init.method ?? 'GET',
     headers: {
-      Accept: 'application/json',
-      'X-Api-Key': config.ZIDOLISTA_API_KEY,
       'X-UC-Client-Ip': req.ip,
       ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
