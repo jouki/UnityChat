@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import sharp from 'sharp';
 import {
   PHASH_FRAMES, PHASH_MAX_HAMMING, PHASH_MIN_SCORE, dhashFromGray, hamming, pickFramesByTime, sequenceSimilarity,
-  isSimilarSequence, computePhash, FLAT_HASH,
+  isSimilarSequence, computePhash, FLAT_HASH, PHASH_MAX_INPUT_PIXELS, PHASH_TOOL_TIMEOUT_MS,
 } from './gifPhash.js';
 
 // Syntetické animace: pruhy, které se posouvají (A), a šachovnice s rostoucím kruhem (B) — obsahově jiné.
@@ -110,7 +110,20 @@ test('computePhash: poškozená data / chybějící nástroj → null a varován
   assert.ok(warns.length >= 3);
 });
 
-const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+test('computePhash: výpočet přes limit (zaseknutý sharp) → null + varování; strop pixelů vstupu', async () => {
+  const warns: Array<Record<string, unknown>> = [];
+  const log = { warn: (o: object) => { warns.push(o as Record<string, unknown>); } };
+  let seenOpts: Record<string, unknown> | null = null;
+  const stuck = (async () => ((_b: Buffer, o: Record<string, unknown>) => { seenOpts = o; return { metadata: () => new Promise(() => {}) }; })) as never;
+  const t0 = Date.now();
+  assert.equal(await computePhash(Buffer.from('GIF89a'), 'gif', { log, loadSharp: stuck, timeoutMs: 50 }), null);
+  assert.ok(Date.now() - t0 < 2000);
+  assert.match(String(warns[0]?.err), /timeout/);
+  assert.equal((seenOpts as unknown as Record<string, unknown>)?.limitInputPixels, PHASH_MAX_INPUT_PIXELS);
+  assert.equal(PHASH_TOOL_TIMEOUT_MS, 20_000);
+});
+
+const hasFfmpeg =(() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('computePhash: MP4 přes ffmpeg — stejný obsah jako GIF = podobný', { skip: hasFfmpeg ? false : 'ffmpeg není v PATH' }, async () => {
   const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');

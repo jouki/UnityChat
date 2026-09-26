@@ -112,7 +112,26 @@ export function duplicateView(p: DuplicatePair) {
   return { id: p.id, channel: p.channel, score: Math.round(p.score * 1000) / 1000, status: p.status, createdAt: p.createdAt.getTime(), first: mediaView(p.first), second: mediaView(p.second) };
 }
 
-export const DUPLICATE_ACTIONS = ['keep-first', 'keep-second', 'keep-both'] as const;
+/** Postgres: chybí tabulka (42P01) nebo sloupec (42703) — SQL z 2026-09-26 ještě neběželo. */
+export function isSchemaMissing(e: unknown): boolean {
+  for (let x: unknown = e, i = 0; x && i < 3; x = (x as { cause?: unknown }).cause, i++) {
+    const code = (x as { code?: unknown }).code;
+    if (code === '42P01' || code === '42703') return true;
+  }
+  return false;
+}
+
+/** Chyba DB v routě knihovny → 503 not_ready (chybí schéma) / 500 internal. */
+export function libraryErrorReply(e: unknown): Out {
+  return isSchemaMissing(e) ? { status: 503, body: { ok: false, error: 'not_ready' } } : { status: 500, body: { ok: false, error: 'internal' } };
+}
+
+export type MergeResult ={ ok: true } | { ok: false; error: 'gone' } | { ok: false; error: 'already_decided'; status: string };
+
+/** Vault po sloučení: schválené médium vault nemá (vault = zamítnutý bez retence). */
+export const mergedVault = (resultApproved: boolean, keepVault: boolean, dropVault: boolean): boolean => (resultApproved ? false : keepVault || dropVault);
+
+export const DUPLICATE_ACTIONS =['keep-first', 'keep-second', 'keep-both'] as const;
 export type DuplicateAction = typeof DUPLICATE_ACTIONS[number];
 
 // ---------------------------------------------------------------------------
@@ -130,11 +149,13 @@ export interface GifLibraryStore {
   /** Podmíněně pending → kept_both; false = už rozhodnuto / neexistuje. */
   keepBoth(id: number, by: string, at: Date): Promise<boolean>;
   /**
-   * Sloučení (transakce): žádosti a syntetické zprávy `gif-<id>` s `drop` → `keep`, `keep` dostane součet použití,
-   * pozdější last_used_at, sjednocení tagů, vault, a když `drop` byl v knihovně (approved), i schválení;
-   * `drop` se smaže (jeho zamítnutí, zákaz a návrhy kaskádou). false = některé médium mezitím zmizelo.
+   * Sloučení (transakce): nejdřív zamkne řádek návrhu `dupId` (FOR UPDATE) a vyžaduje `pending` (souběh
+   * s keep-both / jiným sloučením → `already_decided`). Pak žádosti a syntetické zprávy `gif-<id>` s `drop` → `keep`,
+   * `keep` dostane součet použití, pozdější last_used_at, sjednocení tagů, a když `drop` byl v knihovně (approved),
+   * i schválení; vault jen když výsledek není schválený. `drop` se smaže (jeho zamítnutí, zákaz a návrhy kaskádou).
+   * `gone` = návrh nebo některé médium mezitím zmizelo.
    */
-  mergeInto(keep: string, drop: string, at: Date): Promise<boolean>;
+  mergeInto(dupId: number, keep: string, drop: string, at: Date): Promise<MergeResult>;
   /** Rozhodnuté médium (approved/rejected) bez pokusu o hash; schválená přednostně, pak nejstarší. */
   nextToHash(): Promise<{ id: string; kind: GifKind; bytes: Buffer } | null>;
   /** Hash (null = selhal) + čas pokusu (znovu se nezkouší). */
@@ -198,14 +219,18 @@ export const dbGifLibraryStore: GifLibraryStore = {
       .where(and(eq(gifDuplicates.id, id), eq(gifDuplicates.status, 'pending'))).returning({ id: gifDuplicates.id });
     return rows.length > 0;
   },
-  async mergeInto(keep, drop, at) {
-    return db.transaction(async (tx) => {
+  async mergeInto(dupId, keep, drop, at) {
+    return db.transaction(async (tx): Promise<MergeResult> => {
+      // Zámek návrhu: souběžné keep-both / jiné sloučení počká a pak uvidí, že už není pending.
+      const [dup] = await tx.select({ status: gifDuplicates.status }).from(gifDuplicates).where(eq(gifDuplicates.id, dupId)).for('update');
+      if (!dup) return { ok: false, error: 'gone' };
+      if (dup.status !== 'pending') return { ok: false, error: 'already_decided', status: dup.status };
       const rows = await tx.select({
         id: gifMedia.id, status: gifMedia.status, useCount: gifMedia.useCount, lastUsedAt: gifMedia.lastUsedAt,
         tags: gifMedia.tags, vault: gifMedia.vault, approvedAt: gifMedia.approvedAt,
       }).from(gifMedia).where(inArray(gifMedia.id, [keep, drop])).for('update');
       const k = rows.find((r) => r.id === keep), d = rows.find((r) => r.id === drop);
-      if (!k || !d) return false;
+      if (!k || !d) return { ok: false, error: 'gone' };
       // Syntetické zprávy schválených GIFů (content_raw.gif.mediaId) → ponechané médium (jinak by v historii zmizely).
       await tx.execute(sql`update messages m set content_raw = jsonb_set(m.content_raw, '{gif,mediaId}', to_jsonb(${keep}::text))
         from gif_requests r
@@ -216,10 +241,11 @@ export const dbGifLibraryStore: GifLibraryStore = {
       const approve = d.status === 'approved' && k.status !== 'approved';
       await tx.update(gifMedia).set({
         useCount: k.useCount + d.useCount, lastUsedAt: later,
-        tags: normalizeTags([...(k.tags ?? []), ...(d.tags ?? [])]), vault: approve ? false : k.vault || d.vault,
+        tags: normalizeTags([...(k.tags ?? []), ...(d.tags ?? [])]),
+        vault: mergedVault(approve || k.status === 'approved', k.vault, d.vault),
         ...(approve ? { status: 'approved', approvedAt: d.approvedAt ?? at, rejectedAt: null, rejectedBy: null } : {}),
       }).where(eq(gifMedia.id, keep));
-      return true;
+      return { ok: true };
     });
   },
   async nextToHash() {
@@ -306,7 +332,12 @@ export async function resolveDuplicate(deps: DuplicateDeps, p: { id: number; act
     return { status: 200, body: { ok: true, id: d.id, action: p.action } };
   }
   const [keep, drop] = p.action === 'keep-first' ? [d.a, d.b] : [d.b, d.a];
-  if (!(await deps.store.mergeInto(keep, drop, at))) return { status: 409, body: { ok: false, error: 'gone' } };
+  const merged = await deps.store.mergeInto(d.id, keep, drop, at);
+  if (!merged.ok) {
+    return merged.error === 'already_decided'
+      ? { status: 409, body: { ok: false, error: 'already_decided', status: merged.status } }
+      : { status: 409, body: { ok: false, error: 'gone' } };
+  }
   deps.mediaDeleted?.(drop);
   deps.mediaChanged?.(keep);
   await record({ ok: true, kept: keep, removed: drop });

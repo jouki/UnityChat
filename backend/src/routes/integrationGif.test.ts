@@ -20,7 +20,7 @@ function setup(over: Partial<IntegrationGifOpts> = {}) {
     listDuplicates: async (ch) => { calls.push(['listDuplicates', ch]); return []; },
     getDuplicate: async (id) => (id === 3 ? { id: 3, channel: 'robdiesalot', a: M('a'), b: M('c'), status: 'pending' } : id === 4 ? { id: 4, channel: 'cizi', a: M('b'), b: M('d'), status: 'pending' } : null),
     keepBoth: async (id, by) => { calls.push(['keepBoth', { id, by }]); return true; },
-    mergeInto: async () => true,
+    mergeInto: async () => ({ ok: true }),
   };
   const opts: IntegrationGifOpts = {
     authorize: () => true,

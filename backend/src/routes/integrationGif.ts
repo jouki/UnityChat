@@ -22,7 +22,7 @@ import { MEDIA_ID_RE } from '../lib/gifIds.js';
 import { dbGifStore, GIF_MEDIA_ACTIONS, type GifFlow, type GifStore } from '../lib/gifRequests.js';
 import { issueIntegrationToken } from '../lib/gifTokens.js';
 import {
-  dbGifLibraryStore, duplicateView, libraryPage, resolveDuplicate, updateTags, DUPLICATE_ACTIONS, DUPLICATES_PAGE,
+  dbGifLibraryStore, duplicateView, libraryErrorReply, libraryPage, resolveDuplicate, updateTags, DUPLICATE_ACTIONS, DUPLICATES_PAGE,
   type DuplicateDeps, type GifLibraryStore,
 } from '../lib/gifLibrary.js';
 import { ActorSchema } from './integrationModeration.js';
@@ -80,9 +80,11 @@ export default async function integrationGifRoutes(app: FastifyInstance, opts: I
     if (!b.success) return null;
     return b.data.actor ? `zidolista:${b.data.actor.userId}` : 'zidolista';
   };
+  /** Chybí tabulka / sloupec (SQL ještě neběželo) → 503 not_ready, jiná chyba → 500. */
   const fail = (reply: FastifyReply, e: unknown, what: string) => {
-    app.log.warn({ err: (e as Error).message }, `integration gif: ${what} selhalo`);
-    return reply.code(503).send({ ok: false, error: 'unavailable' });
+    const out = libraryErrorReply(e);
+    app.log.warn({ err: (e as Error).message, error: out.body.error }, `integration gif: ${what} selhalo`);
+    return reply.code(out.status).send(out.body);
   };
 
   app.get<{ Params: { slug: string }; Querystring: { q?: string; cursor?: string; limit?: string } }>('/integrations/:slug/gifs', async (req, reply) => {

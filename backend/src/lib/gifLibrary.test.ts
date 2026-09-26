@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   compareLibrary, libraryCursorOf, parseLibraryCursor, parseLibraryQuery, libraryPage, libraryView, updateTags,
-  resolveDuplicate, createPhashWorker, duplicateView, LIBRARY_PAGE,
+  resolveDuplicate, createPhashWorker, duplicateView, mergedVault, isSchemaMissing, libraryErrorReply, LIBRARY_PAGE,
   type GifLibraryStore, type LibraryItem, type LibraryCursor, type DuplicatePair, type LibMedia,
 } from './gifLibrary.js';
 
@@ -44,9 +44,13 @@ function memLibrary() {
     },
     async getDuplicate(did) { const d = dups.get(did); return d ? { id: d.id, channel: d.channel, a: d.a, b: d.b, status: d.status } : null; },
     async keepBoth(did, by) { const d = dups.get(did); if (!d || d.status !== 'pending') return false; d.status = 'kept_both'; d.decidedBy = by; return true; },
-    async mergeInto(keep, drop, at) {
+    async mergeInto(dupId, keep, drop, at) {
+      // Stejná sémantika jako DB: zámek návrhu → musí být pending.
+      const dup = dups.get(dupId);
+      if (!dup) return { ok: false, error: 'gone' };
+      if (dup.status !== 'pending') return { ok: false, error: 'already_decided', status: dup.status };
       const k = media.get(keep), d = media.get(drop);
-      if (!k || !d) return false;
+      if (!k || !d) return { ok: false, error: 'gone' };
       for (const r of requests) if (r.mediaId === drop) r.mediaId = keep;
       for (const x of messages) if (x.mediaId === drop) x.mediaId = keep;
       media.delete(drop);
@@ -54,9 +58,10 @@ function memLibrary() {
       k.useCount += d.useCount;
       k.lastUsedAt = lu(k) >= lu(d) ? k.lastUsedAt : d.lastUsedAt;
       k.tags = [...new Set([...k.tags, ...d.tags])].slice(0, 20);
-      k.vault = k.vault || d.vault;
-      if (d.status === 'approved' && k.status !== 'approved') Object.assign(k, { status: 'approved', approvedAt: d.approvedAt ?? at, vault: false });
-      return true;
+      const approve = d.status === 'approved' && k.status !== 'approved';
+      k.vault = mergedVault(approve || k.status === 'approved', k.vault, d.vault);
+      if (approve) Object.assign(k, { status: 'approved', approvedAt: d.approvedAt ?? at });
+      return { ok: true };
     },
     async nextToHash() {
       const m = [...media.values()].filter((x) => x.phashAt === null && x.status !== 'pending').sort((x, y) => Number(x.status !== 'approved') - Number(y.status !== 'approved') || x.createdAt.getTime() - y.createdAt.getTime())[0];
@@ -233,15 +238,60 @@ test('duplicity: keep-second, keep-both (znovu 409), cizí kanál 404, souběh (
   await L2.store.insertDuplicate({ channel: 'robdiesalot', a: id('a'), b: id('b'), score: 0.7 });
   const out = await resolveDuplicate({ store: L2.store, log: quiet, now: () => 1 }, { id: 1, action: 'keep-second', by: 'x', accountId: null });
   assert.deepEqual(out.body, { ok: true, id: 1, action: 'keep-second', kept: id('b'), removed: id('a') });
-  // Souběh: médium mezitím pryč (merge vrátí false) → 409 gone.
+  // Souběh: médium mezitím pryč → 409 gone.
   const L3 = memLibrary();
   L3.add({ id: id('a') }); L3.add({ id: id('b') });
   await L3.store.insertDuplicate({ channel: 'robdiesalot', a: id('a'), b: id('b'), score: 0.7 });
-  L3.store.mergeInto = async () => false;
+  L3.store.mergeInto = async () => ({ ok: false, error: 'gone' });
   assert.deepEqual(await resolveDuplicate({ store: L3.store, log: quiet, now: () => 1 }, { id: 1, action: 'keep-first', by: 'x', accountId: null }), { status: 409, body: { ok: false, error: 'gone' } });
   // Tvar pro klienty.
   const [p] = await L.store.listDuplicates('robdiesalot', 10);
   const v = duplicateView(p);
   assert.equal(v.first.url, `http://localhost:3000/media/gif/${id('b')}`);
   assert.deepEqual(Object.keys(v).sort(), ['channel', 'createdAt', 'first', 'id', 'score', 'second', 'status']);
+});
+
+test('duplicity souběh: keep-both proběhne mezi čtením návrhu a sloučením → keep-first 409 { status }, nic se nesloučí', async () => {
+  const L = memLibrary();
+  L.add({ id: id('a'), useCount: 1 }); L.add({ id: id('b'), useCount: 2 });
+  L.requests.push({ id: 1, mediaId: id('b') });
+  await L.store.insertDuplicate({ channel: 'robdiesalot', a: id('a'), b: id('b'), score: 0.8 });
+  const orig = L.store.getDuplicate.bind(L.store);
+  // Druhý mod klikne „nechat oba" hned po tom, co si první přečetl návrh (ještě pending).
+  L.store.getDuplicate = async (did) => { const snap = await orig(did); await L.store.keepBoth(did, 'twitch:modb', new Date()); return snap; };
+  const gone: string[] = [];
+  const out = await resolveDuplicate({ store: L.store, log: quiet, now: () => 1, mediaDeleted: (x) => gone.push(x) }, { id: 1, action: 'keep-first', by: 'twitch:moda', accountId: null });
+  assert.deepEqual(out, { status: 409, body: { ok: false, error: 'already_decided', status: 'kept_both' } });
+  assert.ok(L.media.has(id('a')) && L.media.has(id('b')), 'obě média zůstala');
+  assert.equal(L.media.get(id('a'))!.useCount, 1);
+  assert.deepEqual(L.requests, [{ id: 1, mediaId: id('b') }]);
+  assert.deepEqual(gone, []);
+});
+
+test('sloučení: schválený výsledek nemá vault (vault jen u zamítnutého)', async () => {
+  assert.equal(mergedVault(true, true, true), false);
+  assert.equal(mergedVault(false, false, true), true);
+  assert.equal(mergedVault(false, false, false), false);
+  // Ponechané schválené + odebírané zamítnuté ve vaultu → vault se nepřenese.
+  const L = memLibrary();
+  L.add({ id: id('a'), status: 'approved' });
+  L.add({ id: id('b'), status: 'rejected', vault: true });
+  await L.store.insertDuplicate({ channel: 'robdiesalot', a: id('a'), b: id('b'), score: 0.8 });
+  await resolveDuplicate({ store: L.store, log: quiet, now: () => 1 }, { id: 1, action: 'keep-first', by: 'x', accountId: null });
+  assert.equal(L.media.get(id('a'))!.vault, false);
+  // Ponechané zamítnuté ve vaultu + odebírané schválené → výsledek schválený, bez vaultu.
+  const M2 = memLibrary();
+  M2.add({ id: id('a'), status: 'rejected', vault: true });
+  M2.add({ id: id('b'), status: 'approved' });
+  await M2.store.insertDuplicate({ channel: 'robdiesalot', a: id('a'), b: id('b'), score: 0.8 });
+  await resolveDuplicate({ store: M2.store, log: quiet, now: () => 1 }, { id: 1, action: 'keep-first', by: 'x', accountId: null });
+  assert.deepEqual([M2.media.get(id('a'))!.status, M2.media.get(id('a'))!.vault], ['approved', false]);
+});
+
+test('chyba DB knihovny: chybí tabulka / sloupec (42P01, 42703, i v cause) → 503 not_ready, jinak 500', () => {
+  assert.equal(isSchemaMissing({ code: '42P01' }), true);
+  assert.equal(isSchemaMissing({ message: 'x', cause: { code: '42703' } }), true);
+  assert.equal(isSchemaMissing(new Error('x')), false);
+  assert.deepEqual(libraryErrorReply({ code: '42703' }), { status: 503, body: { ok: false, error: 'not_ready' } });
+  assert.deepEqual(libraryErrorReply(new Error('boom')), { status: 500, body: { ok: false, error: 'internal' } });
 });

@@ -747,7 +747,9 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
     **čekající žádosti na médium se hned zamítnou** (`by` = mod).
   - **Odebrat z knihovny** (Task 2): `unapprove` — schválený GIF → zamítnutý (`rejected_at/by`, bez `approved_at`
     a vaultu → retence 14 dní, od té chvíle jen s tokenem; staré zprávy s ním ho bez tokenu nenačtou); `purge` nad
-    **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou).
+    **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou). **Záměrně:** `unapprove`
+    i `purge` schváleného média GIF skryje (bez tokenu 404) nebo rozbije i ve **starých zprávách v historii** — mod
+    GIF odebírá proto, že se nemá zobrazovat (rozhodnutí 2026-09-26).
   - Audit `moderation_actions` `gif_media_<akce>` (`platform: "uc"`).
 - Retence: 1×/h se mažou zamítnutá média s `rejected_at` starším 14 dní bez vaultu (a bez čekající žádosti);
   propadlé zákazy se uklidí.
@@ -773,7 +775,8 @@ bez obecných slov (`gif`, `animated gif`, `sticker`, `tenor`, `giphy` …) a du
 **Perceptuální hash a návrhy duplikátů:** dHash 64 bit z **8 snímků rovnoměrně v čase** (GIF/WebP přes `sharp` podle
 délek snímků, MP4 přes `ffprobe` + `ffmpeg -vf fps=8/délka` od půlky prvního intervalu); podobnost = podíl snímků
 s Hammingovou vzdáleností **≤ 10** přes posunuté zarovnání sekvencí (vůči kratší sekvenci), **≥ 0,6** = návrh. Plochý
-snímek se za shodu nepočítá. Na pozadí **1 médium za 2 s** (bez práce / chyba 30 s): nejdřív hash rozhodnutých médií
+snímek se za shodu nepočítá. Výpočet je omezený: ffmpeg `-threads 1` a zabití po 20 s, sharp jedno vlákno,
+`limitInputPixels` 100 M a nejvýš 20 s (jinak hash `NULL` + varování). Na pozadí **1 médium za 2 s** (bez práce / chyba 30 s): nejdřív hash rozhodnutých médií
 (`approved` přednostně, pak `rejected`; čekající až po rozhodnutí), pak porovnání jednoho média s médii **téhož
 kanálu** → `gif_duplicates` jen pro dvojici, která ještě nemá záznam (`a` = starší = „první"). Chybí `ffmpeg`/`sharp`
 nebo selže → `phash` zůstane `NULL`, varování `gif phash: výpočet selhal`, médium funguje dál (znovu se nezkouší).
@@ -794,11 +797,15 @@ Nic se neslučuje samo.
   přidá sám). `first` = starší.
 - `POST /moderation/gif/duplicates/:id/keep-first|keep-second|keep-both` (mod kanálu **návrhu**) →
   `200 { ok, id, action, kept?, removed? }`; `404 not_found` (i neznámá akce); `403 not_mod`;
-  už rozhodnuto `409 { error: "already_decided", status }`; médium mezitím pryč (souběh) `409 { error: "gone" }`.
+  už rozhodnuto `409 { error: "already_decided", status }` (sloučení zamyká řádek návrhu `FOR UPDATE` a vyžaduje
+  `pending`, takže souběžné keep-both + keep-first nic nesloučí); návrh / médium mezitím pryč (souběh)
+  `409 { error: "gone" }`. Chybí tabulka / sloupec (SQL neběželo, 42P01 / 42703) → `503 { error: "not_ready" }`,
+  jiná chyba DB → `500 { error: "internal" }` (platí i pro `/gifs/library` a integraci).
   - `keep-both` → `kept_both` (znovu se nenavrhne).
   - `keep-first` / `keep-second` = **sloučení** do ponechaného média (transakce): žádosti a syntetické zprávy
     `gif-<requestId>` (`content_raw.gif.mediaId`) se přesměrují, `use_count` se sečte, `last_used_at` pozdější, tagy
-    sjednocené, vault; když bylo v knihovně odebírané médium a ponechané ne, ponechané se schválí. Druhé médium se smaže
+    sjednocené; když bylo v knihovně odebírané médium a ponechané ne, ponechané se schválí; vault jen když výsledek
+    není schválený (schválené médium vault nemá). Druhé médium se smaže
     (jeho počítadla zamítnutí, zákaz a ostatní návrhy kaskádou), `/media/gif` tombstone.
   - Audit `moderation_actions` `gif_duplicate_keep_first|keep_second|keep_both` (`platform: "uc"`).
 - `POST /moderation/gif/:mediaId/unapprove` — viz „Odebrat z knihovny" výš.

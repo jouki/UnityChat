@@ -11,7 +11,7 @@
 //
 // Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající a zamítnuté `private, no-store`,
 // schválené `public, max-age=3600`. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
-import type { FastifyInstance, preHandlerAsyncHookHandler } from 'fastify';
+import type { FastifyInstance, FastifyReply, preHandlerAsyncHookHandler } from 'fastify';
 import { z } from 'zod';
 import { requireWebSession, listIdentities, type PublicIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, chatRole, type ChatRole } from '../lib/chatRole.js';
@@ -27,7 +27,7 @@ import { config } from '../config.js';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, moderationActions, type Message } from '../db/schema.js';
-import { dbGifLibraryStore, duplicateView, libraryPage, resolveDuplicate, DUPLICATE_ACTIONS, DUPLICATES_PAGE, type DuplicateDeps, type GifLibraryStore } from '../lib/gifLibrary.js';
+import { dbGifLibraryStore, duplicateView, libraryErrorReply, libraryPage, resolveDuplicate, DUPLICATE_ACTIONS, DUPLICATES_PAGE, type DuplicateDeps, type GifLibraryStore } from '../lib/gifLibrary.js';
 import { channelMatches } from '../lib/messageDeletes.js';
 import { publishRestored } from '../lib/linkRestore.js';
 
@@ -434,6 +434,13 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     log: app.log,
   };
 
+  /** Chyba DB knihovny: chybí tabulka / sloupec → 503 not_ready, jinak 500. */
+  const libraryFail = (reply: FastifyReply, e: unknown, what: string) => {
+    const out = libraryErrorReply(e);
+    app.log.warn({ err: (e as Error).message, error: out.body.error }, `${what} selhalo`);
+    return reply.code(out.status).send(out.body);
+  };
+
   // Veřejné (divák bez odměny knihovnu vidí): schválené GIFy kanálu podle použití, `cursor` = nextCursor.
   const libraryLimiter = new RateLimiter(10, 5);
   app.get<{ Querystring: { channel?: string; q?: string; cursor?: string; limit?: string } }>('/gifs/library', async (req, reply) => {
@@ -444,10 +451,7 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     try {
       const out = await libraryPage(library, channel, req.query);
       return reply.code(out.status).send(out.body);
-    } catch (e) {
-      app.log.warn({ err: (e as Error).message }, 'gifs/library selhalo');
-      return reply.code(503).send({ ok: false, error: 'unavailable' });
-    }
+    } catch (e) { return libraryFail(reply, e, 'gifs/library'); }
   });
 
   // Návrhy duplikátů kanálu (mod) — nejstarší první; rozhodnutí keep-first | keep-second | keep-both.
@@ -458,7 +462,8 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     const channel = parseChannel(req.query.channel, DEFAULT_CHANNEL);
     if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
     if (!(await modsOf(accountId, channel)).length) return reply.code(403).send({ ok: false, error: 'not_mod' });
-    return { ok: true, items: (await library.listDuplicates(channel, DUPLICATES_PAGE)).map(duplicateView) };
+    try { return { ok: true, items: (await library.listDuplicates(channel, DUPLICATES_PAGE)).map(duplicateView) }; }
+    catch (e) { return libraryFail(reply, e, 'moderation/gif/duplicates'); }
   });
 
   app.post<{ Params: { id: string; action: string } }>('/moderation/gif/duplicates/:id/:action', { preHandler: session }, async (req, reply) => {
@@ -467,13 +472,15 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     if (!action || !Number.isSafeInteger(id) || id <= 0) return reply.code(404).send({ ok: false, error: 'not_found' });
     const accountId = req.webAccountId!;
     if (!modLimiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-    // Kanál z návrhu (ne od klienta) — mod jiného kanálu nerozhoduje.
-    const d = await library.getDuplicate(id);
-    if (!d) return reply.code(404).send({ ok: false, error: 'not_found' });
-    const mods = await modsOf(accountId, d.channel);
-    if (!mods.length) return reply.code(403).send({ ok: false, error: 'not_mod' });
-    const out = await resolveDuplicate(dupDeps, { id, action, by: `${mods[0].platform}:${mods[0].login}`, accountId, channel: d.channel });
-    return reply.code(out.status).send(out.body);
+    try {
+      // Kanál z návrhu (ne od klienta) — mod jiného kanálu nerozhoduje.
+      const d = await library.getDuplicate(id);
+      if (!d) return reply.code(404).send({ ok: false, error: 'not_found' });
+      const mods = await modsOf(accountId, d.channel);
+      if (!mods.length) return reply.code(403).send({ ok: false, error: 'not_mod' });
+      const out = await resolveDuplicate(dupDeps, { id, action, by: `${mods[0].platform}:${mods[0].login}`, accountId, channel: d.channel });
+      return reply.code(out.status).send(out.body);
+    } catch (e) { return libraryFail(reply, e, 'moderation/gif/duplicates rozhodnutí'); }
   });
 
   const stateLimiter = new RateLimiter(10, 1);

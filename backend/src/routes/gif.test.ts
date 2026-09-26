@@ -319,7 +319,7 @@ const libStore = (over: Record<string, unknown> = {}) => {
     listDuplicates: async (channel: string) => { calls.push(['listDuplicates', channel]); return []; },
     getDuplicate: async (id: number) => (id === 5 ? { id: 5, channel: 'robdiesalot', a: 'a'.repeat(32), b: lib, status: 'pending' } : null),
     keepBoth: async () => true,
-    mergeInto: async () => true,
+    mergeInto: async () => ({ ok: true }),
     ...over,
   };
   return { store, calls, lib };
@@ -348,7 +348,7 @@ test('duplicity v UC: bez přihlášení 401, nemod 403, mod → seznam a rozhod
   const { default: Fastify } = await import('fastify');
   const { default: gifRoutes } = await import('./gif.js');
   const merged: string[] = [];
-  const { store } = libStore({ mergeInto: async (k: string, d: string) => { merged.push(`${k}<-${d}`); return true; } });
+  const { store } = libStore({ mergeInto: async (_id: number, k: string, d: string) => { merged.push(`${k}<-${d}`); return { ok: true }; } });
   const forgotten: string[] = [];
   const media = new MediaServer(async () => null);
   media.forget = (id: string) => { forgotten.push(id); };
@@ -380,5 +380,35 @@ test('duplicity v UC: bez přihlášení 401, nemod 403, mod → seznam a rozhod
   assert.deepEqual(forgotten, ['a'.repeat(32)]);
   assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${'c'.repeat(32)}/unapprove`, headers: H, payload: {} })).statusCode, 200);
   assert.deepEqual(actions, ['unapprove']);
+  await app.close();
+});
+
+test('duplicity v UC + knihovna: chybí tabulka/sloupec → 503 not_ready, jiná chyba DB → 500', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const missing = Object.assign(new Error('relation "gif_duplicates" does not exist'), { code: '42P01' });
+  let err: Error = missing;
+  const { store } = libStore({
+    listDuplicates: async () => { throw err; },
+    getDuplicate: async () => { throw err; },
+    listLibrary: async () => { throw err; },
+  });
+  const app = Fastify();
+  await app.register(gifRoutes, {
+    flow: {} as never, store: {} as never, media: new MediaServer(async () => null), library: store as never,
+    tokens: { issue: async () => 'x', verify: async () => false },
+    auth: async (req) => { req.webAccountId = 7; },
+    modIdentities: async () => [{ platform: 'twitch', login: 'moda' }],
+  });
+  const calls = () => Promise.all([
+    app.inject({ method: 'GET', url: '/moderation/gif/duplicates?channel=robdiesalot' }),
+    app.inject({ method: 'POST', url: '/moderation/gif/duplicates/5/keep-both', payload: {} }),
+    app.inject({ method: 'GET', url: '/gifs/library' }),
+  ]);
+  for (const r of await calls()) assert.deepEqual([r.statusCode, r.json()], [503, { ok: false, error: 'not_ready' }]);
+  err = Object.assign(new Error('column "phash" does not exist'), { code: '42703' });
+  for (const r of await calls()) assert.equal(r.statusCode, 503);
+  err = new Error('connection reset');
+  for (const r of await calls()) assert.deepEqual([r.statusCode, r.json()], [500, { ok: false, error: 'internal' }]);
   await app.close();
 });

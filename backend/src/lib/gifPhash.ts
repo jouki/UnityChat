@@ -20,8 +20,10 @@ export const PHASH_MAX_HAMMING = 10;
 export const PHASH_MIN_SCORE = 0.6;
 /** Hash plochého snímku (i klesajícího přechodu) — do shody se nepočítá. */
 export const FLAT_HASH = '0000000000000000';
-/** Časový limit ffmpeg / ffprobe. */
+/** Časový limit výpočtu (ffmpeg / ffprobe se po něm zabije SIGKILL, sharp se přestane čekat). */
 export const PHASH_TOOL_TIMEOUT_MS = 20_000;
+/** Strop pixelů vstupu pro sharp (u animace šířka × výška × snímky) — proti dekompresní bombě. */
+export const PHASH_MAX_INPUT_PIXELS = 100_000_000;
 
 const HASH_RE = /^[0-9a-f]{16}$/;
 
@@ -108,13 +110,26 @@ export interface PhashDeps {
   timeoutMs?: number;
 }
 
-const defaultLoadSharp = async (): Promise<SharpFn> => (await import('sharp')).default as unknown as SharpFn;
+const defaultLoadSharp = async (): Promise<SharpFn> => {
+  const s = (await import('sharp')).default as unknown as SharpFn;
+  // Jedno vlákno libvips: hash běží na pozadí a nesmí brát CPU VPS ingestu a API.
+  s.concurrency(1);
+  return s;
+};
+
+/** Promise s limitem; po vypršení výjimka `timeout` (práce sama se nezruší, jen se na ni přestane čekat). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error(`timeout ${ms} ms`)), ms); t.unref?.(); });
+  return Promise.race([p, timer]).finally(() => clearTimeout(t));
+}
 
 /** GIF / WebP: všechny snímky naráz zmenšené na 9×8 v šedi (průhlednost na šedém pozadí), výběr podle času. */
 async function framesViaSharp(bytes: Buffer, deps: PhashDeps): Promise<string[]> {
   const sharp = await (deps.loadSharp ?? defaultLoadSharp)();
-  const md = await sharp(bytes, { animated: true }).metadata();
-  const { data, info } = await sharp(bytes, { animated: true })
+  const opts = { animated: true, limitInputPixels: PHASH_MAX_INPUT_PIXELS };
+  const md = await sharp(bytes, opts).metadata();
+  const { data, info } = await sharp(bytes, opts)
     .flatten({ background: '#808080' }).greyscale().resize(9, 8, { fit: 'fill' }).raw()
     .toBuffer({ resolveWithObject: true });
   const ch = info.channels || 1;
@@ -125,7 +140,7 @@ async function framesViaSharp(bytes: Buffer, deps: PhashDeps): Promise<string[]>
 }
 
 const run = (cmd: string, args: string[], timeoutMs: number, binary: boolean) => new Promise<{ stdout: Buffer | string }>((resolve, reject) => {
-  execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, encoding: binary ? 'buffer' : 'utf8', windowsHide: true }, (err, stdout) => {
+  execFile(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, encoding: binary ? 'buffer' : 'utf8', windowsHide: true }, (err, stdout) => {
     if (err) reject(err); else resolve({ stdout });
   });
 });
@@ -143,7 +158,8 @@ async function framesViaFfmpeg(bytes: Buffer, deps: PhashDeps): Promise<string[]
     // Středy N dílů (jako u GIFu): začít o půl intervalu později, pak N snímků za celou délku.
     const seek = known ? ['-ss', (duration / PHASH_FRAMES / 2).toFixed(6)] : [];
     const fps = known ? `fps=${(PHASH_FRAMES / duration).toFixed(6)},` : '';
-    const out = await run(deps.ffmpeg ?? 'ffmpeg', ['-v', 'error', '-nostdin', ...seek, '-i', file, '-frames:v', '2000', '-vf', `${fps}scale=9:8:flags=area,format=gray`, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'], timeout, true);
+    // -threads 1 (dekodér) + -filter_threads 1: jedno vlákno, hash nesmí brát CPU VPS.
+    const out = await run(deps.ffmpeg ?? 'ffmpeg', ['-v', 'error', '-nostdin', '-threads', '1', ...seek, '-i', file, '-filter_threads', '1', '-threads', '1', '-frames:v', '2000', '-vf', `${fps}scale=9:8:flags=area,format=gray`, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'], timeout, true);
     const raw = out.stdout as Buffer;
     const count = Math.floor(raw.length / 72);
     return pickEven(count, PHASH_FRAMES).map((i) => dhashFromGray(raw, i * 72));
@@ -155,7 +171,8 @@ async function framesViaFfmpeg(bytes: Buffer, deps: PhashDeps): Promise<string[]
 /** Pole hashů média, nebo null (nástroj chybí / selhal / bez snímků) — varování do logu, nikdy výjimka. */
 export async function computePhash(bytes: Buffer, kind: GifKind, deps: PhashDeps = {}): Promise<string[] | null> {
   try {
-    const hashes = kind === 'mp4' ? await framesViaFfmpeg(bytes, deps) : await framesViaSharp(bytes, deps);
+    // Celkový strop i pro ffmpeg (ffprobe + ffmpeg mají každý vlastní kill, dohromady by mohly překročit).
+    const hashes = await withTimeout(kind === 'mp4' ? framesViaFfmpeg(bytes, deps) : framesViaSharp(bytes, deps), deps.timeoutMs ?? PHASH_TOOL_TIMEOUT_MS);
     if (!hashes.length) { deps.log?.warn({ kind }, 'gif phash: médium bez snímků'); return null; }
     return hashes;
   } catch (e) {

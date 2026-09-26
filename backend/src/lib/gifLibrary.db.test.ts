@@ -47,7 +47,7 @@ test('dbGifLibraryStore: knihovna (řazení, kurzor, hledání v tagech), duplic
     // Sloučení: žádost + syntetická zpráva zamítnutého (ids[3]) → ponechané schválené ids[0].
     const [r] = await db.insert(gifRequests).values({ channel: CH, workspace: 'x', platform: 'twitch', platformChannel: CH, userId: '1', login: 'a', messageId: 'm', mediaId: ids[3], kind: 'gif', expiresAt: new Date(), status: 'approved' }).returning();
     await db.insert(messages).values({ platform: 'twitch', platformMessageId: `gif-${r.id}`, platformUserId: '1', platformUsername: 'a', content: '', contentRaw: { gif: { mediaId: ids[3] } }, channel: CH, isUnitychatUser: false, isReply: false, sentAt: new Date() });
-    assert.equal(await s.mergeInto(ids[0], ids[3], new Date()), true);
+    assert.deepEqual(await s.mergeInto(d.id, ids[0], ids[3], new Date()), { ok: true });
     const [kept] = await db.select().from(gifMedia).where(eq(gifMedia.id, ids[0]));
     assert.equal(kept.useCount, 6);
     assert.deepEqual(kept.tags, ['cat dance', 'cat', 'kočka']);
@@ -57,7 +57,14 @@ test('dbGifLibraryStore: knihovna (řazení, kurzor, hledání v tagech), duplic
     const [msg] = await db.select().from(messages).where(eq(messages.platformMessageId, `gif-${r.id}`));
     assert.equal((msg.contentRaw as { gif: { mediaId: string } }).gif.mediaId, ids[0]);
     assert.equal(await s.getDuplicate(d.id), null, 'návrh zmizel kaskádou');
-    assert.equal(await s.mergeInto(ids[0], ids[3], new Date()), false, 'druhé médium už není');
+    assert.deepEqual(await s.mergeInto(d.id, ids[0], ids[3], new Date()), { ok: false, error: 'gone' }, 'návrh i druhé médium už nejsou');
+    // Návrh rozhodnutý keep-both → sloučení odmítnuto pod zámkem, nic se nezmění.
+    await db.insert(gifMedia).values({ ...base, id: ids[3], sha256: 's4', status: 'rejected', rejectedAt: new Date(), vault: true });
+    assert.equal(await s.insertDuplicate({ channel: CH, a: ids[1], b: ids[3], score: 0.8 }), true);
+    const [d2] = await s.listDuplicates(CH, 10);
+    assert.equal(await s.keepBoth(d2.id, 'x', new Date()), true);
+    assert.deepEqual(await s.mergeInto(d2.id, ids[1], ids[3], new Date()), { ok: false, error: 'already_decided', status: 'kept_both' });
+    assert.equal((await db.select().from(gifMedia).where(eq(gifMedia.id, ids[3]))).length, 1);
 
     // Worker selektory: rozhodnutá bez hashe → hash; s hashem → kontrola.
     const h = await s.nextToHash();
