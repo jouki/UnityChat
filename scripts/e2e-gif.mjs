@@ -89,7 +89,7 @@ const H1 = [
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
 const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
-  library: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set() };
+  library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set() };
 const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [] };
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
@@ -145,12 +145,16 @@ s.onevent = async (d) => {
   if (u.includes('/gifs/library')) {
     posts.library.push(u);
     const q = new URL(u).searchParams.get('q') || '';
-    return json({ ok: true, items: mock.library.filter((x) => !q || x.tags.some((t) => t.includes(q))), nextCursor: null });
+    const send = () => json({ ok: true, items: mock.library.filter((x) => !q || x.tags.some((t) => t.includes(q))), nextCursor: null });
+    if (mock.libHold) { mock.libHeld.push({ q, send }); return; }   // souběh: odpovědi pustí test v libovolném pořadí
+    return send();
   }
   const dm = u.match(/\/moderation\/gif\/(\d+)\/decide/);
   if (dm) {
     posts.decide.push({ id: dm[1], body, auth: q.headers?.Authorization || q.headers?.authorization || null });
     const r = mock.decide[dm[1]];
+    // Produkční pořadí: backend rozešle SSE (gif-decided + gif-queue) DŘÍV, než odpoví na HTTP → odpověď podržet.
+    if (r?.hold) { r.release = () => json({ ok: true, requestId: Number(dm[1]), status: body.approve ? 'approved' : 'rejected' }); return; }
     if (r) return json(r.body, r.code);
     return json({ ok: true, requestId: Number(dm[1]), status: body.approve ? 'approved' : 'rejected' });
   }
@@ -281,6 +285,26 @@ check('A 409 → hláška „Už rozhodl modik (Twitch)“ a karta 24', await un
 // Propadnutí (lokálně podle expiresAt) → hláška a fronta prázdná
 check('A propadnutí → „Propadlo — nikdo nerozhodl včas“', await until(`document.querySelector('.uc-gif-notice:not([hidden])')?.textContent === 'Propadlo — nikdo nerozhodl včas' && !document.querySelector('.uc-gif-card')`, 25000), JSON.stringify(await stack()));
 check('A po hlášce karta i zásobník pryč', await until(`!document.querySelector('.uc-gif-stack')`, 5000));
+
+// Produkční pořadí: gif-decided + gif-queue přijdou PŘED HTTP odpovědí na můj klik → pořád moje rozhodnutí (0,3 s, bez hlášky)
+mock.decide['27'] = { hold: true };
+pushAcc(['gif-pending', pend0(27)], ['gif-pending', pend0(28)], ['gif-queue', { channel: 'robdiesalot', pendingCount: 2, headId: 27 }]);
+check('A SSE před HTTP: karta 27', await until(`!!document.querySelector('.uc-gif-card[data-request-id="27"]')`, 12000));
+await until(`!window.ucGif.gifs().locked && !document.querySelector('.uc-gif-card [data-act="approve"]:disabled')`, 2000);
+await click(27, 'approve');
+await until(`true`, 10);
+await (async () => { const t = Date.now(); while (Date.now() - t < 4000 && !mock.decide['27'].release) await sleep(50); })();
+pushAcc(['gif-decided', { requestId: 27, channel: 'robdiesalot', approved: true, status: 'approved', by: 'twitch:moduser' }], ['gif-queue', { channel: 'robdiesalot', pendingCount: 1, headId: 28 }]);
+check('A SSE před HTTP → karta 28', await until(`!!document.querySelector('.uc-gif-card[data-request-id="28"]')`, 12000));
+const stSse = await stack();
+check('A … zámek jen 0,3 s a bez hlášky (moje rozhodnutí)', stSse?.lockMs > 0 && stSse.lockMs <= 300 && !stSse.notice, JSON.stringify(stSse));
+mock.decide['27'].release?.();
+await sleep(600);
+const stSse2 = await stack();
+check('A … pozdní HTTP odpověď nic nerozbije (karta 28, bez hlášky)', stSse2?.cards === '28' && !stSse2.notice && posts.decide.filter((x) => x.id === '27').length === 1, JSON.stringify(stSse2));
+pushAcc(['gif-decided', { requestId: 28, channel: 'robdiesalot', approved: false, status: 'rejected', by: 'twitch:jinymod' }], ['gif-queue', { channel: 'robdiesalot', pendingCount: 0, headId: null }]);
+await until(`!document.querySelector('.uc-gif-card')`, 12000);
+await until(`!document.querySelector('.uc-gif-stack')`, 5000);
 
 // Dříve zamítnutý GIF: kdy + kým a „Automaticky zahazovat 12 h“
 pushAcc(['gif-pending', pend0(26, { previouslyRejected: { at: Date.UTC(2026, 8, 25, 12, 5), by: 'twitch:modik' } })], ['gif-queue', { channel: 'robdiesalot', pendingCount: 1, headId: 26 }]);
@@ -457,6 +481,34 @@ check('C zámek: nová karta 1 s, klik během zámku neodejde', coreLock?.head1 
 check('C zámek: po vlastním rozhodnutí další karta 0,3 s', coreLock?.dec === 'approved' && coreLock.head2 === '2' && coreLock.lock2 === 300 && coreLock.unlocked2, JSON.stringify(coreLock));
 check('C zámek: rozhodnutí jiného moda → další karta 1 s + hláška', coreLock?.head3 === '3' && coreLock.lock3 === 1000 && coreLock.notice === 'Zamítnuto · jiny (Twitch)', JSON.stringify(coreLock));
 check('C gif-queue prázdná → všechno pryč', coreLock?.empty === true, JSON.stringify(coreLock));
+// SSE před HTTP (falešné hodiny): gif-decided / gif-queue během busy = moje rozhodnutí; 409 po SSE = hláška.
+const coreSse = await ev(`(async () => {
+  let T = 1000; const box = document.createElement('div'); document.body.appendChild(box); const pend = [];
+  const g = new window.UC_CORE.GifRequests({ doc: document, container: box, now: () => T, channel: () => 'robdiesalot', canModerate: () => true,
+    api: (path) => new Promise((res, rej) => pend.push({ res, rej })), setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} });
+  const P = (id, c) => ({ requestId: id, channel: 'robdiesalot', platform: 'twitch', login: 'x', userId: 'u', messageId: 'm' + id, text: '', media: { url: ${JSON.stringify(murl(MEDIA.card))}, kind: 'gif' }, createdAt: c, expiresAt: T + 600000 });
+  [1, 2, 3, 4].forEach((i) => g.onPending(P(i, i * 10)));
+  T += 1000;
+  const r = {};
+  let p = g.decide('1', true);
+  g.onDecided({ requestId: 1, channel: 'robdiesalot', status: 'approved', by: 'twitch:ja' });
+  r.head1 = g.headId; r.lock1 = g.lockMs; r.notice1 = box.querySelector('.uc-gif-notice').hidden;
+  pend.shift().res({ ok: true, status: 'approved' }); r.res1 = await p; r.head1b = g.headId;
+  T += 300;
+  p = g.decide('2', false);
+  g.onQueue({ channel: 'robdiesalot', pendingCount: 2, headId: 3 });
+  r.head2 = g.headId; r.lock2 = g.lockMs;
+  pend.shift().res({ ok: true, status: 'rejected' }); r.res2 = await p;
+  T += 300;
+  p = g.decide('3', true);
+  g.onDecided({ requestId: 3, channel: 'robdiesalot', status: 'approved', by: 'twitch:jiny' });
+  pend.shift().rej({ error: 'already_decided', status: 409, body: { status: 'approved', decidedBy: 'twitch:jiny' } }); r.res3 = await p;
+  r.notice3 = box.querySelector('.uc-gif-notice').textContent; r.head3 = g.headId;
+  g.clear(); box.remove(); return r;
+})()`);
+check('C SSE gif-decided před HTTP → další karta 0,3 s, bez hlášky, pozdní odpověď OK', coreSse?.head1 === '2' && coreSse.lock1 === 300 && coreSse.notice1 === true && coreSse.res1 === 'approved' && coreSse.head1b === '2', JSON.stringify(coreSse));
+check('C SSE gif-queue před HTTP → taky 0,3 s', coreSse?.head2 === '3' && coreSse.lock2 === 300 && coreSse.res2 === 'rejected', JSON.stringify(coreSse));
+check('C 409 po SSE → hláška „Už rozhodl jiny (Twitch)“', coreSse?.res3 === 'approved' && coreSse.notice3 === 'Už rozhodl jiny (Twitch)' && coreSse.head3 === '4', JSON.stringify(coreSse));
 
 // ---- fáze B: divák = odesílatel (štítky u vlastní zprávy místo karty) ----
 mock.mod = false;
@@ -627,6 +679,52 @@ await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.va
 check('G hledání v tazích → GET s q=cat, 2 GIFy', await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 2`, 3000) && posts.library.some((u) => /[?&]q=cat/.test(u)), JSON.stringify(await gl()));
 await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 3`, 3000);
+// Souběh: hledání během běžícího načtení — platí poslední dotaz, i když starší odpověď dorazí později
+mock.libHold = true;
+await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = 'cat'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+await waitFor(() => mock.libHeld.some((x) => x.q === 'cat'), 3000);
+await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = 'dog'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+check('G souběh: druhé hledání se nezahodí (dva dotazy)', await waitFor(() => mock.libHeld.some((x) => x.q === 'dog'), 3000), JSON.stringify(mock.libHeld.map((x) => x.q)));
+mock.libHold = false;
+const heldDog = mock.libHeld.find((x) => x.q === 'dog'), heldCat = mock.libHeld.find((x) => x.q === 'cat');
+mock.libHeld = [];
+heldDog.send();
+await sleep(300);
+heldCat.send();   // starší odpověď až po novější
+await sleep(500);
+check('G souběh: platí poslední dotaz („dog“ = 1 GIF), starší odpověď zahozena', (await gl())?.items === '0c', JSON.stringify(await gl()));
+await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 3`, 3000);
+// Přepnutí kanálu s otevřeným panelem (core createGifPanel ve stránce, odpovědi v libovolném pořadí)
+const coreCh = await ev(`(async () => {
+  let chan = 'kanala'; const calls = []; const pane = document.createElement('div'); document.body.appendChild(pane);
+  const item = (n) => ({ mediaId: n.repeat(32).slice(0, 32), url: 'https://api.jouki.cz/media/gif/' + n.repeat(32).slice(0, 32), kind: 'gif', width: 10, height: 10, tags: [] });
+  const api = (path) => new Promise((res) => calls.push({ path, res }));
+  const p = window.UC_CORE.createGifPanel({ pane, api, channel: () => chan, onPick: () => {} });
+  p.show();
+  const ids = () => [...pane.querySelectorAll('.uc-gl-i')].map((i) => i.dataset.id[0]).join(',');
+  const r = { first: calls.length };
+  chan = 'kanalb'; p.reset();                                        // přepnutí kanálu → nový dotaz hned
+  r.second = calls.length;
+  calls[1].res({ ok: true, items: [item('b')] });
+  await new Promise((x) => setTimeout(x, 20));
+  calls[0].res({ ok: true, items: [item('a')] });                    // starý kanál dorazí pozdě
+  await new Promise((x) => setTimeout(x, 20));
+  r.afterReset = ids();
+  chan = 'kanalc';                                                    // změna kanálu bez nového dotazu
+  p.reload();
+  const n3 = calls.length;
+  chan = 'kanald';
+  calls[n3 - 1].res({ ok: true, items: [item('c')] });               // dotaz pro c doběhne, kanál je už d → znovu
+  await new Promise((x) => setTimeout(x, 20));
+  r.refetch = calls.length > n3 && /channel=kanald/.test(calls.at(-1).path);
+  calls.at(-1).res({ ok: true, items: [item('d')] });
+  await new Promise((x) => setTimeout(x, 20));
+  r.final = ids();
+  p.destroy(); pane.remove(); return r;
+})()`);
+check('G souběh kanálu: přepnutí s otevřeným panelem → nový dotaz, starý výsledek zahozen', coreCh?.first === 1 && coreCh.second === 2 && coreCh.afterReset === 'b', JSON.stringify(coreCh));
+check('G souběh kanálu: kanál se změnil během dotazu → po doběhnutí znovu načíst', coreCh?.refetch === true && coreCh.final === 'd', JSON.stringify(coreCh));
 // Odemčená odměna → výběr pošle náš odkaz do chatu
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 1 };
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);

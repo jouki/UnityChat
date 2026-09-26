@@ -576,10 +576,10 @@ export class GifRequests {
     this._L(`gif-decided ${x.requestId} ${x.status} by=${x.by || '-'}${card ? '' : ' (bez karty)'}`);
     if (!card) return false;
     const wasHead = this._shownId === x.requestId;
-    this._cards.delete(x.requestId);
-    this._queueDrop(x.requestId);
+    // Karta, na kterou jsem právě klikl (busy): server pošle gif-decided DŘÍV než HTTP odpověď → moje rozhodnutí.
+    const mine = this._dropCard(x.requestId, 'gif-decided');
     // Rozhodl jiný mod o kartě, kterou mám před sebou → řeknout kdo (vlastní rozhodnutí už hláška nepotřebuje).
-    if (wasHead && this._ownDecidedId !== x.requestId) this._setNotice(gifDecisionText(x.status, x.by), x.status);
+    if (wasHead && !mine && this._ownDecidedId !== x.requestId) this._setNotice(gifDecisionText(x.status, x.by), x.status);
     this._render();
     return true;
   }
@@ -593,11 +593,11 @@ export class GifRequests {
     this._L(`gif-queue ${pendingCount} čeká, první ${headId ?? '-'}`);
     if (!headId) {
       // Fronta je prázdná → všechno lokální je rozhodnuté (případné gif-decided mohlo chybět).
-      for (const id of [...this._cards.keys()]) this._cards.delete(id);
+      for (const id of [...this._cards.keys()]) this._dropCard(id, 'gif-queue prázdná');
     } else if (this._cards.has(headId)) {
       // FIFO: co je starší než první čekající, už nečeká.
       const head = this._cards.get(headId).req;
-      for (const [id, c] of [...this._cards]) if (fifoCmp(c.req, head) < 0) { this._cards.delete(id); this._L(`gif ${id}: podle gif-queue už nečeká`); }
+      for (const [id, c] of [...this._cards]) if (fifoCmp(c.req, head) < 0) { this._dropCard(id, 'gif-queue'); this._L(`gif ${id}: podle gif-queue už nečeká`); }
     } else if (this.canModerate()) {
       // Server zná žádost, kterou klient nemá (výpadek SSE) → dotáhnout.
       void this.loadPending();
@@ -637,9 +637,11 @@ export class GifRequests {
     try {
       const r = await this.api(`/moderation/gif/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { approve: !!approve } });
       card.busy = false;
-      // Mezitím karta zmizela (clear po přepnutí kanálu, gif-decided jiného moda) → nic nevykreslovat.
-      if (this._cards.get(id) !== card) return null;
       const status = ['approved', 'rejected'].includes(r?.status) ? r.status : (approve ? 'approved' : 'rejected');
+      // SSE (gif-decided / gif-queue) předběhlo HTTP odpověď → karta už je pryč jako moje rozhodnutí, jen potvrdit.
+      if (card.resolvedBySse) { this._rememberDecided(id, status); this._L(`decide ${id} → ${status} (SSE bylo rychlejší)`); return status; }
+      // Mezitím karta zmizela (clear po přepnutí kanálu) → nic nevykreslovat.
+      if (this._cards.get(id) !== card) return null;
       if (r?.published === false) this._L(`decide ${id}: schváleno, ale zpráva se nezapsala (published:false)`);
       this._L(`decide ${id} → ${status}`);
       this._rememberDecided(id, status);
@@ -650,6 +652,16 @@ export class GifRequests {
       return status;
     } catch (e) {
       card.busy = false;
+      // Karta zmizela přes SSE jako „moje“, ale server vrátil 409 → rozhodl někdo jiný: doplnit hlášku.
+      if (card.resolvedBySse && e?.error === 'already_decided') {
+        const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
+        const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
+        const by = e.body?.decidedBy ?? e.decidedBy ?? null;
+        this._L(`decide ${id}: 409 po SSE (${st}, ${by ?? '-'})`);
+        this._setNotice(gifAlreadyDecidedText(st, by), st);
+        this._render();
+        return st;
+      }
       if (this._cards.get(id) !== card) return null;
       this._L(`decide ${id} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
       if (e?.error === 'already_decided') {
@@ -738,6 +750,22 @@ export class GifRequests {
   _rememberDecided(id, status) {
     this._decided.set(String(id), status);
     if (this._decided.size > 300) this._decided.delete(this._decided.keys().next().value);
+  }
+
+  /**
+   * Žádost pryč ze SSE (gif-decided / gif-queue). Když na ni právě běží můj klik (busy), je to moje rozhodnutí:
+   * backend rozešle SSE dřív, než odpoví na HTTP → další karta se zámkem 0,3 s a bez hlášky. Vrací true = moje.
+   */
+  _dropCard(id, why) {
+    const card = this._cards.get(String(id));
+    if (!card) return false;
+    this._cards.delete(String(id));
+    this._queueDrop(id);
+    if (!card.busy) return false;
+    card.resolvedBySse = true;
+    this._ownDecidedId = String(id);
+    this._L(`gif ${id}: ${why} před HTTP odpovědí na můj klik → moje rozhodnutí (zámek ${this.lockOwnMs} ms)`);
+    return true;
   }
 
   /** Žádost zmizela lokálně → odhad fronty do příští gif-queue (počet − 1, první = neznámá). */

@@ -131,6 +131,21 @@ Promise.all([
   box.clear();
   check('Outbox: clear', box.size === 0 && box.view('twitch', 'm1') === null);
 
+  // unlock bez done → strop 60 s: „Vypršelo“ a konec překreslování
+  {
+    let n2 = 0; const ticks = []; let cleared = 0; const ch2 = [];
+    const b2 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => n2, onChange: (k) => ch2.push(...k), setInterval: (fn) => { ticks.push(fn); return ticks.length; }, clearInterval: () => { cleared++; } });
+    b2.onProgress({ requestKey: 'twitch:u1', channel: 'robdiesalot', platform: 'twitch', messageId: 'u1', phase: 'unlock', pct: 50, estimateMs: 5000, elapsedMs: 0 });
+    n2 = 30_000; ticks[0]();
+    const mid = b2.view('twitch', 'u1');
+    n2 = 60_001; ticks[0]();
+    const end = b2.view('twitch', 'u1');
+    n2 = 61_000; ticks[0]();
+    check('Outbox: unlock bez done → po 60 s „Vypršelo“ a interval se zastaví', mid?.text === '95 %' && end?.kind === 'expired' && end.text === 'Vypršelo' && cleared >= 1, JSON.stringify({ mid, end, cleared }));
+    b2.onProgress({ requestKey: 'twitch:u1', channel: 'robdiesalot', platform: 'twitch', messageId: 'u1', phase: 'done', pct: 100, outcome: 'pending' });
+    check('Outbox: pozdní done po stropu stav opraví', b2.view('twitch', 'u1')?.kind === 'pending');
+  }
+
   // --- stav odměny (indikátor + hlavička) ---
   const RV = L.gifRewardView;
   check('gifRewardView: nepřihlášený', RV(null, 0, { loggedIn: false }).mode === 'login' && !RV(null, 0, { loggedIn: false }).canSend);

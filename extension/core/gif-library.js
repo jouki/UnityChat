@@ -31,6 +31,8 @@ export const GIF_OPTIMISTIC_PAIR_MS = 60_000;
 export const GIF_PROGRESS_TICK_MS = 250;
 /** Optimistické kolečko bez jediné události ze serveru zmizí po této době. */
 export const GIF_OPTIMISTIC_SILENT_MS = 15_000;
+/** Průběh bez další události ze serveru (typicky zaseknutá fáze unlock bez done) → po této době „Vypršelo“ a konec animace. */
+export const GIF_PROGRESS_MAX_SILENT_MS = 60_000;
 
 export const GIF_STATUS_TEXT = {
   pending: 'Schvalování moderátorem',
@@ -321,6 +323,7 @@ export class GifOutbox {
       for (const e of this._e.values()) {
         if (!live(e)) continue;
         if (e.optimistic && now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
+        else if (!e.optimistic && now - e.at > GIF_PROGRESS_MAX_SILENT_MS) { e.state = 'expired'; this._L(`${e.key} ${e.phase} bez další události ${Math.round((now - e.at) / 1000)} s → Vypršelo`); }
         keys.push(e.key);
       }
       if (!keys.length) { this._ci(this._timer); this._timer = null; return; }
@@ -618,10 +621,17 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   }
 
   // ---- data ----
+  // Pořadová čísla dotazů: platí jen výsledek posledního (hledání / přepnutí kanálu během načítání se nezahodí).
+  let libSeq = 0, rejSeq = 0;
+  const libKey = () => `${ch()}|${st.q.trim().toLowerCase()}`;
+
   async function loadLibrary({ more = false } = {}) {
-    if (st.loading) return;
+    // Další stránka jen nad hotovým seznamem; nový dotaz (hledání, kanál) vždy — starší výsledek se zahodí.
+    if (more && (st.loading || !st.cursor)) return;
     const c = ch();
     if (!c) return;
+    const seq = ++libSeq;
+    const key = libKey();
     st.loading = true;
     st.error = '';
     if (!more) paintBody();
@@ -629,7 +639,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     const qs = `channel=${encodeURIComponent(c)}${q ? `&q=${encodeURIComponent(q)}` : ''}${more && st.cursor ? `&cursor=${encodeURIComponent(st.cursor)}` : ''}&limit=${GIF_LIBRARY_PAGE}`;
     try {
       const j = await api(`/gifs/library?${qs}`);
-      if (c !== ch() || q !== st.q.trim().toLowerCase()) return;   // mezitím jiný kanál / hledání
+      if (seq !== libSeq) { L(`knihovna: zahozen starší výsledek (${key})`); return; }
+      if (key !== libKey()) return;   // mezitím jiný kanál / hledání bez nového dotazu → finally načte znovu
       const items = (Array.isArray(j?.items) ? j.items : []).map((x) => normalizeLibraryItem(x, opts)).filter(Boolean);
       st.items = more ? [...st.items, ...items.filter((x) => !st.items.some((y) => y.mediaId === x.mediaId))] : items;
       st.cursor = j?.nextCursor || null;
@@ -637,11 +648,16 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       st.channel = c;
       L(`${c}${q ? ` „${q}“` : ''}: ${items.length} GIFů${more ? ' (další stránka)' : ''}${st.cursor ? ', další stránka existuje' : ''}`);
     } catch (e) {
+      if (seq !== libSeq) return;
       st.error = e?.error === 'not_ready' ? gifLibraryErrorText(e) : 'GIFy se nepodařilo načíst.';
       L(`načtení FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
     } finally {
-      st.loading = false;
-      paintBody();
+      if (seq === libSeq) {
+        st.loading = false;
+        // Kanál / hledání se změnily, ale nikdo nový dotaz nespustil → načíst znovu (panel otevřený).
+        if (key !== libKey() && st.visible) { L(`knihovna: dotaz se změnil (${key} → ${libKey()}) → znovu`); void loadLibrary(); }
+        else paintBody();
+      }
     }
   }
 
@@ -663,26 +679,30 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   }
 
   async function loadRejected({ more = false } = {}) {
-    if (st.rejLoading || !isMod()) return;
+    if (!isMod() || (more && (st.rejLoading || !st.rejBefore))) return;
     const c = ch();
+    const seq = ++rejSeq;
     st.rejLoading = true;
     st.rejError = '';
     if (!more) paintBody();
     try {
       await ensureToken();
       const j = await api(`/moderation/gif/rejected?channel=${encodeURIComponent(c)}${more && st.rejBefore ? `&before=${encodeURIComponent(st.rejBefore)}` : ''}`);
-      if (c !== ch()) return;
+      if (seq !== rejSeq || c !== ch()) return;
       const items = (Array.isArray(j?.items) ? j.items : []).map((x) => normalizeRejectedItem(x, opts)).filter(Boolean);
       st.rej = more ? [...st.rej, ...items] : items;
       st.rejBefore = j?.nextBefore || null;
       st.rejLoaded = true;
       L(`zamítnuté ${c}: ${items.length}${more ? ' (další stránka)' : ''}`);
     } catch (e) {
+      if (seq !== rejSeq) return;
       st.rejError = gifLibraryErrorText(e);
       L(`zamítnuté FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
     } finally {
-      st.rejLoading = false;
-      paintBody();
+      if (seq === rejSeq) {
+        st.rejLoading = false;
+        if (c !== ch() && st.visible && st.tab === 'rej') void loadRejected(); else paintBody();
+      }
     }
   }
 
@@ -694,10 +714,12 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
 
   /** Náhled zamítnutého média s tokenem vrátil chybu → jednou nový token a znovu vykreslit. */
   function onTokenMediaError() {
-    if (!tokens || st.tokenRetried) return false;
+    // Nejvýš jedna obnova za 30 s (médium může být opravdu pryč → bez smyčky obnov).
+    if (!tokens || st.tokenRetried || clock() - (st.tokenAt || 0) < 30_000) return false;
     st.tokenRetried = true;
     L('náhled zamítnutého se nenačetl → nový token');
-    tokens.refresh().then((t) => { st.token = t; paintBody(); });
+    // Po úspěšné obnově zase povolit další obnovu (token může vypadnout znovu); neúspěch = dál nezkoušet.
+    tokens.refresh().then((t) => { st.token = t; if (t) { st.tokenRetried = false; st.tokenAt = clock(); } paintBody(); });
     return true;
   }
 
