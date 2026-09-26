@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
+import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
@@ -60,6 +60,7 @@ function memStore(now: () => number) {
     async activeBan(ch, id, at) { const b = bans.get(`${ch}|${id}`); return b && b.until > at ? b : null; },
     async setBan(ch, id, until, by) { bans.set(`${ch}|${id}`, { until, by }); },
     async pendingForMedia(id, at) { return livePending(id, at); },
+    async mediaReferenced(id) { return [...reqs.values()].some((r) => r.mediaId === id && r.status !== 'expired'); },
     async listRejected(ch, before, limit) {
       const t = (x: GifMediaInfo) => x.rejectedAt!.getTime();
       return [...media.values()].filter((x) => x.channel === ch && x.status === 'rejected'
@@ -273,6 +274,42 @@ test('notifier: odesílatel (own) + jen mody kanálu mezi připojenými účty, 
   assert.deepEqual(sent, [[7, 'gif-pending', { requestId: 1, own: true }], [2, 'gif-pending', { requestId: 1 }]]);
   await n.notify(r, 'gif-decided', { requestId: 1 });
   assert.equal(modChecks, 3, 'mod stav z cache (účty 1, 2, 3)');
+});
+
+test('M4 notifier: odesílatel gif-decided bez `by` (kdo zamítl), mod ho dostává; previouslyRejected odesílateli bez by', async () => {
+  const sent: Array<[number, string, Record<string, unknown>]> = [];
+  const n = createGifNotifier({
+    connected: () => [2, 7],
+    isMod: async (acc) => acc === 2,
+    senderAccount: async () => 7,
+    send: (acc, e, d) => { sent.push([acc, e, d as Record<string, unknown>]); return 1; },
+  });
+  const ev = { requestId: 1, channel: 'robdiesalot', approved: false, status: 'rejected', by: 'twitch:modik' };
+  await n.notify({ channel: 'robdiesalot', platform: 'twitch', userId: '42' }, 'gif-decided', ev);
+  assert.deepEqual(sent[0], [7, 'gif-decided', { requestId: 1, channel: 'robdiesalot', approved: false, status: 'rejected', own: true }]);
+  assert.equal('by' in sent[0][2], false);
+  assert.deepEqual(sent[1], [2, 'gif-decided', ev]);
+  assert.deepEqual(forSender({ requestId: 2, previouslyRejected: { at: 5, by: 'kick:x' } }), { requestId: 2, previouslyRejected: { at: 5 } });
+  assert.deepEqual(ev.by, 'twitch:modik', 'původní událost (pro mody) se nemění');
+});
+
+test('M1 expireTick: čekající alias z backfillu (schválená žádost = zpráva v archivu) se po propadnutí jiné žádosti nesmaže', async () => {
+  const s = setup();
+  // Nová žádost na médium (náš odkaz na alias) → propadne.
+  await s.flow.intercept(params());
+  // Starší schválená žádost na totéž médium (syntetická zpráva gif-<id> odkazuje na médium).
+  const old = await s.mem.store.insertRequest({ ...s.mem.reqs.get(1)!, messageId: 'old' } as unknown as NewGifRequest);
+  old.status = 'approved';
+  s.advance(120_000);
+  assert.equal(await s.flow.expireTick(), 1);
+  assert.equal(s.mem.media.has(MEDIA), true, 'médium zůstává (odkazuje na něj schválená žádost)');
+  assert.equal(s.mem.log.includes(`deleteMedia:${MEDIA}`), false);
+  // Bez jiné žádosti se propadlé čekající médium smaže jako dřív.
+  const t = setup();
+  await t.flow.intercept(params());
+  t.advance(120_000);
+  await t.flow.expireTick();
+  assert.equal(t.mem.media.has(MEDIA), false);
 });
 
 test('intercept: mod rozhodne dřív, než se nastaví zámek (bod 2) → zámek nevisí a gif-pending se nepošle', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClientMessage, toModeratedContent, RateLimiter } from './chat.js';
+import { toClientMessage, toModeratedContent, RateLimiter, gifMediaGone } from './chat.js';
 import type { Message } from '../db/schema.js';
 
 const base: Message = {
@@ -101,4 +101,26 @@ test('toModeratedContent: smazaná i skrytá zpráva s plným obsahem (jen pro m
   assert.equal(hid.deleted, undefined);
   // Stejný řádek přes veřejnou cestu obsah nenese.
   assert.equal(toClientMessage({ ...base, content: 'tst', deletedAt: new Date(), deletedReason: 'mod' } as any).message, '');
+});
+
+test('I2 gifMediaGone + toClientMessage: GIF odebraný z knihovny / zahozený → smazaná zpráva gif_removed bez obsahu a bez gif; dávkově', async () => {
+  const A = 'a'.repeat(32), B = 'b'.repeat(32), C = 'c'.repeat(32), D = 'd'.repeat(32);
+  const gifRow = (n: number, mediaId: string): Message => ({ ...base, id: n, platformMessageId: `gif-${n}`, content: 'hele lol', isReply: false, replyToMessageId: null, contentRaw: { gif: { mediaId, kind: 'gif', width: 10, height: 10, origin: 'twitch:x' } } });
+  const rows = [gifRow(1, A), gifRow(2, B), gifRow(3, C), gifRow(4, D), gifRow(5, A), base];
+  const asked: string[][] = [];
+  const gone = await gifMediaGone(rows, async (ids) => { asked.push(ids); return new Map([[A, 'approved'], [B, 'rejected'], [C, 'pending']]); });
+  assert.deepEqual(asked, [[A, B, C, D]], 'jeden dotaz, bez duplicit');
+  assert.deepEqual([...gone].sort(), [B, D], 'zamítnuté (odebrané) a neexistující; čekající alias zůstává');
+  const ok = toClientMessage(rows[0], true, gone);
+  assert.equal(ok.gif?.url.endsWith(`/media/gif/${A}`), true);
+  assert.equal(ok.message, 'hele lol');
+  const removed = toClientMessage(rows[1], true, gone);
+  assert.deepEqual(removed, { platform: 'twitch', id: 'gif-2', username: 'Trokner', userId: '1', message: '', timestamp: base.sentAt.getTime(), historical: true, deleted: true, deletedReason: 'gif_removed' });
+  assert.equal(toClientMessage(rows[2], true, gone).gif !== undefined, true);
+  assert.equal(toClientMessage(rows[3], true, gone).deletedReason, 'gif_removed');
+  // Bez GIFů se DB nevolá; chyba DB = nic neschovat.
+  assert.equal((await gifMediaGone([base], async () => { throw new Error('nevolat'); })).size, 0);
+  assert.equal((await gifMediaGone([rows[0]], async () => { throw new Error('db'); })).size, 0);
+  // Bez množiny (živé zprávy, jiná místa) beze změny.
+  assert.equal(toClientMessage(rows[1]).gif !== undefined, true);
 });

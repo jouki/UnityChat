@@ -9,9 +9,9 @@
 //              dvojici, která ještě nemá záznam. Nic se neslučuje samo: mod / Židolišta rozhodne
 //              keep-first | keep-second | keep-both (sloučení = použití na ponechané médium, druhé smazat).
 // Použití (use_count++, last_used_at) počítá lib/gifRequests.ts při každém zobrazení schváleného GIFu (decideCore).
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { gifDuplicates, gifMedia, gifRequests } from '../db/schema.js';
+import { gifDuplicates, gifMedia } from '../db/schema.js';
 import { gifMediaUrl, MEDIA_ID_RE } from './gifIds.js';
 import { normalizeTags, MAX_TAGS, MAX_TAG_LEN, type GifKind } from './gifMedia.js';
 import { sequenceSimilarity, PHASH_MIN_SCORE } from './gifPhash.js';
@@ -135,6 +135,49 @@ export const DUPLICATE_ACTIONS =['keep-first', 'keep-second', 'keep-both'] as co
 export type DuplicateAction = typeof DUPLICATE_ACTIONS[number];
 
 // ---------------------------------------------------------------------------
+// Přesun média do jiného (sloučení duplikátu modem i souběh dedupu při schválení) — jeden zdroj pravdy
+// ---------------------------------------------------------------------------
+
+/**
+ * SQL přesměrování odkazů z média `drop` na `keep`: syntetické zprávy schválených GIFů (`content_raw.gif.mediaId`
+ * zpráv `gif-<requestId>` žádostí na `drop`) a žádosti. Pořadí je důležité — zprávy se hledají přes žádosti.
+ */
+export function redirectMediaRefsSql(drop: string, keep: string): SQL[] {
+  return [
+    sql`update messages m set content_raw = jsonb_set(m.content_raw, '{gif,mediaId}', to_jsonb(${keep}::text))
+      from gif_requests r
+      where r.media_id = ${drop} and m.platform = r.platform and m.platform_message_id = 'gif-' || r.id::text`,
+    sql`update gif_requests set media_id = ${keep} where media_id = ${drop}`,
+  ];
+}
+
+/**
+ * Normalizovaná URL zdroje zahozeného média → ponechanému, když žádnou nemá (dedup té URL bez stahování dál
+ * funguje). Nepřepisuje existující URL (schéma má jednu URL na médium — URL zahozeného média se pak ztratí,
+ * dedup ji pozná až po stažení podle sha256) a nekoliduje s jiným schváleným médiem kanálu (unikátní index).
+ */
+export function adoptSourceUrlSql(keep: string, url: string): SQL {
+  return sql`update gif_media k set source_url_norm = ${url}
+    where k.id = ${keep} and k.source_url_norm is null
+      and not exists (select 1 from gif_media o where o.channel = k.channel and o.source_url_norm = ${url}
+                      and o.status = 'approved' and o.id <> k.id)`;
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Médium `drop` do `keep` (v transakci volajícího): odkazy (zprávy, žádosti) přesměrovat, `drop` smazat (jeho
+ * zamítnutí, zákaz a návrhy duplikátů kaskádou), jeho URL zdroje převzít, když ji `keep` nemá.
+ * Používá ho sloučení duplikátu (mergeInto) i souběh dedupu při schválení (lib/gifRequests.ts mergeMedia).
+ */
+export async function moveMediaInto(tx: Tx, drop: string, keep: string): Promise<void> {
+  const [d] = await tx.select({ url: gifMedia.sourceUrlNorm }).from(gifMedia).where(eq(gifMedia.id, drop)).limit(1);
+  for (const q of redirectMediaRefsSql(drop, keep)) await tx.execute(q);
+  await tx.delete(gifMedia).where(eq(gifMedia.id, drop));
+  if (d?.url) await tx.execute(adoptSourceUrlSql(keep, d.url));
+}
+
+// ---------------------------------------------------------------------------
 // Úložiště (DB) — rozhraní kvůli testům
 // ---------------------------------------------------------------------------
 
@@ -150,7 +193,8 @@ export interface GifLibraryStore {
   keepBoth(id: number, by: string, at: Date): Promise<boolean>;
   /**
    * Sloučení (transakce): nejdřív zamkne řádek návrhu `dupId` (FOR UPDATE) a vyžaduje `pending` (souběh
-   * s keep-both / jiným sloučením → `already_decided`). Pak žádosti a syntetické zprávy `gif-<id>` s `drop` → `keep`,
+   * s keep-both / jiným sloučením → `already_decided`). Pak žádosti a syntetické zprávy `gif-<id>` s `drop` → `keep`
+   * (moveMediaInto; URL zdroje `drop` převezme `keep`, když žádnou nemá),
    * `keep` dostane součet použití, pozdější last_used_at, sjednocení tagů, a když `drop` byl v knihovně (approved),
    * i schválení; vault jen když výsledek není schválený. `drop` se smaže (jeho zamítnutí, zákaz a návrhy kaskádou).
    * `gone` = návrh nebo některé médium mezitím zmizelo.
@@ -231,12 +275,9 @@ export const dbGifLibraryStore: GifLibraryStore = {
       }).from(gifMedia).where(inArray(gifMedia.id, [keep, drop])).for('update');
       const k = rows.find((r) => r.id === keep), d = rows.find((r) => r.id === drop);
       if (!k || !d) return { ok: false, error: 'gone' };
-      // Syntetické zprávy schválených GIFů (content_raw.gif.mediaId) → ponechané médium (jinak by v historii zmizely).
-      await tx.execute(sql`update messages m set content_raw = jsonb_set(m.content_raw, '{gif,mediaId}', to_jsonb(${keep}::text))
-        from gif_requests r
-        where r.media_id = ${drop} and m.platform = r.platform and m.platform_message_id = 'gif-' || r.id::text`);
-      await tx.update(gifRequests).set({ mediaId: keep }).where(eq(gifRequests.mediaId, drop));
-      await tx.delete(gifMedia).where(eq(gifMedia.id, drop));
+      // Syntetické zprávy a žádosti → ponechané médium (jinak by GIFy v historii zmizely), drop pryč, jeho URL zdroje
+      // převzít, když ji ponechané nemá (moveMediaInto — stejná cesta jako souběh dedupu při schválení).
+      await moveMediaInto(tx, drop, keep);
       const later = (k.lastUsedAt?.getTime() ?? 0) >= (d.lastUsedAt?.getTime() ?? 0) ? k.lastUsedAt : d.lastUsedAt;
       const approve = d.status === 'approved' && k.status !== 'approved';
       await tx.update(gifMedia).set({

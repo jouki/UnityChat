@@ -27,7 +27,7 @@ test('dbGifLibraryStore: knihovna (řazení, kurzor, hledání v tagech), duplic
       { ...base, id: ids[0], sha256: 's1', status: 'approved', useCount: 5, lastUsedAt: new Date(3000), tags: ['cat dance', 'cat'] },
       { ...base, id: ids[1], sha256: 's2', status: 'approved', useCount: 5, lastUsedAt: new Date(4000), tags: ['dog'] },
       { ...base, id: ids[2], sha256: 's3', status: 'approved', useCount: 9, tags: [] },
-      { ...base, id: ids[3], sha256: 's4', status: 'rejected', rejectedAt: new Date(), useCount: 1, tags: ['kočka'] },
+      { ...base, id: ids[3], sha256: 's4', status: 'rejected', rejectedAt: new Date(), useCount: 1, tags: ['kočka'], sourceUrlNorm: 'https://tenor.com/view/__test_giflib__' },
     ]);
     const page1 = await libraryPage(s, CH, { limit: 2 });
     const b1 = page1.body as { items: Array<{ mediaId: string }>; nextCursor: string };
@@ -50,6 +50,7 @@ test('dbGifLibraryStore: knihovna (řazení, kurzor, hledání v tagech), duplic
     assert.deepEqual(await s.mergeInto(d.id, ids[0], ids[3], new Date()), { ok: true });
     const [kept] = await db.select().from(gifMedia).where(eq(gifMedia.id, ids[0]));
     assert.equal(kept.useCount, 6);
+    assert.equal(kept.sourceUrlNorm, 'https://tenor.com/view/__test_giflib__', 'M2: URL zdroje zahozeného média převzata');
     assert.deepEqual(kept.tags, ['cat dance', 'cat', 'kočka']);
     assert.equal((await db.select().from(gifMedia).where(eq(gifMedia.id, ids[3]))).length, 0);
     const [req] = await db.select().from(gifRequests).where(eq(gifRequests.id, r.id));
@@ -65,6 +66,19 @@ test('dbGifLibraryStore: knihovna (řazení, kurzor, hledání v tagech), duplic
     assert.equal(await s.keepBoth(d2.id, 'x', new Date()), true);
     assert.deepEqual(await s.mergeInto(d2.id, ids[1], ids[3], new Date()), { ok: false, error: 'already_decided', status: 'kept_both' });
     assert.equal((await db.select().from(gifMedia).where(eq(gifMedia.id, ids[3]))).length, 1);
+
+    // M1: souběh dedupu při schválení (dbGifStore.mergeMedia) přesměruje i syntetické zprávy.
+    const { dbGifStore } = await import('./gifRequests.js');
+    await db.insert(gifMedia).values({ ...base, id: ids[2].replace(/3/g, '5'), sha256: 's5', status: 'pending' });
+    const dupId = ids[2].replace(/3/g, '5');
+    ids.push(dupId);
+    const [r2] = await db.insert(gifRequests).values({ channel: CH, workspace: 'x', platform: 'twitch', platformChannel: CH, userId: '1', login: 'a', messageId: 'm2', mediaId: dupId, kind: 'gif', expiresAt: new Date(), status: 'approved' }).returning();
+    await db.insert(messages).values({ platform: 'twitch', platformMessageId: `gif-${r2.id}`, platformUserId: '1', platformUsername: 'a', content: '', contentRaw: { gif: { mediaId: dupId } }, channel: CH, isUnitychatUser: false, isReply: false, sentAt: new Date() });
+    await dbGifStore.mergeMedia(dupId, ids[1]);
+    const [m2] = await db.select().from(messages).where(eq(messages.platformMessageId, `gif-${r2.id}`));
+    assert.equal((m2.contentRaw as { gif: { mediaId: string } }).gif.mediaId, ids[1]);
+    assert.equal((await db.select().from(gifRequests).where(eq(gifRequests.id, r2.id)))[0].mediaId, ids[1]);
+    assert.equal(await dbGifStore.mediaReferenced(ids[1]), true);
 
     // Worker selektory: rozhodnutá bez hashe → hash; s hashem → kontrola.
     const h = await s.nextToHash();

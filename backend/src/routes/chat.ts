@@ -1,14 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { messages, streamers, type Message } from '../db/schema.js';
+import { gifMedia, messages, streamers, type Message } from '../db/schema.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { subscribeChatStream, chatStreamClientsForIp } from '../sse/chatBus.js';
 import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply, gifReviews } from '../lib/ucSends.js';
 import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
-import { gifFromRaw, gifReplaces, gifOrigin, type GifMediaView } from '../lib/gifIds.js';
+import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -71,8 +71,12 @@ export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platfo
   hiddenAt?: Date | null;
 };
 
-/** Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu). */
-export function toClientMessage(row: ClientRow, historical = true): ClientMessage {
+/**
+ * Řádek z DB (nebo z ingestu) → tvar, který panel dostává od providerů (renderer má jednu cestu).
+ * `goneGifs` = id médií, která už nejsou veřejná (gifMediaGone) — zpráva se schváleným GIFem na takové médium
+ * jde jako smazaná (`gif_removed`) bez obsahu a bez `gif`.
+ */
+export function toClientMessage(row: ClientRow, historical = true, goneGifs?: ReadonlySet<string>): ClientMessage {
   // Smazaná / skrytá zpráva: text, emoty i reply-to zůstávají jen v DB (audit) — klient nikdy nedostane obsah.
   const meta = {
     platform: row.platform,
@@ -87,6 +91,9 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
   };
   if (row.deletedAt) return { ...meta, deleted: true, deletedReason: row.deletedReason };
   if (row.hiddenAt) return { ...meta, hidden: true, segments: [] };
+  // GIF odebraný z knihovny / trvale zahozený: bez obsahu (text nad GIFem patří k GIFu), klient „Zpráva smazána“, OBS skryje.
+  const gifId = goneGifs?.size ? gifMediaIdFromRaw(row.contentRaw) : null;
+  if (gifId && goneGifs!.has(gifId)) return { ...meta, deleted: true, deletedReason: GIF_REMOVED_REASON };
   const out = toClientContent(row, historical);
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
@@ -124,6 +131,28 @@ export function toModeratedContent(row: ClientRow): ClientMessage {
   if (row.deletedAt) { out.deleted = true; out.deletedReason = row.deletedReason ?? null; }
   else if (row.hiddenAt) out.hidden = true;
   return out;
+}
+
+/** Stav média pro gifMediaGone: id → status (`approved` | `pending` | `rejected`); chybějící id = médium neexistuje. */
+export type GifMediaStatusLookup = (ids: string[]) => Promise<Map<string, string>>;
+
+const dbGifMediaStatus: GifMediaStatusLookup = async (ids) => {
+  const rows = await db.select({ id: gifMedia.id, status: gifMedia.status }).from(gifMedia).where(inArray(gifMedia.id, ids));
+  return new Map(rows.map((r) => [r.id, r.status]));
+};
+
+/**
+ * Média schválených GIFů v `rows`, která už nejsou veřejná: neexistují (trvale zahozená, sloučená) nebo jsou
+ * zamítnutá (odebraná z knihovny). Jeden dotaz na stránku (ne N+1); bez GIFů se DB nevolá. Čekající médium
+ * (alias z backfillu, `servableMedia` ho vydá veřejně) zůstává vidět. Chyba DB → prázdná množina (GIF se ukáže
+ * jako dosud, klient pak po 404 napíše „GIF odebrán“).
+ */
+export async function gifMediaGone(rows: ReadonlyArray<Pick<ClientRow, 'contentRaw'>>, lookup: GifMediaStatusLookup = dbGifMediaStatus): Promise<Set<string>> {
+  const ids = [...new Set(rows.map((r) => gifMediaIdFromRaw(r.contentRaw)).filter((x): x is string => !!x))];
+  if (!ids.length) return new Set();
+  let st: Map<string, string>;
+  try { st = await lookup(ids); } catch { return new Set(); }
+  return new Set(ids.filter((id) => { const s = st.get(id); return !s || s === 'rejected'; }));
 }
 
 function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage {
@@ -320,9 +349,11 @@ export default async function chatRoutes(app: FastifyInstance) {
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     const oldest = page[page.length - 1];
+    // GIFy odebrané z knihovny / zahozené → smazané bez média (dávkově, jeden dotaz na stránku).
+    const gone = await gifMediaGone(page);
     return {
       ok: true,
-      messages: page.reverse().map((r) => toClientMessage(r)),
+      messages: page.reverse().map((r) => toClientMessage(r, true, gone)),
       nextBefore: hasMore && oldest ? encodeCursor(oldest.sentAt.getTime(), oldest.id) : null,
     };
   });

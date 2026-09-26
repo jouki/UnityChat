@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   compareLibrary, libraryCursorOf, parseLibraryCursor, parseLibraryQuery, libraryPage, libraryView, updateTags,
   resolveDuplicate, createPhashWorker, duplicateView, mergedVault, isSchemaMissing, libraryErrorReply, LIBRARY_PAGE,
+  redirectMediaRefsSql, adoptSourceUrlSql,
   type GifLibraryStore, type LibraryItem, type LibraryCursor, type DuplicatePair, type LibMedia,
 } from './gifLibrary.js';
 
@@ -294,4 +296,20 @@ test('chyba DB knihovny: chybí tabulka / sloupec (42P01, 42703, i v cause) → 
   assert.equal(isSchemaMissing(new Error('x')), false);
   assert.deepEqual(libraryErrorReply({ code: '42703' }), { status: 503, body: { ok: false, error: 'not_ready' } });
   assert.deepEqual(libraryErrorReply(new Error('boom')), { status: 500, body: { ok: false, error: 'internal' } });
+});
+
+test('M1 redirectMediaRefsSql: syntetické zprávy (content_raw.gif.mediaId) přes žádosti PŘED přesměrováním žádostí; M2 adoptSourceUrlSql', () => {
+  const dialect = new PgDialect();
+  const [msgs, reqs] = redirectMediaRefsSql(id('d'), id('k')).map((q) => dialect.sqlToQuery(q));
+  assert.match(msgs.sql, /update messages m set content_raw = jsonb_set\(m\.content_raw, '\{gif,mediaId\}', to_jsonb\(\$1::text\)\)/);
+  assert.match(msgs.sql, /where r\.media_id = \$2 and m\.platform = r\.platform and m\.platform_message_id = 'gif-' \|\| r\.id::text/);
+  assert.deepEqual(msgs.params, [id('k'), id('d')]);
+  assert.match(reqs.sql, /update gif_requests set media_id = \$1 where media_id = \$2/);
+  assert.deepEqual(reqs.params, [id('k'), id('d')]);
+  // URL zdroje zahozeného média: jen když ji ponechané nemá a nekoliduje se schváleným médiem kanálu.
+  const url = dialect.sqlToQuery(adoptSourceUrlSql(id('k'), 'https://tenor.com/view/x'));
+  assert.match(url.sql, /set source_url_norm = \$1/);
+  assert.match(url.sql, /k\.source_url_norm is null/);
+  assert.match(url.sql, /not exists \(select 1 from gif_media o where o\.channel = k\.channel and o\.source_url_norm = \$3\s+and o\.status = 'approved' and o\.id <> k\.id\)/);
+  assert.deepEqual(url.params, ['https://tenor.com/view/x', id('k'), 'https://tenor.com/view/x']);
 });

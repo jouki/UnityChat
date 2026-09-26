@@ -17,11 +17,25 @@ export interface GifMediaView { url: string; kind: string; width: number | null;
 
 /** content_raw.gif syntetické zprávy → tvar pro klienty; cokoli jiného → null. */
 export function gifFromRaw(raw: unknown): GifMediaView | null {
-  const g = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).gif : null) as Record<string, unknown> | null | undefined;
-  if (!g || typeof g.mediaId !== 'string' || !MEDIA_ID_RE.test(g.mediaId)) return null;
+  const id = gifMediaIdFromRaw(raw);
+  if (!id) return null;
+  const g = (raw as Record<string, unknown>).gif as Record<string, unknown>;
   const dim = (v: unknown): number | null => (typeof v === 'number' && v > 0 ? v : null);
-  return { url: gifMediaUrl(g.mediaId), kind: String(g.kind || 'gif'), width: dim(g.width), height: dim(g.height) };
+  return { url: gifMediaUrl(id), kind: String(g.kind || 'gif'), width: dim(g.width), height: dim(g.height) };
 }
+
+/** content_raw.gif.mediaId syntetické zprávy (32 hex), jinak null. */
+export function gifMediaIdFromRaw(raw: unknown): string | null {
+  const g = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).gif : null) as Record<string, unknown> | null | undefined;
+  return g && typeof g.mediaId === 'string' && MEDIA_ID_RE.test(g.mediaId) ? g.mediaId : null;
+}
+
+/**
+ * Důvod „smazání“ zprávy se schváleným GIFem, jehož médium už veřejné není (odebráno z knihovny = zamítnuté,
+ * trvale zahozeno, sloučeno a pryč). V archivu se nic nemění — /chat/history a Profil ji jen pošlou jako smazanou
+ * bez obsahu a bez `gif` (divák „Zpráva smazána“, OBS ji skryje). Mod ji v UnityChatu neodkryje (`gif_` prefix).
+ */
+export const GIF_REMOVED_REASON = 'gif_removed' as const;
 
 const gifKey = (raw: unknown, key: 'replaces' | 'origin'): string | null => {
   const g = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).gif : null) as Record<string, unknown> | null | undefined;

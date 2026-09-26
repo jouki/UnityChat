@@ -15,7 +15,7 @@ import { unionAll } from 'drizzle-orm/pg-core';
 import { db } from '../db/index.js';
 import { messages, moderationActions, nicknames, type Message } from '../db/schema.js';
 import { encodeCursor, type decodeCursor } from './cursor.js';
-import { toClientMessage, toClientContent, type ClientMessage } from '../routes/chat.js';
+import { toClientMessage, toClientContent, gifMediaGone, type ClientMessage } from '../routes/chat.js';
 import { workspaceForChannel, zidolistaDonations, type Platform, type DonationItem } from './zidolista.js';
 import { defaultWorkspace } from './platformChannels.js';
 import { ucChannelFor } from './ucChannel.js';
@@ -58,6 +58,8 @@ export interface HistoryDeps {
    * `public` = veřejný Profil: necachovaná volání Židolišty jdou přes globální strop (PUBLIC_DONATIONS_PER_MIN).
    */
   donations: (channel: string, ids: UserTarget[], opts?: { public?: boolean }) => Promise<DonationItem[] | null>;
+  /** Média schválených GIFů, která už nejsou veřejná (routes/chat.ts gifMediaGone); chybí = DB. */
+  gifGone?: (rows: Message[]) => Promise<Set<string>>;
 }
 
 const sameId = (a: UserTarget, b: UserTarget) => a.platform === b.platform && a.userId === b.userId;
@@ -351,11 +353,13 @@ export async function buildMessages(input: MessagesInput, deps: HistoryDeps, cac
   const rows = await deps.messagesPage(scope, input.cursor, input.limit);
   const page = rows.slice(0, input.limit);
   const oldest = page[page.length - 1];
+  // GIFy odebrané z knihovny / zahozené → smazané bez média (jako /chat/history).
+  const gone = await (deps.gifGone ?? gifMediaGone)(page);
   return {
     status: 200,
     body: {
       ok: true,
-      messages: page.reverse().map((r) => toClientMessage(r)),
+      messages: page.reverse().map((r) => toClientMessage(r, true, gone)),
       nextBefore: rows.length > input.limit && oldest ? encodeCursor(oldest.sentAt.getTime(), oldest.id) : null,
     },
   };

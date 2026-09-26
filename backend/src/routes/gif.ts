@@ -10,7 +10,7 @@
 //   GET  /gif/state?channel=&platform=&review=1   (Bearer) cooldown + režim odměny pro vlastní účet (bublina u pole)
 //
 // Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající a zamítnuté `private, no-store`,
-// schválené `public, max-age=3600`. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
+// schválené `public, max-age=300`. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
 import type { FastifyInstance, FastifyReply, preHandlerAsyncHookHandler } from 'fastify';
 import { z } from 'zod';
 import { requireWebSession, listIdentities, type PublicIdentity } from '../lib/webAuth.js';
@@ -59,10 +59,11 @@ const IdParam = z.object({ requestId: z.coerce.number().int().positive().max(Num
 
 /**
  * Cache-Control podle stavu: čekající médium vidí jen modi a odesílatel a může být zamítnuté, zamítnuté jde jen
- * s tokenem → nikam neukládat; schválené → hodina, bez `immutable`.
+ * s tokenem → nikam neukládat; schválené → 5 minut, bez `immutable` (odebrání z knihovny / zahození se
+ * v prohlížečích a na proxy projeví nejpozději do 5 minut; rozhodnutí 2026-09-26).
  */
 export function mediaCacheControl(status: MediaEntry['status']): string {
-  return status === 'approved' ? 'public, max-age=3600' : 'private, no-store';
+  return status === 'approved' ? 'public, max-age=300' : 'private, no-store';
 }
 
 /**
@@ -249,7 +250,11 @@ const defaultStateDeps: GifStateDeps = {
 export const GIF_HELD_BATCH = 50;
 
 export type GifHeldState = 'held' | 'visible' | 'deleted' | 'replaced' | 'unknown';
-export interface GifHeldItem { platform: Platform; messageId: string; state: GifHeldState; reason?: string; message?: ClientMessage }
+/**
+ * `status` = stav žádosti o GIF k té zprávě (pending | approved | rejected | expired | deleted), když žádost existuje —
+ * odesílatel podle něj usadí štítek u vlastní zprávy (core GifOutbox), když se `gif-decided` ztratilo.
+ */
+export interface GifHeldItem { platform: Platform; messageId: string; state: GifHeldState; reason?: string; message?: ClientMessage; status?: GifStatus }
 
 export interface GifHeldDeps {
   inFlight: (platform: Platform, messageId: string) => boolean;
@@ -282,6 +287,7 @@ export function parseHeldIds(raw: string | undefined): Array<{ platform: Platfor
  * se ztratilo — výpadek SSE):
  *  - zachycení ještě běží / žádost čeká → `held` (klient se zeptá znovu);
  *  - žádost schválena → `replaced` (GIF ji nahradil, zůstává schovaná); zamítnuta/propadla → `deleted` gif_rejected;
+ *    se žádostí navíc `status` (stav žádosti — odesílatel podle něj usadí štítek, když se gif-decided ztratilo);
  *  - řádek v archivu nesmazaný → `visible` + celá zpráva; smazaný jiným důvodem → `deleted` + důvod;
  *  - zaseknutý gif_request bez žádosti a bez běžícího zachycení (převod selhal a rozhodnutí se neuložilo,
  *    restart serveru) → obnovit (fail-open: na platformě zpráva zůstala, bot maže až po úspěšném převodu)
@@ -299,11 +305,11 @@ export async function gifHeldState(channel: string, keys: Array<{ platform: Plat
     const row = pc ? await deps.row(platform, messageId) : null;
     if (!row || !channelMatches(row.channel, pc)) { out.push({ ...base, state: 'unknown' }); continue; }
     const st = await deps.requestStatus(platform, messageId);
-    if (st === 'pending') { out.push({ ...base, state: 'held' }); continue; }
-    if (st === 'approved' || st === 'deleted') { out.push({ ...base, state: 'replaced' }); continue; }
+    if (st === 'pending') { out.push({ ...base, state: 'held', status: st }); continue; }
+    if (st === 'approved' || st === 'deleted') { out.push({ ...base, state: 'replaced', status: st }); continue; }
     if (st === 'rejected' || st === 'expired') {
       if (row.deletedReason === GIF_HELD) await deps.retag(platform, messageId, GIF_HELD, GIF_REJECTED_REASON).catch(() => false);
-      out.push({ ...base, state: 'deleted', reason: GIF_REJECTED_REASON });
+      out.push({ ...base, state: 'deleted', reason: GIF_REJECTED_REASON, status: st });
       continue;
     }
     if (!row.deletedAt) { out.push({ ...base, state: 'visible', message: toClientMessage(row, true) }); continue; }

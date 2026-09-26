@@ -270,3 +270,16 @@ test('DB: skupiny kanálů, stránka zpráv a moderace přes identity (platform,
     await db.delete(moderationActions).where(eq(moderationActions.channel, ch));
   }
 });
+
+test('I2 buildMessages: GIF odebraný z knihovny → smazaná bez média (gifGone), stejně jako /chat/history', async () => {
+  const M = 'e'.repeat(32);
+  const dd = deps({
+    messagesPage: async () => [row(9, 'twitch', '1', 'robdiesalot', '2026-09-25T10:00:00Z', { platformMessageId: 'gif-9', contentRaw: { gif: { mediaId: M, kind: 'gif' } } })],
+    gifGone: async (rows) => { assert.equal(rows.length, 1); return new Set([M]); },
+  });
+  const out = await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd);
+  const [m] = (out.body as { messages: Array<Record<string, unknown>> }).messages;
+  assert.equal(m.deleted, true);
+  assert.equal(m.deletedReason, 'gif_removed');
+  assert.equal(m.gif, undefined);
+});

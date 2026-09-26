@@ -53,7 +53,7 @@ test('MediaServer: tombstone — smazané/zamítnuté médium se nevrátí z cac
 test('mediaCacheControl: čekající a zamítnuté private no-store, schválené hodina bez immutable (bod 4)', () => {
   assert.equal(mediaCacheControl('pending'), 'private, no-store');
   assert.equal(mediaCacheControl('rejected'), 'private, no-store');
-  assert.equal(mediaCacheControl('approved'), 'public, max-age=3600');
+  assert.equal(mediaCacheControl('approved'), 'public, max-age=300');
 });
 
 test('mediaAllowed: schválené a čekající veřejně; zamítnuté jen s platným tokenem pro kanál média (bez / špatný / nemod → ne)', async () => {
@@ -295,11 +295,14 @@ test('gifHeldState: běžící zachycení / čekající žádost = held; schvál
   assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], inflight.deps))[0].state, 'held');
   assert.deepEqual(inflight.calls, []);
   const pend = heldDeps({ a: held }, { requestStatus: async () => 'pending' });
-  assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], pend.deps))[0].state, 'held');
+  // Se žádostí nese položka i `status` (odesílatel podle něj usadí štítek, když se gif-decided ztratilo).
+  assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], pend.deps))[0], { platform: 'twitch', messageId: 'a', state: 'held', status: 'pending' });
   const appr = heldDeps({ a: held }, { requestStatus: async () => 'approved' });
-  assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], appr.deps))[0].state, 'replaced');
+  assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], appr.deps))[0], { platform: 'twitch', messageId: 'a', state: 'replaced', status: 'approved' });
   const rej = heldDeps({ a: held }, { requestStatus: async () => 'expired' });
-  assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], rej.deps))[0], { platform: 'twitch', messageId: 'a', state: 'deleted', reason: 'gif_rejected' });
+  assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], rej.deps))[0], { platform: 'twitch', messageId: 'a', state: 'deleted', reason: 'gif_rejected', status: 'expired' });
+  const rj = heldDeps({ a: held }, { requestStatus: async () => 'rejected' });
+  assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], rj.deps))[0].status, 'rejected');
   assert.deepEqual(rej.calls, ['retag:a:gif_request->gif_rejected']);
 });
 
