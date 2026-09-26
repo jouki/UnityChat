@@ -347,6 +347,9 @@ export const FLUSH_WAIT_MS = 1500;
  */
 export const SETTLE_RETRY_MS = 5000;
 
+/** Host odkazu do logu (bez cesty a query). */
+const safeHost = (u: unknown): string => { try { return new URL(String(u)).hostname; } catch { return '?'; } };
+
 export function createGifFlow(deps: GifFlowDeps) {
   const busy = new Set<string>();
   // Původní zprávy právě v interceptu (`platform:messageId`) — GET /gif/held je hlásí jako „čeká".
@@ -539,7 +542,7 @@ export function createGifFlow(deps: GifFlowDeps) {
             if (mediaId) await safe('úklid média', () => deps.store.deleteMedia(mediaId!));
           }
         } else {
-          deps.log.info({ channel: p.ucChannel, platform: m.platform, code: res.code }, 'gif: převod odkazu selhal (běžný odkaz)');
+          deps.log.info({ channel: p.ucChannel, platform: m.platform, host: safeHost(p.candidate.url), code: res.code }, 'gif: převod odkazu selhal (běžný odkaz)');
         }
 
         if (!created) {

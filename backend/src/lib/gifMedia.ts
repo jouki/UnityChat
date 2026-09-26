@@ -263,9 +263,12 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
     let res: TransportResponse;
     try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
     catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
-    if (deps.unlocker && await isCloudflareChallenge(res, signal)) {
+    // Ochrana proti botům (Cloudflare challenge) = jediný případ pro Bright Data; jiné chyby (404, HTML místo
+    // média, velikost…) jdou rovnou ven bez placeného pokusu. Bez možnosti obejít → vlastní kód bot_protection.
+    if ((res.status === 403 || res.status === 503) && await isCloudflareChallenge(res, signal)) {
       res.dispose();
-      const original = new GifError(`http_${res.status}`);
+      const original = new GifError('bot_protection');
+      if (!deps.unlocker) throw original;
       ctx.extend(deps.unlocker.timeoutMs);
       // Zapsat předem: i chyba samotného API jde do reportu (log + negativní cache).
       ctx.unlocked.push(url);

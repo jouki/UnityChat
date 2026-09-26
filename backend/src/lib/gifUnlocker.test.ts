@@ -69,7 +69,7 @@ test('unlocker: bez klíče / zóny vypnutý; ne-challenge 403 a neveřejná URL
   assert.equal(createUnlocker({ apiKey: KEY, zone: '', dailyCap: 100, fetch: f }), null);
   assert.equal(createUnlocker({ apiKey: KEY, zone: 'z', dailyCap: 0, fetch: f }), null);
   // Bez unlockeru: challenge = původní chyba.
-  await assert.rejects(resolveGif({ url: URL_4PC, mode: 'direct' }, { transport: transportOf({ [URL_4PC]: challenge }), lookupAll, unlocker: null }), (e: GifError) => e.code === 'http_403');
+  await assert.rejects(resolveGif({ url: URL_4PC, mode: 'direct' }, { transport: transportOf({ [URL_4PC]: challenge }), lookupAll, unlocker: null }), (e: GifError) => e.code === 'bot_protection');
 
   const unlocker = mk({ fetch: f });
   const plain403: Route = { status: 403, headers: { 'content-type': 'text/html' }, body: Buffer.from('<h1>Forbidden</h1>') };
@@ -141,10 +141,10 @@ test('unlocker: denní strop → původní chyba bez volání; reset o půlnoci 
   const t = transportOf(routes);
   const go = (i: number) => resolveGif({ url: `https://i.4pcdn.org/${i}.gif`, mode: 'direct' }, { transport: t, lookupAll, unlocker });
   await go(0); await go(1);
-  await assert.rejects(go(2), (e: GifError) => e.code === 'http_403');
+  await assert.rejects(go(2), (e: GifError) => e.code === 'bot_protection');
   assert.equal(calls.length, 2);
   now = Date.parse('2026-09-26T23:59:59Z');
-  await assert.rejects(go(2), (e: GifError) => e.code === 'http_403');
+  await assert.rejects(go(2), (e: GifError) => e.code === 'bot_protection');
   now = Date.parse('2026-09-27T00:00:01Z');
   assert.equal((await go(3)).kind, 'gif');
   assert.equal(calls.length, 3);
@@ -159,7 +159,7 @@ test('unlocker: negativní cache — po selhání stejnou URL 10 min nevolá', a
   const go = (u = URL_4PC) => resolveGif({ url: u, mode: 'direct' }, { transport: t, lookupAll, unlocker });
   await assert.rejects(go(), (e: GifError) => e.code === 'bad_type');
   fail = false;
-  await assert.rejects(go(), (e: GifError) => e.code === 'http_403'); // z cache: původní chyba, bez volání
+  await assert.rejects(go(), (e: GifError) => e.code === 'bot_protection'); // z cache: ochrana, bez volání
   assert.equal(calls.length, 1);
   assert.equal((await go('https://i.4pcdn.org/other.gif')).kind, 'gif'); // jiná URL volá
   now += UNLOCKER_NEGATIVE_TTL_MS + 1;
@@ -171,7 +171,7 @@ test('unlocker: negativní cache — po selhání stejnou URL 10 min nevolá', a
   const api = mk({ fetch: brdFetch(() => new Response('x', { status: 502, headers: { 'x-brd-error-code': 'nav_timeout' } }), apiCalls), now: () => now });
   const goApi = () => resolveGif({ url: URL_4PC, mode: 'direct' }, { transport: t, lookupAll, unlocker: api });
   await assert.rejects(goApi(), (e: GifError) => e.code === 'unlocker_nav_timeout');
-  await assert.rejects(goApi(), (e: GifError) => e.code === 'http_403');
+  await assert.rejects(goApi(), (e: GifError) => e.code === 'bot_protection');
   assert.equal(apiCalls.length, 1);
 });
 
