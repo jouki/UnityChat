@@ -1153,7 +1153,8 @@ class UnityChat {
     // Ladění / e2e: pojistka schovaných GIF zpráv (delayMs, size).
     try { window.ucGifHold = () => this._gifHold(); } catch {}
     // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker }; } catch {}
+    // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m) }; } catch {}
 
     this._init();
   }
@@ -1254,6 +1255,8 @@ class UnityChat {
         channel: () => (this.config.channel || '').toLowerCase(),
         log: (tag, text) => this._ucLog(tag, text),
         hasMessage: (platform, id) => this._msgEls(id, platform).length > 0,
+        // Pojistka po ztrátě SSE: stav štítku z GET /gif/held (průběh bez události 60 s, čekání po expiresAt).
+        api: (path) => this._ucApi(path),
         onChange: (keys) => this._paintGifOwn(keys),
         onNotice: (kind) => { if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT); },
       });
@@ -1279,9 +1282,18 @@ class UnityChat {
    */
   _applyGifOwn(el, msg) {
     if (!el) return;
-    if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); return; }
     const platform = el.dataset.platform || msg?.platform;
-    window.UC_CORE.paintGifStatus(document, el, this._gifOutInst?.view(platform, el.dataset.msgId) || null);
+    const view = this._gifOutInst?.view(platform, el.dataset.msgId) || null;
+    // Schváleno a echo pořád nedorazilo (YouTube: bot zprávu smazal dřív, než ji poller viděl) → optimistická
+    // zpráva s odkazem pryč; schválený GIF je nová zpráva na konci chatu.
+    if (view?.kind === 'approved' && el.isConnected && String(el.dataset.msgId || '').startsWith('sent-')) {
+      this._ucLog('Gif', `${el.dataset.msgId} schváleno bez echa → optimistická zpráva pryč`);
+      this._gifOutInst?.drop(platform, el.dataset.msgId);
+      this._dropOptimistic(el.dataset.msgId);
+      return;
+    }
+    if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); return; }
+    window.UC_CORE.paintGifStatus(document, el, view);
   }
 
   /** Dev mode (pamatuje se v configu): nástroje, editace jména; QR dono ukáže i u kanálu bez darů. */
@@ -4164,13 +4176,19 @@ class UnityChat {
       // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
       if (j.fallback === 'mention') this._dropOptimistic(optId);
       // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora).
+      // GIF zprávu ale řídí štítek (gif-progress / gif-decided): server ji schoval a bot ji mohl smazat dřív,
+      // než ji poller viděl → echo nikdy nepřijde, přesto odešla. Bez štítku (server o ní neví) → neodesláno.
       if (platform === 'youtube') {
-        setTimeout(() => {
-          if (this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)) {
-            this._markSendFailed(optId, 'YouTube zprávu přijal, ale v chatu ji nezobrazil — nejspíš blokuje odkazy nebo ji zadržel filtr');
-            this._ucLog('Send', 'youtube: bez echa 20 s → označeno');
-          }
-        }, 20_000);
+        const isGif = !!raw && !raw.startsWith('!') && window.UC_CORE.hasGifLink(raw);
+        const check = (last) => {
+          if (!this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)) return;
+          if (isGif && this._gifOutInst?.governs(platform, optId)) { this._ucLog('Send', 'youtube: GIF bez echa — stav řídí štítek, ne neodesláno'); return; }
+          // GIF: server se mohl ozvat později (poller YouTube) → ještě jednou za 25 s.
+          if (isGif && !last) { setTimeout(() => check(true), 25_000); return; }
+          this._markSendFailed(optId, 'YouTube zprávu přijal, ale v chatu ji nezobrazil — nejspíš blokuje odkazy nebo ji zadržel filtr');
+          this._ucLog('Send', 'youtube: bez echa 20 s → označeno');
+        };
+        setTimeout(() => check(false), 20_000);
       }
     } catch (e) {
       fail(e.message || 'neodesláno');
@@ -4760,7 +4778,8 @@ class UnityChat {
     core.applyDeleted(el, { ...view, hidden, hasContent, restorable });
     // Historie/stream posílají smazanou zprávu bez obsahu — mod si text dotáhne (dávkově, jednou).
     const id = msg?.id != null ? String(msg.id) : '';
-    if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && this.store.get(msg.id) === msg) {
+    // GIF odebraný z knihovny (gif_removed) text nemá — neptat se.
+    if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && msg.deletedReason !== 'gif_removed' && this.store.get(msg.id) === msg) {
       if (this._deletedLoader().request(msg.platform, id)) this._ucLog('Mod', `deleted-content ← ${msg.platform}:${id}`);
     }
   }
@@ -5525,6 +5544,8 @@ class UnityChat {
         'gif-progress': (d) => this._gifOut().onProgress(d),
         'gif-notice': (d) => this._gifOut().onNotice(d),
       },
+      // Po (znovu)připojení: události mohly propadnout → stav vlastních GIF štítků dotazem (GET /gif/held).
+      onOpen: ({ reconnect }) => { const n = this._gifOutInst?.resync() || 0; if (n || reconnect) this._ucLog('Gif', `account stream ${reconnect ? 'znovu ' : ''}připojen → resync ${n} štítků`); },
       log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
     });
   }
@@ -7826,6 +7847,21 @@ class UnityChat {
         const cleanMsg = msg.message.replace(' ' + UC_MARKER, '').replace(UC_MARKER, '');
         if (cleanMsg === this._lastSentText) this._lastSentText = null;
       }
+    }
+
+    // Vlastní GIF: echo spárovat přes id (POST /chat/send → id, gif-progress requestKey), ne podle textu — server
+    // zprávu schoval (gif_request) a /chat/stream ji pošle BEZ obsahu, textový klíč by nesouhlasil a zpráva by
+    // se ukázala dvakrát. Optimistická si nechá svůj text (gifEchoPatch), echo dodá id, čas a smazání.
+    const gifOpt = !msg._optimistic && msg.id != null && this._gifOutInst?.optIdFor(msg.platform, String(msg.id));
+    if (gifOpt && this.store.get(gifOpt)) {
+      for (const [k, id] of this._optimisticKeys) if (id === gifOpt) { this._optimisticKeys.delete(k); break; }
+      const patch = window.UC_CORE.gifEchoPatch(msg);
+      this.store.upgrade(gifOpt, patch);
+      this._upgradeOptimistic(gifOpt, patch);
+      this._ucLog('Gif', `echo ${msg.platform}:${msg.id} spárováno přes id s ${gifOpt}${patch === msg ? '' : ' (bez obsahu)'}`);
+      const heldR = msg.deleted ? msg.deletedReason : this._heldReasons?.get(String(msg.id));
+      if (heldR || msg.deleted) this._applyDeleted(msg.platform, msg.id, { reason: heldR || null });
+      return;
     }
 
     // Párování optimistická ↔ echo z platformy (echo má jiné id, stejný text).

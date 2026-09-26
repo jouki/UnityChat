@@ -1,5 +1,5 @@
 // E2E (headless Chrome + CDP): odměna „Posílání GIFů" (moderace část 4) v addonu.
-//  A (mod): GIF z historie (img 400×225, lazy), chyba média → odkaz, GET /moderation/gif/pending → karta,
+//  A (mod): GIF z historie (img 400×225, lazy), chyba média → „GIF odebrán“ (bez odkazu), gif_removed z historie, GET /moderation/gif/pending → karta,
 //     gif-pending z /account/stream (karta s náhledem, textem, odpočtem), Schválit (POST decide) → „Schváleno · tebou"
 //     → karta zmizí, SSE gif-message → zpráva s GIFem (dedup), MP4 = <video autoplay loop muted playsinline>,
 //     Zamítnout, 409 already_decided, rozhodnutí jiného moda (gif-decided), propadnutí, cizí kanál, smazání GIFu modem.
@@ -86,6 +86,8 @@ const H1 = [
   H('gif-8', 'Divak', 'u9', 'nahradil', 4, { gif: { url: murl(MEDIA.ok), kind: 'gif', width: 50, height: 50 }, replaces: 'twitch:e2e-held' }),
   H('e2e-rej', 'Divak', 'u9', '', 5, { deleted: true, deletedReason: 'gif_rejected' }),
   H('e2e-wait', 'Divak', 'u9', '', 6, { deleted: true, deletedReason: 'gif_request' }),
+  // Závěrečná review I2: GIF odebraný z knihovny → server ho v historii pošle jako smazaný (gif_removed) bez média.
+  H('gif-9', 'Divak', 'u9', '', 6.5, { deleted: true, deletedReason: 'gif_removed' }),
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
 const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
@@ -210,8 +212,10 @@ const h5 = await ev(`(() => { const i = document.querySelector('.msg[data-msg-id
     text: document.querySelector('.msg[data-msg-id="gif-5"] .tx').textContent, after: i.closest('.uc-gif').previousElementSibling?.className }; })()`);
 check('A historie: 498×280 → 400×225, lazy, z našeho serveru, pod textem', h5?.w === '400' && h5.h === '225' && h5.loading === 'lazy' && h5.src === murl(MEDIA.ok) && h5.rw <= 400 && h5.rh <= 250 && h5.text === 'z historie' && h5.after === 'tx', JSON.stringify(h5));
 check('A historie: obrázek se načetl', await until(`document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif-media')?.complete && document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif-media').naturalWidth > 0`, 5000));
-check('A GIF s prázdným textem se nezahodí + chyba média → odkaz', await until(`document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif-fallback')?.textContent === 'GIF se nepodařilo načíst — otevřít'`, 5000)
-  && await ev(`document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif-fallback').href`) === murl(MEDIA.bad));
+check('A GIF s prázdným textem se nezahodí + chyba média (404) → štítek „GIF odebrán“ bez odkazu', await until(`document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif-fallback')?.textContent === 'GIF odebrán'`, 5000)
+  && await ev(`!document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif a') && document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif-fallback').tagName`) === 'SPAN');
+const g9 = await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-9"]'); if (!m) return null; return { deleted: m.classList.contains('uc-deleted'), held: m.classList.contains('uc-gif-held'), gif: !!m.querySelector('.uc-gif'), shown: getComputedStyle(m).display !== 'none' }; })()`);
+check('A I2 gif_removed z historie → smazaná zpráva bez média (mod ji vidí jako smazanou, ne schovanou)', g9?.deleted && !g9.held && !g9.gif && g9.shown, JSON.stringify(g9));
 
 // GET pending (mod) → karta 20 (FIFO: jen nejstarší čekající)
 check('A GET /moderation/gif/pending s kanálem', await until(`true`, 10) && posts.pending.some((x) => /pending\?channel=robdiesalot$/.test(x)), posts.pending.join(' | '));
@@ -341,7 +345,8 @@ check('A gif-message z cizího kanálu / s cizím médiem ignorováno', await ev
 await ev(`(() => { window.__vid = []; const P = HTMLMediaElement.prototype; P.play = function () { window.__vid.push('play'); return Promise.resolve(); }; P.pause = function () { window.__vid.push('pause'); }; return true; })()`);
 await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-28"]'); window.__parked = m; m.remove(); return true; })()`);
 check('A zaparkovaný uzel (mimo DOM) → video pause', await until(`window.__vid.includes('pause')`, 3000), await ev(`JSON.stringify(window.__vid)`));
-await ev(`(() => { window.__vid = []; document.getElementById('chat').appendChild(window.__parked); return true; })()`);
+// Vrácený uzel do záběru (víc zpráv v historii ho jinak může nechat pod okrajem → IO ho správně nespustí).
+await ev(`(() => { window.__vid = []; document.getElementById('chat').appendChild(window.__parked); window.__parked.scrollIntoView({ block: 'center' }); return true; })()`);
 check('A vrácený uzel → video znovu play', await until(`window.__vid.includes('play')`, 3000), await ev(`JSON.stringify(window.__vid)`));
 
 // Odpověď na GIF: nativní reply nejde (zpráva na Twitchi neexistuje) → ucReplyTo + @jméno.
@@ -606,6 +611,46 @@ mock.sendId = null;
 mock.sse.push(['gif-message', { channel: 'robdiesalot', requestId: 70, message: { platform: 'twitch', id: 'gif-70', username: 'Cizi', userId: 'u70', message: '', timestamp: Date.now() + 1000, historical: false, color: '#1e90ff', gif: { url: murl(MEDIA.ok), kind: 'gif', width: 60, height: 40 }, gifOrigin: 'twitch:hodne-stara' } }]);
 check('B schválený GIF jiného diváka je poslední zprávou', await until(`[...document.querySelectorAll('#chat .msg[data-msg-id]')].filter(m => getComputedStyle(m).display !== 'none').at(-1)?.dataset.msgId === 'gif-70'`, 8000));
 check('B GIF z historie vidí i divák', await ev(`!!document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif img')`) === true);
+check('B I2 gif_removed → divák „smazáno“ bez média', await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-9"]'); return !!m && m.classList.contains('uc-deleted') && !m.querySelector('.uc-gif'); })()`) === true);
+
+// ---- Závěrečná review I1: GIF poslaný účtem, echo bez obsahu / žádné echo (YouTube: server zprávu schoval) ----
+const optGif = (needle) => ev(`(() => { const els = [...document.querySelectorAll('#chat .msg')].filter(m => (m.querySelector('.tx')?.textContent || '').includes(${JSON.stringify(needle)}));
+  const m = els[0]; return { n: els.length, id: m?.dataset.msgId || null, shown: m ? getComputedStyle(m).display !== 'none' : false, kind: m?.querySelector('.uc-gif-st')?.dataset.kind || null,
+    label: m?.querySelector('.uc-gif-st-pct, .uc-gif-st-txt')?.textContent || null, failed: !!m?.classList.contains('send-failed') }; })()`);
+const sendGif = async (id, text) => {
+  await ev(`(() => { window.ucGif.cd().reset(); return true; })()`);
+  mock.sendId = id;
+  const n = posts.send.length;
+  await typeIn(text);
+  await sleep(300);
+  await clickSend();
+  return waitFor(() => posts.send.length > n, 4000);
+};
+mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1 };
+check('I1 GIF odeslán účtem (POST /chat/send → id)', await sendGif('e2e-i1', 'echo bez textu https://tenor.com/view/i1-gif-1'));
+pushAcc(PR('e2e-i1', 'download', 30));
+check('I1 průběh podle id z /chat/send → štítek u optimistické zprávy', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.uc-gif-st-pct')?.textContent === '30 %')`, 12000), JSON.stringify(await optGif('i1-gif')));
+// Echo z /chat/stream: server zprávu schoval (gif_request) → přijde BEZ textu; textem by se nespárovala.
+await ev(`(window.ucGif.add({ platform: 'twitch', id: 'e2e-i1', username: 'ModUser', userId: 'u7', message: '', timestamp: Date.now(), historical: false, deleted: true, deletedReason: 'gif_request' }), true)`);
+await sleep(300);
+const i1 = await optGif('i1-gif');
+check('I1 echo bez textu → spárováno přes id: jedna zpráva, text i štítek zůstaly', i1?.n === 1 && i1.id === 'e2e-i1' && i1.shown && i1.kind === 'progress' && !i1.failed, JSON.stringify(i1));
+check('I1 … žádná druhá (prázdná) zpráva e2e-i1', await ev(`document.querySelectorAll('#chat .msg[data-msg-id="e2e-i1"]').length`) === 1);
+// Bez echa (bot zprávu smazal dřív, než ji poller viděl): čeká → schváleno → optimistická pryč, GIF na konci chatu.
+check('I1 druhý GIF odeslán', await sendGif('e2e-i2', 'bez echa https://tenor.com/view/i2-gif-2'));
+pushAcc(PR('e2e-i2', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(40, { own: true, login: 'moduser', messageId: 'e2e-i2' })]);
+check('I1 bez echa → optimistická se štítkem „Schvalování moderátorem“', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('i2-gif') && m.querySelector('.uc-gif-st')?.dataset.kind === 'pending')`, 12000), JSON.stringify(await optGif('i2-gif')));
+pushAcc(['gif-decided', { requestId: 40, channel: 'robdiesalot', approved: true, status: 'approved', own: true }]);
+mock.sse.push(['gif-message', { channel: 'robdiesalot', requestId: 40, message: { platform: 'twitch', id: 'gif-40', username: 'ModUser', userId: 'u7', message: 'bez echa', timestamp: Date.now() + 5000, historical: false, color: '#1e90ff', gif: { url: murl(MEDIA.ok), kind: 'gif', width: 60, height: 40 }, gifOrigin: 'twitch:e2e-i2' } }]);
+check('I1 schváleno bez echa → GIF na konci chatu', await until(`!!document.querySelector('.msg[data-msg-id="gif-40"] .uc-gif img')`, 8000));
+check('I1 … optimistická zpráva s odkazem zmizela (žádný duplikát)', await until(`![...document.querySelectorAll('#chat .msg')].some(m => m.querySelector('.tx')?.textContent.includes('i2-gif'))`, 4000), JSON.stringify(await optGif('i2-gif')));
+// Bez echa → zamítnuto: zpráva zůstane s červeným štítkem, ne „neodesláno“.
+check('I1 třetí GIF odeslán', await sendGif('e2e-i3', 'zamitnuty https://tenor.com/view/i3-gif-3'));
+pushAcc(PR('e2e-i3', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(41, { own: true, login: 'moduser', messageId: 'e2e-i3' })],
+  ['gif-decided', { requestId: 41, channel: 'robdiesalot', approved: false, status: 'rejected', own: true }]);
+check('I1 bez echa → zamítnuto: optimistická zůstane s červeným „Zamítnuto moderátorem“', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('i3-gif') && m.querySelector('.uc-gif-st')?.dataset.kind === 'rejected')`, 12000), JSON.stringify(await optGif('i3-gif')));
+check('I1 … ne jako neodeslaná', (await optGif('i3-gif'))?.failed === false);
+mock.sendId = null;
 
 // ---- fáze D (divák): bublina cooldownu ----
 const SN = 5_000_000;   // hodiny serveru jinde než klient (posun přes serverNow)

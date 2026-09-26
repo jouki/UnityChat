@@ -190,9 +190,12 @@ Promise.all([
     class FakeES { constructor(url) { this.url = url; this.l = {}; this.closed = false; sources.push(this); } addEventListener(t, f) { (this.l[t] ||= []).push(f); } emit(t, data) { for (const f of this.l[t] || []) f({ data: data === undefined ? undefined : JSON.stringify(data) }); } close() { this.closed = true; } }
     let tickets = 0; const timers = [];
     const got = [], acks = [];
-    const s = aw.connectAccountStream({ baseUrl: 'https://api', EventSource: FakeES, getTicket: async () => `t${++tickets}`, onWarning: (w) => got.push(w), onAck: (id) => acks.push(id), setTimeout: (f) => { timers.push(f); return timers.length; }, clearTimeout: () => {} });
+    const opens = [];
+    const s = aw.connectAccountStream({ baseUrl: 'https://api', EventSource: FakeES, getTicket: async () => `t${++tickets}`, onWarning: (w) => got.push(w), onAck: (id) => acks.push(id), onOpen: (i) => opens.push(i.reconnect), setTimeout: (f) => { timers.push(f); return timers.length; }, clearTimeout: () => {} });
     await new Promise((r) => setTimeout(r, 0));
     check('stream: URL s ticketem', sources[0]?.url === 'https://api/account/stream?ticket=t1', sources[0]?.url);
+    sources[0].emit('open');
+    check('stream: onOpen při prvním připojení (reconnect: false)', eq(opens, [false]));
     sources[0].emit('account-warning', { id: 9, channel: 'rob', reason: 'Nespamuj', createdAt: 'x' });
     sources[0].emit('account-warning-ack', { id: 9 });
     check('stream: account-warning + ack', got[0]?.id === '9' && got[0].reason === 'Nespamuj' && acks[0] === '9');
@@ -200,6 +203,8 @@ Promise.all([
     check('stream: po chybě zavřeno + naplánováno', sources[0].closed && timers.length === 1);
     timers[0](); await new Promise((r) => setTimeout(r, 0));
     check('stream: reconnect s NOVÝM ticketem', sources[1]?.url.endsWith('ticket=t2'), sources[1]?.url);
+    sources[1].emit('open');
+    check('stream: onOpen po znovupřipojení (reconnect: true — GifOutbox.resync)', eq(opens, [false, true]));
     sources[1].emit('error', { error: 'too_many_streams' });
     check('stream: too_many_streams → bez obnovy', timers.length === 1);
     s.close();

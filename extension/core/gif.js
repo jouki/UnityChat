@@ -2,7 +2,7 @@
 // kontrakt docs/superpowers/plans/2026-09-25-moderace-cast-2-kontrakt.md §Část 4). Sdílené addonem i webem.
 //
 //  - render schváleného GIFu ve zprávě (createGifMedia): <img> nebo <video autoplay loop muted playsinline>,
-//    max 400 × 250 px se zachovaným poměrem, lazy load, při chybě odkaz;
+//    max 400 × 250 px se zachovaným poměrem, lazy load, při chybě štítek „GIF odebrán“;
 //  - fronta ke schválení pro mody (GifRequests, GIF knihovna 2026-09-26): FIFO — jedna karta = nejstarší čekající +
 //    „+N čeká“, SSE `gif-pending` / `gif-decided` / `gif-queue` z /account/stream, zámek tlačítek 1 s / 0,3 s,
 //    POST /moderation/gif/:id/decide (409 → „Už rozhodl X“), GET /moderation/gif/pending, ban12h.
@@ -305,12 +305,16 @@ function gifVideoObserver(win) {
   return io;
 }
 
+/** Štítek místo média, které se nenačetlo (odebráno z knihovny / trvale zahozeno). */
+export const GIF_REMOVED_TEXT = 'GIF odebrán';
+
 /**
  * Médium GIFu jako prvek `<div class="uc-gif">` (do zprávy pod text, nebo do karty).
  * Velikost: 100 %, nejvýš `maxW` × `maxH` (výchozí 400 × 250), poměr zachován (inline width + aspect-ratio,
  * aby CSS nemuselo nic ořezávat a obraz se nedeformoval).
  * `lazy`: obrázek `loading="lazy"`; video se spouští / zastavuje podle viditelnosti (sdílený IO).
- * Chyba načtení → odkaz „GIF se nepodařilo načíst“ (otevře médium v nové kartě).
+ * Chyba načtení → štítek „GIF odebrán“ (médium je vždy z našeho serveru a 404 znamená odebráno z knihovny / zahozeno;
+ * odkaz „otevřít“ by vedl jen na tutéž 404 — závěrečná review 2026-09-26, I2).
  */
 export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H, token = null, onError = null } = {}) {
   const g = gif && gif.url && isGifMediaUrl(gif.url) ? gif : null;
@@ -339,12 +343,9 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     // Hostitel si může říct o nový token a médium vykreslit znovu (zamítnuté GIFy moda) → true = vyřízeno.
     if (onError && onError({ wrap, url: g.url, token }) === true) return;
     try { if (video) gifVideoObserver(doc.defaultView)?.unobserve(m); } catch { /* ignore */ }
-    const a = doc.createElement('a');
+    const a = doc.createElement('span');
     a.className = 'uc-gif-fallback';
-    a.href = g.url;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.textContent = 'GIF se nepodařilo načíst — otevřít';
+    a.textContent = GIF_REMOVED_TEXT;
     wrap.replaceChildren(a);
     wrap.classList.add('uc-gif--failed');
   };

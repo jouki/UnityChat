@@ -31,8 +31,21 @@ export const GIF_OPTIMISTIC_PAIR_MS = 60_000;
 export const GIF_PROGRESS_TICK_MS = 250;
 /** Optimistické kolečko bez jediné události ze serveru zmizí po této době. */
 export const GIF_OPTIMISTIC_SILENT_MS = 15_000;
-/** Průběh bez další události ze serveru (typicky zaseknutá fáze unlock bez done) → po této době „Vypršelo“ a konec animace. */
+/**
+ * Průběh (jakákoli fáze) bez další události ze serveru — ztracené `done`, výpadek SSE, zaseknutý unlock → po této
+ * době dotaz na stav (GET /gif/held), bez něj / když selže „Vypršelo“ a konec animace.
+ */
 export const GIF_PROGRESS_MAX_SILENT_MS = 60_000;
+/** Čekání na moda bez rozhodnutí (ztracené `gif-decided`): po `expiresAt` + rezerva → dotaz na stav. */
+export const GIF_PENDING_GRACE_MS = 15_000;
+/** Doba žádosti, když `expiresAt` chybí (ztracený vlastní `gif-pending`) — výchozí `requestTtlSec` serveru. */
+export const GIF_PENDING_DEFAULT_TTL_MS = 300_000;
+/** Server říká „pořád čeká / převádí“ → další dotaz za tuto dobu. */
+export const GIF_HELD_RECHECK_MS = 30_000;
+/** Kolikrát nejvýš se na jednu zprávu ptát, pak „Vypršelo“. */
+export const GIF_OWN_MAX_CHECKS = 6;
+/** Max klíčů v jednom GET /gif/held (stejně jako server). */
+const HELD_BATCH = 50;
 
 export const GIF_STATUS_TEXT = {
   pending: 'Schvalování moderátorem',
@@ -97,16 +110,59 @@ export function gifOutcomeState(outcome) {
 }
 
 /**
+ * Položka `GET /gif/held` → stav štítku vlastní zprávy: `status` žádosti (server od 2026-09-26) má přednost;
+ * starší odpověď bez něj podle `state`. `progress` = zachycení ještě běží, `pending` = čeká na moda,
+ * `none` = běžná zpráva (převod selhal / smazána jinak).
+ */
+export function gifHeldOwnState(r) {
+  switch (r?.status) {
+    case 'approved': case 'deleted': return 'approved';
+    case 'rejected': return 'rejected';
+    case 'expired': return 'expired';
+    case 'pending': return 'pending';
+    default: break;
+  }
+  switch (r?.state) {
+    case 'replaced': return 'approved';
+    case 'deleted': return r.reason === 'gif_rejected' ? 'rejected' : 'none';
+    case 'visible': return 'none';
+    case 'held': return 'progress';
+    default: return 'expired';
+  }
+}
+
+/**
+ * Echo vlastní GIF zprávy spárované přes id (ne text): server ji schoval (`gif_request`) a `/chat/stream` ji pošle
+ * BEZ obsahu → optimistická zpráva si nechá svůj text, echo dodá jen id, čas a stav smazání.
+ */
+export function gifEchoPatch(msg) {
+  if (!msg || typeof msg !== 'object') return msg;
+  const text = String(msg.message || '').replace(/\u2800/g, '').trim();
+  const has = !!text || (Array.isArray(msg.ytRuns) && msg.ytRuns.length > 0) || (typeof msg.kickContent === 'string' && msg.kickContent.trim().length > 0) || !!msg.gif;
+  if (has) return msg;
+  const { message: _m, ytRuns: _y, kickContent: _k, segments: _s, twitchEmotes: _t, twitchEmotesOffset: _o, badgesRaw: _b, color: _c, ...rest } = msg;
+  return rest;
+}
+
+/**
  * Stav vlastních GIF zpráv (odesílatel). Klíč = `platform:messageId` (requestKey serveru). Optimistická zpráva
  * (`sent-…`) se na klíč napáruje přes `alias` (id z POST /chat/send, echo z platformy) nebo — když průběh přijde
  * dřív než echo — na poslední vlastní optimistickou GIF zprávu téže platformy (do GIF_OPTIMISTIC_PAIR_MS).
  *
  *   outbox.onProgress(d) / onNotice(d) / onOwnPending(d) / onDecided(d) / onGifMessage(msg)
  *   outbox.view(platform, id, now) → { kind, pct?, text?, warn? } | null
+ *   outbox.governs(platform, optId) → stav zprávy řídí GIF (host ji nesmí po 20 s označit jako neodeslanou)
+ *   outbox.optIdFor(platform, realId) → optimistická zpráva spárovaná s tímto id (echo schovaného GIFu bez textu)
+ *   outbox.resync() → po znovupřipojení SSE dotaz na stav čekajících štítků
  *   host: onChange(keys) → překreslit štítky zpráv (paintGifStatus), onNotice(kind, entry) → hláška
+ *
+ * Pojistka po ztrátě SSE (`api` = GET /gif/held): průběh bez události GIF_PROGRESS_MAX_SILENT_MS, čekání na moda
+ * po `expiresAt` + GIF_PENDING_GRACE_MS → dotaz; server „čeká“ → znovu za GIF_HELD_RECHECK_MS (nejvýš
+ * GIF_OWN_MAX_CHECKS×); bez `api` / chyba dotazu → „Vypršelo“.
  */
 export class GifOutbox {
-  constructor({ channel, now, log, onChange, onNotice, hasMessage, setInterval: si, clearInterval: ci } = {}) {
+  constructor({ channel, now, log, onChange, onNotice, hasMessage, api, setInterval: si, clearInterval: ci } = {}) {
+    this.api = typeof api === 'function' ? api : null;
     this.channel = channel || (() => '');
     this.now = now || (() => Date.now());
     this.log = log || (() => {});
@@ -158,6 +214,19 @@ export class GifOutbox {
     this._opt = this._opt.filter((o) => o.optId !== String(id));
   }
 
+  /**
+   * Řídí stav této (optimistické) zprávy GIF štítek? Pak ji host po 20 s bez echa NESMÍ označit jako neodeslanou
+   * (server ji schoval / bot smazal dřív, než ji poller viděl) — výsledek dá gif-progress / gif-decided / štítek.
+   */
+  governs(platform, id) { return this.view(platform, id) !== null; }
+
+  /** Optimistická zpráva spárovaná (alias) se skutečným id `realId`, nebo null. */
+  optIdFor(platform, realId) {
+    const key = `${platform}:${realId}`;
+    for (const [opt, k] of this._alias) if (k === key) return opt;
+    return null;
+  }
+
   /** Všechna id zpráv s tímto klíčem (skutečné + optimistické aliasy). */
   idsFor(key) {
     const out = [key.slice(key.indexOf(':') + 1)];
@@ -184,7 +253,7 @@ export class GifOutbox {
   _entry(key, platform, messageId) {
     let e = this._e.get(key);
     if (!e) {
-      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null };
+      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null, checks: 0, checking: false, nextCheck: null, expiresAt: null, pendingAt: null };
       this._e.set(key, e);
       if (this._e.size > 200) this._e.delete(this._e.keys().next().value);
     }
@@ -219,6 +288,7 @@ export class GifOutbox {
     if (p.phase === 'done') {
       e.state = gifOutcomeState(p.outcome);
       e.outcome = p.outcome;
+      if (e.state === 'pending') e.pendingAt = e.pendingAt ?? this.now();
       this._L(`${p.key} hotovo → ${p.outcome}`);
     } else if (p.phase === 'unlock') {
       this._L(`${p.key} unlock (odhad ${p.estimateMs ?? '?'} ms, uplynulo ${p.elapsedMs} ms)`);
@@ -261,6 +331,9 @@ export class GifOutbox {
     e.requestId = req.requestId;
     this._req.set(req.requestId, key);
     if (e.state === 'progress' || e.state === 'none') e.state = 'pending';
+    e.pendingAt = e.pendingAt ?? this.now();
+    // Konec čekání (čas serveru) → po něm + rezerva se štítek usadí dotazem, když gif-decided nepřijde.
+    e.expiresAt = Number.isFinite(req.expiresAt) ? req.expiresAt : null;
     e.warn = !!req.previouslyRejected;
     this._L(`${key} čeká na moda (žádost ${req.requestId})${e.warn ? ' ⚠ dříve zamítnutý' : ''}`);
     this._arm();
@@ -312,22 +385,109 @@ export class GifOutbox {
     if (this._timer) { this._ci(this._timer); this._timer = null; }
   }
 
-  /** Animace unlock fáze: překreslovat, dokud nějaký průběh běží. */
+  /** Po znovupřipojení SSE (`/account/stream`): stav rozpracovaných a čekajících štítků hned dotazem (události mohly propadnout). */
+  resync() {
+    const list = [...this._e.values()].filter((e) => !e.checking && !e.optimistic && (e.state === 'progress' || e.state === 'pending'));
+    if (!list.length || !this.api) return 0;
+    this._L(`znovupřipojení → dotaz na ${list.length} štítků`);
+    void this._check(list, { resync: true });
+    return list.length;
+  }
+
+  /** Čekání na moda: kdy se zeptat (čas `expiresAt` je serverový; bez něj výchozí doba žádosti od začátku čekání). */
+  _pendingDue(e) {
+    if (e.nextCheck) return e.nextCheck;
+    if (Number.isFinite(e.expiresAt)) return e.expiresAt + GIF_PENDING_GRACE_MS;
+    return (e.pendingAt ?? e.at) + GIF_PENDING_DEFAULT_TTL_MS + GIF_PENDING_GRACE_MS;
+  }
+
+  _giveUp(e, why) {
+    e.state = 'expired';
+    e.nextCheck = null;
+    this._L(`${e.key} ${why} → Vypršelo`);
+  }
+
+  /**
+   * Dotaz GET /gif/held na stav štítků `list` (skutečná id). Bez `api` / optimistická bez id → „Vypršelo“.
+   * `resync`: po znovupřipojení — chyba dotazu ani chybějící položka štítek nemění (usadí ho pak strop).
+   */
+  async _check(list, { resync = false } = {}) {
+    const ask = [];
+    const keys = [];
+    for (const e of list) {
+      if (this.api && !/^sent-/.test(e.messageId)) ask.push(e);
+      else if (!resync) { this._giveUp(e, `${e.state === 'pending' ? 'čekání' : e.phase} bez rozhodnutí (bez dotazu)`); keys.push(e.key); }
+    }
+    for (let i = 0; i < ask.length; i += HELD_BATCH) {
+      const chunk = ask.slice(i, i + HELD_BATCH);
+      for (const e of chunk) e.checking = true;
+      let res = null;
+      const ids = chunk.map((e) => e.key).join(',');
+      try { res = await this.api(`/gif/held?channel=${encodeURIComponent(String(this.channel() || '').toLowerCase())}&ids=${encodeURIComponent(ids)}`); }
+      catch (err) { this._L(`/gif/held selhalo (${err?.error || err?.message || err})`); }
+      const got = new Map((Array.isArray(res?.messages) ? res.messages : []).map((r) => [`${r.platform}:${r.messageId}`, r]));
+      for (const e of chunk) {
+        e.checking = false;
+        if (this._e.get(e.key) !== e) continue;                           // mezitím zahozeno
+        if (e.state !== 'progress' && e.state !== 'pending') continue;    // mezitím rozhodnuto událostí
+        const r = got.get(e.key);
+        if (!r) { if (!resync) { this._giveUp(e, 'stav nezjištěn'); keys.push(e.key); } continue; }
+        this._applyHeld(e, r);
+        keys.push(e.key);
+      }
+    }
+    this._arm();
+    if (keys.length) this.onChange(keys);
+  }
+
+  /** Výsledek /gif/held → štítek (approved / replaced / deleted / rejected / expired); „čeká“ → zeptat se znovu. */
+  _applyHeld(e, r) {
+    const next = gifHeldOwnState(r);
+    const now = this.now();
+    if (next === 'pending' || next === 'progress') {
+      if (++e.checks >= GIF_OWN_MAX_CHECKS) { this._giveUp(e, `pořád bez rozhodnutí po ${e.checks} dotazech`); return; }
+      if (next === 'pending' && e.state === 'progress') { e.state = 'pending'; e.pendingAt = e.pendingAt ?? now; }
+      // Průběh: strop znovu za GIF_HELD_RECHECK_MS; čekání: další dotaz za GIF_HELD_RECHECK_MS.
+      if (e.state === 'progress') e.at = now - GIF_PROGRESS_MAX_SILENT_MS + GIF_HELD_RECHECK_MS;
+      else e.nextCheck = now + GIF_HELD_RECHECK_MS;
+      this._L(`${e.key} /gif/held → ${r.state}${r.status ? `/${r.status}` : ''} (čeká, znovu za ${GIF_HELD_RECHECK_MS / 1000} s)`);
+      return;
+    }
+    e.state = next;
+    e.nextCheck = null;
+    this._L(`${e.key} /gif/held → ${r.state}${r.status ? `/${r.status}` : ''} → ${next}`);
+  }
+
+  /**
+   * Časovač: animace unlock + optimistického kolečka (překreslit) a strop pro vše rozpracované / čekající
+   * (průběh bez události 60 s, čekání na moda po expiresAt) → dotaz na stav.
+   */
   _arm() {
-    const live = (e) => e.state === 'progress' && (e.phase === 'unlock' || e.optimistic);
-    if (![...this._e.values()].some(live)) { if (this._timer) { this._ci(this._timer); this._timer = null; } return; }
+    const watched = (e) => !e.checking && (e.state === 'progress' || e.state === 'pending');
+    if (![...this._e.values()].some(watched)) { if (this._timer) { this._ci(this._timer); this._timer = null; } return; }
     if (this._timer) return;
     this._timer = this._si(() => {
       const now = this.now();
       const keys = [];
+      const due = [];
       for (const e of this._e.values()) {
-        if (!live(e)) continue;
-        if (e.optimistic && now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
-        else if (!e.optimistic && now - e.at > GIF_PROGRESS_MAX_SILENT_MS) { e.state = 'expired'; this._L(`${e.key} ${e.phase} bez další události ${Math.round((now - e.at) / 1000)} s → Vypršelo`); }
-        keys.push(e.key);
+        if (e.checking) continue;
+        if (e.state === 'progress') {
+          if (e.optimistic) {
+            if (now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
+            keys.push(e.key);
+          } else if (now - e.at > GIF_PROGRESS_MAX_SILENT_MS) {
+            this._L(`${e.key} ${e.phase} bez další události ${Math.round((now - e.at) / 1000)} s → dotaz na stav`);
+            due.push(e);
+          } else if (e.phase === 'unlock') keys.push(e.key);
+        } else if (e.state === 'pending' && now >= this._pendingDue(e)) {
+          this._L(`${e.key} čeká na moda i po konci žádosti → dotaz na stav`);
+          due.push(e);
+        }
       }
-      if (!keys.length) { this._ci(this._timer); this._timer = null; return; }
-      this.onChange(keys);
+      if (keys.length) this.onChange(keys);
+      if (due.length) void this._check(due);
+      if (this._timer && ![...this._e.values()].some(watched)) { this._ci(this._timer); this._timer = null; }
     }, GIF_PROGRESS_TICK_MS);
   }
 }

@@ -25,13 +25,16 @@ export function normalizeWarning(w) {
  *   `gif-decided` — core/gif.js GifRequests.onPending / onDecided); data = rozparsovaný JSON
  * @param {(tag: string, text: string) => void} [o.log]
  * @param {number} [o.retryMs]
+ * @param {(info: { reconnect: boolean }) => void} [o.onOpen]  spojení otevřeno (i po výpadku — události mezitím
+ *   propadly, např. GifOutbox.resync)
  * @returns {{close: () => void}}
  */
-export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = globalThis.EventSource, onWarning, onAck, handlers = {}, log = () => {}, retryMs = 5000, setTimeout: st = globalThis.setTimeout.bind(globalThis), clearTimeout: ct = globalThis.clearTimeout.bind(globalThis) }) {
+export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = globalThis.EventSource, onWarning, onAck, handlers = {}, onOpen, log = () => {}, retryMs = 5000, setTimeout: st = globalThis.setTimeout.bind(globalThis), clearTimeout: ct = globalThis.clearTimeout.bind(globalThis) }) {
   let es = null;
   let timer = null;
   let closed = false;
   let fails = 0;
+  let opened = 0;
   const schedule = () => {
     if (closed || timer) return;
     const wait = Math.min(60000, retryMs * 2 ** Math.min(Math.max(fails - 1, 0), 4));
@@ -53,7 +56,12 @@ export function connectAccountStream({ getTicket, baseUrl, EventSource: ES = glo
     drop();
     const src = new ES(`${baseUrl}/account/stream?ticket=${encodeURIComponent(ticket)}`);
     es = src;
-    src.addEventListener('open', () => { fails = 0; log('AccWarn', 'stream připojen'); });
+    src.addEventListener('open', () => {
+      fails = 0;
+      log('AccWarn', 'stream připojen');
+      if (src !== es) return;
+      try { onOpen?.({ reconnect: opened++ > 0 }); } catch (err) { log('AccWarn', `onOpen FAIL ${err?.message || err}`); }
+    });
     src.addEventListener('account-warning', (e) => {
       try { const w = normalizeWarning(JSON.parse(e.data)); if (w) onWarning?.(w); } catch {}
     });

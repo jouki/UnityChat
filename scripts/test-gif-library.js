@@ -146,6 +146,96 @@ Promise.all([
     check('Outbox: pozdní done po stropu stav opraví', b2.view('twitch', 'u1')?.kind === 'pending');
   }
 
+
+  // --- závěrečná review I1: štítek řídí stav zprávy, echo schovaného GIFu bez textu se páruje přes id ---
+  {
+    let n3 = 0; const ch3 = [];
+    const b3 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => n3, onChange: (k) => ch3.push(...k), setInterval: () => 1, clearInterval: () => {} });
+    b3.noteOptimistic('sent-9', 'youtube', { show: true });
+    b3.alias('sent-9', 'youtube', 'LCC.abc');
+    check('I1 governs: optimistická GIF zpráva se štítkem → host ji po 20 s neoznačí jako neodeslanou', b3.governs('youtube', 'sent-9') === true);
+    check('I1 optIdFor: skutečné id → optimistická zpráva', b3.optIdFor('youtube', 'LCC.abc') === 'sent-9' && b3.optIdFor('youtube', 'jine') === null);
+    n3 = L.GIF_OPTIMISTIC_SILENT_MS + 1;
+    check('I1 governs: optimistická bez odezvy serveru (15 s) → už ne (YouTube odkaz zahodil → neodesláno)', b3.governs('youtube', 'sent-9') === false);
+    b3.onProgress({ requestKey: 'youtube:LCC.abc', channel: 'robdiesalot', platform: 'youtube', messageId: 'LCC.abc', phase: 'done', pct: 100, outcome: 'pending' });
+    check('I1 governs: server se ozval (čeká na moda) → zase řídí štítek', b3.governs('youtube', 'sent-9') === true && b3.view('youtube', 'sent-9')?.kind === 'pending');
+    b3.onDecided({ requestId: 1, channel: 'robdiesalot', status: 'rejected' });
+    check('I1 governs: failed → běžná zpráva, neřídí', (() => { b3.onProgress({ requestKey: 'youtube:LCC.x', channel: 'robdiesalot', platform: 'youtube', messageId: 'LCC.x', phase: 'done', pct: 100, outcome: 'failed' }); return b3.governs('youtube', 'LCC.x') === false; })());
+  }
+  const echo = { platform: 'youtube', id: 'LCC.abc', username: 'Ja', userId: 'UC1', message: '', timestamp: 5, historical: false, deleted: true, deletedReason: 'gif_request', ytRuns: [], color: null };
+  const patch = L.gifEchoPatch(echo);
+  check('I1 gifEchoPatch: echo bez obsahu → jen id, čas, smazání (text optimistické zůstane)', !('message' in patch) && !('ytRuns' in patch) && !('color' in patch) && patch.id === 'LCC.abc' && patch.deleted === true && patch.deletedReason === 'gif_request' && patch.timestamp === 5, JSON.stringify(patch));
+  const full = { ...echo, deleted: false, message: 'hele https://tenor.com/x ⠀' };
+  check('I1 gifEchoPatch: echo s textem beze změny', L.gifEchoPatch(full) === full && L.gifEchoPatch({ ...echo, message: '⠀ ' }).message === undefined);
+
+  // --- závěrečná review I3: /gif/held → štítek, strop průběhu i čekání, resync po znovupřipojení ---
+  check('I3 gifHeldOwnState: status má přednost', eq(['approved', 'deleted', 'rejected', 'expired', 'pending'].map((status) => L.gifHeldOwnState({ state: 'held', status })), ['approved', 'approved', 'rejected', 'expired', 'pending']));
+  check('I3 gifHeldOwnState: starší odpověď bez status', eq([{ state: 'replaced' }, { state: 'deleted', reason: 'gif_rejected' }, { state: 'deleted', reason: 'mod' }, { state: 'visible' }, { state: 'held' }, { state: 'unknown' }].map(L.gifHeldOwnState), ['approved', 'rejected', 'none', 'none', 'progress', 'expired']));
+  {
+    let n4 = 0; const ticks = []; const asked = []; const ch4 = [];
+    let answer = (ids) => ids.map((k) => ({ platform: k.split(':')[0], messageId: k.slice(k.indexOf(':') + 1), state: 'held' }));
+    const api = async (path) => { const u = new URL(`https://x${path}`); const ids = u.searchParams.get('ids').split(','); asked.push({ ch: u.searchParams.get('channel'), ids }); return { ok: true, messages: answer(ids) }; };
+    const b4 = new L.GifOutbox({ channel: () => 'RobDiesALot', now: () => n4, api, onChange: (k) => ch4.push(...k), setInterval: (fn) => { ticks.push(fn); return ticks.length; }, clearInterval: () => {} });
+    const tick = async () => { ticks.at(-1)?.(); await new Promise((r) => setTimeout(r, 0)); };
+    // Průběh: ztracené done → po 60 s bez události dotaz; server „převádí“ → čeká dál, znovu za 30 s.
+    b4.onProgress({ requestKey: 'twitch:p1', channel: 'robdiesalot', platform: 'twitch', messageId: 'p1', phase: 'download', pct: 30 });
+    n4 = 59_000; await tick();
+    check('I3 průběh bez události < 60 s → bez dotazu', asked.length === 0 && b4.view('twitch', 'p1')?.text === '30 %');
+    n4 = 60_001; await tick();
+    check('I3 průběh bez události 60 s → GET /gif/held (kanál malými, skutečné id)', asked.length === 1 && asked[0].ch === 'robdiesalot' && eq(asked[0].ids, ['twitch:p1']), JSON.stringify(asked));
+    check('I3 … server „převádí“ (held bez status) → dál kolečko', b4.view('twitch', 'p1')?.kind === 'progress');
+    answer = (ids) => ids.map((k) => ({ platform: 'twitch', messageId: k.split(':')[1], state: 'deleted', reason: 'gif_rejected', status: 'rejected' }));
+    n4 = 60_001 + 29_000; await tick();
+    check('I3 … další dotaz až za 30 s', asked.length === 1);
+    n4 = 60_001 + 30_001; await tick();
+    check('I3 … výsledek rejected → „Zamítnuto moderátorem“', asked.length === 2 && b4.view('twitch', 'p1')?.kind === 'rejected' && ch4.includes('twitch:p1'));
+    // Čekání na moda: ztracené gif-decided → po expiresAt + 15 s dotaz → approved/replaced → štítek pryč.
+    answer = (ids) => ids.map((k) => ({ platform: 'twitch', messageId: k.split(':')[1], state: 'replaced', status: 'approved' }));
+    b4.onOwnPending({ requestId: 50, channel: 'robdiesalot', platform: 'twitch', messageId: 'p2', login: 'ja', media: { url: OUR, kind: 'gif' }, expiresAt: n4 + 300_000, own: true });
+    const exp = n4 + 300_000;
+    n4 = exp + L.GIF_PENDING_GRACE_MS - 1; await tick();
+    check('I3 čekání: před expiresAt + rezerva bez dotazu', asked.length === 2 && b4.view('twitch', 'p2')?.kind === 'pending');
+    n4 = exp + L.GIF_PENDING_GRACE_MS + 1; await tick();
+    check('I3 čekání: po expiresAt + rezerva dotaz → schváleno → štítek pryč (approved)', asked.length === 3 && eq(asked[2].ids, ['twitch:p2']) && b4.view('twitch', 'p2')?.kind === 'approved');
+    // Bez expiresAt (ztracený gif-pending): výchozí 300 s od „done pending“.
+    answer = (ids) => ids.map((k) => ({ platform: 'twitch', messageId: k.split(':')[1], state: 'deleted', reason: 'gif_rejected', status: 'expired' }));
+    const t0 = n4;
+    b4.onProgress({ requestKey: 'twitch:p3', channel: 'robdiesalot', platform: 'twitch', messageId: 'p3', phase: 'done', pct: 100, outcome: 'pending' });
+    n4 = t0 + L.GIF_PENDING_DEFAULT_TTL_MS + L.GIF_PENDING_GRACE_MS + 1; await tick();
+    check('I3 čekání bez expiresAt → po výchozí době dotaz → „Vypršelo“', b4.view('twitch', 'p3')?.text === 'Vypršelo' && asked.at(-1).ids.includes('twitch:p3'));
+    // Server pořád „čeká“ → nejvýš GIF_OWN_MAX_CHECKS dotazů, pak „Vypršelo“.
+    answer = (ids) => ids.map((k) => ({ platform: 'twitch', messageId: k.split(':')[1], state: 'held', status: 'pending' }));
+    b4.onOwnPending({ requestId: 51, channel: 'robdiesalot', platform: 'twitch', messageId: 'p4', login: 'ja', media: { url: OUR, kind: 'gif' }, expiresAt: n4, own: true });
+    const before = asked.length;
+    for (let i = 0; i < L.GIF_OWN_MAX_CHECKS + 2; i++) { n4 += L.GIF_PENDING_GRACE_MS + L.GIF_HELD_RECHECK_MS + 1; await tick(); }
+    check('I3 server pořád „čeká“ → po GIF_OWN_MAX_CHECKS dotazech „Vypršelo“', b4.view('twitch', 'p4')?.kind === 'expired' && asked.length - before === L.GIF_OWN_MAX_CHECKS, `${asked.length - before}`);
+    // Resync po znovupřipojení: hned dotaz na rozpracované / čekající (ne na hotové, ne na optimistické bez id).
+    answer = (ids) => ids.map((k) => ({ platform: 'twitch', messageId: k.split(':')[1], state: 'deleted', reason: 'gif_rejected', status: 'rejected' }));
+    b4.onOwnPending({ requestId: 52, channel: 'robdiesalot', platform: 'twitch', messageId: 'p5', login: 'ja', media: { url: OUR, kind: 'gif' }, expiresAt: n4 + 300_000, own: true });
+    b4.noteOptimistic('sent-77', 'twitch', { show: true });
+    const nRes = b4.resync();
+    await new Promise((r) => setTimeout(r, 0));
+    check('I3 resync po znovupřipojení → dotaz jen na čekající se skutečným id, výsledek do štítku', nRes === 1 && eq(asked.at(-1).ids, ['twitch:p5']) && b4.view('twitch', 'p5')?.kind === 'rejected', JSON.stringify(asked.at(-1)));
+    // Resync: chyba dotazu štítek nemění.
+    const b5 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => 0, api: async () => { throw { error: 'offline' }; }, setInterval: () => 1, clearInterval: () => {} });
+    b5.onOwnPending({ requestId: 53, channel: 'robdiesalot', platform: 'twitch', messageId: 'p6', login: 'ja', media: { url: OUR, kind: 'gif' }, expiresAt: 999_999, own: true });
+    b5.resync();
+    await new Promise((r) => setTimeout(r, 0));
+    check('I3 resync: chyba dotazu → štítek beze změny (čeká dál)', b5.view('twitch', 'p6')?.kind === 'pending');
+    // Mezitím rozhodnuto událostí → odpověď dotazu štítek nepřepíše.
+    let release;
+    const b6 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => 0, api: () => new Promise((r) => { release = r; }), setInterval: () => 1, clearInterval: () => {} });
+    b6.onOwnPending({ requestId: 54, channel: 'robdiesalot', platform: 'twitch', messageId: 'p7', login: 'ja', media: { url: OUR, kind: 'gif' }, expiresAt: 999_999, own: true });
+    b6.resync();
+    b6.onDecided({ requestId: 54, channel: 'robdiesalot', status: 'rejected' });
+    release({ ok: true, messages: [{ platform: 'twitch', messageId: 'p7', state: 'held', status: 'pending' }] });
+    await new Promise((r) => setTimeout(r, 0));
+    check('I3 odpověď po gif-decided štítek nepřepíše', b6.view('twitch', 'p7')?.kind === 'rejected');
+  }
+
+  // --- závěrečná review I2: médium se nenačetlo → „GIF odebrán“ bez odkazu ---
+  check('I2 GIF_REMOVED_TEXT', g.GIF_REMOVED_TEXT === 'GIF odebrán');
+
   // --- stav odměny (indikátor + hlavička) ---
   const RV = L.gifRewardView;
   check('gifRewardView: nepřihlášený', RV(null, 0, { loggedIn: false }).mode === 'login' && !RV(null, 0, { loggedIn: false }).canSend);

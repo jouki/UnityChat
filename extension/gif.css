@@ -21,12 +21,13 @@
   max-height: 250px;
   width: auto;
 }
+/* Médium se nenačetlo (404 = odebráno z knihovny / zahozeno) → ztlumený štítek „GIF odebrán“, bez odkazu. */
 .uc-gif-fallback {
   display: inline-block;
   line-height: 1.4;
   font-size: 12px;
-  color: var(--accent, #ff8c00);
-  text-decoration: underline;
+  font-style: italic;
+  opacity: .6;
 }
 
 /* Smazaná / skrytá zpráva: GIF se neukazuje (text nahrazuje štítek), u dim/strike jen ztlumený. */
