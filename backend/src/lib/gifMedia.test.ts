@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import {
   classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia,
-  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, type Transport, type TransportResponse, type LookupAll,
+  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, normalizeSourceUrl, type Transport, type TransportResponse, type LookupAll,
 } from './gifMedia.js';
 
 // ---- vzorky médií ----
@@ -169,6 +169,40 @@ test('resolveGif: stránka bez og médií → no_media; HTTP chyba → http_<sta
   const t = fakeTransport({ 'https://giphy.com/gifs/a-1': { headers: { 'content-type': 'text/html' }, body: Buffer.from('<title>x</title>') } });
   await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/a-1', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'no_media');
   await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/b-2', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'http_404');
+});
+
+test('normalizeSourceUrl: bez utm_* a sledovacích parametrů, bez fragmentu, schéma a host malými písmeny, parametry seřazené', () => {
+  assert.equal(normalizeSourceUrl('HTTPS://Tenor.COM/view/cat-gif-1?utm_source=x&utm_medium=y#top'), 'https://tenor.com/view/cat-gif-1');
+  assert.equal(normalizeSourceUrl('https://x.cz/a.gif?b=2&a=1&fbclid=zz'), 'https://x.cz/a.gif?a=1&b=2');
+  assert.equal(normalizeSourceUrl('https://x.cz:443/A.gif'), 'https://x.cz/A.gif', 'cesta zůstává, výchozí port pryč');
+  assert.equal(normalizeSourceUrl('https://x.cz/a.gif?x=1'), normalizeSourceUrl('https://X.cz/a.gif?x=1&utm_campaign=q#f'));
+  assert.notEqual(normalizeSourceUrl('http://x.cz/a.gif'), normalizeSourceUrl('https://x.cz/a.gif'), 'jiné schéma = jiná URL');
+  assert.equal(normalizeSourceUrl('nesmysl'), null);
+  assert.equal(normalizeSourceUrl('ftp://x.cz/a.gif'), null);
+});
+
+test('classifyGifUrl: odkaz na naše médium (/media/gif/<32 hex>) = mode own + mediaId; cizí host ne', () => {
+  const id = 'ab'.repeat(16);
+  const own = ['api.jouki.cz'];
+  assert.deepEqual(classifyGifUrl(`https://api.jouki.cz/media/gif/${id}`, own), { url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own', mediaId: id });
+  assert.equal(classifyGifUrl(`api.jouki.cz/media/gif/${id}?t=x`, own)?.mode, 'own');
+  assert.equal(classifyGifUrl(`https://evil.cz/media/gif/${id}`, own), null);
+  assert.equal(classifyGifUrl('https://api.jouki.cz/media/gif/kratke', own), null);
+  assert.equal(gifCandidate(`hele https://api.jouki.cz/media/gif/${id}`, own)?.mediaId, id);
+});
+
+test('resolveGif: průběh stahování — bajty s velikostí (Content-Length), pak bez ní', async () => {
+  const url = 'https://x.cz/a.gif';
+  const body = [gif(), Buffer.alloc(100), Buffer.alloc(100)];
+  const total = body.reduce((n, b) => n + b.length, 0);
+  const ev: unknown[] = [];
+  await resolveGif({ url, mode: 'direct' }, { transport: fakeTransport({ [url]: { headers: { 'content-type': 'image/gif', 'content-length': String(total) }, body } }), lookupAll: publicDns, onProgress: (e) => ev.push(e) });
+  assert.deepEqual(ev, [
+    { phase: 'download', loaded: 32, total }, { phase: 'download', loaded: 132, total }, { phase: 'download', loaded: 232, total },
+  ]);
+  const ev2: Array<{ total: number | null }> = [];
+  await resolveGif({ url, mode: 'direct' }, { transport: fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body } }), lookupAll: publicDns, onProgress: (e) => ev2.push(e as { total: number | null }) });
+  assert.ok(ev2.length === 3 && ev2.every((e) => e.total === null));
 });
 
 // Klient (bublina cooldownu) rozpoznává GIF odkazy kopií v extension/core/gif-links.js — musí dát stejný výsledek.

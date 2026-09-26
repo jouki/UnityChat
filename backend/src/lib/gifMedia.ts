@@ -22,7 +22,8 @@ import { isIP, BlockList } from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
 import { findLinks } from './links.js';
-import type { Unlocker } from './gifUnlocker.js';
+import { config } from '../config.js';
+import type { Unlocker, UnlockEstimator } from './gifUnlocker.js';
 
 export type GifKind = 'gif' | 'webp' | 'mp4';
 
@@ -43,17 +44,29 @@ export class GifError extends Error {
 export interface GifSource {
   /** URL, kterou server stáhne. */
   url: string;
-  /** direct = soubor média; page = HTML stránka s og:video / og:image. */
-  mode: 'direct' | 'page';
+  /** direct = soubor média; page = HTML stránka s og:video / og:image; own = odkaz na naše médium (nestahuje se). */
+  mode: 'direct' | 'page' | 'own';
+  /** mode own: id média v gif_media (32 hex). */
+  mediaId?: string;
 }
 
 const TRAIL = /[)\]}>,.!?;:'"]+$/;
 
+/** Hosty našeho serveru: odkaz `<host>/media/gif/<id>` (výběr z knihovny) = známé médium, ne stahování. */
+export function defaultOwnHosts(): string[] {
+  const out = ['api.jouki.cz'];
+  try { const h = new URL(config.PUBLIC_BASE_URL).hostname.toLowerCase(); if (!out.includes(h)) out.push(h); } catch { /* ignore */ }
+  return out;
+}
+
+const OWN_PATH = /^\/media\/gif\/([a-f0-9]{32})\/?$/;
+
 /**
  * Odkaz (URL z textu, i bez schématu) → zdroj GIFu, nebo null. Stránky Tenor / Giphy / Imgur / 7TV, přímé
- * soubory .gif/.webp/.mp4 z libovolného hostu (každý GIF schvaluje mod), Imgur .gifv → .mp4.
+ * soubory .gif/.webp/.mp4 z libovolného hostu (každý GIF schvaluje mod), Imgur .gifv → .mp4, odkaz na naše
+ * médium (`ownHosts` + `/media/gif/<32 hex>`) → mode own.
  */
-export function classifyGifUrl(raw: string): GifSource | null {
+export function classifyGifUrl(raw: string, ownHosts: string[] = defaultOwnHosts()): GifSource | null {
   let u: URL;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) return null;
   try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return null; }
@@ -62,6 +75,9 @@ export function classifyGifUrl(raw: string): GifSource | null {
   const bare = host.replace(/^www\./, '');
   const path = u.pathname.toLowerCase();
   const href = u.toString();
+
+  const own = ownHosts.includes(host) && OWN_PATH.exec(u.pathname);
+  if (own) return { url: `${u.origin}${u.pathname}`, mode: 'own', mediaId: own[1] };
 
   // 7TV emote stránka → animované WebP z CDN (stránka je SPA bez og tagů).
   const seven = bare === '7tv.app' && /^\/emotes\/([0-9a-z]{10,40})\/?$/i.exec(u.pathname);
@@ -93,13 +109,32 @@ export interface GifCandidate extends GifSource {
 }
 
 /** První odkaz ve zprávě, který vede na GIF; null = žádný. Detekce odkazů = sdílený detektor (lib/links.ts). */
-export function gifCandidate(text: string): GifCandidate | null {
+export function gifCandidate(text: string, ownHosts: string[] = defaultOwnHosts()): GifCandidate | null {
   for (const l of findLinks(text)) {
     const raw = tokenUrl(l.text, l.host);
-    const src = raw ? classifyGifUrl(raw) : null;
+    const src = raw ? classifyGifUrl(raw, ownHosts) : null;
     if (src) return { ...src, token: l.text };
   }
   return null;
+}
+
+/** Sledovací parametry, které nemění médium (dedup podle URL). */
+const TRACKING_PARAMS = new Set(['fbclid', 'gclid', 'igshid', 'mc_cid', 'mc_eid']);
+
+/**
+ * URL zdroje pro dedup před stažením: bez `utm_*` a sledovacích parametrů, bez fragmentu, schéma a host
+ * malými písmeny (URL to dělá sama), výchozí port pryč, zbylé parametry seřazené. Neplatná / ne-http(s) → null.
+ */
+export function normalizeSourceUrl(raw: string): string | null {
+  let u: URL;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  u.hash = '';
+  u.hostname = u.hostname.toLowerCase().replace(/\.$/, '');
+  const keep = [...u.searchParams].filter(([k]) => !/^utm_/i.test(k) && !TRACKING_PARAMS.has(k.toLowerCase()))
+    .sort((a, b) => (a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1));
+  u.search = keep.length ? new URLSearchParams(keep).toString() : '';
+  return u.toString();
 }
 
 /**
@@ -227,7 +262,18 @@ export interface FetchDeps {
   lookupAll?: LookupAll;
   /** Fallback přes Bright Data Web Unlocker; null/undefined = vypnutý. */
   unlocker?: Unlocker | null;
+  /** Odhad doby fallbacku (průběh u odesílatele); doby úspěšných stažení přes unlocker se do něj zapisují. */
+  estimator?: UnlockEstimator | null;
+  /** Průběh stahování média (fáze download = bajty; unlock = odhad doby Bright Data). */
+  onProgress?: (e: GifFetchProgress) => void;
 }
+
+export type GifFetchProgress =
+  | { phase: 'download'; loaded: number; total: number | null }
+  | { phase: 'unlock'; estimateMs: number; elapsedMs: number };
+
+/** Výchozí odhad doby Bright Data, dokud nejsou vzorky. */
+export const UNLOCK_DEFAULT_ESTIMATE_MS = 8000;
 
 /** Běh jednoho převodu: společný signál + prodloužení limitu při fallbacku + URL, které šly přes unlocker. */
 interface Ctx {
@@ -235,7 +281,11 @@ interface Ctx {
   /** Prodlouží celkový limit na `totalMs` od začátku převodu (jen směrem nahoru). */
   extend(totalMs: number): void;
   unlocked: URL[];
+  /** Začátek posledního stažení přes unlocker (ms). */
+  unlockStart: number;
 }
+
+const safeProgress = (deps: FetchDeps, e: GifFetchProgress): void => { try { deps.onProgress?.(e); } catch { /* ignore */ } };
 
 const CHALLENGE_SNIFF_BYTES = 64 * 1024;
 
@@ -272,6 +322,8 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
       ctx.extend(deps.unlocker.timeoutMs);
       // Zapsat předem: i chyba samotného API jde do reportu (log + negativní cache).
       ctx.unlocked.push(url);
+      ctx.unlockStart = Date.now();
+      safeProgress(deps, { phase: 'unlock', estimateMs: deps.estimator?.estimate(null) ?? UNLOCK_DEFAULT_ESTIMATE_MS, elapsedMs: 0 });
       const via = await deps.unlocker.fetch(url, signal);
       if (!via) { ctx.unlocked.pop(); throw original; } // strop / negativní cache → původní chyba, nic nereportovat
       res = via;
@@ -296,9 +348,10 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
 }
 
 /** Tělo s limitem velikosti (Content-Length předem, pak počítání). */
-async function readLimited(res: TransportResponse, max: number, signal: AbortSignal, truncate = false): Promise<Buffer> {
+async function readLimited(res: TransportResponse, max: number, signal: AbortSignal, truncate = false, onChunk?: (loaded: number, total: number | null) => void): Promise<Buffer> {
   const len = Number(res.headers['content-length']);
   if (!truncate && Number.isFinite(len) && len > max) { res.dispose(); throw new GifError('too_large'); }
+  const expected = Number.isFinite(len) && len > 0 ? len : null;
   const chunks: Buffer[] = [];
   let total = 0;
   try {
@@ -310,6 +363,7 @@ async function readLimited(res: TransportResponse, max: number, signal: AbortSig
         throw new GifError('too_large');
       }
       chunks.push(Buffer.from(c));
+      onChunk?.(total, expected);
     }
   } catch (e) {
     res.dispose();
@@ -408,12 +462,20 @@ async function fetchMedia(url: string, ctx: Ctx, deps: FetchDeps): Promise<Resol
   const n = ctx.unlocked.length;
   const { res, url: final } = await safeGet(url, 'image/*,video/*', ctx, deps);
   // Unlocker nemusí předat Content-Type cíle → bez něj rozhodnou magic bytes (jako u octet-stream).
-  const ct = res.headers['content-type'] ?? (ctx.unlocked.length > n ? 'application/octet-stream' : undefined);
+  const viaUnlock = ctx.unlocked.length > n;
+  const ct = res.headers['content-type'] ?? (viaUnlock ? 'application/octet-stream' : undefined);
   if (/^\s*text\//i.test(String(ct || ''))) { res.dispose(); throw new GifError('bad_type'); }
-  const bytes = await readLimited(res, GIF_MAX_BYTES, signal);
+  if (viaUnlock) {
+    // Velikost z odpovědi Bright Data → odhad doby přepočítaný podle ní.
+    const len = Number(res.headers['content-length']);
+    if (Number.isFinite(len) && len > 0 && deps.estimator) safeProgress(deps, { phase: 'unlock', estimateMs: deps.estimator.estimate(len), elapsedMs: Date.now() - ctx.unlockStart });
+  }
+  // Přes unlocker se bajty nehlásí (klient animuje lineárně podle odhadu), jinak skutečné bajty.
+  const bytes = await readLimited(res, GIF_MAX_BYTES, signal, false, viaUnlock ? undefined : (loaded, total) => safeProgress(deps, { phase: 'download', loaded, total }));
   const kind = sniffKind(bytes);
   if (!kind) throw new GifError('bad_magic');
   if (!contentTypeOk(ct, kind)) throw new GifError('bad_type');
+  if (viaUnlock) deps.estimator?.record(Math.max(1, Date.now() - ctx.unlockStart), bytes.length);
   return { bytes, kind, contentType: CONTENT_TYPES[kind], ...mediaSize(bytes, kind), sourceUrl: final.toString() };
 }
 
@@ -435,7 +497,10 @@ export async function resolveGif(src: GifSource, deps: FetchDeps & { timeoutMs?:
     signal: ctl.signal,
     extend(totalMs) { if (totalMs > limit && !ctl.signal.aborted) { limit = totalMs; clearTimeout(timer); timer = arm(); } },
     unlocked: [],
+    unlockStart: 0,
   };
+  // Odkaz na naše médium se nestahuje (lib/gifRequests.ts ho dohledá podle id).
+  if (src.mode === 'own') { clearTimeout(timer); throw new GifError('own_media'); }
   try {
     const r = await resolveWith(src, ctx, deps);
     for (const u of ctx.unlocked) deps.unlocker?.report(u, null);

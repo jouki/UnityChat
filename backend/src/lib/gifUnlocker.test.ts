@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveGif, GifError, GIF_MAX_BYTES, type Transport, type LookupAll } from './gifMedia.js';
-import { createUnlocker, UNLOCKER_ENDPOINT, UNLOCKER_NEGATIVE_TTL_MS, type UnlockerOptions } from './gifUnlocker.js';
+import { createUnlocker, createUnlockEstimator, UNLOCKER_ENDPOINT, UNLOCKER_NEGATIVE_TTL_MS, UNLOCKER_TIMEOUT_MS, type UnlockerOptions } from './gifUnlocker.js';
 
 const KEY = 'SECRET-brd-key-9f8e7d';
 const gif = (): Buffer => { const b = Buffer.alloc(32); b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(320, 6); b.writeUInt16LE(240, 8); return b; };
@@ -198,4 +198,29 @@ test('unlocker: API klíč se neobjeví v chybě ani v logu', async () => {
   }
   // Log nese jen host a výsledek.
   for (const l of logs) assert.match(l, /^gif: unlocker (ok|err) \{"host":"i\.4pcdn\.org"(,"code":"[a-z0-9_-]+")?\}$/i);
+});
+
+test('createUnlockEstimator: klouzavý průměr posledních 20 dob, škálovaný velikostí; bez vzorků výchozí; strop limitu', () => {
+  const e = createUnlockEstimator({ defaultMs: 8000 });
+  assert.equal(e.estimate(null), 8000);
+  assert.equal(e.estimate(1_000_000), 8000, 'bez vzorků i se známou velikostí výchozí');
+  e.record(4000, 1_000_000);
+  e.record(6000, 1_000_000);
+  assert.equal(e.estimate(null), 5000);
+  assert.equal(e.estimate(2_000_000), 10_000, 'dvojnásobná velikost = dvojnásobná doba');
+  assert.equal(e.estimate(100_000_000), UNLOCKER_TIMEOUT_MS, 'nikdy nad celkový limit');
+  for (let i = 0; i < 20; i++) e.record(1000, 1_000_000);
+  assert.equal(e.estimate(null), 1000, 'jen posledních 20 vzorků');
+});
+
+test('resolveGif: průběh přes Bright Data — fáze unlock s odhadem, doba se zapíše do odhadu', async () => {
+  const est = createUnlockEstimator({ defaultMs: 7000 });
+  const ev: Array<Record<string, unknown>> = [];
+  const unlocker = mk({ fetch: brdFetch(() => ok(gif())) });
+  await resolveGif({ url: URL_4PC, mode: 'direct' }, { transport: transportOf({ [URL_4PC]: challenge }), lookupAll, unlocker, estimator: est, onProgress: (e) => ev.push(e as Record<string, unknown>) });
+  assert.equal(ev[0].phase, 'unlock');
+  assert.equal(ev[0].estimateMs, 7000);
+  assert.equal(ev[0].elapsedMs, 0);
+  assert.ok(ev.every((e) => e.phase === 'unlock'), 'přes unlocker se bajty nehlásí (lineární odhad)');
+  assert.equal(est.size, 1);
 });

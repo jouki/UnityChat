@@ -46,6 +46,41 @@ export interface UnlockerOptions {
   log?: UnlockerLog;
 }
 
+/**
+ * Odhad doby stažení přes Bright Data (průběh u odesílatele, fáze 50–95 %): klouzavý průměr posledních
+ * `max` skutečných dob fallbacku; se známou velikostí škálovaný podle průměrné velikosti vzorků. Strop = limit převodu.
+ */
+export interface UnlockEstimator {
+  record(ms: number, bytes: number): void;
+  estimate(size?: number | null): number;
+  readonly size: number;
+}
+
+export function createUnlockEstimator(opts: { max?: number; defaultMs?: number } = {}): UnlockEstimator {
+  const max = opts.max ?? 20;
+  const def = opts.defaultMs ?? 8000;
+  const samples: Array<{ ms: number; bytes: number }> = [];
+  const cap = (ms: number) => Math.max(500, Math.min(UNLOCKER_TIMEOUT_MS, Math.round(ms)));
+  return {
+    record(ms, bytes) {
+      if (!(ms > 0)) return;
+      samples.push({ ms, bytes: bytes > 0 ? bytes : 0 });
+      while (samples.length > max) samples.shift();
+    },
+    estimate(size) {
+      if (!samples.length) return cap(def);
+      const avgMs = samples.reduce((n, s) => n + s.ms, 0) / samples.length;
+      const withBytes = samples.filter((s) => s.bytes > 0);
+      if (size && size > 0 && withBytes.length) {
+        const avgBytes = withBytes.reduce((n, s) => n + s.bytes, 0) / withBytes.length;
+        return cap(avgMs * (size / avgBytes));
+      }
+      return cap(avgMs);
+    },
+    get size() { return samples.length; },
+  };
+}
+
 /** Bez klíče nebo zóny (nebo se stropem 0) → null = fallback vypnutý. */
 export function createUnlocker(opts: UnlockerOptions): Unlocker | null {
   const apiKey = String(opts.apiKey || '').trim();
