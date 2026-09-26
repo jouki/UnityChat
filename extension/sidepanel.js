@@ -5310,7 +5310,11 @@ class UnityChat {
     if (p.get('uc_error')) throw new Error(p.get('uc_error'));
     const code = p.get('uc_code');
     if (!code) throw new Error('bez kódu');
-    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    // Bearer i při výměně: backend připojí platformu k účtu jen tehdy, když výměnu pošle session
+    // téhož účtu, který přihlášení spustil (ochrana proti login CSRF). Bez něj = samostatné přihlášení.
+    const exHeaders = { 'Content-Type': 'application/json' };
+    if (current) exHeaders.Authorization = `Bearer ${current}`;
+    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: exHeaders, body: JSON.stringify({ code }) });
     const ej = await ex.json().catch(() => ({}));
     if (!ex.ok || !ej.token) throw new Error(ej.error || `exchange ${ex.status}`);
     await chrome.storage.local.set({ uc_session: ej.token });
