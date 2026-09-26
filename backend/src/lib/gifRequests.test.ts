@@ -36,6 +36,8 @@ function memStore(now: () => number) {
     async setMediaApproved(id, at) {
       const x = media.get(id);
       if (!x) return id;
+      // Zahozené médium se nevzkřísí → null (souběh se zahozením).
+      if (!['pending', 'rejected', 'approved'].includes(x.status)) return null;
       // Unikátní (channel, sha256) pro schválené: jiné schválené médium se stejným obsahem vyhrává.
       const other = [...media.values()].find((o) => o.id !== id && o.status === 'approved' && o.channel === x.channel && o.sha256 === x.sha256);
       if (other) return other.id;
@@ -50,17 +52,26 @@ function memStore(now: () => number) {
     async setMediaRejected(id, by, at) { const x = media.get(id); if (x && (x.status === 'pending' || x.status === 'rejected')) Object.assign(x, { status: 'rejected', rejectedAt: at, rejectedBy: by }); },
     async purgeMedia(id, to, by, at, purgeAt) {
       const x = media.get(id);
-      if (!x || (x.status !== 'approved' && x.status !== 'rejected')) return false;
+      if (!x || (x.status !== 'approved' && x.status !== 'rejected')) return { ok: false, rejected: [] };
       Object.assign(x, { statusBeforePurge: x.status, status: to, purgedAt: at, purgedBy: by, purgeAt });
-      return true;
+      const rejected: GifRequest[] = [];
+      for (const r of reqs.values()) if (r.mediaId === id && r.status === 'pending') { Object.assign(r, { status: 'rejected', decidedBy: by, decidedAt: at }); rejected.push(r); }
+      return { ok: true, rejected };
     },
-    async restoreMedia(id) {
+    async setRequestRejected(id, by, at) {
+      const r = reqs.get(id);
+      if (!r || r.status !== 'approved') return null;
+      Object.assign(r, { status: 'rejected', decidedBy: by, decidedAt: at });
+      return r;
+    },
+    async restoreMedia(id, at, by) {
       const x = media.get(id);
       if (!x || x.status !== 'purging') return null;
       const to = x.statusBeforePurge === 'approved' ? 'approved' as const : 'rejected' as const;
       const other = to === 'approved' ? [...media.values()].find((o) => o.id !== id && o.status === 'approved' && o.channel === x.channel && o.sha256 === x.sha256) : null;
       if (other) return { status: 'approved' as const, mergedInto: other.id };
-      Object.assign(x, { status: to, statusBeforePurge: null, purgedAt: null, purgedBy: null, purgeAt: null });
+      const rej = to === 'rejected' ? { rejectedAt: at, rejectedBy: x.rejectedBy ?? x.purgedBy ?? by } : {};
+      Object.assign(x, { status: to, statusBeforePurge: null, purgedAt: null, purgedBy: null, purgeAt: null, ...rej });
       return { status: to };
     },
     async removeMediaFile(id) {
@@ -81,8 +92,8 @@ function memStore(now: () => number) {
       for (const x of [...media.values()]) if (x.status === 'purging' && x.purgeAt && x.purgeAt <= at) { media.delete(x.id); out.push(x.id); }
       return out;
     },
-    async messagesForMedia(id, limit) {
-      return [...reqs.values()].filter((r) => r.mediaId === id && r.status === 'approved').slice(0, limit).map((r) => toClientMessage(approvedMessageRow(r), true));
+    async messageKeysForMedia(id, limit) {
+      return [...reqs.values()].filter((r) => r.mediaId === id && r.status === 'approved').slice(0, limit).map((r) => `${r.platform}:gif-${r.id}`);
     },
     async setMediaUnapproved(id, by, at) {
       const x = media.get(id);
@@ -990,8 +1001,8 @@ test('zahodit, zprávy nechat: withdrawn — z knihovny pryč, stav před zahoze
   assert.equal(md.purgedBy, 'twitch:modb');
   assert.equal(md.purgeAt, null);
   assert.deepEqual(changed, [MEDIA]);
-  // Zprávy zůstávají vidět → žádná změna pro klienty.
-  assert.deepEqual(events(s.calls, 'broadcast:gif-media'), []);
+  // Zprávy zůstávají vidět → jen lehký signál pro panely GIFů (knihovna / zahozené).
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media'), [{ channel: 'robdiesalot', mediaId: MEDIA, state: 'library' }]);
   assert.deepEqual((await s.mem.store.listDiscarded('robdiesalot', 'withdrawn', null, 10)).map((m) => m.id), [MEDIA]);
   // Znovu zahodit / obnovit (jen purging) / zákaz → 409.
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'x', accountId: 1 })).body.error, 'already_purged');
@@ -1013,7 +1024,8 @@ test('zahodit, zprávy nechat u odebraného z knihovny: zprávy se znovu ukážo
   const [ev] = events(s.calls, 'broadcast:gif-media');
   assert.equal(ev.state, 'visible');
   assert.equal(ev.channel, 'robdiesalot');
-  assert.deepEqual((ev.messages as Array<{ id: string }>).map((m) => m.id), ['gif-1']);
+  assert.deepEqual(ev.messageIds, ['twitch:gif-1'], 'jen klíče zpráv, obsah si klient dotáhne (GET /chat/messages)');
+  assert.equal(ev.messages, undefined);
   assert.equal(s.mem.media.get(MEDIA)!.statusBeforePurge, 'rejected');
 });
 
@@ -1037,7 +1049,7 @@ test('odstranit ze serveru: jen withdrawn → unavailable, tombstone v cache, gi
   assert.deepEqual(out, { status: 200, body: { ok: true, mediaId: MEDIA, action: 'remove-file', status: 'unavailable' } });
   assert.equal(s.mem.media.get(MEDIA)!.status, 'unavailable');
   assert.deepEqual(gone, [MEDIA]);
-  assert.deepEqual(events(s.calls, 'broadcast:gif-media').map((e) => [e.mediaId, e.state, e.messages]), [[MEDIA, 'unavailable', undefined]]);
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media').map((e) => [e.mediaId, e.state, e.messageIds]), [[MEDIA, 'unavailable', undefined]]);
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'remove-file', by: 'x', accountId: 1 })).status, 409);
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'x', accountId: 1 })).status, 409);
 });
@@ -1060,23 +1072,118 @@ test('zahodit i se zprávami: purging na 7 dní, zprávy hned schované (gif-med
   assert.equal(md.purgeAt, null);
   const [ev] = events(s.calls, 'broadcast:gif-media');
   assert.equal(ev.state, 'visible');
-  assert.deepEqual((ev.messages as Array<{ id: string; gif?: unknown }>).map((m) => [m.id, !!m.gif]), [['gif-1', true]]);
+  assert.deepEqual(ev.messageIds, ['twitch:gif-1']);
   // Obnovené médium jde znovu zahodit.
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'x', accountId: 1 })).status, 200);
 });
 
-test('obnovit zamítnutý: purging → rejected (zpět do zamítnutých), bez gif-media (zprávy zůstávají schované)', async () => {
+test('obnovit zamítnutý: purging → rejected (zpět do zamítnutých), jen gif-media library (zprávy zůstávají schované)', async () => {
   const s = setup();
   await s.flow.intercept(from('42', 'm1'));
   await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
   await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 });
-  assert.deepEqual(events(s.calls, 'broadcast:gif-media'), [], 'zamítnutý → purging: zprávy už byly schované');
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media').map((e) => e.state), ['library'], 'zamítnutý → purging: zprávy už byly schované, jen panely');
   assert.equal((await s.mem.store.listRejected('robdiesalot', null, 10)).length, 0, 'ze Zamítnutých zmizí');
   assert.deepEqual((await s.mem.store.listDiscarded('robdiesalot', 'purging', null, 10)).map((m) => m.id), [MEDIA]);
+  s.calls.length = 0;
   const r = await s.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'twitch:moda', accountId: 1 });
   assert.equal(r.body.status, 'rejected');
   assert.equal(s.mem.media.get(MEDIA)!.status, 'rejected');
-  assert.deepEqual(events(s.calls, 'broadcast:gif-media'), []);
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media').map((e) => e.state), ['library']);
+});
+
+test('obnova mezi zamítnuté = nové zamítnutí: zamítnuté před 20 dny → zahozené → obnovené → retence ho nesmaže, deleteAt za 14 dní', async () => {
+  const { rejectedView } = await import('../routes/gif.js');
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  s.advance(20 * 86_400_000);
+  // Bez obnovy by ho retence smazala (starší 14 dní) — tady ho mod mezitím zahodil.
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:modb', accountId: 2 });
+  s.advance(3 * 86_400_000);
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'twitch:modc', accountId: 3 });
+  const restoredAt = s.now();
+  const md = s.mem.media.get(MEDIA)!;
+  assert.equal(md.rejectedAt!.getTime(), restoredAt);
+  assert.equal(md.rejectedBy, 'twitch:moda', 'kdo zamítl zůstává');
+  assert.equal(rejectedView(md).deleteAt, restoredAt + 14 * 86_400_000);
+  assert.equal(await s.flow.retentionTick(), 0);
+  s.advance(13 * 86_400_000);
+  assert.equal(await s.flow.retentionTick(), 0);
+  s.advance(2 * 86_400_000);
+  assert.equal(await s.flow.retentionTick(), 1);
+  // Bez záznamu o zamítnutí → kdo zahodil.
+  const t = setup();
+  await t.flow.intercept(from('42', 'm1'));
+  await t.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  Object.assign(t.mem.media.get(MEDIA)!, { rejectedBy: null });
+  await t.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:modb', accountId: 2 });
+  Object.assign(t.mem.media.get(MEDIA)!, { statusBeforePurge: null });
+  await t.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'twitch:modc', accountId: 3 });
+  assert.equal(t.mem.media.get(MEDIA)!.status, 'rejected', 'status_before_purge NULL → rejected');
+  assert.equal(t.mem.media.get(MEDIA)!.rejectedBy, 'twitch:modb');
+});
+
+test('souběh: mod schvaluje žádost na médium zahozené mezitím → žádost zamítnuta, žádná zpráva ani gif-message, odesílatel jako u zahozeného', async () => {
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const s = setup({ toSender: async () => (ev, d) => { told.push([ev, d as Record<string, unknown>]); } });
+  await s.flow.intercept(from('42', 'm1'));
+  // Zahození proběhlo mezi zobrazením karty a klikem (médium mimo pending/approved/rejected).
+  s.mem.media.get(MEDIA)!.status = 'withdrawn';
+  s.calls.length = 0;
+  const out = await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(out, { status: 200, body: { ok: true, requestId: 1, status: 'rejected', reason: 'purged' } });
+  assert.equal(s.mem.reqs.get(1)!.status, 'rejected');
+  assert.equal(names(s.calls).includes('broadcast:gif-message'), false);
+  assert.equal(s.mem.log.some((l) => l.startsWith('message:')), false, 'nic do archivu');
+  assert.equal(names(s.calls).includes('used'), false, 'bez cooldownu');
+  assert.ok(events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm1' && e.reason === 'gif_rejected'));
+  assert.ok(events(s.calls, 'notify:gif-decided').some((e) => e.status === 'rejected'));
+  assert.ok(told.some(([ev, d]) => ev === 'gif-notice' && d.kind === 'auto_rejected' && d.reason === 'purged'));
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'withdrawn', 'médium se nevzkřísí');
+  assert.equal(s.flow._pendingSize(), 0, 'zámek uživatele pryč');
+  await s.flow._idle();
+});
+
+test('souběh: instantní schválení (známý schválený GIF) a zahození během FLUSH_WAIT → automaticky zamítnuto, bez gif-message', async () => {
+  let purgeDuring: (() => Promise<unknown>) | null = null;
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const s = setup({
+    // FLUSH_WAIT: médium už je nalezené jako schválené, mod ho mezitím trvale zahodí.
+    sleep: async () => { await new Promise((r) => setImmediate(r)); const f = purgeDuring; purgeDuring = null; await f?.(); },
+    toSender: async () => (ev, d) => { told.push([ev, d as Record<string, unknown>]); },
+  });
+  await approvedGif(s);
+  // DB vrací snímek řádku (ne živý objekt) — dedup vidí „approved“, zahození přijde až po něm.
+  const orig = s.mem.store.findMedia.bind(s.mem.store);
+  s.mem.store.findMedia = async (ch, by) => { const x = await orig(ch, by); return x ? { ...x } : x; };
+  told.length = 0;
+  purgeDuring =() => s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:modb', accountId: 2, keepMessages: true });
+  s.calls.length = 0;
+  assert.equal(await s.flow.intercept(from('43', 'm2')), 'rejected');
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'withdrawn');
+  assert.equal(names(s.calls).includes('broadcast:gif-message'), false);
+  assert.equal(s.mem.reqs.get(2)!.status, 'rejected');
+  assert.ok(events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'));
+  assert.ok(told.some(([ev, d]) => ev === 'gif-notice' && d.kind === 'auto_rejected' && d.reason === 'purged'), JSON.stringify(told));
+  await s.flow._idle();
+});
+
+test('zahození zamítne čekající žádosti v téže operaci (purgeMedia) → gif-decided rejected, původní zprávy smazané', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  await s.flow.intercept(from('43', 'm2'));
+  s.calls.length = 0;
+  const out = await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:modb', accountId: 2 });
+  assert.equal(out.body.requests, 1);
+  assert.equal(s.mem.reqs.get(2)!.status, 'rejected');
+  assert.equal(s.mem.reqs.get(2)!.decidedBy, 'twitch:modb');
+  assert.ok(events(s.calls, 'notify:gif-decided').some((e) => e.requestId === 2 && e.status === 'rejected'));
+  assert.ok(events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'));
+  // Pozdní klik moda → 409 (už rozhodnuto).
+  assert.equal((await s.flow.decide({ requestId: 2, approve: true, by: 'twitch:moda', accountId: 1 })).status, 409);
+  await s.flow._idle();
 });
 
 test('purge bez keepMessages (dnešní Židolišta) = i se zprávami; obnova se souběhem dedupu → sloučení do schváleného', async () => {

@@ -33,17 +33,22 @@ test('dbGifStore: purge / restore / remove-file / listDiscarded / purgeDue / mes
     await db.insert(messages).values({ platform: 'twitch', platformMessageId: `gif-${r.id}`, platformUserId: '1', platformUsername: 'a', content: 'hele', contentRaw: { gif: { mediaId: ids[0], kind: 'gif' } }, channel: CH, isUnitychatUser: false, isReply: false, sentAt: new Date() });
 
     // Zahodit, zprávy nechat.
-    assert.equal(await s.purgeMedia(ids[0], 'withdrawn', 'twitch:moda', new Date(5000), null), true);
+    // Čekající žádost na médium se zamítne v téže transakci.
+    const [pend] = await db.insert(gifRequests).values({ channel: CH, workspace: 'x', platform: 'twitch', platformChannel: CH, userId: '2', login: 'b', messageId: 'm2', mediaId: ids[0], kind: 'gif', expiresAt: new Date(Date.now() + 60_000), status: 'pending' }).returning();
+    const purged = await s.purgeMedia(ids[0], 'withdrawn', 'twitch:moda', new Date(5000), null);
+    assert.equal(purged.ok, true);
+    assert.deepEqual(purged.rejected.map((x) => [x.id, x.status, x.decidedBy]), [[pend.id, 'rejected', 'twitch:moda']]);
+    assert.equal(await s.setMediaApproved(ids[0], new Date()), null, 'zahozené se schválením nevzkřísí');
     let md = (await s.getMedia(ids[0]))!;
     assert.equal(md.status, 'withdrawn');
     assert.equal(md.statusBeforePurge, 'approved', 'SET status_before_purge = starý stav');
     assert.equal(md.purgedBy, 'twitch:moda');
-    assert.equal(await s.purgeMedia(ids[0], 'purging', 'x', new Date(), new Date()), false, 'už zahozené');
+    assert.equal((await s.purgeMedia(ids[0], 'purging', 'x', new Date(), new Date())).ok, false, 'už zahozené');
     assert.equal((await s.findMedia(CH, { url: 'https://tenor.com/view/__test_gifpurge_1' }))!.id, ids[0], 'dedup pozná stažený');
     assert.deepEqual((await s.listDiscarded(CH, 'withdrawn', null, 10)).map((m) => m.id), [ids[0]]);
     let gone = await gifMediaGone([{ contentRaw: { gif: { mediaId: ids[0] } } }]);
     assert.equal(gone.size, 0, 'stažený = zprávy vidět');
-    assert.deepEqual((await s.messagesForMedia(ids[0], 10)).map((m) => m.id), [`gif-${r.id}`]);
+    assert.deepEqual(await s.messageKeysForMedia(ids[0], 10), [`twitch:gif-${r.id}`]);
 
     // Odstranit ze serveru.
     assert.equal(await s.removeMediaFile(ids[0]), true);
@@ -54,13 +59,14 @@ test('dbGifStore: purge / restore / remove-file / listDiscarded / purgeDue / mes
     assert.deepEqual([...(gone.unavailable ?? [])], [ids[0]]);
 
     // Zahodit i se zprávami (zamítnutý) → obnovit → zpět do zamítnutých; znovu → purgeDue smaže.
-    assert.equal(await s.purgeMedia(ids[1], 'purging', 'twitch:moda', new Date(6000), new Date(10_000)), true);
+    assert.equal((await s.purgeMedia(ids[1], 'purging', 'twitch:moda', new Date(6000), new Date(10_000))).ok, true);
     assert.deepEqual((await s.listDiscarded(CH, 'purging', null, 10)).map((m) => m.id), [ids[1]]);
-    assert.deepEqual(await s.restoreMedia(ids[1]), { status: 'rejected' });
+    assert.deepEqual(await s.restoreMedia(ids[1], new Date(8000), 'twitch:modc'), { status: 'rejected' });
     md = (await s.getMedia(ids[1]))!;
     assert.equal(md.status, 'rejected');
     assert.equal(md.purgeAt, null);
-    assert.equal(await s.restoreMedia(ids[1]), null, 'jen purging');
+    assert.equal(md.rejectedAt!.getTime(), 8000, 'nové zamítnutí = retence od obnovy');
+    assert.equal(await s.restoreMedia(ids[1], new Date(), 'x'), null, 'jen purging');
     await s.purgeMedia(ids[1], 'purging', 'x', new Date(6000), new Date(10_000));
     assert.deepEqual(await s.purgeDue(new Date(9_000)), []);
     assert.deepEqual(await s.purgeDue(new Date(10_000)), [ids[1]]);

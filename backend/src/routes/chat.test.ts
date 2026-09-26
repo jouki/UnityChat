@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClientMessage, toModeratedContent, RateLimiter, gifMediaGone } from './chat.js';
+import { toClientMessage, toModeratedContent, RateLimiter, gifMediaGone, parseMessageKeys, messagesByKeys, MESSAGES_BY_ID_MAX } from './chat.js';
 import type { Message } from '../db/schema.js';
 
 const base: Message = {
@@ -123,6 +123,23 @@ test('I2 gifMediaGone + toClientMessage: GIF odebraný z knihovny / zahozený �
   assert.equal((await gifMediaGone([rows[0]], async () => { throw new Error('db'); })).size, 0);
   // Bez množiny (živé zprávy, jiná místa) beze změny.
   assert.equal(toClientMessage(rows[1]).gif !== undefined, true);
+});
+
+test('GET /chat/messages: parseMessageKeys (platné, bez duplicit, strop) + messagesByKeys (jen kanál, nesmazané, neskryté, GIF podle stavu, nejstarší první)', async () => {
+  assert.deepEqual(parseMessageKeys('twitch:gif-1, kick:x ,twitch:gif-1,evil:x,youtube:', 200), [{ platform: 'twitch', messageId: 'gif-1' }, { platform: 'kick', messageId: 'x' }]);
+  assert.equal(parseMessageKeys(Array.from({ length: 250 }, (_, i) => `twitch:gif-${i}`).join(','), MESSAGES_BY_ID_MAX).length, 200);
+  const A = 'a'.repeat(32), P = 'b'.repeat(32);
+  const row = (id: number, extra: Partial<Message> = {}): Message => ({ ...base, id, platformMessageId: `gif-${id}`, content: `t${id}`, isReply: false, replyToMessageId: null, sentAt: new Date(10_000 - id), contentRaw: { gif: { mediaId: A, kind: 'gif' } }, ...extra });
+  const asked: unknown[] = [];
+  const rows = [row(1), row(2), row(3, { deletedAt: new Date(), deletedReason: 'mod' }), row(4, { hiddenAt: new Date() }), row(5, { contentRaw: { gif: { mediaId: P, kind: 'gif' } } })];
+  const out = await messagesByKeys(['robdiesalot'], [{ platform: 'twitch', messageId: 'gif-1' }], {
+    rows: async (ch, keys) => { asked.push([ch, keys]); return rows; },
+    gone: async () => new Set([P]),
+  });
+  assert.deepEqual(asked, [[['robdiesalot'], [{ platform: 'twitch', messageId: 'gif-1' }]]]);
+  assert.deepEqual(out.map((m) => m.id), ['gif-2', 'gif-1'], 'nejstarší první, bez smazaných / skrytých / s neveřejným GIFem');
+  assert.equal(out[0].gif?.url.endsWith(`/media/gif/${A}`), true);
+  assert.equal(out[0].message, 't2');
 });
 
 test('gifMediaGone: zahozené GIFy v historii — withdrawn normálně, purging smazaná (gif_removed), unavailable se štítkem', async () => {

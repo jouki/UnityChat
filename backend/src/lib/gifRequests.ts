@@ -187,7 +187,10 @@ export interface GifStore {
    * approved + approved_at (první), zruší rejected_* a vault. Vrací id schváleného média: když už je stejný obsah
    * (channel, sha256) schválený jako JINÉ médium (souběh dedupu, unikátní index), vrátí jeho id a toto nemění.
    */
-  setMediaApproved(id: string, at: Date): Promise<string>;
+  // null = médium mezitím trvale zahozené (withdrawn / purging / unavailable) nebo pryč → schválení se neprovede.
+  setMediaApproved(id: string, at: Date): Promise<string | null>;
+  /** Schválená žádost na zahozené médium (souběh) → rejected (podmíněně jen approved). */
+  setRequestRejected(id: number, by: string, at: Date): Promise<GifRequest | null>;
   /**
    * Duplikát `fromId` do `toId` (souběh dedupu): žádosti i syntetické zprávy (`content_raw.gif.mediaId`) přesměrovat,
    * `fromId` smazat, jeho URL zdroje převzít (lib/gifLibrary.ts moveMediaInto — stejně jako sloučení duplikátu).
@@ -196,23 +199,28 @@ export interface GifStore {
   /** rejected + rejected_at/by (jen čekající / zamítnuté — schválené ani zahozené se nemění). */
   setMediaRejected(id: string, by: string, at: Date): Promise<void>;
   /**
-   * Trvale zahodit: approved | rejected → `to` (withdrawn / purging), status_before_purge, purged_at/by, purge_at
-   * (jen purging). false = médium mezitím v jiném stavu.
+   * Trvale zahodit (jedna transakce): approved | rejected → `to` (withdrawn / purging), status_before_purge,
+   * purged_at/by, purge_at (jen purging) + čekající žádosti na médium → rejected (`rejected` = zamítnuté řádky).
+   * ok false = médium mezitím v jiném stavu (nic se nezměnilo).
    */
-  purgeMedia(id: string, to: GifDiscardedStatus, by: string, at: Date, purgeAt: Date | null): Promise<boolean>;
+  purgeMedia(id: string, to: GifDiscardedStatus, by: string, at: Date, purgeAt: Date | null): Promise<{ ok: boolean; rejected: GifRequest[] }>;
   /**
-   * Obnovit: jen purging → stav před zahozením (approved / rejected), purge_* pryč. null = není purging.
-   * `mergedInto`: stejný obsah je mezitím schválený jako jiné médium (unikátní index) → volající sloučí (mergeMedia).
+   * Obnovit: jen purging → stav před zahozením (approved / rejected; bez záznamu rejected), purge_* pryč. Obnova mezi
+   * zamítnuté = nové zamítnutí: rejected_at = `at` (retence 14 dní znovu od obnovy), rejected_by chybí → purged_by / `by`.
+   * null = není purging. `mergedInto`: stejný obsah je mezitím schválený jako jiné médium → volající sloučí.
    */
-  restoreMedia(id: string): Promise<{ status: 'approved' | 'rejected'; mergedInto?: string } | null>;
+  restoreMedia(id: string, at: Date, by: string): Promise<{ status: 'approved' | 'rejected'; mergedInto?: string } | null>;
   /** Odstranit ze serveru: jen withdrawn → unavailable, bajty pryč (řádek zůstává). false = jiný stav. */
   removeMediaFile(id: string): Promise<boolean>;
   /** Zahozená média kanálu (Stažené / Ke smazání), nejnovější zahození první; `before` = kurzor purgedAt:id. */
   listDiscarded(channel: string, status: GifDiscardedStatus, before: { at: Date; id: string } | null, limit: number): Promise<GifMediaInfo[]>;
   /** Retence: purging s purge_at <= at pryč (i záznam); vrací id. */
   purgeDue(at: Date): Promise<string[]>;
-  /** Syntetické zprávy s médiem (nesmazané, neskryté), nejnovější první — do SSE `gif-media` při zviditelnění. */
-  messagesForMedia(mediaId: string, limit: number): Promise<ClientMessage[]>;
+  /**
+   * Klíče `<platform>:<id>` syntetických zpráv s médiem (nesmazané, neskryté), nejnovější první — do SSE `gif-media`
+   * při zviditelnění (klient si obsah dotáhne přes GET /chat/messages).
+   */
+  messageKeysForMedia(mediaId: string, limit: number): Promise<string[]>;
   /** Odebrat z knihovny: jen approved → rejected (approved_at pryč, rejected_at/by, bez vaultu). false = nebylo schválené. */
   setMediaUnapproved(id: string, by: string, at: Date): Promise<boolean>;
   markMediaUsed(id: string, at: Date): Promise<void>;
@@ -292,7 +300,12 @@ export const dbGifStore: GifStore = {
     const set = { status: 'approved', approvedAt: sql`coalesce(${gifMedia.approvedAt}, ${at.toISOString()}::timestamptz)`, rejectedAt: null, rejectedBy: null, vault: false };
     for (let attempt = 0; ; attempt++) {
       // Zahozené médium (withdrawn / purging / unavailable) se schválením z karty nevzkřísí (souběh se zahozením).
-      try { await db.update(gifMedia).set(attempt ? { ...set, sourceUrlNorm: null } : set).where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected', 'approved']))); return id; }
+      // 0 řádků = médium mezitím zahozené nebo pryč → null (volající žádost zamítne, nic nerozešle).
+      try {
+        const rows = await db.update(gifMedia).set(attempt ? { ...set, sourceUrlNorm: null } : set)
+          .where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected', 'approved']))).returning({ id: gifMedia.id });
+        return rows.length ? id : null;
+      }
       catch (e) {
         if (!isUniqueViolation(e) || attempt) throw e;
         // Souběh dedupu (unikátní indexy pro schválené): stejný obsah už je schválený → použít ho.
@@ -313,17 +326,32 @@ export const dbGifStore: GifStore = {
     await db.update(gifMedia).set({ status: 'rejected', rejectedAt: at, rejectedBy: by }).where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected'])));
   },
   async purgeMedia(id, to, by, at, purgeAt) {
-    // status_before_purge = starý stav (v UPDATE … SET se pravá strana čte z původního řádku).
-    const rows = await db.update(gifMedia).set({ status: to, statusBeforePurge: sql`${gifMedia.status}`, purgedAt: at, purgedBy: by, purgeAt })
-      .where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['approved', 'rejected']))).returning({ id: gifMedia.id });
-    return rows.length > 0;
+    return db.transaction(async (tx) => {
+      // status_before_purge = starý stav (v UPDATE … SET se pravá strana čte z původního řádku).
+      const rows = await tx.update(gifMedia).set({ status: to, statusBeforePurge: sql`${gifMedia.status}`, purgedAt: at, purgedBy: by, purgeAt })
+        .where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['approved', 'rejected']))).returning({ id: gifMedia.id });
+      if (!rows.length) return { ok: false, rejected: [] };
+      // Čekající žádosti na médium zamítnout v téže transakci (souběžné rozhodnutí moda už pending nenajde).
+      const rejected = await tx.update(gifRequests).set({ status: 'rejected', decidedBy: by, decidedAt: at })
+        .where(and(eq(gifRequests.mediaId, id), eq(gifRequests.status, 'pending'))).returning();
+      return { ok: true, rejected };
+    });
   },
-  async restoreMedia(id) {
+  async setRequestRejected(id, by, at) {
+    const rows = await db.update(gifRequests).set({ status: 'rejected', decidedBy: by, decidedAt: at })
+      .where(and(eq(gifRequests.id, id), eq(gifRequests.status, 'approved'))).returning();
+    return rows[0] ?? null;
+  },
+  async restoreMedia(id, at, by) {
     const [me] = await db.select({ status: gifMedia.status, before: gifMedia.statusBeforePurge, channel: gifMedia.channel, sha256: gifMedia.sha256 })
       .from(gifMedia).where(eq(gifMedia.id, id)).limit(1);
     if (!me || me.status !== 'purging') return null;
     const to = me.before === 'approved' ? 'approved' as const : 'rejected' as const;
-    const clear = { status: to, statusBeforePurge: null, purgedAt: null, purgedBy: null, purgeAt: null };
+    const base = { status: to, statusBeforePurge: null, purgedAt: null, purgedBy: null, purgeAt: null };
+    // Mezi zamítnuté = nové zamítnutí (retence 14 dní od obnovy); kdo zamítl: původní, jinak kdo zahodil / obnovil.
+    const clear = to === 'rejected'
+      ? { ...base, rejectedAt: at, rejectedBy: sql`coalesce(${gifMedia.rejectedBy}, ${gifMedia.purgedBy}, ${by})` }
+      : base;
     for (let attempt = 0; ; attempt++) {
       try {
         const rows = await db.update(gifMedia).set(attempt ? { ...clear, sourceUrlNorm: null } : clear)
@@ -360,12 +388,13 @@ export const dbGifStore: GifStore = {
     const rows = await db.delete(gifMedia).where(and(eq(gifMedia.status, 'purging'), lte(gifMedia.purgeAt, at))).returning({ id: gifMedia.id });
     return rows.map((r) => r.id);
   },
-  async messagesForMedia(mediaId, limit) {
+  async messageKeysForMedia(mediaId, limit) {
     // Přes žádosti (index gif_requests_media_idx + unikátní platform/platform_message_id), ne JSONB scan zpráv.
-    const rows = await db.select({ m: messages }).from(messages)
+    const rows = await db.select({ platform: messages.platform, id: messages.platformMessageId }).from(messages)
       .innerJoin(gifRequests, and(eq(gifRequests.mediaId, mediaId), eq(messages.platform, gifRequests.platform), eq(messages.platformMessageId, sql`'gif-' || ${gifRequests.id}::text`)))
+      .where(and(isNull(messages.deletedAt), isNull(messages.hiddenAt)))
       .orderBy(desc(messages.sentAt)).limit(limit);
-    return rows.map((r) => toClientMessage(r.m, true)).filter((m) => !m.deleted && !m.hidden);
+    return rows.map((r) => `${r.platform}:${r.id}`);
   },
   async setMediaUnapproved(id, by, at) {
     const rows = await db.update(gifMedia).set({ status: 'rejected', approvedAt: null, rejectedAt: at, rejectedBy: by, vault: false })
@@ -733,24 +762,47 @@ export function createGifFlow(deps: GifFlowDeps) {
    */
   const announceMedia = async (channel: string, mediaId: string, before: string, after: string, effective = mediaId) => {
     const state = gifMessageState(after);
-    if (gifMessageState(before) === state) return;
     await safe('gif-media', async () => {
+      // Viditelnost zpráv beze změny (approved→withdrawn, rejected→purging, purging→rejected…) → jen lehký signál
+      // pro otevřené panely GIFů (knihovna / zamítnuté / zahozené se načtou znovu).
+      if (gifMessageState(before) === state) { deps.broadcast('gif-media', { channel, mediaId, state: 'library' }); return; }
       if (state === 'visible') {
-        const messages = await deps.store.messagesForMedia(effective, GIF_MEDIA_EVENT_MESSAGES);
-        if (messages.length) deps.broadcast('gif-media', { channel, mediaId, state, messages });
+        // Jen klíče zpráv (max 200) — obsah si klient dotáhne přes GET /chat/messages (payload SSE + replay buffer).
+        const messageIds = await deps.store.messageKeysForMedia(effective, GIF_MEDIA_EVENT_MESSAGES);
+        deps.broadcast('gif-media', { channel, mediaId, state, messageIds });
         return;
       }
       deps.broadcast('gif-media', { channel, mediaId, state });
     });
   };
 
-  const decided = async (r: GifRequest, status: GifStatus, by: string | null, opts: { quiet?: boolean } = {}) => {
+  /**
+   * Schválení žádosti na médium, které je mezitím trvale zahozené (souběh s „Trvale zahodit“): žádost → rejected,
+   * žádná zpráva ani gif-message; odesílatel dostane totéž jako u zahozeného dedupu (gif-notice auto_rejected
+   * `purged` + zamítnuto). `instant` (zachycení v ingestu): původní zprávu a hlášku vyřídí intercept (dropOriginal).
+   */
+  const rejectPurged = async (r: GifRequest, p: { by: string; accountId: number | null; auto?: boolean; quiet?: boolean; instant?: boolean }, at: Date): Promise<{ status: number; body: Record<string, unknown> }> => {
+    await safe('zamítnutí žádosti na zahozené médium', () => deps.store.setRequestRejected(r.id, p.by, at));
+    r.status = 'rejected';
+    deps.log.info({ requestId: r.id, channel: r.channel }, 'gif: schválení žádosti na zahozené médium → zamítnuto');
+    if (!p.instant && deps.toSender) {
+      await safe('gif-notice purged', async () => {
+        const tell = await deps.toSender!(r.platform as Platform, r.userId);
+        tell?.('gif-notice', { requestKey: `${r.platform}:${r.messageId}`, channel: r.channel, platform: r.platform, messageId: r.messageId, kind: 'auto_rejected', reason: 'purged' });
+      });
+    }
+    await decided(r, 'rejected', p.by, { quiet: p.quiet ?? p.auto, keepOriginal: p.instant });
+    await safe('moderation_actions', async () => deps.recordAction?.({ channel: r.channel, accountId: p.accountId, actor: p.by, action: 'gif_reject', platform: r.platform, targetLogin: r.login, targetMessageId: r.messageId, params: { requestId: r.id, reason: 'purged' }, result: { status: 'rejected' } }));
+    return { status: 200, body: { ok: true, requestId: r.id, status: 'rejected', reason: 'purged' } };
+  };
+
+  const decided = async (r: GifRequest, status: GifStatus, by: string | null, opts: { quiet?: boolean; keepOriginal?: boolean } = {}) => {
     closed.add(r.id);
     if (closed.size > 2000) closed.delete(closed.values().next().value!);
     const k = userKey(r.channel, r.platform, r.userId);
     if (pending.get(k) === r.id) pending.delete(k);
     // Zamítnuto / propadlo: původní zpráva (v UC dosud nevykreslená, gif_request) → běžně smazaná.
-    if (status === 'rejected' || status === 'expired') await rejectOriginal(r, status === 'rejected' ? by : null);
+    if ((status === 'rejected' || status === 'expired') && !opts.keepOriginal) await rejectOriginal(r, status === 'rejected' ? by : null);
     // Auto-schválení modem / z knihovny: nikdo žádost neviděl (gif-pending ani gif.pending nešlo) → ani rozhodnutí neohlašovat.
     if (opts.quiet) return;
     const ev = { requestId: r.id, channel: r.channel, approved: status === 'approved', status, by };
@@ -833,7 +885,7 @@ export function createGifFlow(deps: GifFlowDeps) {
    * `auto`: bez gif-used (mod nemá cooldown). `quiet`: bez gif-decided / gif.decided (žádost nikdo neviděl).
    * `cascade`: schválení z jiné žádosti na stejné médium (sama už dál nekaskáduje).
    */
-  const decideCore = async (p: { requestId: number; approve: boolean; by: string; accountId: number | null; auto?: boolean; quiet?: boolean; cascade?: boolean }): Promise<{ status: number; body: Record<string, unknown> }> => {
+  const decideCore = async (p: { requestId: number; approve: boolean; by: string; accountId: number | null; auto?: boolean; quiet?: boolean; cascade?: boolean; instant?: boolean }): Promise<{ status: number; body: Record<string, unknown> }> => {
     const at = new Date(deps.now());
     const r = await deps.store.decide(p.requestId, p.approve ? 'approved' : 'rejected', p.by, at);
     if (!r) {
@@ -843,21 +895,28 @@ export function createGifFlow(deps: GifFlowDeps) {
     }
     const status: GifStatus = p.approve ? 'approved' : 'rejected';
     let published = true;
+    // Médium do knihovny (approved = veřejné) PŘED čímkoli dalším: zahozené mezitím (souběh s Trvale zahodit) →
+    // žádost zamítnout jako zahozený dedup, žádná zpráva, žádný gif-message ani cooldown.
+    let effective: string | null | undefined = r.mediaId ?? undefined;
+    if (p.approve && r.mediaId) {
+      try { effective = await deps.store.setMediaApproved(r.mediaId, at); }
+      catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: schválení média selhalo'); effective = undefined; }
+      if (effective === null) return rejectPurged(r, p, at);
+    }
     if (p.approve) {
       // Cooldown hned (gifUsed ho nastaví lokálně synchronně, před voláním Židolišty), ne až po rozeslání.
       // Auto (mod / broadcaster): cooldown se neuplatňuje → gif-used se nevolá.
       const usedP = p.auto ? Promise.resolve() : Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
         .catch((e) => deps.log.warn({ err: (e as Error).message }, 'gif: gif-used selhalo'));
-      // Médium do knihovny (approved = veřejné) a počítadlo použití.
-      if (r.mediaId) {
+      // Počítadlo použití; souběh dedupu (stejný obsah schválený jako jiné médium) → sloučit.
+      if (r.mediaId && effective) {
         await safe('schválení média', async () => {
-          const effective = await deps.store.setMediaApproved(r.mediaId!, at);
           if (effective !== r.mediaId) {
             // Souběh dedupu: stejný obsah už je schválený jako jiné médium → žádosti (i ostatní) na něj, duplikát pryč.
             const dup = r.mediaId!;
-            await deps.store.mergeMedia(dup, effective);
+            await deps.store.mergeMedia(dup, effective!);
             deps.mediaDeleted?.(dup);
-            r.mediaId = effective;
+            r.mediaId = effective!;
             deps.log.info({ requestId: r.id }, 'gif: duplikát schváleného média (souběh) → sloučeno');
           }
           await deps.store.markMediaUsed(r.mediaId!, at);
@@ -1082,10 +1141,17 @@ export function createGifFlow(deps: GifFlowDeps) {
         // Mod / broadcaster nebo známý schválený GIF z knihovny: schválit HNED po insertu (stejná cesta jako
         // decide approve), bez karet — dřív, než by žádost mohl uvidět a rozhodnout jiný mod (listPending
         // auto/instant žádosti vynechává). Mazání na platformě až potom (níž).
-        let instantOut: { status: number } | null = null;
+        let instantOut: { status: number; body: Record<string, unknown> } | null = null;
         if (instant) {
           const by = auto ? `${m.platform}:${m.username.toLowerCase()}` : 'library';
-          instantOut = await decideCore({ requestId: created.id, approve: true, by, accountId: null, auto, quiet: true });
+          instantOut = await decideCore({ requestId: created.id, approve: true, by, accountId: null, auto, quiet: true, instant: true });
+          // Médium zahozené během stahování / FLUSH_WAIT (souběh s „Trvale zahodit“) → jako zahozený dedup.
+          if (instantOut.body.reason === 'purged') {
+            await dropOriginal(p, GIF_REJECTED_REASON);
+            notice('auto_rejected', { reason: 'purged' });
+            deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id }, 'gif: médium zahozené během zachycení → automaticky zamítnuto');
+            return finish('rejected');
+          }
           deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id, status: instantOut.status, auto }, auto ? 'gif: mod → schváleno rovnou' : 'gif: známý schválený GIF → rovnou do chatu');
         }
 
@@ -1139,7 +1205,7 @@ export function createGifFlow(deps: GifFlowDeps) {
      *  - remove-file (jen withdrawn): soubor pryč → unavailable, zprávy ukážou „[GIF nedostupný]" (nevratné);
      *  - unapprove (jen schválené): „odebrat z knihovny" → zamítnuté (retence 14 dní, jen s tokenem);
      *  - ban12h (čekající / zamítnuté): „Automaticky zahazovat 12 h" od všech + čekající žádosti na médium zamítnout.
-     * Změna viditelnosti zpráv s GIFem → SSE `gif-media` { channel, mediaId, state, messages? } (veřejné).
+     * Změna stavu → SSE `gif-media` { channel, mediaId, state: visible|removed|unavailable|library, messageIds? } (veřejné).
      */
     async mediaAction(p: { mediaId: string; action: GifMediaAction; by: string; accountId: number | null; keepMessages?: boolean }): Promise<{ status: number; body: Record<string, unknown> }> {
       const md = await deps.store.getMedia(p.mediaId);
@@ -1158,7 +1224,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       }
       if (p.action === 'restore') {
         if (md.status !== 'purging') return conflict('not_purging', md.status);
-        const r = await deps.store.restoreMedia(md.id);
+        const r = await deps.store.restoreMedia(md.id, at, p.by);
         if (!r) return conflict('not_purging', (await deps.store.getMedia(md.id))?.status ?? 'gone');
         let effective = md.id;
         if (r.mergedInto) {
@@ -1184,12 +1250,17 @@ export function createGifFlow(deps: GifFlowDeps) {
       if (p.action === 'purge') {
         const prev = md.status;
         if (prev !== 'approved' && prev !== 'rejected') return conflict(GIF_DISCARDED.has(prev) ? 'already_purged' : 'not_rejected', prev);
-        // Čekající žádosti na médium nejdřív zamítnout (původní zprávy → běžně smazané).
-        const pendingRows = await deps.store.pendingForMedia(md.id, at).catch(() => [] as GifRequest[]);
-        for (const r of pendingRows) await decideCore({ requestId: r.id, approve: false, by: p.by, accountId: p.accountId });
         const to: GifDiscardedStatus = p.keepMessages ? 'withdrawn' : 'purging';
         const purgeAt = to === 'purging' ? new Date(at.getTime() + PURGE_DELAY_MS) : null;
-        if (!(await deps.store.purgeMedia(md.id, to, p.by, at, purgeAt))) return conflict('already_purged', (await deps.store.getMedia(md.id))?.status ?? 'gone');
+        // Zahození + zamítnutí čekajících žádostí na médium v jedné transakci (rozhodnutí moda už nic nenajde).
+        const out = await deps.store.purgeMedia(md.id, to, p.by, at, purgeAt);
+        if (!out.ok) return conflict('already_purged', (await deps.store.getMedia(md.id))?.status ?? 'gone');
+        const pendingRows = out.rejected;
+        // Zamítnuté žádosti: původní zprávy → běžně smazané, gif-decided / gif.decided / fronta jako u zamítnutí modem.
+        for (const r of pendingRows) {
+          await decided(r, 'rejected', p.by);
+          await safe('moderation_actions', async () => deps.recordAction?.({ channel: r.channel, accountId: p.accountId, actor: p.by, action: 'gif_reject', platform: r.platform, targetLogin: r.login, targetMessageId: r.messageId, params: { requestId: r.id, reason: 'purged' }, result: { status: 'rejected' } }));
+        }
         // Stav se změnil (withdrawn veřejně, purging jen s tokenem) → cache /media/gif zahodit.
         deps.mediaChanged?.(md.id);
         await announceMedia(md.channel, md.id, prev, to);
@@ -1214,6 +1285,8 @@ export function createGifFlow(deps: GifFlowDeps) {
       if (p.action === 'approve') {
         // Do knihovny; čekající žádosti na totéž médium se schválí taky (bez nového schvalování).
         const effective = await deps.store.setMediaApproved(md.id, at);
+        // Mezitím zahozené (souběh s jiným modem) → nic neschvalovat.
+        if (effective === null) return conflict('already_purged', (await deps.store.getMedia(md.id))?.status ?? 'gone');
         if (effective !== md.id) { await deps.store.mergeMedia(md.id, effective); deps.mediaDeleted?.(md.id); }
         else deps.mediaChanged?.(md.id);
         // Zprávy s GIFem odebraným z knihovny se znovu ukážou (i ty přesměrované na sloučené médium).

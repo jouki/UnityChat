@@ -26,7 +26,7 @@ import { MEDIA_ID_RE, gifMediaUrl } from '../lib/gifIds.js';
 import { pendingView, GIF_MEDIA_ACTIONS, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifDiscardedStatus, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
 import { createGifTokenVerifier, dbGifTokenStore, issueAccountToken, type GifTokenVerifier } from '../lib/gifTokens.js';
 import { parseChannel } from './moderation.js';
-import { RateLimiter, toClientMessage, type ClientMessage } from './chat.js';
+import { RateLimiter, toClientMessage, parseMessageKeys, type ClientMessage } from './chat.js';
 import { config } from '../config.js';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
@@ -309,16 +309,7 @@ export interface GifHeldDeps {
 
 /** `twitch:abc,kick:def` → klíče (nejvýš GIF_HELD_BATCH, bez duplicit, jen platné). */
 export function parseHeldIds(raw: string | undefined): Array<{ platform: Platform; messageId: string }> {
-  const out: Array<{ platform: Platform; messageId: string }> = [];
-  const seen = new Set<string>();
-  for (const part of String(raw || '').split(',')) {
-    const m = /^(twitch|kick|youtube):([\w.:-]{1,200})$/.exec(part.trim());
-    if (!m || seen.has(part.trim())) continue;
-    seen.add(part.trim());
-    out.push({ platform: m[1] as Platform, messageId: m[2] });
-    if (out.length >= GIF_HELD_BATCH) break;
-  }
-  return out;
+  return parseMessageKeys(raw, GIF_HELD_BATCH);
 }
 
 /**

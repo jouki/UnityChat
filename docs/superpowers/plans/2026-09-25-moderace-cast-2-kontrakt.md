@@ -132,7 +132,7 @@
   re-timeout odjinud s jinou délkou projde (nové `until`).
 
 `gif-media` (2026-09-27) — změna viditelnosti zpráv se schváleným GIFem po zahození / obnově / odstranění souboru
-/ odebrání z knihovny: `{ channel, mediaId, state: "visible"|"removed"|"unavailable", messages? }`, viz Část 4
+/ odebrání z knihovny: `{ channel, mediaId, state: "visible"|"removed"|"unavailable"|"library", messageIds? }`, viz Část 4
 „Trvale zahodit — dvě varianty".
 
 ## Integrace Židolišty (X-Api-Key + HMAC, `inboundAuthorized`)
@@ -901,14 +901,32 @@ integrace (`private, no-store`; náhled v „Ke smazání"), `unavailable` `404`
 `{ message: '', deleted: true, deletedReason: "gif_removed" }` bez `gif`; `unavailable` → **nesmazaná** zpráva s textem
 a `gif: { url, kind, width, height, unavailable: true }` (URL zůstává — starší klient dostane 404 → „GIF odebrán").
 
-**SSE `gif-media` na `/nicknames/stream` (veřejné) — jen když se změní viditelnost zpráv s GIFem:**
-`{ channel, mediaId, state: "visible"|"removed"|"unavailable", messages?: [<zpráva jako /chat/history>] }`.
+**SSE `gif-media` na `/nicknames/stream` (veřejné) — po každé změně stavu média (zahození, obnova, odstranění
+souboru, odebrání z knihovny, schválení ze zamítnutých):**
+`{ channel, mediaId, state: "visible"|"removed"|"unavailable"|"library", messageIds?: ["<platform>:<id>", …] }`.
 - `removed` (unapprove, purge → purging): klient zprávy s tímto médiem ukáže jako smazané `gif_removed`.
 - `unavailable` (remove-file): klient místo média ukáže štítek „[GIF nedostupný]" (text zůstává).
-- `visible` (restore do knihovny, approve ze zamítnutých, purge odebraného z knihovny se `keepMessages`): nese
-  `messages` (nejvýš 200 nejnovějších syntetických zpráv `gif-<id>` s obsahem, nesmazané modem) — klient je
-  vykreslí na místě jako obnovené (má je jen jako smazané bez obsahu). Bez zpráv se nepošle.
+- `visible` (restore do knihovny, approve ze zamítnutých, purge odebraného z knihovny se `keepMessages`): nese jen
+  `messageIds` (nejvýš 200 nejnovějších syntetických zpráv `gif-<id>`, nesmazané / neskryté) — klient si obsah těch,
+  které má, dotáhne přes `GET /chat/messages` a vykreslí je na místě jako obnovené.
+- `library` — viditelnost zpráv se nezměnila (approved→withdrawn, rejected→purging, purging→rejected), jen otevřené
+  panely GIFů se načtou znovu (klient refetch rozprostře náhodně do 0–2 s).
 - Nenese interní stav média ani kdo zahodil. Řeší i dřívější M5 (odebrání z knihovny se otevřeným klientům projeví hned).
+
+**`GET /chat/messages?channel=&ids=<platform>:<id>,…`** (veřejné, bez auth, rate limit per IP 10 + 2/s, `no-store`) →
+`{ ok, messages: [<zpráva jako /chat/history>] }` — nejvýš 200 klíčů, jen zprávy kanálu (Twitch login + YouTube / Kick
+z adresáře), jen nesmazané a neskryté (i GIF zpráva s neveřejným médiem se vynechá), nejstarší první. Špatný kanál
+`400 channel`, žádný platný klíč `400 ids`.
+
+**Souběh schválení se zahozením:** `purge` zamítne čekající žádosti na médium v téže transakci jako změnu stavu
+(pozdní klik moda → `409 already_decided`). Když se médium zahodí mezi rozhodnutím a schválením (karta moda,
+instantní schválení známého GIFu v ingestu během stahování), `setMediaApproved` to pozná (0 řádků) → žádost se
+zamítne, nic se nezapíše ani nerozešle (`gif-message`, cooldown), původní zpráva `gif_rejected`, odesílatel
+`gif-notice { kind: "auto_rejected", reason: "purged" }`; odpověď moda `200 { ok, requestId, status: "rejected",
+reason: "purged" }`.
+
+**Obnova mezi zamítnuté = nové zamítnutí:** `rejected_at` = čas obnovy (retence 14 dní znovu od ní, `deleteAt` za
+14 dní), `rejected_by` zůstává, bez něj kdo zahodil / obnovil. `status_before_purge` NULL → `rejected`.
 
 **Klient (core `gif-library.js`, `gif.js`):** každá dlaždice (knihovna, Zamítnuté, duplikáty) má nabídku ⋯ s „Náhled"
 (i divák v knihovně); v Zamítnutých a duplikátech otevře náhled i klik. Náhled = překryv nad GIF panelem (větší GIF,

@@ -233,6 +233,55 @@ export class RateLimiter {
 
 const CHANNEL_RE = /^[a-z0-9_]{1,40}$/;
 const PLATFORMS = ['twitch', 'kick', 'youtube'] as const;
+
+/** Max zpráv v jednom GET /chat/messages (= strop `messageIds` v SSE gif-media). */
+export const MESSAGES_BY_ID_MAX = 200;
+
+/**
+ * `twitch:abc,kick:def` → klíče zpráv (bez duplicit, jen platné, nejvýš `max`). Sdílí GET /chat/messages
+ * i GET /gif/held (routes/gif.ts parseHeldIds).
+ */
+export function parseMessageKeys(raw: string | undefined, max: number): Array<{ platform: typeof PLATFORMS[number]; messageId: string }> {
+  const out: Array<{ platform: typeof PLATFORMS[number]; messageId: string }> = [];
+  const seen = new Set<string>();
+  for (const part of String(raw || '').split(',')) {
+    const m = /^(twitch|kick|youtube):([\w.:-]{1,200})$/.exec(part.trim());
+    if (!m || seen.has(part.trim())) continue;
+    seen.add(part.trim());
+    out.push({ platform: m[1] as typeof PLATFORMS[number], messageId: m[2] });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** Řádky zpráv kanálů `channels` podle klíčů (routa: DB; testy injektují). */
+export type MessageRowsByKeys = (channels: string[], keys: Array<{ platform: string; messageId: string }>) => Promise<Message[]>;
+
+const dbMessageRowsByKeys: MessageRowsByKeys = async (channels, keys) => {
+  if (!keys.length) return [];
+  // (platform, platform_message_id) je unikátní index → oba IN seznamy ho využijí; kanál jako pojistka izolace.
+  const rows = await db.select().from(messages).where(and(
+    inArray(messages.channel, channels),
+    inArray(messages.platform, [...new Set(keys.map((k) => k.platform))]),
+    inArray(messages.platformMessageId, [...new Set(keys.map((k) => k.messageId))]),
+  ));
+  const want = new Set(keys.map((k) => `${k.platform}:${k.messageId}`));
+  return rows.filter((r) => want.has(`${r.platform}:${r.platformMessageId}`));
+};
+
+/**
+ * Konkrétní zprávy kanálu podle klíčů (GET /chat/messages — klient si po SSE gif-media visible dotáhne obsah
+ * obnovených zpráv). Jen nesmazané a neskryté (i ty, jejichž GIF už není veřejný, se vynechají), tvar jako
+ * /chat/history, nejstarší první.
+ */
+export async function messagesByKeys(channels: string[], keys: Array<{ platform: string; messageId: string }>, deps: { rows?: MessageRowsByKeys; gone?: typeof gifMediaGone } = {}): Promise<ClientMessage[]> {
+  const rows = (await (deps.rows ?? dbMessageRowsByKeys)(channels, keys)).filter((r) => !r.deletedAt && !r.hiddenAt);
+  const gone = await (deps.gone ?? gifMediaGone)(rows);
+  return rows
+    .sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime() || a.id - b.id)
+    .map((r) => toClientMessage(r, true, gone))
+    .filter((m) => !m.deleted && !m.hidden);
+}
 const MAX_STREAMS_PER_IP = 10; // domácnost za NAT, víc tabů
 
 /**
@@ -328,6 +377,19 @@ export default async function chatRoutes(app: FastifyInstance) {
     const unsubscribe = subscribeChatStream(reply, { ip: req.ip, channels, platforms: wanted });
     req.raw.on('close', unsubscribe);
     return undefined; // hijacknuto — odpověď drží SSE, Fastify nic neposílá
+  });
+
+  // Konkrétní zprávy podle id (veřejné, jako historie): klient si po SSE gif-media visible dotáhne obsah zpráv,
+  // které má jen jako smazané. Jen daný kanál, jen nesmazané a neskryté, nejvýš MESSAGES_BY_ID_MAX klíčů.
+  const byIdLimiter = new RateLimiter(10, 2);
+  app.get<{ Querystring: { channel?: string; ids?: string } }>('/chat/messages', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!byIdLimiter.allow(req.ip)) { reply.code(429); return { ok: false, error: 'too many requests' }; }
+    const channel = (req.query.channel || '').trim().toLowerCase();
+    if (!CHANNEL_RE.test(channel)) { reply.code(400); return { ok: false, error: 'channel' }; }
+    const keys = parseMessageKeys(req.query.ids, MESSAGES_BY_ID_MAX);
+    if (!keys.length) { reply.code(400); return { ok: false, error: 'ids' }; }
+    return { ok: true, messages: await messagesByKeys(await resolveChannels(channel), keys) };
   });
 
   app.get<{ Querystring: { channel?: string; limit?: string; before?: string } }>('/chat/history', async (req, reply) => {
