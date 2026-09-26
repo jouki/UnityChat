@@ -56,6 +56,8 @@ import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
+import { createPhashWorker, dbGifLibraryStore, startPhashWorker } from './lib/gifLibrary.js';
+import { computePhash } from './lib/gifPhash.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
 import { publishRestored } from './lib/linkRestore.js';
@@ -132,6 +134,13 @@ const gifFlow = createGifFlow({
   mediaDeleted: (id) => gifMedia.forget(id),
   mediaChanged: (id) => gifMedia.invalidate(id),
   mediaApproved: (id) => gifMedia.prewarm(id),
+  log: app.log,
+});
+// GIF knihovna (Task 2): dopočet perceptuálních hashů a návrhy duplikátů v rámci kanálu (lib/gifLibrary.ts).
+const phashWorker = createPhashWorker({
+  store: dbGifLibraryStore,
+  compute: (bytes, kind) => computePhash(bytes, kind, { log: app.log }),
+  now: Date.now,
   log: app.log,
 });
 // Smazání schváleného GIFu modem (část 1, id `gif-…`) → žádost `deleted`. Médium zůstává v knihovně
@@ -229,12 +238,15 @@ app.addHook('onReady', async () => {
   // Retence zamítnutých GIFů (14 dní, kromě vaultu) 1×/h.
   gifRetentionTimer = setInterval(() => { void gifFlow.retentionTick(); }, 3600_000);
   gifRetentionTimer.unref?.();
+  // Perceptuální hash + návrhy duplikátů na pozadí (1 médium za 2 s; bez práce / chyba → 30 s).
+  stopPhashWorker = startPhashWorker(phashWorker);
   loadActivePermits().then((n) => app.log.info({ n }, 'link filter: aktivní permity načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'link filter: načtení permitů selhalo'));
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
 let gifExpiryTimer: ReturnType<typeof setInterval> | null = null;
 let gifRetentionTimer: ReturnType<typeof setInterval> | null = null;
-app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); if (gifRetentionTimer) clearInterval(gifRetentionTimer); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
+let stopPhashWorker: (() => void) | null = null;
+app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); if (gifRetentionTimer) clearInterval(gifRetentionTimer); stopPhashWorker?.(); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',

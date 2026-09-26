@@ -461,7 +461,7 @@ export function normalizeTags(raw: readonly unknown[]): string[] {
   const out: string[] = [];
   for (const v of raw) {
     if (typeof v !== 'string') continue;
-    const t = v.normalize('NFKC').toLowerCase().replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LEN).trim();
+    const t = v.normalize('NFKC').toLowerCase().replace(/[\u0000-\u001f\u007f]/g, ' ').trim().replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LEN).trim();
     if (!t || GENERIC_TAGS.has(t) || out.includes(t)) continue;
     out.push(t);
     if (out.length >= MAX_TAGS) break;

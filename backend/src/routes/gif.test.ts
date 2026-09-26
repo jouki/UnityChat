@@ -125,7 +125,7 @@ test('GET /media/gif/:id: zamítnuté bez tokenu / se špatným 404, s platným 
   assert.equal(ok.statusCode, 200);
   assert.equal(ok.headers['cache-control'], 'private, no-store');
   // Bez přihlášení → 401 (route existuje, ne 404).
-  for (const a of ['approve', 'vault', 'purge', 'ban12h', 'decide']) {
+  for (const a of ['approve', 'vault', 'purge', 'ban12h', 'unapprove', 'decide']) {
     assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} })).statusCode, 401, a);
   }
   assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: {} })).statusCode, 401);
@@ -308,4 +308,77 @@ test('gifHeldState: nesmazaný řádek = visible; jiný důvod = deleted; cizí 
   const k = await gifHeldState('robdiesalot', [{ platform: 'kick', messageId: 'ok' }], deps);
   assert.equal(k[0].state, 'unknown');
   assert.deepEqual(calls, []);
+});
+
+// ---- GIF knihovna (Task 2) ----
+const libStore = (over: Record<string, unknown> = {}) => {
+  const lib = 'b'.repeat(32);
+  const calls: Array<[string, unknown]> = [];
+  const store = {
+    listLibrary: async (channel: string, o: unknown) => { calls.push(['listLibrary', { channel, o }]); return channel === 'robdiesalot' ? [{ id: lib, kind: 'gif', width: 10, height: 20, tags: ['cat'], useCount: 3, lastUsedAt: new Date(9000) }] : []; },
+    listDuplicates: async (channel: string) => { calls.push(['listDuplicates', channel]); return []; },
+    getDuplicate: async (id: number) => (id === 5 ? { id: 5, channel: 'robdiesalot', a: 'a'.repeat(32), b: lib, status: 'pending' } : null),
+    keepBoth: async () => true,
+    mergeInto: async () => true,
+    ...over,
+  };
+  return { store, calls, lib };
+};
+
+test('GET /gifs/library: veřejné (bez přihlášení), kanál z parametru, URL našeho média, rate limit per IP, no-store', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const { store, calls, lib } = libStore();
+  const app = Fastify();
+  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media: new MediaServer(async () => null), library: store as never, tokens: { issue: async () => 'x', verify: async () => false } });
+  const r = await app.inject({ method: 'GET', url: '/gifs/library?channel=RobDiesALot&q=cat&limit=10' });
+  assert.equal(r.statusCode, 200);
+  assert.equal(r.headers['cache-control'], 'no-store');
+  assert.deepEqual(r.json(), { ok: true, items: [{ mediaId: lib, url: `http://localhost:3000/media/gif/${lib}`, kind: 'gif', width: 10, height: 20, tags: ['cat'], useCount: 3, lastUsedAt: 9000 }], nextCursor: null });
+  assert.deepEqual(calls[0], ['listLibrary', { channel: 'robdiesalot', o: { q: 'cat', after: null, limit: 10 } }]);
+  assert.equal((await app.inject({ method: 'GET', url: '/gifs/library?channel=../x' })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/gifs/library?cursor=zzz' })).statusCode, 400);
+  let last = 200;
+  for (let i = 0; i < 40 && last !== 429; i++) last = (await app.inject({ method: 'GET', url: '/gifs/library' })).statusCode;
+  assert.equal(last, 429);
+  await app.close();
+});
+
+test('duplicity v UC: bez přihlášení 401, nemod 403, mod → seznam a rozhodnutí (kanál z návrhu); unapprove route', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const merged: string[] = [];
+  const { store } = libStore({ mergeInto: async (k: string, d: string) => { merged.push(`${k}<-${d}`); return true; } });
+  const forgotten: string[] = [];
+  const media = new MediaServer(async () => null);
+  media.forget = (id: string) => { forgotten.push(id); };
+  const actions: string[] = [];
+  const flow = { mediaAction: async (p: { action: string }) => { actions.push(p.action); return { status: 200, body: { ok: true } }; } };
+  const gstore = { getMedia: async () => ({ id: 'c'.repeat(32), channel: 'robdiesalot', status: 'approved' }) };
+  let account = 1;
+  const app = Fastify();
+  await app.register(gifRoutes, {
+    flow: flow as never, store: gstore as never, media, library: store as never, recordAction: async () => {},
+    tokens: { issue: async () => 'x', verify: async () => false },
+    auth: async (req, reply) => { if (!req.headers.authorization) { reply.code(401).send({ ok: false }); return; } req.webAccountId = account; },
+    modIdentities: async (acc) => (acc === 7 ? [{ platform: 'twitch', login: 'moda' }] : []),
+  });
+  const H = { authorization: 'Bearer x' };
+  assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/duplicates?channel=robdiesalot' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/duplicates/5/keep-first', payload: {} })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/duplicates?channel=robdiesalot', headers: H })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/duplicates/5/keep-first', headers: H, payload: {} })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${'c'.repeat(32)}/unapprove`, headers: H, payload: {} })).statusCode, 403);
+  account = 7;
+  const list = await app.inject({ method: 'GET', url: '/moderation/gif/duplicates?channel=robdiesalot', headers: H });
+  assert.deepEqual(list.json(), { ok: true, items: [] });
+  assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/duplicates/99/keep-first', headers: H, payload: {} })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/duplicates/5/keep-nothing', headers: H, payload: {} })).statusCode, 404);
+  const r = await app.inject({ method: 'POST', url: '/moderation/gif/duplicates/5/keep-second', headers: H, payload: {} });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.deepEqual(merged, [`${'b'.repeat(32)}<-${'a'.repeat(32)}`]);
+  assert.deepEqual(forgotten, ['a'.repeat(32)]);
+  assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${'c'.repeat(32)}/unapprove`, headers: H, payload: {} })).statusCode, 200);
+  assert.deepEqual(actions, ['unapprove']);
+  await app.close();
 });
