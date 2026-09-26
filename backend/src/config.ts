@@ -59,7 +59,14 @@ const EnvSchema = z.object({
   MAIL_DAILY_BUDGET: z.coerce.number().int().positive().default(380),
   // Kam jde měsíční udržovací e-mail (lib/mailKeepalive.ts; Brevo klíč vyprší po 90 dnech nečinnosti). Prázdné = vypnuto.
   MAIL_KEEPALIVE_TO: z.string().default('m.joukal+unitychat@gmail.com'),
-  ZIDOLISTA_WORKSPACES: z.string().default('robdiesalot=rob'),
+  // GIFy (lib/gifUnlocker.ts): záložní stažení přes Bright Data Web Unlocker, když přímé narazí na Cloudflare
+  // challenge. Bez klíče nebo zóny = vypnuto. Klíč jen v Coolify secrets, NIKDY v gitu ani v logu.
+  BRIGHTDATA_API_KEY: z.string().default(''),
+  BRIGHTDATA_ZONE: z.string().default(''),
+  // Denní strop volání (reset o půlnoci UTC); free tier = 5000 požadavků / měsíc.
+  // Prázdná hodnota = výchozí (z.coerce by z '' udělal 0 = vypnuto).
+  BRIGHTDATA_DAILY_CAP: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().nonnegative().default(100)),
+  ZIDOLISTA_WORKSPACES:z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),
 });

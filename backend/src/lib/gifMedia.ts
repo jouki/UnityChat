@@ -12,11 +12,17 @@
 //     → DNS rebinding mezi kontrolou a spojením nepomůže; IP literál se ověří přímo;
 //   - limit 10 MB (Content-Length i počítání při čtení), stránka max 1 MB, celkový časový limit 10 s;
 //   - Content-Type (image/* | video/* | octet-stream) + magic bytes (GIF87a/89a, RIFF…WEBP, MP4 ftyp).
+//
+// Fallback (lib/gifUnlocker.ts): přímý pokus skončil Cloudflare challenge (403/503 + cf-mitigated: challenge,
+// nebo 403 s HTML „Just a moment“ a cf- hlavičkami) → stejná URL (už ověřená assertPublicUrl) přes Bright Data
+// Web Unlocker. Na odpověď platí stejné kontroly; přesměrování z ní se ověřuje jako každé jiné. Celkový limit
+// se po zapnutí fallbacku prodlouží na UNLOCKER_TIMEOUT_MS (25 s od začátku), víc ne.
 import { lookup as dnsLookup } from 'node:dns';
 import { isIP, BlockList } from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
 import { findLinks } from './links.js';
+import type { Unlocker } from './gifUnlocker.js';
 
 export type GifKind = 'gif' | 'webp' | 'mp4';
 
@@ -219,18 +225,62 @@ export const nodeTransport: Transport = (url, headers, signal) => new Promise((r
 export interface FetchDeps {
   transport?: Transport;
   lookupAll?: LookupAll;
+  /** Fallback přes Bright Data Web Unlocker; null/undefined = vypnutý. */
+  unlocker?: Unlocker | null;
+}
+
+/** Běh jednoho převodu: společný signál + prodloužení limitu při fallbacku + URL, které šly přes unlocker. */
+interface Ctx {
+  signal: AbortSignal;
+  /** Prodlouží celkový limit na `totalMs` od začátku převodu (jen směrem nahoru). */
+  extend(totalMs: number): void;
+  unlocked: URL[];
+}
+
+const CHALLENGE_SNIFF_BYTES = 64 * 1024;
+
+/** Odpověď je Cloudflare challenge? (403/503 + cf-mitigated: challenge; 403 + HTML „Just a moment“ s cf- hlavičkami) */
+export async function isCloudflareChallenge(res: TransportResponse, signal: AbortSignal): Promise<boolean> {
+  if (res.status !== 403 && res.status !== 503) return false;
+  if (/\bchallenge\b/i.test(String(res.headers['cf-mitigated'] || ''))) return true;
+  if (res.status !== 403) return false;
+  const cf = /cloudflare/i.test(String(res.headers.server || '')) || Object.keys(res.headers).some((k) => k.startsWith('cf-'));
+  if (!cf || !/html/i.test(String(res.headers['content-type'] || ''))) return false;
+  let html: string;
+  try { html = (await readLimited(res, CHALLENGE_SNIFF_BYTES, signal, true)).toString('utf8'); } catch { return false; }
+  return /just a moment|challenge-platform|cf-chl-|cf_chl_/i.test(html);
 }
 
 /** GET s ručními přesměrováními (max 3, každé znovu ověřené) → odpověď se statusem 2xx. */
-async function safeGet(start: string, accept: string, signal: AbortSignal, deps: FetchDeps): Promise<{ res: TransportResponse; url: URL }> {
+async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps): Promise<{ res: TransportResponse; url: URL }> {
   const transport = deps.transport ?? nodeTransport;
+  const signal = ctx.signal;
   let url: URL;
   try { url = new URL(start); } catch { throw new GifError('bad_url'); }
   for (let hop = 0; ; hop++) {
+    // Veřejná adresa se ověří VŽDY před jakýmkoli stažením — i před předáním URL do Bright Data.
     await assertPublicUrl(url, deps.lookupAll);
     let res: TransportResponse;
     try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
     catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
+    if (deps.unlocker && await isCloudflareChallenge(res, signal)) {
+      res.dispose();
+      const original = new GifError(`http_${res.status}`);
+      ctx.extend(deps.unlocker.timeoutMs);
+      // Zapsat předem: i chyba samotného API jde do reportu (log + negativní cache).
+      ctx.unlocked.push(url);
+      const via = await deps.unlocker.fetch(url, signal);
+      if (!via) { ctx.unlocked.pop(); throw original; } // strop / negativní cache → původní chyba, nic nereportovat
+      res = via;
+      // Bright Data přesměrování sleduje u sebe; kdyby odpověď nesla cílovou adresu, musí být veřejná.
+      for (const k of ['x-brd-final-url', 'x-final-url', 'content-location']) {
+        const v = res.headers[k];
+        if (!v) continue;
+        let fin: URL;
+        try { fin = new URL(v, url); } catch { res.dispose(); throw new GifError('bad_url'); }
+        try { await assertPublicUrl(fin, deps.lookupAll); } catch (e) { res.dispose(); throw e; }
+      }
+    }
     if (res.status >= 300 && res.status < 400 && res.headers.location) {
       res.dispose();
       if (hop >= MAX_REDIRECTS) throw new GifError('too_many_redirects');
@@ -349,10 +399,13 @@ export interface ResolvedGif {
   sourceUrl: string;
 }
 
-async function fetchMedia(url: string, signal: AbortSignal, deps: FetchDeps): Promise<ResolvedGif> {
+async function fetchMedia(url: string, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
+  const signal = ctx.signal;
   // Accept image/*,video/* — media*.tenor.com posílá prohlížeči při navigaci HTML obal, čisté médium jen s ním.
-  const { res, url: final } = await safeGet(url, 'image/*,video/*', signal, deps);
-  const ct = res.headers['content-type'];
+  const n = ctx.unlocked.length;
+  const { res, url: final } = await safeGet(url, 'image/*,video/*', ctx, deps);
+  // Unlocker nemusí předat Content-Type cíle → bez něj rozhodnou magic bytes (jako u octet-stream).
+  const ct = res.headers['content-type'] ?? (ctx.unlocked.length > n ? 'application/octet-stream' : undefined);
   if (/^\s*text\//i.test(String(ct || ''))) { res.dispose(); throw new GifError('bad_type'); }
   const bytes = await readLimited(res, GIF_MAX_BYTES, signal);
   const kind = sniffKind(bytes);
@@ -366,10 +419,38 @@ async function fetchMedia(url: string, signal: AbortSignal, deps: FetchDeps): Pr
  * přesměrování) má jeden časový limit 10 s. Chyba = GifError s kódem (zpráva se pak bere jako běžný odkaz).
  */
 export async function resolveGif(src: GifSource, deps: FetchDeps & { timeoutMs?: number } = {}): Promise<ResolvedGif> {
-  const signal = AbortSignal.timeout(deps.timeoutMs ?? GIF_TIMEOUT_MS);
-  if (src.mode === 'direct') return fetchMedia(src.url, signal, deps);
-  const { res, url } = await safeGet(src.url, 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', signal, deps);
-  const ct = String(res.headers['content-type'] || '');
+  const started = Date.now();
+  const ctl = new AbortController();
+  let limit = deps.timeoutMs ?? GIF_TIMEOUT_MS;
+  const arm = (): ReturnType<typeof setTimeout> => {
+    const t = setTimeout(() => ctl.abort(), Math.max(0, limit - (Date.now() - started)));
+    t.unref?.();
+    return t;
+  };
+  let timer = arm();
+  const ctx: Ctx = {
+    signal: ctl.signal,
+    extend(totalMs) { if (totalMs > limit && !ctl.signal.aborted) { limit = totalMs; clearTimeout(timer); timer = arm(); } },
+    unlocked: [],
+  };
+  try {
+    const r = await resolveWith(src, ctx, deps);
+    for (const u of ctx.unlocked) deps.unlocker?.report(u, null);
+    return r;
+  } catch (e) {
+    const code = e instanceof GifError ? e.code : (ctl.signal.aborted ? 'timeout' : 'exception');
+    for (const u of ctx.unlocked) deps.unlocker?.report(u, code);
+    throw e instanceof GifError ? e : new GifError(code);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
+  const signal = ctx.signal;
+  if (src.mode === 'direct') return fetchMedia(src.url, ctx, deps);
+  const { res, url } = await safeGet(src.url, 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', ctx, deps);
+  const ct = String(res.headers['content-type'] || (ctx.unlocked.length ? 'application/octet-stream' : ''));
   if (!/html/i.test(ct)) {
     // Stránka vrátila rovnou médium (např. imgur přesměruje na i.imgur.com) — ověřit jako médium.
     const bytes = await readLimited(res, GIF_MAX_BYTES, signal);
@@ -380,5 +461,5 @@ export async function resolveGif(src: GifSource, deps: FetchDeps & { timeoutMs?:
   const html = (await readLimited(res, PAGE_MAX_BYTES, signal, true)).toString('utf8');
   const media = pickOgMedia(html, url);
   if (!media) throw new GifError('no_media');
-  return fetchMedia(media, signal, deps);
+  return fetchMedia(media, ctx, deps);
 }

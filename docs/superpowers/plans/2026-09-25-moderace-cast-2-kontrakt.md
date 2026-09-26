@@ -503,6 +503,16 @@ schválené zůstává (retence archivu).
   IPv4-mapped/NAT64 zakázané; ověřující lookup i při samotném připojení), max 3 přesměrování (každé znovu ověřené),
   10 MB, 10 s celkem, Content-Type (`image/*`, `video/*`, octet-stream) + magic bytes (GIF87a/89a, RIFF…WEBP, MP4 `ftyp`),
   rozměry z hlavičky (GIF, WebP; MP4 z `tkhd`, jinak null).
+- **Fallback přes Bright Data Web Unlocker** (`lib/gifUnlocker.ts`, 2026-09-26): když přímý pokus skončí Cloudflare
+  challenge (403/503 + `cf-mitigated: challenge`, nebo 403 s HTML „Just a moment“ a `cf-` hlavičkami / `Server: cloudflare`),
+  pošle se **stejná, už ověřená** URL (`assertPublicUrl` proběhne vždy předem) na `POST https://api.brightdata.com/request`
+  `{ zone, url, format: "raw" }`. Status cíle z `x-brd-status-code`; vnější ≠ 200 nebo `x-brd-error` = chyba
+  `unlocker_<x-brd-error-code|status>`. Na odpověď stejné kontroly (10 MB streamem, MIME + magic bytes, přesměrování
+  i případná cílová adresa z odpovědi znovu ověřené → neveřejná = `blocked`); bez Content-Type rozhodnou magic bytes.
+  Celkový limit převodu se s fallbackem prodlouží na 25 s. Denní strop `BRIGHTDATA_DAILY_CAP` (výchozí 100, reset
+  o půlnoci UTC; po dosažení původní chyba `http_403`), negativní cache 10 min per URL po selhání. Env
+  `BRIGHTDATA_API_KEY` + `BRIGHTDATA_ZONE`, bez nich vypnuto. Log jen `gif: unlocker ok|err|skip { host, code }`, klíč
+  nikdy. Bright Data je zpracovatel: dostane jen URL veřejného odkazu na GIF z chatu (žádné údaje o uživateli).
 - **Převod selže** → běžný odkaz: filtr by ho smazal → přeznačení na `link_filter` + akce filtru (platforma botem);
   filtr by ho pustil → v UC obnovení (`message-restored`, jako u permitu). Na platformě se nic nesmazalo.
 - **Převod OK** → původní zpráva smazaná na platformě **botem workspace** (`deleted_reason` zůstává `gif_request`,

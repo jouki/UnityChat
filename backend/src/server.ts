@@ -53,6 +53,7 @@ import gifRoutes, { MediaServer } from './routes/gif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
 import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
+import { createUnlocker } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
@@ -100,9 +101,16 @@ const gifNotifier = createGifNotifier({
   send: sendToAccount,
 });
 const gifMedia = new MediaServer(servableMedia);
+// Cloudflare challenge při přímém stažení → Bright Data Web Unlocker (bez klíče vypnuto). Log jen host + kód.
+const gifUnlocker = createUnlocker({
+  apiKey: config.BRIGHTDATA_API_KEY,
+  zone: config.BRIGHTDATA_ZONE,
+  dailyCap: config.BRIGHTDATA_DAILY_CAP,
+  log: (obj, msg) => app.log.info(obj, msg),
+});
 const gifFlow = createGifFlow({
   store: dbGifStore,
-  resolve: (src) => resolveGif(src),
+  resolve: (src) => resolveGif(src, { unlocker: gifUnlocker }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   publishDeleted: (p) => publishDeleted(p),
