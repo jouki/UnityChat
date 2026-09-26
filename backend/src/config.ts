@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+// Podpisový klíč v2: prázdný (vypnuto) nebo hex se sudou délkou ≥ 64 znaků. Hodnota se do chyby nevypisuje.
+const signingKey = z.string().trim().default('').refine((v) => v === '' || /^(?:[0-9a-fA-F]{2}){32,}$/.test(v), { message: 'musí být hex, alespoň 64 znaků (32 bajtů)' });
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -60,6 +63,14 @@ const EnvSchema = z.object({
   ZIDOLISTA_INBOUND_KEY: z.string().default(''),
   // "1" = jen nový klíč a platný podpis; jinak přechod (projde i ZIDOLISTA_API_KEY, podpis se jen loguje).
   ZIDOLISTA_INBOUND_STRICT: z.string().default(''),
+  // Podpis v2 (docs/superpowers/plans/2026-09-26-podpis-v2-kontrakt.md, lib/signatureV2.ts). Klíče jsou hex ≥ 64 znaků,
+  // jeden pro každý směr, po síti nikdy nejdou; jen v Coolify secrets, NIKDY v gitu ani v logu.
+  // Příchozí režim: v1 (výchozí, dosavadní chování vč. ZIDOLISTA_INBOUND_STRICT) | any (v1 i v2) | v2.
+  ZIDOLISTA_INBOUND_SIGNATURE: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['v1', 'any', 'v2']).default('v1')),
+  // Židolišta → UnityChat: ověření příchozích v2 (lib/inboundAuth.ts).
+  ZIDOLISTA_TO_UC_SIGNING_KEY: signingKey,
+  // UnityChat → Židolišta: když je nastavený, všechna odchozí volání jdou podepsaná v2 (lib/zidolista.ts zidolistaFetch).
+  UC_TO_ZIDOLISTA_SIGNING_KEY: signingKey,
   // E-maily (ověřovací kód QR dona, lib/mailer.ts): Brevo primárně, Resend záloha. Bez klíčů = ověření vypnuté.
   BREVO_API_KEY: z.string().default(''),
   RESEND_API_KEY: z.string().default(''),
@@ -78,6 +89,11 @@ const EnvSchema = z.object({
   ZIDOLISTA_WORKSPACES:z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),
+}).superRefine((env, ctx) => {
+  // Režim v2 bez klíčů = všechno ze Židolišty by padalo na 401 → radši nenastartovat (Coolify nechá běžet starou verzi).
+  if (env.ZIDOLISTA_INBOUND_SIGNATURE === 'v2' && (!env.ZIDOLISTA_TO_UC_SIGNING_KEY || !env.ZIDOLISTA_INBOUND_KEY)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['ZIDOLISTA_INBOUND_SIGNATURE'], message: 'v2 vyžaduje ZIDOLISTA_TO_UC_SIGNING_KEY i ZIDOLISTA_INBOUND_KEY' });
+  }
 });
 
 export const config = EnvSchema.parse(process.env);

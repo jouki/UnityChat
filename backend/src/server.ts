@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { startNicknameNotify } from './lib/nicknameNotify.js';
 import cors from '@fastify/cors';
 import { config } from './config.js';
+import { registerRawJsonParser } from './lib/inboundAuth.js';
 import { pingDb, closeDb } from './db/index.js';
 import nicknameRoutes from './routes/nicknames.js';
 import userRoutes from './routes/users.js';
@@ -82,11 +83,7 @@ const app = Fastify({
 
 // JSON parser, který si nechá i surové tělo: HMAC podpis požadavků ze Židolišty
 // (lib/inboundAuth.ts) se počítá z přesně odeslaných bajtů, ne z přeparsovaného JSON.
-const defaultJson = app.getDefaultJsonParser('error', 'error');   // ochrana proti __proto__ / constructor poisoning zůstává
-app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
-  req.rawBody = typeof body === 'string' ? body : body.toString('utf8');
-  defaultJson(req, req.rawBody, done);
-});
+registerRawJsonParser(app);
 
 await app.register(cors, {
   origin: true,
