@@ -54,7 +54,7 @@ import gifRoutes, { MediaServer } from './routes/gif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
 import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
-import { createUnlocker } from './lib/gifUnlocker.js';
+import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
@@ -105,9 +105,11 @@ const gifUnlocker = createUnlocker({
   dailyCap: config.BRIGHTDATA_DAILY_CAP,
   log: (obj, msg) => app.log.info(obj, msg),
 });
+// Odhad doby Bright Data pro průběh u odesílatele (klouzavý průměr posledních 20 fallbacků, v paměti procesu).
+const gifUnlockEstimator = createUnlockEstimator();
 const gifFlow = createGifFlow({
   store: dbGifStore,
-  resolve: (src) => resolveGif(src, { unlocker: gifUnlocker }),
+  resolve: (src, hooks) => resolveGif(src, { unlocker: gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   publishDeleted: (p) => publishDeleted(p),
@@ -117,20 +119,22 @@ const gifFlow = createGifFlow({
   broadcast,
   publishChat: (platformChannel, platform, msg) => publishChat(platformChannel, platform, msg),
   notify: (r, event, data) => gifNotifier.notify(r, event, data),
+  notifyMods: (channel, event, data) => gifNotifier.notifyMods(channel, event, data),
+  toSender: (platform, userId) => gifNotifier.toSender(platform, userId),
   integration: (ev) => { publishIntegrationEvent(ev); },
   recordAction: async (v) => { await db.insert(moderationActions).values(v); },
   now: Date.now,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   mediaDeleted: (id) => gifMedia.forget(id),
+  mediaChanged: (id) => gifMedia.invalidate(id),
   mediaApproved: (id) => gifMedia.prewarm(id),
   log: app.log,
 });
-// Smazání schváleného GIFu modem (část 1, id `gif-…`) → žádost `deleted`, médium se přestane servírovat.
+// Smazání schváleného GIFu modem (část 1, id `gif-…`) → žádost `deleted`. Médium zůstává v knihovně
+// (GIF knihovna 2026-09-26: stejné médium může nést víc zpráv; smazání zprávy ≠ vyřazení z knihovny).
 onMessageDeleted(async ({ messageId }) => {
   if (!isGifMessageId(messageId)) return;
-  const r = await dbGifStore.get(Number(messageId.slice(4)));
   await gifFlow.onMessageDeleted(messageId);
-  if (r?.mediaId) gifMedia.forget(r.mediaId);
 });
 
 // Filtr odkazů + `!permit` z chatu (moderace část 3, lib/linkFilter.ts). Zapíná ho jen Židolišta
@@ -218,11 +222,15 @@ app.addHook('onReady', async () => {
   gifFlow.loadPending().then((n) => app.log.info({ n }, 'gif: čekající žádosti načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: načtení žádostí selhalo (tabulka chybí?)'));
   gifExpiryTimer = setInterval(() => { void gifFlow.expireTick(); }, 10_000);
   gifExpiryTimer.unref?.();
+  // Retence zamítnutých GIFů (14 dní, kromě vaultu) 1×/h.
+  gifRetentionTimer = setInterval(() => { void gifFlow.retentionTick(); }, 3600_000);
+  gifRetentionTimer.unref?.();
   loadActivePermits().then((n) => app.log.info({ n }, 'link filter: aktivní permity načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'link filter: načtení permitů selhalo'));
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
 let gifExpiryTimer: ReturnType<typeof setInterval> | null = null;
-app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
+let gifRetentionTimer: ReturnType<typeof setInterval> | null = null;
+app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); if (gifRetentionTimer) clearInterval(gifRetentionTimer); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',
@@ -263,7 +271,13 @@ await app.register(moderationRoutes, { ingest });
 await app.register(integrationModerationRoutes, { ingest });
 await app.register(accountWarningRoutes, {
   // Čekající žádosti o GIF, které účet smí vidět (mod kanálu / odesílatel), hned po připojení.
-  onOpen: async (accountId: number) => (await gifNotifier.visibleTo(accountId, await dbGifStore.listPending(new Date()))).map((data) => ({ event: 'gif-pending', data })),
+  // + stav front (gif-queue) kanálů, kde je účet mod.
+  onOpen: async (accountId: number) => {
+    const rows = await dbGifStore.listPending(new Date());
+    const pendingEv = (await gifNotifier.visibleTo(accountId, rows)).map((data) => ({ event: 'gif-pending', data }));
+    const queueEv = (await gifNotifier.queuesFor(accountId, rows)).map((data) => ({ event: 'gif-queue', data }));
+    return [...pendingEv, ...queueEv];
+  },
 });
 await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: gifMedia });
 await app.register(soundboardRoutes);

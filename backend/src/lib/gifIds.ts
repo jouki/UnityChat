@@ -23,9 +23,14 @@ export function gifFromRaw(raw: unknown): GifMediaView | null {
   return { url: gifMediaUrl(g.mediaId), kind: String(g.kind || 'gif'), width: dim(g.width), height: dim(g.height) };
 }
 
-/** content_raw.gif.replaces (`<platform>:<messageId>` původní zprávy) → řetězec, jinak null. */
-export function gifReplaces(raw: unknown): string | null {
+const gifKey = (raw: unknown, key: 'replaces' | 'origin'): string | null => {
   const g = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).gif : null) as Record<string, unknown> | null | undefined;
-  const v = g && typeof g.replaces === 'string' ? g.replaces : '';
+  const v = g && typeof g[key] === 'string' ? g[key] as string : '';
   return /^(twitch|kick|youtube):[^\s]{1,200}$/.test(v) ? v : null;
-}
+};
+
+/** content_raw.gif.replaces (`<platform>:<messageId>` původní zprávy; jen GIFy schválené před 2026-09-26) → řetězec, jinak null. */
+export function gifReplaces(raw: unknown): string | null { return gifKey(raw, 'replaces'); }
+
+/** content_raw.gif.origin (`<platform>:<messageId>` původní zprávy s odkazem, jen k párování) → řetězec, jinak null. */
+export function gifOrigin(raw: unknown): string | null { return gifKey(raw, 'origin'); }

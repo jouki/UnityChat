@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MediaServer, mediaCacheControl, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
+import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
 import type { Message } from '../db/schema.js';
 
 const entry = (status: MediaEntry['status'] = 'pending'): MediaEntry => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status });
@@ -50,9 +50,67 @@ test('MediaServer: tombstone — smazané/zamítnuté médium se nevrátí z cac
   assert.equal(await r.get('b'), null);
 });
 
-test('mediaCacheControl: čekající private no-store, schválené hodina bez immutable (bod 4)', () => {
+test('mediaCacheControl: čekající a zamítnuté private no-store, schválené hodina bez immutable (bod 4)', () => {
   assert.equal(mediaCacheControl('pending'), 'private, no-store');
+  assert.equal(mediaCacheControl('rejected'), 'private, no-store');
   assert.equal(mediaCacheControl('approved'), 'public, max-age=3600');
+});
+
+test('mediaAllowed: schválené a čekající veřejně; zamítnuté jen s platným tokenem pro kanál média (bez / špatný / nemod → ne)', async () => {
+  const seen: Array<[string | undefined, string]> = [];
+  const verify = async (t: string | undefined | null, ch: string) => { seen.push([t ?? undefined, ch]); return t === 'dobry' && ch === 'robdiesalot'; };
+  const rej = { ...entry(), status: 'rejected' as const, channel: 'robdiesalot' };
+  assert.equal(await mediaAllowed(entry('approved'), undefined, verify), true);
+  assert.equal(await mediaAllowed(entry('pending'), undefined, verify), true);
+  assert.equal(seen.length, 0, 'veřejné médium token neověřuje');
+  assert.equal(await mediaAllowed(rej, undefined, verify), false);
+  assert.equal(await mediaAllowed(rej, 'spatny', verify), false);
+  assert.equal(await mediaAllowed(rej, 'dobry', verify), true);
+  assert.equal(await mediaAllowed({ ...rej, channel: 'cizi' }, 'dobry', verify), false);
+  assert.equal(await mediaAllowed({ ...rej, channel: null }, 'dobry', verify), false, 'bez kanálu nikdy');
+});
+
+test('MediaServer.invalidate: změna stavu (zamítnuto) → další čtení z DB, bez tombstone', async () => {
+  let status: MediaEntry['status'] = 'pending';
+  let loads = 0;
+  const s = new MediaServer(async () => { loads++; return { ...entry(), status }; });
+  assert.equal((await s.get('a'))!.status, 'pending');
+  status = 'rejected';
+  s.invalidate('a');
+  assert.equal((await s.get('a'))!.status, 'rejected');
+  assert.equal(loads, 2);
+});
+
+test('GET /media/gif/:id: zamítnuté bez tokenu / se špatným 404, s platným 200 private no-store; routy akcí se zaregistrují vedle /decide', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const app = Fastify();
+  const id = 'f'.repeat(32);
+  const media = new MediaServer(async (x) => (x === id ? { bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status: 'rejected', channel: 'robdiesalot' } : null));
+  const verify = async (t: string | undefined | null, ch: string) => t === 'T'.repeat(43) && ch === 'robdiesalot';
+  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media, tokens: { issue: async () => 'x', verify } });
+  await app.ready();
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}?t=spatny` })).statusCode, 404);
+  const ok = await app.inject({ method: 'GET', url: `/media/gif/${id}?t=${'T'.repeat(43)}` });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.headers['cache-control'], 'private, no-store');
+  // Bez přihlášení → 401 (route existuje, ne 404).
+  for (const a of ['approve', 'vault', 'purge', 'ban12h', 'decide']) {
+    assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} })).statusCode, 401, a);
+  }
+  assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: {} })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/rejected' })).statusCode, 401);
+  await app.close();
+});
+
+test('rejectedView: tvar pro záložku Zamítnuté GIFy (smazání za 14 dní, vault bez smazání)', () => {
+  const md = { id: 'a'.repeat(32), channel: 'robdiesalot', status: 'rejected' as const, kind: 'mp4', width: 498, height: 280, sha256: 'x', approvedAt: null, rejectedAt: new Date(1000), rejectedBy: 'twitch:moda', vault: false };
+  assert.deepEqual(rejectedView(md), {
+    mediaId: md.id, url: `http://localhost:3000/media/gif/${md.id}`, kind: 'mp4', width: 498, height: 280,
+    rejectedAt: 1000, rejectedBy: 'twitch:moda', vault: false, deleteAt: 1000 + 14 * 86_400_000,
+  });
+  assert.equal(rejectedView({ ...md, vault: true }).deleteAt, null);
 });
 
 function stateDeps(over: Partial<GifStateDeps> = {}, log: unknown[] = []): GifStateDeps {

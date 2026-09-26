@@ -8,7 +8,7 @@ import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply, gifReviews } f
 import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
-import { gifFromRaw, gifReplaces, type GifMediaView } from '../lib/gifIds.js';
+import { gifFromRaw, gifReplaces, gifOrigin, type GifMediaView } from '../lib/gifIds.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -47,8 +47,13 @@ export interface ClientMessage {
   segments?: unknown[];
   /** Schválený GIF (moderace část 4): syntetická zpráva `gif-<id>`, médium z našeho serveru. */
   gif?: GifMediaView;
-  /** Schválený GIF nahrazuje původní zprávu (`<platform>:<messageId>`, smazanou s gif_request) na jejím místě. */
+  /**
+   * Jen GIFy schválené před 2026-09-26: nahrazuje původní zprávu (`<platform>:<messageId>`) na jejím místě.
+   * Nové schválené GIFy jdou na konec chatu (čas schválení) a nesou jen `gifOrigin`.
+   */
   replaces?: string;
+  /** Schválený GIF: původní zpráva s odkazem (`<platform>:<messageId>`) — klient jen páruje (optimistická zpráva odesílatele), nic nenahrazuje. */
+  gifOrigin?: string;
 }
 
 /**
@@ -89,6 +94,8 @@ export function toClientMessage(row: ClientRow, historical = true): ClientMessag
     out.gif = gif;
     const rep = gifReplaces(row.contentRaw);
     if (rep) out.replaces = rep;
+    const origin = gifOrigin(row.contentRaw);
+    if (origin) out.gifOrigin = origin;
   }
   return out;
 }
