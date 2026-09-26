@@ -5,8 +5,9 @@ import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationT
 function memTokens() {
   const rows: Array<GifTokenRow & { tokenHash: string; revokedAt: Date | null }> = [];
   const store: GifTokenStore = {
-    async revoke(owner, at) {
-      for (const r of rows) if (!r.revokedAt && (owner.accountId !== undefined ? r.accountId === owner.accountId : r.integrationSlug === owner.integrationSlug)) r.revokedAt = at;
+    async revokeExcess(owner, keep, at) {
+      const mine = rows.filter((r) => !r.revokedAt && (owner.accountId !== undefined ? r.accountId === owner.accountId : r.integrationSlug === owner.integrationSlug));
+      for (const r of mine.reverse().slice(keep)) r.revokedAt = at; // nejnovější první
     },
     async insert(v) { rows.push({ accountId: v.accountId, integrationSlug: v.integrationSlug, tokenHash: v.tokenHash, revokedAt: null }); },
     async findActive(hash) { const r = rows.find((x) => x.tokenHash === hash && !x.revokedAt); return r ? { accountId: r.accountId, integrationSlug: r.integrationSlug } : null; },
@@ -14,16 +15,21 @@ function memTokens() {
   return { store, rows };
 }
 
-test('issueAccountToken: náhodný token vrácen jen jednou, v DB jen hash; nový token zneplatní starý', async () => {
+test('issueAccountToken: náhodný token vrácen jen jednou, v DB jen hash; až 5 aktivních (zařízení), šestý zneplatní nejstarší', async () => {
   const { store, rows } = memTokens();
   const t1 = await issueAccountToken(7, store, () => 1000);
   assert.match(t1, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(rows[0].tokenHash, hashToken(t1));
   assert.ok(!JSON.stringify(rows).includes(t1), 'token v DB není');
-  const t2 = await issueAccountToken(7, store, () => 2000);
-  assert.notEqual(t1, t2);
-  assert.ok(rows[0].revokedAt, 'starý token zneplatněn');
-  assert.equal(rows[1].revokedAt, null);
+  const more = [];
+  for (let i = 0; i < 4; i++) more.push(await issueAccountToken(7, store, () => 2000 + i));
+  assert.equal(new Set([t1, ...more]).size, 5);
+  assert.ok(rows.every((r) => r.revokedAt === null), '5 aktivních');
+  await issueAccountToken(8, store, () => 3000); // jiný účet se nepočítá
+  await issueAccountToken(7, store, () => 4000);
+  assert.ok(rows[0].revokedAt, 'nejstarší zneplatněn');
+  assert.equal(rows.filter((r) => r.accountId === 7 && !r.revokedAt).length, 5);
+  assert.equal(rows.find((r) => r.accountId === 8)!.revokedAt, null);
 });
 
 test('verify: bez tokenu / špatný / zneplatněný / účet už není mod → false; mod kanálu → true', async () => {
@@ -40,11 +46,15 @@ test('verify: bez tokenu / špatný / zneplatněný / účet už není mod → f
   // Odebraný mod (cache vypršela) → false.
   const verify2 = createGifTokenVerifier({ store, isMod: async () => false, slugForChannel: async () => 'rob', now: () => 0 });
   assert.equal(await verify2(t, 'robdiesalot'), false);
-  // Zneplatněný (vydán nový).
+  // Druhé zařízení: starý token platí dál; po pěti dalších je nejstarší zneplatněný.
   const t2 = await issueAccountToken(7, store, () => 2);
   const verify3 = createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => 0 });
-  assert.equal(await verify3(t, 'robdiesalot'), false);
+  assert.equal(await verify3(t, 'robdiesalot'), true);
   assert.equal(await verify3(t2, 'robdiesalot'), true);
+  for (let i = 0; i < 4; i++) await issueAccountToken(7, store, () => 3 + i);
+  const verify4 = createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => 0 });
+  assert.equal(await verify4(t, 'robdiesalot'), false, 'zneplatněný');
+  assert.equal(await verify4(t2, 'robdiesalot'), true);
 });
 
 test('verify: integrační token Židolišty platí jen pro kanál svého workspace', async () => {

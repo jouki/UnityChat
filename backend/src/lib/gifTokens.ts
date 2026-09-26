@@ -1,30 +1,33 @@
 // Tokeny pro zamítnuté GIFy (spec docs/superpowers/specs/2026-09-26-gif-knihovna-design.md §5).
 //
 // Zamítnuté médium není veřejné: GET /media/gif/:id?t=<token> ho vydá jen s platným tokenem.
-//   - token moda: POST /moderation/gif/access-token vydá/obnoví vlastní token účtu (vrací ho jen jednou),
-//     starý se zneplatní; ověření = hash v DB + účet je STÁLE mod kanálu média (accountModIdentities);
+//   - token moda: POST /moderation/gif/access-token vydá nový token účtu (vrací ho jen jednou; jeden na zařízení /
+//     session, nejvýš 5 aktivních — šestý zneplatní nejstarší); ověření = hash v DB + účet je STÁLE mod kanálu média (accountModIdentities);
 //   - integrační token Židolišty (dashboard): platí pro kanál workspace `integration_slug`.
 // V DB jen SHA-256 hash (tabulka gif_access_tokens). Token nikdy do logu ani do jiné odpovědi než při vydání.
 // Bezpečnost stojí na tajemství na serveru — to, že klienti token do odkazů přidávají, nevadí.
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { gifAccessTokens } from '../db/schema.js';
 
 export interface GifTokenRow { accountId: number | null; integrationSlug: string | null }
 
 export interface GifTokenStore {
-  /** Zneplatní všechny aktivní tokeny vlastníka (účet nebo integrace). */
-  revoke(owner: { accountId?: number; integrationSlug?: string }, at: Date): Promise<void>;
+  /** Zneplatní aktivní tokeny vlastníka (účet nebo integrace) kromě `keep` nejnovějších. */
+  revokeExcess(owner: { accountId?: number; integrationSlug?: string }, keep: number, at: Date): Promise<void>;
   insert(v: GifTokenRow & { tokenHash: string }): Promise<void>;
   /** Aktivní (nezneplatněný) token podle hashe. */
   findActive(tokenHash: string): Promise<GifTokenRow | null>;
 }
 
 export const dbGifTokenStore: GifTokenStore = {
-  async revoke(owner, at) {
+  async revokeExcess(owner, keep, at) {
     const who = owner.accountId !== undefined ? eq(gifAccessTokens.accountId, owner.accountId) : eq(gifAccessTokens.integrationSlug, String(owner.integrationSlug));
-    await db.update(gifAccessTokens).set({ revokedAt: at }).where(and(who, isNull(gifAccessTokens.revokedAt)));
+    const excess = db.select({ id: gifAccessTokens.id }).from(gifAccessTokens)
+      .where(and(who, isNull(gifAccessTokens.revokedAt)))
+      .orderBy(desc(gifAccessTokens.createdAt), desc(gifAccessTokens.id)).offset(keep);
+    await db.update(gifAccessTokens).set({ revokedAt: at }).where(inArray(gifAccessTokens.id, excess));
   },
   async insert(v) { await db.insert(gifAccessTokens).values(v); },
   async findActive(tokenHash) {
@@ -38,20 +41,23 @@ export const hashToken = (token: string): string => createHash('sha256').update(
 const newToken = (): string => randomBytes(32).toString('base64url');
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,128}$/;
 
-/** Vydá nový token moda (starý zneplatní). Vrací token — jediné místo, kde odchází ven. */
+/** Aktivních tokenů na účet (jeden na zařízení / session); nový nad limit zneplatní nejstarší. */
+export const MAX_ACCOUNT_TOKENS = 5;
+
+/** Vydá nový token moda; nad MAX_ACCOUNT_TOKENS zneplatní nejstarší. Vrací token — jediné místo, kde odchází ven. */
 export async function issueAccountToken(accountId: number, store: GifTokenStore = dbGifTokenStore, now: () => number = Date.now): Promise<string> {
   const token = newToken();
-  await store.revoke({ accountId }, new Date(now()));
   await store.insert({ accountId, integrationSlug: null, tokenHash: hashToken(token) });
+  await store.revokeExcess({ accountId }, MAX_ACCOUNT_TOKENS, new Date(now()));
   return token;
 }
 
-/** Vydá nový integrační token workspace Židolišty (starý zneplatní). */
+/** Vydá nový integrační token workspace Židolišty (jeden aktivní — starý zneplatní). */
 export async function issueIntegrationToken(slug: string, store: GifTokenStore = dbGifTokenStore, now: () => number = Date.now): Promise<string> {
   const token = newToken();
   const integrationSlug = slug.toLowerCase();
-  await store.revoke({ integrationSlug }, new Date(now()));
   await store.insert({ accountId: null, integrationSlug, tokenHash: hashToken(token) });
+  await store.revokeExcess({ integrationSlug }, 1, new Date(now()));
   return token;
 }
 
