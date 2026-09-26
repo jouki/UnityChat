@@ -10,8 +10,8 @@ import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import {
-  allowedOrigins, isAllowedReturnTo, issueCode, consumeCode, bearerToken, validateWebSession, deleteWebSession,
-  requireWebSession, completeWebLogin, listIdentities, unlinkIdentity, signOutAccount,
+  allowedOrigins, isAllowedReturnTo, issuePendingCode, exchangePendingCode, bearerToken, validateWebSession, deleteWebSession,
+  requireWebSession, listIdentities, unlinkIdentity, signOutAccount, WEB_SESSION_TTL_MS,
   type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
 import { outgoingText, SendError } from '../lib/webSend.js';
@@ -50,7 +50,11 @@ const SendBody = z.object({
 
 const DEFAULT_CHANNEL = 'robdiesalot';
 
-/** Po OAuth callbacku (kind:'web'): účet + session → jednorázový kód → redirect na web (#uc_code). */
+/**
+ * Po OAuth callbacku (kind:'web'): identita + tokeny čekají pod jednorázovým kódem → redirect
+ * na web (#uc_code). Účet ani session tu NEVZNIKAJÍ a identita se nepřipojuje k účtu ze state —
+ * to až POST /auth/exchange s Bearerem téhož účtu (login CSRF, lib/webAuth.ts exchangePendingCode).
+ */
 export async function completeWebCallback(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -60,9 +64,8 @@ export async function completeWebCallback(
   tokens: TokenSet,
 ) {
   const returnTo = payload.returnTo && isAllowedReturnTo(payload.returnTo) ? payload.returnTo : `${allowedOrigins()[0]}/chat/`;
-  const { accountId, sessionToken } = await completeWebLogin(platform, identity, tokens, payload.webAccountId ?? null);
-  const code = issueCode(sessionToken);
-  req.log.info({ platform, accountId, login: identity.login, linked: payload.webAccountId != null }, 'web OAuth completed');
+  const code = issuePendingCode({ platform, identity, tokens, linkAccountId: payload.webAccountId ?? null });
+  req.log.info({ platform, login: identity.login, linkIntent: payload.webAccountId != null }, 'web OAuth callback: pending exchange');
   return reply.redirect(`${returnTo}#uc_code=${encodeURIComponent(code)}&uc_platform=${platform}`, 302);
 }
 
@@ -93,7 +96,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       reply.code(400); return { ok: false, error: 'returnTo origin not allowed' };
     }
 
-    // Přihlášený uživatel napojuje další platformu na svůj účet.
+    // Přihlášený uživatel napojuje další platformu na svůj účet. Ve state je to jen ZÁMĚR —
+    // splní se při /auth/exchange, když výměnu pošle session téhož účtu (login CSRF, C1).
     let webAccountId: number | undefined;
     const raw = bearerToken(req);
     if (raw) { const id = await validateWebSession(raw); if (id !== null) webAccountId = id; }
@@ -120,12 +124,15 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
   });
 
   // ---- jednorázový kód → session token ----
+  // Bearer (volitelný) = session, ve které klient přihlášení spustil. Jen s ním se nová platforma
+  // připojí k účtu ze startu; bez něj / s jiným účtem jde o běžné přihlášení podle identity.
   app.post<{ Body: { code: string } }>('/auth/exchange', async (req, reply) => {
     const body = ExchangeBody.safeParse(req.body);
     if (!body.success) { reply.code(400); return { ok: false, error: 'code' }; }
-    const token = consumeCode(body.data.code);
-    if (!token) { reply.code(400); return { ok: false, error: 'code invalid or expired' }; }
-    return { ok: true, token, expiresInMs: 30 * 24 * 60 * 60 * 1000 };
+    const res = await exchangePendingCode(body.data.code, bearerToken(req));
+    if (!res) { reply.code(400); return { ok: false, error: 'code invalid or expired' }; }
+    req.log.info({ accountId: res.accountId, linked: res.linked, linkRefused: res.linkRefused }, 'web OAuth exchange');
+    return { ok: true, token: res.sessionToken, linked: res.linked, expiresInMs: WEB_SESSION_TTL_MS };
   });
 
   // ---- kdo jsem ----

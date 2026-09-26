@@ -13,15 +13,17 @@ import { config } from './../config.js';
  * Proč Bearer a ne cookie: web (robdiesalot.com) a API (api.jouki.cz) jsou
  * cross-site, cookie by byla third-party. Session = 32 B random, klient drží
  * raw (localStorage), DB jen SHA-256 hash. Po OAuth callbacku se raw token
- * nepředává v redirectu přímo — jde jednorázový kód (60 s), který web vymění
+ * nepředává v redirectu přímo — jde jednorázový kód (5 min), který web vymění
  * přes POST /auth/exchange (kód v URL fragmentu se nikdy neloguje na serveru).
+ * Účet a session vznikají až při výměně, viz „čekající přihlášení" níže.
  */
 
 export type Platform = 'twitch' | 'youtube' | 'kick';
 export const PLATFORMS: readonly Platform[] = ['twitch', 'youtube', 'kick'] as const;
 
 export const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-export const CODE_TTL_MS = 60 * 1000;
+// Kód z #uc_code: v paměti čeká identita + tokeny, dokud ho klient nevymění (POST /auth/exchange).
+export const CODE_TTL_MS = 5 * 60 * 1000;
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -37,36 +39,104 @@ export function allowedOrigins(): string[] {
   return config.WEB_ORIGINS.split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
 }
 
-/** returnTo musí být https/http URL s originem z WEB_ORIGINS (bez open redirectu). */
+function csv(s: string): string[] {
+  return s.split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * Originy rozšíření, na které smí OAuth vrátit #uc_code (I1, 2026-09-26): jen NAŠE rozšíření.
+ * Chrome: chrome.identity.getRedirectURL() = https://<ID rozšíření>.chromiumapp.org/.
+ * Firefox: identity.getRedirectURL() = https://<sha1(ID doplňku) hex>.extensions.allizom.org/
+ * (Firefox ext-identity computeHash: SHA-1 nad UTF-8 ID doplňku) — hash se počítá z gecko ID.
+ * Dřív prošlo libovolné rozšíření → cizí addon mohl pustit náš login a dostat session uživatele.
+ */
+export function allowedExtensionReturnOrigins(): Set<string> {
+  const out = new Set<string>();
+  for (const id of csv(config.ALLOWED_AUTH_EXTENSION_IDS)) {
+    if (/^[a-p]{32}$/.test(id)) out.add(`https://${id}.chromiumapp.org`);
+  }
+  for (const id of csv(config.ALLOWED_AUTH_FIREFOX_ADDON_IDS)) {
+    out.add(`https://${createHash('sha1').update(id, 'utf8').digest('hex')}.extensions.allizom.org`);
+  }
+  return out;
+}
+
+/** returnTo musí být URL s originem z WEB_ORIGINS nebo našeho rozšíření (bez open redirectu). */
 export function isAllowedReturnTo(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.username || u.password) return false;
-    // Addon: chrome.identity.launchWebAuthFlow vrací na https://<id>.chromiumapp.org/ (id = 32× a–p).
-    if (/^https:\/\/[a-p]{32}\.chromiumapp\.org$/.test(u.origin)) return true;
-    // Firefox: identity.getRedirectURL() = https://<sha1 hash ID doplňku, 40 hex>.extensions.allizom.org/.
-    if (/^https:\/\/[0-9a-f]{40}\.extensions\.allizom\.org$/.test(u.origin)) return true;
+    if (allowedExtensionReturnOrigins().has(u.origin)) return true;
     return allowedOrigins().includes(u.origin);
   } catch {
     return false;
   }
 }
 
-// ---- one-time codes (in-memory; jeden proces) ------------------------------
-const codes = new Map<string, { token: string; exp: number }>();
+// ---- čekající přihlášení pod jednorázovým kódem (in-memory; jeden proces) ----
+//
+// Login CSRF (C1, 2026-09-26): callback dřív rovnou připojil identitu k účtu ze state
+// (`webAccountId` = kdo flow SPUSTIL). Útočník si pustil start se svou session a autorizační
+// URL poslal oběti → identita i tokeny oběti skončily na jeho účtu. Teď callback do DB nesahá:
+// tokeny + identita čekají pod jednorázovým kódem, který jde jen do prohlížeče, co dokončil
+// souhlas (fragment returnTo). K účtu ze state se připojí až v POST /auth/exchange, a jen když
+// požadavek nese Bearer session TÉHOŽ účtu (resolveLinkTarget). Jinak běžné přihlášení.
+// ⚠ Paměť jednoho procesu: při více instancích backendu přesunout do DB (sticky nestačí,
+// callback a exchange jsou dva nezávislé požadavky).
 
-export function issueCode(sessionToken: string, now = Date.now()): string {
-  for (const [k, v] of codes) if (v.exp < now) codes.delete(k);
+export interface PendingLogin {
+  platform: Platform;
+  identity: IdentityInfo;
+  tokens: TokenSet;
+  /** Záměr napojit na tento účet (Bearer při /auth/:platform/start). Splní se jen s Bearerem téhož účtu. */
+  linkAccountId: number | null;
+}
+
+const pendingLogins = new Map<string, PendingLogin & { exp: number }>();
+
+export function issuePendingCode(p: PendingLogin, now = Date.now()): string {
+  for (const [k, v] of pendingLogins) if (v.exp < now) pendingLogins.delete(k);
   const code = randomBytes(24).toString('base64url');
-  codes.set(code, { token: sessionToken, exp: now + CODE_TTL_MS });
+  pendingLogins.set(code, { ...p, exp: now + CODE_TTL_MS });
   return code;
 }
 
-export function consumeCode(code: string, now = Date.now()): string | null {
-  const hit = codes.get(code);
+/** Jednorázové: po prvním pokusu (i po expiraci) je kód pryč. */
+export function consumePendingCode(code: string, now = Date.now()): PendingLogin | null {
+  const hit = pendingLogins.get(code);
   if (!hit) return null;
-  codes.delete(code);
-  return hit.exp >= now ? hit.token : null;
+  pendingLogins.delete(code);
+  if (hit.exp < now) return null;
+  const { exp: _exp, ...rest } = hit;
+  return rest;
+}
+
+/** Napojit na účet ze state jen tehdy, když ho výměnu posílá session téhož účtu. */
+export function resolveLinkTarget(linkAccountId: number | null, bearerAccountId: number | null): number | null {
+  return linkAccountId !== null && bearerAccountId !== null && linkAccountId === bearerAccountId ? linkAccountId : null;
+}
+
+export interface ExchangeDeps {
+  validateSession: (raw: string) => Promise<number | null>;
+  completeLogin: typeof completeWebLogin;
+}
+
+/**
+ * POST /auth/exchange: kód → session. `bearerRaw` = session, kterou klient poslal (nebo null).
+ * null = kód neplatný / vypršel / už použitý.
+ */
+export async function exchangePendingCode(
+  code: string,
+  bearerRaw: string | null,
+  deps: ExchangeDeps = { validateSession: validateWebSession, completeLogin: completeWebLogin },
+  now = Date.now(),
+): Promise<{ accountId: number; sessionToken: string; linked: boolean; linkRefused: boolean } | null> {
+  const p = consumePendingCode(code, now);
+  if (!p) return null;
+  const bearerAccountId = p.linkAccountId !== null && bearerRaw ? await deps.validateSession(bearerRaw) : null;
+  const target = resolveLinkTarget(p.linkAccountId, bearerAccountId);
+  const { accountId, sessionToken } = await deps.completeLogin(p.platform, p.identity, p.tokens, target);
+  return { accountId, sessionToken, linked: target !== null, linkRefused: p.linkAccountId !== null && target === null };
 }
 
 // ---- sessions ------------------------------------------------------------
@@ -176,7 +246,8 @@ export function encryptedColumns(tokens: TokenSet) {
 
 /**
  * Dokončení OAuth přihlášení na webu: identita (platform, platformUserId) →
- * existující účet; jinak účet ze session (napojení další platformy); jinak nový.
+ * existující účet; jinak `existingAccountId` (napojení další platformy — volá se jen
+ * s účtem ověřeným Bearerem při výměně kódu, exchangePendingCode); jinak nový.
  * Vrací raw session token (klient si ho uloží).
  */
 export async function completeWebLogin(

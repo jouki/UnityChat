@@ -9,7 +9,7 @@
 //
 // Vše kromě /bot/link/:token chce X-Api-Key = ZIDOLISTA_API_KEY (stejný klíč jako /commands/invalidate).
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
@@ -59,6 +59,51 @@ interface LinkToken { workspace: string; platform: Platform; returnTo: string; e
 const linkTokens = new Map<string, LinkToken>();
 const LINK_TTL_MS = 10 * 60_000;
 function sweepLinkTokens(): void { const now = Date.now(); for (const [k, v] of linkTokens) if (v.exp < now) linkTokens.delete(k); }
+
+// ---- vazba OAuth state na prohlížeč (bot link) ----
+// Login CSRF (audit C1, 2026-09-26): kdo má odkaz /bot/link/:token (admin workspace v Židolištce),
+// mohl ho otevřít, vzít z 302 autorizační URL a poslat ji cizímu člověku — po jeho souhlasu by se
+// účet oběti stal botem workspace (posílá a moderuje za workspace). /bot/link i callback běží na
+// api.jouki.cz jako top-level navigace → first-party cookie (SameSite=Lax přežije návrat
+// od providera). Cookie nese tajemství, state jen jeho SHA-256; callback bez shody nic neuloží.
+const BIND_COOKIE_PATH = '/streamers/oauth/';
+const bindCookieName = (bindId: string) => `ucb_${bindId}`;
+const sha256 = (s: string) => createHash('sha256').update(s).digest('base64url');
+
+export function newBotBinding(): { bindId: string; secret: string; bindHash: string } {
+  const bindId = randomBytes(6).toString('hex');
+  const secret = randomBytes(24).toString('base64url');
+  return { bindId, secret, bindHash: sha256(secret) };
+}
+
+export function bindCookieHeader(bindId: string, secret: string, maxAgeS = Math.floor(LINK_TTL_MS / 1000)): string {
+  return `${bindCookieName(bindId)}=${secret}; Path=${BIND_COOKIE_PATH}; Max-Age=${maxAgeS}; HttpOnly; Secure; SameSite=Lax`;
+}
+
+function readCookie(req: FastifyRequest, name: string): string | null {
+  const raw = req.headers.cookie;
+  if (typeof raw !== 'string') return null;
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return null;
+}
+
+/** State z /bot/link/:token patří tomuto prohlížeči (cookie ucb_<bindId> se shodným tajemstvím). */
+export function verifyBotBinding(req: FastifyRequest, payload: { bindId?: string; bindHash?: string }): boolean {
+  if (!payload.bindId || !payload.bindHash || !/^[0-9a-f]{12}$/.test(payload.bindId)) return false;
+  const secret = readCookie(req, bindCookieName(payload.bindId));
+  if (!secret) return false;
+  const a = Buffer.from(sha256(secret));
+  const b = Buffer.from(payload.bindHash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Jednorázové: po callbacku cookie smazat (i při chybě / odmítnutém souhlasu). */
+export function clearBotBinding(reply: FastifyReply, payload: { bindId?: string }): void {
+  if (payload.bindId && /^[0-9a-f]{12}$/.test(payload.bindId)) reply.header('Set-Cookie', bindCookieHeader(payload.bindId, '', 0));
+}
 
 // ---- idempotence /bot/send ----
 interface SentEntry { status: number; body: object; at: number }
@@ -172,7 +217,9 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     const t = linkTokens.get(req.params.token);
     if (t) linkTokens.delete(req.params.token);
     if (!t) { reply.type('text/html'); return '<!doctype html><meta charset="utf-8"><p style="font-family:system-ui;padding:40px">Odkaz pro napojení bota je neplatný nebo vypršel. Vygeneruj v Židolištce nový.</p>'; }
-    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin, botKind: t.kind };
+    const bind = newBotBinding();
+    reply.header('Set-Cookie', bindCookieHeader(bind.bindId, bind.secret));
+    const state: StateInput = { platform: t.platform, kind: 'bot', workspace: t.workspace, returnTo: t.returnTo, expectLogin: t.expectLogin, botKind: t.kind, bindId: bind.bindId, bindHash: bind.bindHash };
     // Bot mluví za mody i maže/banuje → link vždy žádá i MOD_SCOPES. Výjimka: broadcaster
     // channel-grant flow je souhlas streamera s botem v jeho kanálu (channel:bot), jiné
     // consent okno než účet bota samotného — moderátorské scopes tam nepatří.

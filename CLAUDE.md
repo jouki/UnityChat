@@ -689,7 +689,15 @@ Node.js 22 + TypeScript (ESM) + Fastify 5 + Drizzle ORM + PostgreSQL 18. Nasazen
   **sdílené se streamer flow** (`/streamers/oauth/:platform/callback`, větvení
   podle `kind` ve state, stejné redirect URI u providerů) → 302 na web
   `#uc_code=…` → `POST /auth/exchange {code}` → Bearer session (SHA-256 hash v
-  `web_sessions`, 30 dní klouzavě). `GET /auth/me`, `POST /auth/logout`,
+  `web_sessions`, 30 dní klouzavě). **Od 2026-09-26 (login CSRF, audit C1)** callback
+  účet ani session nezakládá: identita + tokeny čekají v paměti pod jednorázovým kódem
+  (5 min, `issuePendingCode`); k účtu ze startu se platforma připojí jen při výměně
+  s Bearerem TÉHOŽ účtu (klienti posílají Bearer i na `/auth/exchange`), jinak běžné
+  přihlášení podle identity. returnTo rozšíření jen z `ALLOWED_AUTH_EXTENSION_IDS`
+  (výchozí CWS ID; unpacked dev ID přidat do envu) a `ALLOWED_AUTH_FIREFOX_ADDON_IDS`
+  (sha1 gecko ID). Streamer OAuth (`/streamers/oauth/:platform/start`) vypnutý → 410;
+  bot link váže state na prohlížeč cookie `ucb_<id>` z `/bot/link/:token`.
+  `/webhook/deploy` jen s `WEBHOOK_SECRET` (podpis povinný). `GET /auth/me`, `POST /auth/logout`,
   `DELETE /auth/:platform`, `GET /auth/config`. `POST /chat/send {platform,
   text, replyTo?, channel?}`: Twitch Helix `chat/messages` (`user:write:chat`),
   Kick public API `/chat` (`chat:write`), YouTube `liveChatMessages.insert`

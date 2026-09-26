@@ -42,6 +42,15 @@ const EnvSchema = z.object({
   // `www.` je tu záměrně: hosting Roba www nepřesměrovává a Chrome ho v adresním řádku
   // skrývá — diváci na www dostávali 400 a přihlašovací okno se hned zavřelo (2026-09-22).
   WEB_ORIGINS: z.string().default('https://robdiesalot.com,https://www.robdiesalot.com,http://localhost:5173,http://127.0.0.1:5173'),
+  // Rozšíření, která smí OAuth přihlášení vrátit na https://<id>.chromiumapp.org/ (lib/webAuth.ts
+  // isAllowedReturnTo). Čárkami. Výchozí = ID v Chrome Web Store. Vývojová (unpacked) instalace má
+  // ID podle cesty ke složce → přidat ho sem, jinak její přihlášení skončí 400 „returnTo origin not allowed".
+  ALLOWED_AUTH_EXTENSION_IDS: z.string().default('picaeipbmkgcippknkpkbnbgjlkblbnp'),
+  // Firefox: gecko ID doplňku (scripts/build-firefox.mjs GECKO_ID); origin = sha1(ID).extensions.allizom.org.
+  ALLOWED_AUTH_FIREFOX_ADDON_IDS: z.string().default('unitychat@jouki.cz'),
+  // GitHub webhook /webhook/deploy (jen NODE_ENV=development, routes/dev-download.ts). Bez něj se route
+  // vůbec nezaregistruje. NIKDY v gitu.
+  WEBHOOK_SECRET: z.string().default(''),
   // Židolišta (RobJewsALot server): chat commandy streamera pro našeptávání „!".
   // Klíč = env INTEGRATION_API_KEYS na straně Židolišty; NIKDY v gitu. Prázdný
   // klíč = GET /commands vrací prázdný seznam. Mapování kanál → workspace slug.
