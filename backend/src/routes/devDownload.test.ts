@@ -11,9 +11,9 @@ const sign = (body: string, secret = SECRET) => 'sha256=' + createHmac('sha256',
 async function app(secret: string): Promise<FastifyInstance> {
   const a = Fastify();
   const defaultJson = a.getDefaultJsonParser('error', 'error');
-  a.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
-    req.rawBody = typeof body === 'string' ? body : body.toString('utf8');
-    defaultJson(req, req.rawBody, done);
+  a.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    req.rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    defaultJson(req, req.rawBody.toString('utf8'), done);
   });
   await a.register(devDownloadRoutes, { webhookSecret: secret });
   return a;

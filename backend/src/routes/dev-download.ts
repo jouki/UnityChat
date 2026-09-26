@@ -14,11 +14,11 @@ const ZIP_PATH = '/tmp/unitychat-dev.zip';
  * GitHub `X-Hub-Signature-256: sha256=<hex HMAC-SHA256(secret, raw body)>`.
  * Povinný: bez hlavičky, bez raw těla nebo bez secretu → false. Porovnání v konstantním čase.
  */
-export function verifyGithubSignature(header: unknown, rawBody: string | undefined, secret: string): boolean {
-  if (!secret || typeof header !== 'string' || typeof rawBody !== 'string') return false;
+export function verifyGithubSignature(header: unknown, rawBody: Buffer | string | undefined, secret: string): boolean {
+  if (!secret || typeof header !== 'string' || (typeof rawBody !== 'string' && !Buffer.isBuffer(rawBody))) return false;
   const m = /^sha256=([0-9a-f]{64})$/i.exec(header.trim());
   if (!m) return false;
-  const expected = createHmac('sha256', secret).update(rawBody, 'utf8').digest();
+  const expected = createHmac('sha256', secret).update(typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody).digest();
   const got = Buffer.from(m[1], 'hex');
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
