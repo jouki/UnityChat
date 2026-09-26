@@ -33,7 +33,20 @@ function memStore(now: () => number) {
       return [...media.values()].filter((x) => x.channel === channel && (by.url ? x.urlNorm === by.url : x.sha256 === by.sha256))
         .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0] ?? null;
     },
-    async setMediaApproved(id, at) { const x = media.get(id); if (x) Object.assign(x, { status: 'approved', approvedAt: x.approvedAt ?? at, rejectedAt: null, rejectedBy: null, vault: false }); },
+    async setMediaApproved(id, at) {
+      const x = media.get(id);
+      if (!x) return id;
+      // Unikátní (channel, sha256) pro schválené: jiné schválené médium se stejným obsahem vyhrává.
+      const other = [...media.values()].find((o) => o.id !== id && o.status === 'approved' && o.channel === x.channel && o.sha256 === x.sha256);
+      if (other) return other.id;
+      Object.assign(x, { status: 'approved', approvedAt: x.approvedAt ?? at, rejectedAt: null, rejectedBy: null, vault: false });
+      return id;
+    },
+    async mergeMedia(from, to) {
+      for (const r of reqs.values()) if (r.mediaId === from) r.mediaId = to;
+      media.delete(from);
+      log.push(`merge:${from}->${to}`);
+    },
     async setMediaRejected(id, by, at) { const x = media.get(id); if (x && x.status !== 'approved') Object.assign(x, { status: 'rejected', rejectedAt: at, rejectedBy: by }); },
     async markMediaUsed(id) { const x = media.get(id); if (x) x.useCount++; },
     async rejectionCount(ch, id, pl, u) { return rejections.get(rk(ch, id, pl, u)) ?? 0; },
@@ -42,8 +55,10 @@ function memStore(now: () => number) {
     async setBan(ch, id, until, by) { bans.set(`${ch}|${id}`, { until, by }); },
     async pendingForMedia(id, at) { return livePending(id, at); },
     async listRejected(ch, before, limit) {
-      return [...media.values()].filter((x) => x.channel === ch && x.status === 'rejected' && (!before || x.rejectedAt! < before))
-        .sort((a, b) => b.rejectedAt!.getTime() - a.rejectedAt!.getTime()).slice(0, limit);
+      const t = (x: GifMediaInfo) => x.rejectedAt!.getTime();
+      return [...media.values()].filter((x) => x.channel === ch && x.status === 'rejected'
+        && (!before || t(x) < before.at.getTime() || (t(x) === before.at.getTime() && x.id < before.id)))
+        .sort((a, b) => t(b) - t(a) || (a.id < b.id ? 1 : -1)).slice(0, limit);
     },
     async setVault(id, v) { const x = media.get(id); if (x) x.vault = v; },
     async retentionDue(before, at) {
@@ -747,6 +762,83 @@ test('propadnutí: médium čekající jen na tuto žádost pryč; už zamítnut
   s.advance(200_000);
   assert.equal(await s.flow.expireTick(), 1);
   assert.equal(s.mem.media.get(MEDIA)?.status, 'rejected');
+});
+
+test('souběh dedupu: dvě stažení stejného obsahu → dvě média; schválení druhého přesměruje žádost na už schválené, duplikát pryč', async () => {
+  const gone: string[] = [];
+  const s = setup({ mediaDeleted: (id) => gone.push(id) });
+  // Obě stažení doběhnou dřív, než se kterékoli uloží (sha lookup nic nenajde).
+  const orig = s.mem.store.findMedia.bind(s.mem.store);
+  s.mem.store.findMedia = async (ch, by) => (by.sha256 ? null : orig(ch, by));
+  await s.flow.intercept(from('42', 'm1', 'https://a.cz/x.gif'));
+  await s.flow.intercept(from('43', 'm2', 'https://b.cz/y.gif'));
+  const dup = s.mem.reqs.get(2)!.mediaId!;
+  assert.notEqual(dup, MEDIA);
+  assert.equal(s.mem.media.size, 2);
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  s.calls.length = 0;
+  await s.flow.decide({ requestId: 2, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.reqs.get(2)!.mediaId, MEDIA);
+  assert.equal(s.mem.media.has(dup), false);
+  assert.deepEqual(gone, [dup]);
+  const msg2 = events(s.calls, 'broadcast:gif-message')[0].message as Record<string, unknown>;
+  assert.deepEqual(msg2.gif, { url: `http://localhost:3000/media/gif/${MEDIA}`, kind: 'gif', width: 320, height: 240 });
+  assert.equal(s.mem.media.get(MEDIA)!.useCount, 2);
+});
+
+test('mediaChanged: nová žádost na známé médium, propadnutí i rozhodnutí → stav média v /media/gif znovu z DB', async () => {
+  const changed: string[] = [];
+  const s = setup({ mediaChanged: (id) => changed.push(id) });
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(changed, [MEDIA], 'zamítnutí');
+  await s.flow.intercept(from('43', 'm2'));
+  assert.deepEqual(changed, [MEDIA, MEDIA], 'nová žádost na zamítnuté médium (zase veřejné)');
+  s.advance(200_000);
+  await s.flow.expireTick();
+  assert.deepEqual(changed, [MEDIA, MEDIA, MEDIA], 'propadnutí (zase jen s tokenem)');
+});
+
+test('zamítnuté médium: trvale zahodit nejdřív zamítne čekající žádosti; schválit schválí i čekající; ban12h označí médium zamítnuté', async () => {
+  const p = setup();
+  await p.flow.intercept(from('42', 'm1'));
+  await p.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  await p.flow.intercept(from('43', 'm2'));
+  const out = await p.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 });
+  assert.equal(out.status, 200);
+  assert.equal(p.mem.reqs.get(2)!.status, 'rejected');
+  assert.ok(events(p.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'));
+  assert.equal(p.mem.media.size, 0);
+  await p.flow._idle();
+
+  const a = setup();
+  await a.flow.intercept(from('42', 'm1'));
+  await a.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  await a.flow.intercept(from('43', 'm2'));
+  a.calls.length = 0;
+  assert.equal((await a.flow.mediaAction({ mediaId: MEDIA, action: 'approve', by: 'twitch:modb', accountId: 2 })).status, 200);
+  assert.equal(a.mem.reqs.get(2)!.status, 'approved');
+  assert.deepEqual(events(a.calls, 'broadcast:gif-message').map((e) => e.requestId), [2]);
+
+  // Ban na čekajícím (nikdy nezamítnutém) médiu: médium rejected → další pokus = auto zamítnuto.
+  const b = setup();
+  await b.flow.intercept(from('42', 'm1'));
+  await b.flow.mediaAction({ mediaId: MEDIA, action: 'ban12h', by: 'twitch:moda', accountId: 1 });
+  assert.equal(b.mem.media.get(MEDIA)!.status, 'rejected');
+  assert.equal(await b.flow.intercept(from('44', 'm3')), 'rejected');
+  await b.flow._idle();
+});
+
+test('listRejected: kurzor rejectedAt:id (stejný čas zamítnutí se neztratí mezi stránkami)', async () => {
+  const s = setup();
+  const at = new Date(5000);
+  for (const id of ['a', 'b', 'c'].map((c) => c.repeat(32))) {
+    s.mem.media.set(id, { id, channel: 'robdiesalot', status: 'rejected', kind: 'gif', width: null, height: null, sha256: id, approvedAt: null, rejectedAt: at, rejectedBy: 'x', vault: false, urlNorm: null, useCount: 0 });
+  }
+  const p1 = await s.mem.store.listRejected('robdiesalot', null, 2);
+  assert.deepEqual(p1.map((m) => m.id[0]), ['c', 'b']);
+  const p2 = await s.mem.store.listRejected('robdiesalot', { at, id: p1[1].id }, 2);
+  assert.deepEqual(p2.map((m) => m.id[0]), ['a']);
 });
 
 test('listRejected + pendingView: previouslyRejected ve tvaru pro kartu', async () => {

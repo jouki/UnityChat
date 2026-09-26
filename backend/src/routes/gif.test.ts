@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
+import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
 import type { Message } from '../db/schema.js';
 
 const entry = (status: MediaEntry['status'] = 'pending'): MediaEntry => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status });
@@ -12,7 +12,7 @@ test('MediaServer: souběžná čtení téhož média sdílí jedno načtení z 
   const s = new MediaServer(async () => { loads++; return d.promise; });
   const all = Array.from({ length: 200 }, () => s.get('a'));
   assert.equal(s._inflightSize, 1);
-  d.resolve(entry());
+  d.resolve(entry('approved'));
   const got = await Promise.all(all);
   assert.equal(loads, 1);
   assert.ok(got.every((g) => g === got[0]));
@@ -70,6 +70,35 @@ test('mediaAllowed: schválené a čekající veřejně; zamítnuté jen s platn
   assert.equal(await mediaAllowed({ ...rej, channel: null }, 'dobry', verify), false, 'bez kanálu nikdy');
 });
 
+test('MediaServer: čekající a zamítnuté se necachují (každé čtení z DB), schválené ano', async () => {
+  let loads = 0;
+  let status: MediaEntry['status'] = 'pending';
+  const s = new MediaServer(async () => { loads++; return { ...entry(), status }; });
+  await s.get('a'); await s.get('a');
+  assert.equal(loads, 2);
+  status = 'rejected';
+  await s.get('a'); await s.get('a');
+  assert.equal(loads, 4);
+  status = 'approved';
+  await s.get('a'); await s.get('a');
+  assert.equal(loads, 5);
+});
+
+test('GET /media/gif: propadnutí žádosti na dříve zamítnutém médiu → bez tokenu 404 (stav bez zastaralé cache)', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const id = 'e'.repeat(32);
+  // Zamítnuté médium s čekající žádostí = veřejné (servableMedia vrací pending); po propadnutí rejected.
+  let status: MediaEntry['status'] = 'pending';
+  const media = new MediaServer(async () => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status, channel: 'robdiesalot' }));
+  const app = Fastify();
+  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media, tokens: { issue: async () => 'x', verify: async () => false } });
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 200);
+  status = 'rejected';
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 404);
+  await app.close();
+});
+
 test('MediaServer.invalidate: změna stavu (zamítnuto) → další čtení z DB, bez tombstone', async () => {
   let status: MediaEntry['status'] = 'pending';
   let loads = 0;
@@ -102,6 +131,55 @@ test('GET /media/gif/:id: zamítnuté bez tokenu / se špatným 404, s platným 
   assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: {} })).statusCode, 401);
   assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/rejected' })).statusCode, 401);
   await app.close();
+});
+
+test('nemod → 403 na access-token, rejected a akcích nad médiem; mod → token / seznam s kurzorem rejectedAt:id', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const id = 'a'.repeat(32);
+  const md = { id, channel: 'robdiesalot', status: 'rejected' as const, kind: 'gif', width: null, height: null, sha256: 'x', approvedAt: null, rejectedAt: new Date(5000), rejectedBy: 'twitch:moda', vault: false };
+  const listed: unknown[] = [];
+  const store = {
+    getMedia: async (m: string) => (m === id ? md : null),
+    listRejected: async (_ch: string, before: unknown, limit: number) => { listed.push(before); return Array.from({ length: limit }, () => md); },
+  };
+  const actions: string[] = [];
+  const flow = { mediaAction: async (p: { action: string }) => { actions.push(p.action); return { status: 200, body: { ok: true } }; } };
+  let account = 1;
+  const app = Fastify();
+  await app.register(gifRoutes, {
+    flow: flow as never, store: store as never, media: new MediaServer(async () => null),
+    tokens: { issue: async () => 'NOVY', verify: async () => false },
+    auth: async (req) => { req.webAccountId = account; },
+    modIdentities: async (acc) => (acc === 7 ? [{ platform: 'twitch', login: 'moda' }] : []),
+  });
+  const calls = () => [
+    app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: { channel: 'robdiesalot' } }),
+    app.inject({ method: 'GET', url: '/moderation/gif/rejected?channel=robdiesalot' }),
+    ...['approve', 'vault', 'purge', 'ban12h'].map((a) => app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} })),
+  ];
+  for (const r of await Promise.all(calls())) assert.equal(r.statusCode, 403, r.body);
+  assert.deepEqual(actions, []);
+  account = 7;
+  const [tok, rej, ...acts] = await Promise.all(calls());
+  assert.deepEqual(tok.json(), { ok: true, token: 'NOVY' });
+  assert.equal(tok.headers['cache-control'], 'no-store');
+  assert.equal(rej.json().nextBefore, `5000:${id}`);
+  assert.deepEqual(acts.map((r) => r.statusCode), [200, 200, 200, 200]);
+  assert.deepEqual(actions.sort(), ['approve', 'ban12h', 'purge', 'vault']);
+  // Kurzor dál + neplatný kurzor.
+  await app.inject({ method: 'GET', url: `/moderation/gif/rejected?channel=robdiesalot&before=5000:${id}` });
+  assert.deepEqual(listed.at(-1), { at: new Date(5000), id });
+  assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/rejected?channel=robdiesalot&before=5000' })).statusCode, 400);
+  await app.close();
+});
+
+test('parseRejectedCursor', () => {
+  const id = 'b'.repeat(32);
+  assert.equal(parseRejectedCursor(undefined), null);
+  assert.deepEqual(parseRejectedCursor(`123:${id}`), { at: new Date(123), id });
+  assert.equal(parseRejectedCursor('123'), false);
+  assert.equal(parseRejectedCursor(`0:${id}`), false);
 });
 
 test('rejectedView: tvar pro záložku Zamítnuté GIFy (smazání za 14 dní, vault bez smazání)', () => {
