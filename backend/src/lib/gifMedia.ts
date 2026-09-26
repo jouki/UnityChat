@@ -422,19 +422,83 @@ export function mediaSize(b: Buffer, kind: GifKind): { width: number | null; hei
   return { width: null, height: null };
 }
 
-const decodeEntities = (s: string): string => s.replace(/&amp;/g, '&').replace(/&#x2F;/gi, '/').replace(/&#47;/g, '/').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+const decodeEntities = (s: string): string => s.replace(/&amp;/g, '&').replace(/&#x2F;/gi, '/').replace(/&#47;/g, '/').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/gi, "'");
+
+/** `<meta property|name="…" content="…">` stránky → klíč (malými) → hodnoty v pořadí výskytu. */
+function metaTags(html: string): Record<string, string[]> {
+  const meta: Record<string, string[]> = {};
+  for (const m of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = m[0];
+    const key = /\b(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase();
+    const content = /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(tag);
+    const value = content ? (content[1] ?? content[2]) : undefined;
+    if (!key || value === undefined) continue;
+    (meta[key] ??= []).push(decodeEntities(value.trim()));
+  }
+  return meta;
+}
+
+// ---------------------------------------------------------------------------
+// Tagy ze zdroje (GIF knihovna 2026-09-26): z HTML stránky Tenor / Giphy, které se stahuje kvůli og:video —
+// žádný požadavek navíc. Přímý odkaz na soubor tagy nemá (správa v dashboardu Židolišty).
+// ---------------------------------------------------------------------------
+
+export const MAX_TAGS = 20;
+export const MAX_TAG_LEN = 40;
+/** Obecná slova, která k hledání nic nepřidají. */
+const GENERIC_TAGS = new Set(['gif', 'gifs', 'animated gif', 'animated gifs', 'animated', 'sticker', 'stickers', 'tenor', 'giphy', 'tenor gif', 'giphy gif', 'reaction gif']);
+
+/** Titulek / klíčové slovo bez přípony zdroje („X GIF - … - Discover & Share GIFs“, „X GIF by Y - Find & Share on GIPHY“). */
+function cleanTitle(s: string): string {
+  return s.split(/\s+[-–|]\s+/)[0].replace(/\s+(?:gif|sticker)(?:\s+by\s+.*)?$/i, '').trim();
+}
+
+/**
+ * Tagy → malá písmena, bez `#` a přebytečných mezer, bez obecných slov a duplicit, každý nejvýš MAX_TAG_LEN
+ * znaků, celkem nejvýš MAX_TAGS. Ne-řetězce se zahodí.
+ */
+export function normalizeTags(raw: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const t = v.normalize('NFKC').toLowerCase().replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LEN).trim();
+    if (!t || GENERIC_TAGS.has(t) || out.includes(t)) continue;
+    out.push(t);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
+/** `keywords` z JSON-LD bloků (řetězec s čárkami nebo pole), rekurzivně. */
+function jsonLdKeywords(html: string): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6 || !v || typeof v !== 'object') return;
+    if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'keywords') {
+        if (typeof x === 'string') out.push(...x.split(','));
+        else if (Array.isArray(x)) out.push(...x.filter((s): s is string => typeof s === 'string'));
+      } else walk(x, depth + 1);
+    }
+  };
+  for (const m of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try { walk(JSON.parse(m[1]), 0); } catch { /* neplatný JSON-LD → nic */ }
+  }
+  return out;
+}
+
+/** Tagy ze stránky zdroje: titulek (og:title / twitter:title bez přípony), `keywords`, JSON-LD keywords. */
+export function pageTags(html: string): string[] {
+  const meta = metaTags(html);
+  const title = meta['og:title']?.[0] ?? meta['twitter:title']?.[0] ?? '';
+  const keywords = (meta.keywords ?? []).flatMap((k) => k.split(','));
+  return normalizeTags([title, ...keywords, ...jsonLdKeywords(html)].map((s) => cleanTitle(decodeEntities(String(s)))));
+}
 
 /** og:video (MP4) přednostně, jinak og:image; URL relativně ke stránce. */
 export function pickOgMedia(html: string, base: URL): string | null {
-  const meta: Record<string, string[]> = {};
-  const tagRe = /<meta\b[^>]*>/gi;
-  for (const m of html.matchAll(tagRe)) {
-    const tag = m[0];
-    const key = /\b(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase();
-    const content = /\bcontent\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1];
-    if (!key || content === undefined) continue;
-    (meta[key] ??= []).push(decodeEntities(content.trim()));
-  }
+  const meta = metaTags(html);
   const first = (keys: string[], filter?: (u: string) => boolean): string | null => {
     for (const k of keys) for (const v of meta[k] ?? []) if (v && (!filter || filter(v))) return v;
     return null;
@@ -454,6 +518,8 @@ export interface ResolvedGif {
   height: number | null;
   /** URL, ze které se médium nakonec stáhlo (log). */
   sourceUrl: string;
+  /** Tagy ze stránky zdroje (jen mode page — Tenor/Giphy/Imgur stránka); přímý soubor tagy nemá. */
+  tags?: string[];
 }
 
 async function fetchMedia(url: string, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
@@ -529,5 +595,7 @@ async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<R
   const html = (await readLimited(res, PAGE_MAX_BYTES, signal, true)).toString('utf8');
   const media = pickOgMedia(html, url);
   if (!media) throw new GifError('no_media');
-  return fetchMedia(media, ctx, deps);
+  const tags = pageTags(html);
+  const r = await fetchMedia(media, ctx, deps);
+  return tags.length ? { ...r, tags } : r;
 }

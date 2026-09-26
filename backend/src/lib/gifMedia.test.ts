@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import {
   classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia,
-  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, normalizeSourceUrl, type Transport, type TransportResponse, type LookupAll,
+  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll,
 } from './gifMedia.js';
 
 // ---- vzorky médií ----
@@ -118,6 +118,41 @@ test('resolveGif: Tenor stránka → og:video MP4, médium s Accept image/*,vide
   assert.deepEqual([r.width, r.height], [498, 280]);
   assert.equal(seen[1].headers.Accept, 'image/*,video/*');
   assert.match(seen[0].headers.Accept, /text\/html/);
+  assert.equal(r.tags, undefined, 'stránka bez titulku a klíčových slov → bez tagů');
+});
+
+test('pageTags: Tenor (og:title + keywords), Giphy (… GIF by X - Find & Share on GIPHY), JSON-LD; normalizace', () => {
+  const tenor = `<head><meta property="og:title" content="Cat Dance GIF - Cat Dance Funny - Discover &amp; Share GIFs">
+    <meta name="keywords" content="Cat,Dance,Funny,GIF,Animated GIF,cat"></head>`;
+  assert.deepEqual(pageTags(tenor), ['cat dance', 'cat', 'dance', 'funny']);
+  const giphy = `<meta property="og:title" content="Happy Dance GIF by Originals - Find &amp; Share on GIPHY">
+    <meta name="keywords" content="Happy Dance GIF by Originals, Originals, happy, dance, #Party, GIF, Animated GIF">
+    <script type="application/ld+json">{"@type":"ImageObject","keywords":["Party","Celebrate"],"author":{"keywords":"Hype, party"}}</script>`;
+  assert.deepEqual(pageTags(giphy), ['happy dance', 'originals', 'happy', 'dance', 'party', 'celebrate', 'hype']);
+  assert.deepEqual(pageTags('<meta name="keywords" content=\'Don&#39;t, Stop\'>'), ["don't", 'stop']);
+  assert.deepEqual(pageTags('<script type="application/ld+json">{nesmysl</script>'), []);
+  assert.deepEqual(pageTags(''), []);
+});
+
+test('normalizeTags: malá písmena, bez # a duplicit, obecná slova pryč, ≤ 40 znaků, ≤ 20 tagů, ne-řetězce pryč', () => {
+  assert.deepEqual(normalizeTags(['  Ahoj   Světe ', '#ahoj světe', 'GIF', 'Sticker', 42, null, '', 'ok']), ['ahoj světe', 'ok']);
+  assert.equal(normalizeTags(['x'.repeat(60)])[0].length, MAX_TAG_LEN);
+  assert.equal(normalizeTags(Array.from({ length: 30 }, (_, i) => `tag${i}`)).length, MAX_TAGS);
+  assert.equal(MAX_TAGS, 20);
+  assert.equal(MAX_TAG_LEN, 40);
+});
+
+test('resolveGif: stránka Tenor s titulkem a klíčovými slovy → tagy v médiu (bez požadavku navíc)', async () => {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+  const transport = fakeTransport({
+    'https://tenor.com/view/cat-gif-2': { headers: { 'content-type': 'text/html' }, body: Buffer.from('<meta property="og:title" content="Cat Jam GIF - Cat Jam - Discover &amp; Share GIFs"><meta name="keywords" content="Cat,Jam"><meta property="og:image" content="https://media1.tenor.com/m/b/cat.gif">') },
+    'https://media1.tenor.com/m/b/cat.gif': { headers: { 'content-type': 'image/gif' }, body: gif() },
+  }, seen);
+  const r = await resolveGif({ url: 'https://tenor.com/view/cat-gif-2', mode: 'page' }, { transport, lookupAll: publicDns });
+  assert.deepEqual(r.tags, ['cat jam', 'cat', 'jam']);
+  assert.equal(seen.length, 2);
+  const direct = await resolveGif({ url: 'https://media1.tenor.com/m/b/cat.gif', mode: 'direct' }, { transport, lookupAll: publicDns });
+  assert.equal(direct.tags, undefined);
 });
 
 test('resolveGif: přímý Tenor GIF, který bez Accept vrací HTML → s Accept čistý GIF; HTML → bad_type', async () => {

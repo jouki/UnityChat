@@ -11,7 +11,9 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  real,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 const bytea = customType<{ data: Buffer; default: false }>({
   dataType() {
@@ -171,8 +173,27 @@ export const gifMedia = pgTable('gif_media', {
   vault: boolean('vault').notNull().default(false),  // zamítnutý, ale retence 14 dní se na něj nevztahuje
   useCount: integer('use_count').notNull().default(0),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  // Task 2 (backend/sql/2026-09-26-gif-phash.sql): tagy, perceptuální hash, kontrola duplikátů.
+  tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+  phash: text('phash').array(),                      // dHashy (16 hex) z 8 snímků; null = nespočítáno / selhalo
+  phashAt: timestamp('phash_at', { withTimezone: true }),          // pokus o hash (i neúspěšný); null = čeká
+  dupCheckedAt: timestamp('dup_checked_at', { withTimezone: true }), // porovnáno s médii kanálu
 });
 export type GifMediaRow = typeof gifMedia.$inferSelect;
+
+// Návrhy duplikátů (perceptuální hash, jen v rámci kanálu): a = starší („první"), b = novější („druhý").
+export const gifDuplicates = pgTable('gif_duplicates', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  channel: text('channel').notNull(),
+  a: text('a').notNull(),
+  b: text('b').notNull(),
+  score: real('score').notNull(),
+  status: text('status').notNull().default('pending'), // pending | kept_both
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decidedBy: text('decided_by'),
+});
+export type GifDuplicate = typeof gifDuplicates.$inferSelect;
 
 // Kolikrát byl GIF zamítnut uživateli (3.+ pokus = automaticky zamítnuto).
 export const gifRejections = pgTable(

@@ -218,6 +218,8 @@ export const dbGifStore: GifStore = {
     await db.insert(gifMedia).values({
       id, kind: m.kind, contentType: m.contentType, bytes: m.bytes, size: m.bytes.length,
       sha256: meta.sha256, width: m.width, height: m.height, channel: meta.channel, sourceUrlNorm: meta.sourceUrlNorm, status: 'pending',
+      // Tagy ze stránky zdroje (Tenor/Giphy, lib/gifMedia.ts pageTags); hash a duplicity dopočítá lib/gifLibrary.ts na pozadí.
+      tags: m.tags ?? [],
     });
     return id;
   },
