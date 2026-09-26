@@ -7,12 +7,18 @@ import { findLinks } from './links.js';
 
 const TRAIL = /[)\]}>,.!?;:'"]+$/;
 
+/** Hosty našeho serveru (odkaz na médium z knihovny `https://api.jouki.cz/media/gif/<32 hex>`). Backend: defaultOwnHosts. */
+export const GIF_OWN_HOSTS = ['api.jouki.cz'];
+const OWN_PATH = /^\/media\/gif\/([a-f0-9]{32})\/?$/;
+
 /**
- * Odkaz (URL z textu, i bez schématu) → { url, mode: 'direct'|'page' }, nebo null. Stránky Tenor / Giphy /
- * Imgur / 7TV, přímé soubory .gif/.webp/.mp4 z libovolného hostu, Imgur .gifv → .mp4.
+ * Odkaz (URL z textu, i bez schématu) → { url, mode: 'direct'|'page'|'own' }, nebo null. Stránky Tenor / Giphy /
+ * Imgur / 7TV, přímé soubory .gif/.webp/.mp4 z libovolného hostu, Imgur .gifv → .mp4, náš odkaz z knihovny
+ * (`ownHosts` + `/media/gif/<32 hex>`) → { url, mode: 'own', mediaId }.
  * @param {string} raw
+ * @param {string[]} [ownHosts]
  */
-export function classifyGifUrl(raw) {
+export function classifyGifUrl(raw, ownHosts = GIF_OWN_HOSTS) {
   let u;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) return null;
   try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return null; }
@@ -21,6 +27,9 @@ export function classifyGifUrl(raw) {
   const bare = host.replace(/^www\./, '');
   const path = u.pathname.toLowerCase();
   const href = u.toString();
+
+  const own = ownHosts.includes(host) && OWN_PATH.exec(u.pathname);
+  if (own) return { url: `${u.origin}${u.pathname}`, mode: 'own', mediaId: own[1] };
 
   const seven = bare === '7tv.app' && /^\/emotes\/([0-9a-z]{10,40})\/?$/i.exec(u.pathname);
   if (seven) return { url: `https://cdn.7tv.app/emote/${seven[1]}/4x.webp`, mode: 'direct' };
@@ -49,10 +58,10 @@ function tokenUrl(token, host) {
  * První odkaz ve zprávě, který vede na GIF: { url, mode, token }, nebo null.
  * @param {string} text
  */
-export function gifCandidate(text) {
+export function gifCandidate(text, ownHosts = GIF_OWN_HOSTS) {
   for (const l of findLinks(text)) {
     const raw = tokenUrl(l.text, l.host);
-    const src = raw ? classifyGifUrl(raw) : null;
+    const src = raw ? classifyGifUrl(raw, ownHosts) : null;
     if (src) return { ...src, token: l.text };
   }
   return null;
