@@ -167,6 +167,10 @@ class NicknameManager {
       this._eventSource.addEventListener('gif-message', (e) => {
         try { const d = JSON.parse(e.data); if (this.onGifMessage) this.onGifMessage(d); } catch {}
       });
+      // Stav média se změnil (zahozeno / obnoveno / soubor smazán / odebráno z knihovny) → překreslit zprávy s GIFem.
+      this._eventSource.addEventListener('gif-media', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifMedia) this.onGifMedia(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1577,6 +1581,7 @@ class UnityChat {
     this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
     this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
     this.nicknames.onGifMessage = (d) => this._onGifMessage(d);
+    this.nicknames.onGifMedia = (d) => this._onGifMedia(d);
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
@@ -4878,6 +4883,13 @@ class UnityChat {
     this._gifHoldInst?.release(msg?.platform || el.dataset?.platform, msg?.id != null ? String(msg.id) : el.dataset?.msgId);
     const tx = el.querySelector('.tx');
     if (tx && msg) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+    // Obnovená zpráva se schváleným GIFem (obnova zahozeného / znovu v knihovně): médium zpátky pod text.
+    // Jen když médium v uzlu chybí (smazání ho odebralo) — jinak by se GIF zbytečně načítal znovu.
+    if (msg?.gif && !el.querySelector(':scope > .uc-gif')) {
+      const g = window.UC_CORE.normalizeGifMedia?.(msg.gif, { origins: UC_GIF_ORIGINS });
+      if (g) { msg.gif = g; this._appendGifMedia(el, msg); this._ucLog('Gif', `obnovená zpráva ${msg.platform}:${msg.id} → GIF zpátky`); }
+      else delete msg.gif;
+    }
   }
 
   /** Označit zprávu jako smazanou (hidden = jen skrytá v UnityChatu) ve store i ve všech jejích uzlech. */
@@ -5187,6 +5199,57 @@ class UnityChat {
     if (m.gifOrigin) this._gifOutInst?.onGifMessage(m);
     this._ucLog('Gif', `gif-message ${m.id} čas ${m.timestamp}${m.gifOrigin ? ` origin ${m.gifOrigin}` : ''}${m.replaces ? ` replaces ${m.replaces}` : ''}`);
     this._addMessage({ ...m, historical: false });
+  }
+
+  /**
+   * Médium GIFu do zprávy `el` hned za text (nové vykreslení i obnova zprávy); předchozí `.uc-gif` pryč.
+   * `msg.gif` musí být ověřené (normalizeGifMedia s originy) — `unavailable` = štítek „[GIF nedostupný]“.
+   */
+  _appendGifMedia(el, msg) {
+    const core = window.UC_CORE;
+    core.removeGifMedia?.(el);
+    el.classList.add('has-gif');
+    const media = core.createGifMedia(document, msg.gif, { lazy: true, log: (tag, t) => this._ucLog(tag, t) });
+    // Bez známých rozměrů se výška ustálí až po načtení → dorovnat konec chatu.
+    if (media.classList.contains('uc-gif--nosize')) {
+      media.firstChild?.addEventListener?.(msg.gif.kind === 'mp4' ? 'loadedmetadata' : 'load', () => { if (this.autoScroll) this._scroll(); }, { once: true });
+    }
+    const tx = el.querySelector(':scope > .tx');
+    if (tx) tx.after(media); else el.appendChild(media);
+    return media;
+  }
+
+  /**
+   * SSE gif-media z /nicknames/stream (spec 2026-09-27-gif-nahled-zahozeni-design.md): médium zahozené i se zprávami
+   * / odebrané z knihovny → zprávy s ním „smazané“ (gif_removed); soubor smazán → štítek „[GIF nedostupný]“;
+   * obnoveno / znovu vidět → zprávy z události se vykreslí na místě jako obnovené (klient je má bez obsahu).
+   */
+  _onGifMedia(d) {
+    const core = window.UC_CORE;
+    const n = core.normalizeGifMediaEvent?.(d, this.config.channel || '');
+    if (!n) { this._ucLog('Gif', `gif-media ignorováno (${d?.channel || '?'} ${d?.mediaId || '?'} ${d?.state || '?'})`); return; }
+    let hit = 0;
+    if (n.state === 'visible') {
+      for (const m of n.messages) {
+        const g = core.normalizeGifMedia(m.gif, { origins: UC_GIF_ORIGINS });
+        // Jen zprávy, které chat má (starší, dosud nenačtené přijdou z historie už správně) — nic nepřidávat.
+        if (!g || !this.store.get(String(m.id))) continue;
+        this._unhideMessage({ platform: m.platform, messageId: m.id, message: { ...m, gif: g } }, { restore: true });
+        hit++;
+      }
+    } else {
+      for (const msg of this.store.slice()) {
+        if (core.gifMsgMediaId(msg) !== n.mediaId) continue;
+        hit++;
+        if (n.state === 'removed') this._applyDeleted(msg.platform, msg.id, { reason: 'gif_removed' });
+        else {
+          msg.gif = { ...msg.gif, unavailable: true };
+          for (const el of this._msgEls(msg.id, msg.platform)) core.setGifUnavailable(document, el);
+        }
+      }
+    }
+    this._ucLog('Gif', `gif-media ${n.mediaId} → ${n.state} (${hit} zpráv v chatu${n.state === 'visible' ? `, ${n.messages.length} v události` : ''})`);
+    this._gifPanel?.mediaChanged?.();
   }
 
   /** Zavře Profil (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
@@ -8126,16 +8189,10 @@ class UnityChat {
 
     el.appendChild(tx);
 
-    // Schválený GIF pod textem (core/gif.js): max 400 × 250 px, lazy, při chybě odkaz.
+    // Schválený GIF pod textem (core/gif.js): max 400 × 250 px, lazy, při chybě „GIF odebrán“.
     if (msg.gif) {
-      el.classList.add('has-gif');
-      const media = window.UC_CORE.createGifMedia(document, msg.gif, { lazy: true, log: (tag, t) => this._ucLog(tag, t) });
-      // Bez známých rozměrů se výška ustálí až po načtení → dorovnat konec chatu.
-      if (media.classList.contains('uc-gif--nosize')) {
-        media.firstChild?.addEventListener?.(msg.gif.kind === 'mp4' ? 'loadedmetadata' : 'load', () => { if (this.autoScroll) this._scroll(); }, { once: true });
-      }
-      el.appendChild(media);
-      this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} ${msg.gif.kind} ${msg.gif.width || '?'}×${msg.gif.height || '?'}${msg.historical ? ' (historie)' : ''}`);
+      this._appendGifMedia(el, msg);
+      this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} ${msg.gif.kind} ${msg.gif.width || '?'}×${msg.gif.height || '?'}${msg.gif.unavailable ? ' (nedostupný)' : ''}${msg.historical ? ' (historie)' : ''}`);
     }
 
     // Easter egg: StreamElements !bulgarians response — click to play audio

@@ -300,6 +300,27 @@ Promise.all([
   check('ChatStore: GIF s časem schválení je poslední (ne u původní zprávy)', eq(store.slice().map((m) => m.id), ['orig', 'a', 'b', 'gif-1']), JSON.stringify(store.slice().map((m) => m.id)));
   check('ChatStore: stejné gif-<id> podruhé = dup', store.add({ platform: 'twitch', id: 'gif-1', timestamp: 4000 }) === 'dup');
 
+  // --- Trvale zahodit + náhled (2026-09-27): texty, množná čísla, položky zahozených ---
+  check('gifDaysText: 1 den / 2 dny / 4 dny / 5 dní / 0 dní', ['1 den', '2 dny', '4 dny', '5 dní', '0 dní'].join('|') === [1, 2, 4, 5, 0].map(L.gifDaysText).join('|'));
+  const D = 86_400_000, N0 = 1_000_000_000;
+  check('gifDeleteInText: za 6 dní / za 1 den / dnes', L.gifDeleteInText(N0 + 6 * D, N0) === 'smaže se za 6 dní' && L.gifDeleteInText(N0 + 3600_000, N0) === 'smaže se za 1 den' && L.gifDeleteInText(N0 - 1, N0) === 'smaže se dnes');
+  check('rejectedMetaText: beze změny (3 dny)', L.rejectedMetaText({ rejectedBy: 'twitch:modik', deleteAt: N0 + 3 * D }, N0) === 'Zamítl modik (Twitch) · smaže se za 3 dny');
+  const DISC = { mediaId: ID, url: OUR, kind: 'gif', width: 498, height: 280, tags: ['cat'], status: 'purging', purgedAt: N0, purgedBy: 'twitch:modik', purgeAt: N0 + 6 * D, restoreTo: 'approved' };
+  const dn = L.normalizeDiscardedItem(DISC);
+  check('normalizeDiscardedItem: purging', dn?.status === 'purging' && dn.purgeAt === N0 + 6 * D && dn.restoreTo === 'approved' && eq(dn.tags, ['cat']), JSON.stringify(dn));
+  check('normalizeDiscardedItem: jiný stav / cizí URL → null', L.normalizeDiscardedItem({ ...DISC, status: 'approved' }) === null && L.normalizeDiscardedItem({ ...DISC, url: 'https://x.cz/a.gif' }) === null);
+  check('normalizeDiscardedItem: restoreTo výchozí rejected', L.normalizeDiscardedItem({ ...DISC, restoreTo: 'x' }).restoreTo === 'rejected');
+  check('discardedMetaText: ke smazání s odpočtem', L.discardedMetaText(dn, N0) === 'Zahodil modik (Twitch) · smaže se za 6 dní', L.discardedMetaText(dn, N0));
+  check('discardedMetaText: stažený', L.discardedMetaText({ ...dn, status: 'withdrawn', purgeAt: null }, N0) === 'Zahodil modik (Twitch) · zprávy zůstaly');
+  check('gifDimText', L.gifDimText({ kind: 'mp4', width: 498, height: 280 }) === '498 × 280 px · MP4' && L.gifDimText({ kind: 'gif' }) === 'GIF' && L.gifDimText({ kind: 'webp', width: 1, height: 2 }) === '1 × 2 px · WebP');
+  check('gifPreviewMeta: knihovna = použití', L.gifPreviewMeta({ useCount: 5 }, 'lib', N0) === 'Použito 5×');
+  check('gifPreviewMeta: zamítnuté = kdo + kdy (+ vault)', /^Zamítl modik \(Twitch\) · \d+\. \d+\. \d+:\d\d · Vault$/.test(L.gifPreviewMeta({ rejectedBy: 'twitch:modik', rejectedAt: N0, vault: true }, 'rej', N0)), L.gifPreviewMeta({ rejectedBy: 'twitch:modik', rejectedAt: N0, vault: true }, 'rej', N0));
+  check('gifPreviewMeta: ke smazání / stažený / duplikát', /^Zahodil modik \(Twitch\) · \d+\. \d+\. \d+:\d\d · smaže se za 6 dní$/.test(L.gifPreviewMeta(dn, 'pg', N0))
+    && / · zprávy zůstaly$/.test(L.gifPreviewMeta({ ...dn, status: 'withdrawn' }, 'wd', N0)) && L.gifPreviewMeta({ status: 'rejected', useCount: 2 }, 'dup', N0) === 'Zamítnutý · použito 2×');
+  check('GIF_CONFIRM_TEXT: obě varianty v textu, odstranění nevratné', L.GIF_CONFIRM_TEXT.purge.lines.some((l) => l.startsWith('Zahodit, zprávy nechat')) && L.GIF_CONFIRM_TEXT.purge.lines.some((l) => l.startsWith('Zahodit i se zprávami') && l.includes('7 dní'))
+    && L.GIF_CONFIRM_TEXT['remove-file'].lines[0] === 'Staré zprávy ukážou [GIF nedostupný]. Nejde vrátit.');
+  check('gifLibraryErrorText: nové chyby', L.gifLibraryErrorText({ error: 'already_purged' }) === 'GIF už je zahozený.' && L.gifLibraryErrorText({ error: 'not_purging' }) === 'GIF už není ke smazání.' && L.gifLibraryErrorText({ error: 'not_withdrawn' }) === 'GIF už není mezi staženými.');
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

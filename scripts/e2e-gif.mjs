@@ -88,11 +88,13 @@ const H1 = [
   H('e2e-wait', 'Divak', 'u9', '', 6, { deleted: true, deletedReason: 'gif_request' }),
   // Závěrečná review I2: GIF odebraný z knihovny → server ho v historii pošle jako smazaný (gif_removed) bez média.
   H('gif-9', 'Divak', 'u9', '', 6.5, { deleted: true, deletedReason: 'gif_removed' }),
+  // Stažený GIF se smazaným souborem (2026-09-27): zpráva zůstává s textem, místo GIFu štítek „[GIF nedostupný]“.
+  H('gif-10', 'Divak', 'u9', 'text nad nedostupným', 6.7, { gif: { url: murl(hex(20)), kind: 'gif', width: 100, height: 50, unavailable: true } }),
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
 const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
-  library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set() };
-const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [] };
+  library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set(), wd: [], pg: [] };
+const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [] };
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
@@ -142,8 +144,18 @@ s.onevent = async (d) => {
   const da = u.match(/\/moderation\/gif\/duplicates\/(\d+)\/(keep-first|keep-second|keep-both)/);
   if (da) { posts.dupAct.push({ id: da[1], action: da[2] }); const r = mock.dupAct; if (r) return json(r.body, r.code); mock.dups = mock.dups.filter((d) => String(d.id) !== da[1]); return json({ ok: true, id: Number(da[1]), action: da[2] }); }
   if (u.includes('/moderation/gif/duplicates')) { posts.dups.push(u); return json({ ok: true, items: mock.dups }); }
-  const ma = u.match(/\/moderation\/gif\/([0-9a-f]{32})\/(approve|vault|purge|ban12h|unapprove)/);
-  if (ma) { posts.media.push({ id: ma[1], action: ma[2] }); return json(ma[2] === 'ban12h' ? { ok: true, mediaId: ma[1], bannedUntil: Date.now() + 43200000, rejected: 1 } : { ok: true, mediaId: ma[1], action: ma[2] }); }
+  // Zahozené GIFy (2026-09-27): Stažené / Ke smazání.
+  if (u.includes('/moderation/gif/withdrawn')) { posts.disc.push(u); return json({ ok: true, items: mock.wd, nextBefore: null }); }
+  if (u.includes('/moderation/gif/purging')) { posts.disc.push(u); return json({ ok: true, items: mock.pg, nextBefore: null }); }
+  const ma = u.match(/\/moderation\/gif\/([0-9a-f]{32})\/(approve|vault|purge|ban12h|unapprove|restore|remove-file)/);
+  if (ma) {
+    posts.media.push({ id: ma[1], action: ma[2], body });
+    if (ma[2] === 'ban12h') return json({ ok: true, mediaId: ma[1], bannedUntil: Date.now() + 43200000, rejected: 1 });
+    if (ma[2] === 'purge') return json({ ok: true, mediaId: ma[1], action: 'purge', status: body?.keepMessages ? 'withdrawn' : 'purging' });
+    if (ma[2] === 'restore') return json({ ok: true, mediaId: ma[1], action: 'restore', status: 'approved' });
+    if (ma[2] === 'remove-file') return json({ ok: true, mediaId: ma[1], action: 'remove-file', status: 'unavailable' });
+    return json({ ok: true, mediaId: ma[1], action: ma[2] });
+  }
   if (u.includes('/gifs/library')) {
     posts.library.push(u);
     const q = new URL(u).searchParams.get('q') || '';
@@ -216,6 +228,9 @@ check('A GIF s prázdným textem se nezahodí + chyba média (404) → štítek 
   && await ev(`!document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif a') && document.querySelector('.msg[data-msg-id="gif-6"] .uc-gif-fallback').tagName`) === 'SPAN');
 const g9 = await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-9"]'); if (!m) return null; return { deleted: m.classList.contains('uc-deleted'), held: m.classList.contains('uc-gif-held'), gif: !!m.querySelector('.uc-gif'), shown: getComputedStyle(m).display !== 'none' }; })()`);
 check('A I2 gif_removed z historie → smazaná zpráva bez média (mod ji vidí jako smazanou, ne schovanou)', g9?.deleted && !g9.held && !g9.gif && g9.shown, JSON.stringify(g9));
+const g10 = await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); if (!m) return null; return { text: m.querySelector('.tx')?.textContent, label: m.querySelector('.uc-gif--unavailable .uc-gif-fallback')?.textContent, img: !!m.querySelector('.uc-gif-media'), deleted: m.classList.contains('uc-deleted') }; })()`);
+check('A historie: stažený GIF bez souboru → text zůstává, místo GIFu „[GIF nedostupný]“, nic se nenačítá', g10?.text === 'text nad nedostupným' && g10.label === '[GIF nedostupný]' && !g10.img && !g10.deleted
+  && await ev(`![...performance.getEntriesByType('resource')].some(e => e.name.includes(${JSON.stringify(hex(20))}))`) === true, JSON.stringify(g10));
 
 // GET pending (mod) → karta 20 (FIFO: jen nejstarší čekající)
 check('A GET /moderation/gif/pending s kanálem', await until(`true`, 10) && posts.pending.some((x) => /pending\?channel=robdiesalot$/.test(x)), posts.pending.join(' | '));
@@ -720,6 +735,32 @@ const sendG0 = posts.send.length;
 await glClick('.uc-gl-i[data-id$="0b"] .uc-gl-pick');
 await sleep(300);
 check('G zamčený výběr → nic neodejde, hlavička blikne', posts.send.length === sendG0 && (await gl())?.flash === true);
+// Náhled (2026-09-27): nabídka ⋯ i pro diváka (jen „Náhled“), překryv nad panelem, zavření Esc / klik mimo / ×.
+const pv = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-preview'); const vis = (e) => !!e && !e.hidden && getComputedStyle(e).display !== 'none';
+  if (!vis(p)) return { open: false, picker: !document.querySelector('.uc-ep').classList.contains('hidden') };
+  const m = p.querySelector('.uc-gif-media'); const r = m?.getBoundingClientRect(); const pr = p.getBoundingClientRect();
+  return { open: true, picker: !document.querySelector('.uc-ep').classList.contains('hidden'), dim: p.querySelector('.uc-gl-preview-dim').textContent,
+    tags: [...p.querySelectorAll('.uc-gl-tag')].map(t => t.textContent).join(','), meta: p.querySelector('.uc-gl-preview-meta').textContent,
+    src: m?.getAttribute('src') || '', w: Math.round(r?.width || 0), fits: !!r && r.width <= pr.width && r.height <= pr.height, overPane: pr.width > 100 && pr.height > 100 }; })()`);
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="menu"]');
+check('G divák: nabídka ⋯ u GIFu v knihovně = jen „Náhled“', await ev(`[...document.querySelectorAll('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Náhled');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu [data-act="preview"]');
+const pvG = await pv();
+check('G náhled: překryv nad panelem — větší GIF (fit), rozměry, tagy, použití', pvG?.open && pvG.dim === '200 × 100 px · GIF' && pvG.tags === 'cat,dance' && pvG.meta === 'Použito 9×' && pvG.w > 100 && pvG.fits && pvG.overPane && pvG.src === murl(hex(11)), JSON.stringify(pvG));
+check('G náhled: nic se neposlalo', posts.send.length === sendG0);
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+const pvEsc = await pv();
+check('G náhled: Esc zavře náhled, panel emotů zůstane otevřený', pvEsc?.open === false && pvEsc.picker === true, JSON.stringify(pvEsc));
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] [data-act="menu"]');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] .uc-gl-menu [data-act="preview"]');
+check('G náhled jiného GIFu: jeho tagy (dog)', (await pv())?.tags === 'dog');
+await ev(`document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-preview').click()`);
+check('G náhled: klik mimo (na pozadí) zavře', (await pv())?.open === false);
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0d"] [data-act="menu"]');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0d"] .uc-gl-menu [data-act="preview"]');
+await glClick('.uc-gl-preview [data-act="preview-close"]');
+const pvX = await pv();
+check('G náhled: × zavře, panel zůstane', pvX?.open === false && pvX.picker === true, JSON.stringify(pvX));
 await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = 'cat'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 check('G hledání v tazích → GET s q=cat, 2 GIFy', await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 2`, 3000) && posts.library.some((u) => /[?&]q=cat/.test(u)), JSON.stringify(await gl()));
 await ev(`(() => { const i = document.querySelector('.uc-gl-search input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
@@ -813,6 +854,14 @@ check('G2 mod: taby GIFy | Zamítnuté GIFy + „Možné duplikáty (1)“', awa
 check('G2 náhled zamítnutého: 404 s prvním tokenem → nový token (POST access-token) → načteno', await until(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.src.includes(${JSON.stringify(`t=${goodTok}`)}) && i.complete && i.naturalWidth > 0)`, 8000),
   JSON.stringify({ token: posts.token, tok: posts.mediaTok }));
 check('G2 schválený GIF v duplikátu bez tokenu', await ev(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.getAttribute('src') === ${JSON.stringify(murl(hex(11)))})`) === true);
+// Duplikát: klik na GIF = náhled (zamítnutý s tokenem), nabídka ⋯ = Náhled.
+await glClick('.uc-gl-pair-i[data-id$="0e"] [data-act="preview"]');
+const pvDup = await pv();
+check('G2 duplikát: klik → náhled zamítnutého s tokenem, stav a použití', pvDup?.open && pvDup.src.includes(`t=${goodTok}`) && pvDup.meta === 'Zamítnutý · použito 6×', JSON.stringify(pvDup));
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+check('G2 duplikát: nabídka ⋯ s „Náhled“', await glClick('.uc-gl-pair-i[data-id$="0b"] [data-act="menu"]') && await ev(`[...document.querySelectorAll('.uc-gl-pair-i[data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Náhled'
+  && await ev(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-menu:not([hidden])').length`) === 1, 'jen jedna nabídka (stejné médium je i v knihovně)');
+await glClick('.uc-gl-pair-i[data-id$="0b"] [data-act="menu"]');
 check('G2 token jen v chrome.storage.session, ne v localStorage', await ev(`chrome.storage.session.get('uc_gif_token').then(r => r.uc_gif_token)`) === goodTok
   && await ev(`Object.keys(localStorage).every(k => !String(localStorage.getItem(k)).includes('tk-'))`) === true);
 // Duplikát: 409 already_decided → skrýt a obnovit seznam
@@ -824,30 +873,73 @@ check('G2 „Nechat první“ → POST keep-first; 409 → návrh pryč + nové 
   && posts.dupAct.some((x) => x.id === '4' && x.action === 'keep-first') && posts.dups.length > dupsGet, JSON.stringify({ act: posts.dupAct, dups: posts.dups.length }));
 mock.dupAct = null;
 // Odebrat z knihovny (unapprove) přes menu
-await glClick('.uc-gl-i[data-id$="0b"] [data-act="menu"]');
-check('G2 menu GIFu: Odebrat z knihovny / Trvale zahodit…', await ev(`[...document.querySelectorAll('.uc-gl-i[data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Odebrat z knihovny|Trvale zahodit…');
-await glClick('.uc-gl-i[data-id$="0b"] [data-act="unapprove"]');
-check('G2 Odebrat z knihovny → POST unapprove, GIF z knihovny pryč', await until(`!document.querySelector('.uc-gl-i[data-id$="0b"]')`, 4000) && posts.media.some((x) => x.id === hex(11) && x.action === 'unapprove'), JSON.stringify(posts.media));
-// Trvale zahodit schválený: jen s potvrzením „Zmizí i ze starých zpráv“
-await glClick('.uc-gl-i[data-id$="0c"] [data-act="menu"]');
-await glClick('.uc-gl-i[data-id$="0c"] [data-act="purge-ask"]');
-check('G2 Trvale zahodit… → potvrzení „Zmizí i ze starých zpráv.“', (await gl())?.confirm === 'Zmizí i ze starých zpráv.' && !posts.media.some((x) => x.id === hex(12)), JSON.stringify(await gl()));
-await glClick('[data-act="confirm-yes"]');
-check('G2 potvrzeno → POST purge', await until(`!document.querySelector('.uc-gl-i[data-id$="0c"]')`, 4000) && posts.media.some((x) => x.id === hex(12) && x.action === 'purge'));
-// Zamítnuté GIFy
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="menu"]');
+check('G2 menu GIFu: Náhled / Odebrat z knihovny / Trvale zahodit…', await ev(`[...document.querySelectorAll('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Náhled|Odebrat z knihovny|Trvale zahodit…');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="unapprove"]');
+check('G2 Odebrat z knihovny → POST unapprove, GIF z knihovny pryč', await until(`!document.querySelector('.uc-gl-i[data-sec="lib"][data-id$="0b"]')`, 4000) && posts.media.some((x) => x.id === hex(11) && x.action === 'unapprove'), JSON.stringify(posts.media));
+// Trvale zahodit schválený: dialog se dvěma variantami + Zrušit a vysvětlením (2026-09-27)
+const cf = () => ev(`(() => { const c = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-confirm'); if (!c || c.hidden) return null;
+  return { kind: c.dataset.kind, title: c.querySelector('b').textContent, lines: [...c.querySelectorAll('p')].map(p => p.textContent), btns: [...c.querySelectorAll('button')].map(b => b.textContent).join('|') }; })()`);
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] [data-act="menu"]');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] [data-act="purge-ask"]');
+const cf1 = await cf();
+check('G2 Trvale zahodit… → dialog „Zrušit | Zahodit, zprávy nechat | Zahodit i se zprávami“ s vysvětlením', cf1?.title === 'Trvale zahodit GIF?' && cf1.btns === 'Zrušit|Zahodit, zprávy nechat|Zahodit i se zprávami'
+  && cf1.lines.length === 2 && cf1.lines[1].includes('7 dní') && !posts.media.some((x) => x.id === hex(12)), JSON.stringify(cf1));
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+check('G2 Esc zavře dialog (nic neodejde), panel zůstane', await cf() === null && !posts.media.some((x) => x.id === hex(12)) && await ev(`!document.querySelector('.uc-ep').classList.contains('hidden')`) === true);
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] [data-act="menu"]');
+await glClick('.uc-gl-i[data-sec="lib"][data-id$="0c"] [data-act="purge-ask"]');
+await glClick('[data-act="confirm-keep"]');
+check('G2 „Zahodit, zprávy nechat“ → POST purge { keepMessages: true }, GIF z knihovny pryč', await until(`!document.querySelector('.uc-gl-i[data-sec="lib"][data-id$="0c"]')`, 4000)
+  && posts.media.some((x) => x.id === hex(12) && x.action === 'purge' && x.body?.keepMessages === true), JSON.stringify(posts.media.at(-1)));
+// Zamítnuté GIFy + Stažené / Ke smazání
+const DISC = (n, status, extra = {}) => ({ mediaId: hex(n), url: murl(hex(n)), kind: 'gif', width: 200, height: 100, tags: ['zahozeny'], status, purgedAt: Date.now() - 3600_000, purgedBy: 'twitch:modik', purgeAt: status === 'purging' ? Date.now() + 6 * 86400000 - 60_000 : null, restoreTo: 'approved', ...extra });
+mock.wd = [DISC(21, 'withdrawn')];
+mock.pg = [DISC(22, 'purging')];
+mock.rejMedia.add(hex(22));
 await glClick('[data-gl-tab="rej"]');
 check('G2 Zamítnuté GIFy → GET rejected, 2 GIFy', await until(`document.querySelectorAll('.uc-gl-grid--rej .uc-gl-i').length === 2`, 5000) && posts.rejected.some((u) => /channel=robdiesalot/.test(u)), JSON.stringify(await gl()));
 check('G2 zamítnuté náhledy s tokenem', await until(`[...document.querySelectorAll('.uc-gl-grid--rej img.uc-gif-media')].every(i => i.src.includes(${JSON.stringify(`t=${goodTok}`)}) && i.complete && i.naturalWidth > 0)`, 6000));
 check('G2 kdo zamítl + kdy se smaže', /^Zamítl modik \(Twitch\) · smaže se za 13 dní$/.test(await ev(`document.querySelector('.uc-gl-grid--rej .uc-gl-meta').textContent`) || ''), await ev(`document.querySelector('.uc-gl-grid--rej .uc-gl-meta').textContent`));
 check('G2 akce Schválit / Vault / Trvale zahodit', await ev(`[...document.querySelectorAll('.uc-gl-grid--rej .uc-gl-i')[0].querySelectorAll('.uc-gl-acts button')].map(b => b.textContent).join('|')`) === 'Schválit|Vault|Trvale zahodit');
+// Klik na zamítnutý GIF = náhled (kdo a kdy zamítl, s tokenem)
+await glClick('.uc-gl-grid--rej .uc-gl-i[data-id$="0f"] [data-act="preview"]');
+const pvRej = await pv();
+check('G2 zamítnuté: klik → náhled s tokenem, „Zamítl modik (Twitch) · <kdy>“', pvRej?.open && pvRej.src.includes(`t=${goodTok}`) && /^Zamítl modik \(Twitch\) · \d+\. \d+\. \d+:\d\d$/.test(pvRej.meta), JSON.stringify(pvRej));
+await glClick('.uc-gl-preview [data-act="preview-close"]');
+// Sekce Stažené GIFy / Ke smazání
+check('G2 sekce „Stažené GIFy (1)“ a „Ke smazání (1)“ (GET withdrawn + purging)', await until(`document.querySelectorAll('.uc-gl-grid--disc .uc-gl-i').length === 2`, 5000)
+  && await ev(`[...document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-h')].map(h => h.textContent).join('|')`) === 'Zamítnuté (2 GIFy)|Stažené GIFy (1)|Ke smazání (1)'
+  && posts.disc.some((u) => /withdrawn\?channel=robdiesalot/.test(u)) && posts.disc.some((u) => /purging\?channel=robdiesalot/.test(u)), await ev(`[...document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-h')].map(h => h.textContent).join('|')`));
+const disc = await ev(`(() => { const q = (s) => document.querySelector(s); const pg = q('.uc-gl-grid--pg .uc-gl-i'), wd = q('.uc-gl-grid--wd .uc-gl-i');
+  return { pgMeta: pg?.querySelector('.uc-gl-meta')?.textContent, pgBtns: [...pg.querySelectorAll('.uc-gl-acts button')].map(b => b.textContent).join('|'), pgTok: pg?.querySelector('img')?.src.includes('t='),
+    wdMeta: wd?.querySelector('.uc-gl-meta')?.textContent, wdBtns: [...wd.querySelectorAll('.uc-gl-acts button')].map(b => b.textContent).join('|'), wdTok: wd?.querySelector('img')?.src.includes('t=') }; })()`);
+check('G2 Ke smazání: odpočet „smaže se za 6 dní“ + Obnovit (náhled s tokenem); Stažené: Odstranit ze serveru (bez tokenu)',
+  disc?.pgMeta === 'Zahodil modik (Twitch) · smaže se za 6 dní' && disc.pgBtns === 'Obnovit' && disc.pgTok === true
+  && disc.wdMeta === 'Zahodil modik (Twitch) · zprávy zůstaly' && disc.wdBtns === 'Odstranit ze serveru' && disc.wdTok === false, JSON.stringify(disc));
+await glClick('.uc-gl-grid--pg .uc-gl-i [data-act="preview"]');
+check('G2 Ke smazání: náhled s tokenem a odpočtem', / · smaže se za 6 dní$/.test((await pv())?.meta || '') && (await pv()).src.includes('t='), JSON.stringify(await pv()));
+await ev(`document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-preview').click()`);
+mock.pg = [];
+await glClick('.uc-gl-grid--pg .uc-gl-i [data-act="restore"]');
+check('G2 Obnovit → POST restore, sekce Ke smazání zmizí, hláška „obnoven zpět do knihovny“', await until(`!document.querySelector('.uc-gl-grid--pg')`, 4000)
+  && posts.media.some((x) => x.id === hex(22) && x.action === 'restore') && (await gl())?.msg === 'GIF obnoven zpět do knihovny.', JSON.stringify(await gl()));
+await glClick('.uc-gl-grid--wd .uc-gl-i [data-act="remove-ask"]');
+const cf2 = await cf();
+check('G2 Odstranit ze serveru → potvrzení „Staré zprávy ukážou [GIF nedostupný]. Nejde vrátit.“', cf2?.kind === 'remove-file' && cf2.lines[0] === 'Staré zprávy ukážou [GIF nedostupný]. Nejde vrátit.' && cf2.btns === 'Zrušit|Odstranit ze serveru'
+  && !posts.media.some((x) => x.id === hex(21)), JSON.stringify(cf2));
+mock.wd = [];
+await glClick('[data-act="confirm-remove"]');
+check('G2 … POST remove-file, stažený GIF pryč', await until(`!document.querySelector('.uc-gl-grid--wd')`, 4000) && posts.media.some((x) => x.id === hex(21) && x.action === 'remove-file'));
 await glClick('.uc-gl-grid--rej .uc-gl-i[data-id$="0f"] [data-act="vault"]');
 check('G2 Vault → POST vault, „Ve vaultu“', await until(`document.querySelector('.uc-gl-grid--rej .uc-gl-i[data-id$="0f"] [data-act="vault"]')?.textContent === 'Ve vaultu'`, 4000) && posts.media.some((x) => x.id === hex(15) && x.action === 'vault'));
 await glClick('.uc-gl-grid--rej .uc-gl-i[data-id$="10"] [data-act="approve"]');
 check('G2 Schválit → POST approve, pryč ze zamítnutých', await until(`!document.querySelector('.uc-gl-grid--rej .uc-gl-i[data-id$="10"]')`, 4000) && posts.media.some((x) => x.id === hex(16) && x.action === 'approve'));
 await glClick('.uc-gl-grid--rej .uc-gl-i[data-id$="0f"] [data-act="purge-ask"]');
-check('G2 Trvale zahodit zamítnutý → potvrzení', (await gl())?.confirm === 'GIF se smaže natrvalo, nejde vrátit.');
-await glClick('[data-act="confirm-yes"]');
-check('G2 … POST purge', await until(`!document.querySelector('.uc-gl-grid--rej .uc-gl-i')`, 4000) && posts.media.some((x) => x.id === hex(15) && x.action === 'purge'));
+check('G2 Trvale zahodit zamítnutý → stejný dialog se dvěma variantami', (await cf())?.btns === 'Zrušit|Zahodit, zprávy nechat|Zahodit i se zprávami');
+await glClick('[data-act="confirm-purge"]');
+check('G2 „Zahodit i se zprávami“ → POST purge { keepMessages: false }', await until(`!document.querySelector('.uc-gl-grid--rej .uc-gl-i')`, 4000)
+  && posts.media.some((x) => x.id === hex(15) && x.action === 'purge' && x.body?.keepMessages === false), JSON.stringify(posts.media.at(-1)));
 await ev(`document.getElementById('btn-emotes').click()`);
 
 // ---- fáze E (mod + Dev mód): schvalování jako divák ----
@@ -863,6 +955,27 @@ const sendE = posts.send.length;
 await clickSend();
 check('E Dev mód moda → POST /chat/send s gifReview: true', await waitFor(() => posts.send.length > sendE) && posts.send.at(-1).gifReview === true, JSON.stringify(posts.send.at(-1)));
 await ev(`chrome.storage.sync.get('uc_config').then((r) => chrome.storage.sync.set({ uc_config: { ...(r.uc_config || {}), devMode: false } })).then(() => true)`);
+
+// ---- fáze H: SSE gif-media — zahození / obnova / odstranění souboru překreslí zprávy s GIFem (2026-09-27) ----
+mock.mod = false;
+await boot();
+await until(`!!document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif img')`, 5000);
+const gm = (id) => ev(`(() => { const m = document.querySelector('.msg[data-msg-id="${id}"]'); if (!m) return null;
+  return { deleted: m.classList.contains('uc-deleted'), img: !!m.querySelector('.uc-gif img.uc-gif-media'), label: m.querySelector('.uc-gif-fallback')?.textContent || null, text: m.querySelector('.tx')?.textContent || '' }; })()`);
+mock.sse.push(['gif-media', { channel: 'jiny', mediaId: MEDIA.ok, state: 'removed' }]);
+mock.sse.push(['gif-media', { channel: 'robdiesalot', mediaId: MEDIA.ok, state: 'removed' }]);
+check('H gif-media removed → obě zprávy s médiem „smazané“ bez GIFu (cizí kanál ignorován)', await until(`(() => { const a = document.querySelector('.msg[data-msg-id="gif-5"]'), b = document.querySelector('.msg[data-msg-id="gif-8"]'); return !!a && !!b && a.classList.contains('uc-deleted') && b.classList.contains('uc-deleted') && !a.querySelector('.uc-gif') && !b.querySelector('.uc-gif'); })()`, 6000),
+  JSON.stringify([await gm('gif-5'), await gm('gif-8')]));
+mock.sse.push(['gif-media', { channel: 'robdiesalot', mediaId: MEDIA.ok, state: 'visible', messages: [
+  { platform: 'twitch', id: 'gif-5', username: 'Divak', userId: 'u9', message: 'z historie', timestamp: now - 58000, historical: true, gif: { url: murl(MEDIA.ok), kind: 'gif', width: 498, height: 280 } },
+  { platform: 'twitch', id: 'gif-neni', username: 'Divak', userId: 'u9', message: 'nenačtená', timestamp: now - 90000, historical: true, gif: { url: murl(MEDIA.ok), kind: 'gif', width: 498, height: 280 } },
+] }]);
+check('H gif-media visible → zpráva obnovená na místě s textem i GIFem (img)', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-5"]'); return !!m && !m.classList.contains('uc-deleted') && !!m.querySelector('.uc-gif img.uc-gif-media') && m.querySelector('.tx')?.textContent === 'z historie'; })()`, 6000),
+  JSON.stringify(await gm('gif-5')));
+check('H … zpráva, kterou chat nemá, se nepřidá; zpráva mimo událost zůstane smazaná', await ev(`!document.querySelector('.msg[data-msg-id="gif-neni"]')`) === true && (await gm('gif-8'))?.deleted === true);
+mock.sse.push(['gif-media', { channel: 'robdiesalot', mediaId: MEDIA.ok, state: 'unavailable' }]);
+check('H gif-media unavailable → místo GIFu „[GIF nedostupný]“, text zůstává', await until(`document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif--unavailable .uc-gif-fallback')?.textContent === '[GIF nedostupný]'`, 6000)
+  && (await gm('gif-5'))?.text === 'z historie' && !(await gm('gif-5')).img, JSON.stringify(await gm('gif-5')));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

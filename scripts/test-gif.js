@@ -223,6 +223,21 @@ Promise.all([
     check('clearDeleted: pryč uc-gif-held i uc-deleted, hidden false', !cls.has('uc-gif-held') && !cls.has('uc-deleted') && el.hidden === false);
   }
 
+  // --- Trvale zahodit (2026-09-27): unavailable štítek, SSE gif-media ---
+  check('normalizeGifMedia: unavailable jen true', g.normalizeGifMedia({ url: URL_OK, kind: 'gif', unavailable: true }).unavailable === true
+    && g.normalizeGifMedia({ url: URL_OK, kind: 'gif', unavailable: 'ano' }).unavailable === undefined && !('unavailable' in g.normalizeGifMedia({ url: URL_OK })));
+  check('GIF_UNAVAILABLE_TEXT', g.GIF_UNAVAILABLE_TEXT === '[GIF nedostupný]');
+  check('gifMediaHtml (OBS): unavailable → štítek bez média', g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }) === '<div class="uc-gif uc-gif--failed uc-gif--unavailable"><span class="uc-gif-fallback">[GIF nedostupný]</span></div>'
+    && !g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }).includes('<img'));
+  const ev = g.normalizeGifMediaEvent({ channel: 'RobDiesALot', mediaId: ID, state: 'visible', messages: [{ id: 'gif-1', platform: 'twitch' }, { id: 'x' }, null] }, 'robdiesalot');
+  check('normalizeGifMediaEvent: visible se zprávami (jen platné)', ev?.state === 'visible' && ev.mediaId === ID && eq(ev.messages.map((m) => m.id), ['gif-1']), JSON.stringify(ev));
+  check('normalizeGifMediaEvent: removed / unavailable bez zpráv', eq(g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'removed', messages: [{ id: 'a', platform: 'twitch' }] }, 'rob')?.messages, [])
+    && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'unavailable' }, 'rob')?.state === 'unavailable');
+  check('normalizeGifMediaEvent: jiný kanál / neznámý stav / špatné id → null', g.normalizeGifMediaEvent({ channel: 'jiny', mediaId: ID, state: 'removed' }, 'rob') === null
+    && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'purging' }, 'rob') === null && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: 'abc', state: 'removed' }, 'rob') === null);
+  check('gifMsgMediaId', g.gifMsgMediaId({ gif: { url: URL_OK } }) === ID && g.gifMsgMediaId({}) === null && g.gifMsgMediaId(null) === null);
+  check('gifShortDate', /^\d+\. \d+\. \d+:\d\d$/.test(g.gifShortDate(Date.UTC(2026, 8, 27, 10, 5))) && g.gifShortDate(0) === '' && g.gifShortDate('x') === '');
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

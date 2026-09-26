@@ -40,11 +40,14 @@ export function isGifMediaUrl(url, origins = null) {
 
 const dim = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 && n <= 20000 ? Math.round(n) : null; };
 
-/** `{ url, kind, width, height }` ze serveru → ověřené médium, nebo null. */
+/**
+ * `{ url, kind, width, height, unavailable? }` ze serveru → ověřené médium, nebo null. `unavailable` = soubor byl
+ * smazán ze serveru (stažený GIF „Odstranit ze serveru“) → místo média štítek „[GIF nedostupný]“.
+ */
 export function normalizeGifMedia(g, { origins = null } = {}) {
   if (!g || typeof g !== 'object' || !isGifMediaUrl(g.url, origins)) return null;
   const kind = String(g.kind || '').toLowerCase();
-  return { url: String(g.url), kind: KINDS.has(kind) ? kind : 'gif', width: dim(g.width), height: dim(g.height) };
+  return { url: String(g.url), kind: KINDS.has(kind) ? kind : 'gif', width: dim(g.width), height: dim(g.height), ...(g.unavailable === true ? { unavailable: true } : {}) };
 }
 
 export const isGifVideo = (g) => g?.kind === 'mp4';
@@ -307,6 +310,48 @@ function gifVideoObserver(win) {
 
 /** Štítek místo média, které se nenačetlo (odebráno z knihovny / trvale zahozeno). */
 export const GIF_REMOVED_TEXT = 'GIF odebrán';
+/** Štítek místo média staženého GIFu, jehož soubor mod odstranil ze serveru (zpráva zůstává). */
+export const GIF_UNAVAILABLE_TEXT = '[GIF nedostupný]';
+
+/** Obsah prvku `.uc-gif` → štítek místo média (video zastavit a odpojit od IO). */
+function gifFallback(doc, wrap, text, extraClass = '') {
+  const v = wrap.querySelector('video');
+  if (v) {
+    try { gifVideoObserver(doc.defaultView)?.unobserve(v); } catch { /* ignore */ }
+    try { v.pause(); v.removeAttribute('src'); v.load?.(); } catch { /* ignore */ }
+  }
+  const a = doc.createElement('span');
+  a.className = 'uc-gif-fallback';
+  a.textContent = text;
+  wrap.replaceChildren(a);
+  wrap.classList.add('uc-gif--failed');
+  if (extraClass) wrap.classList.add(extraClass);
+  wrap.classList.remove('uc-gif--nosize');
+}
+
+/**
+ * SSE `gif-media` (/nicknames/stream) → { mediaId, state: visible|removed|unavailable, messages } pro aktuální kanál,
+ * nebo null. `messages` (jen u visible) = zprávy s obsahem ve tvaru /chat/history (klient je vykreslí jako obnovené).
+ */
+export function normalizeGifMediaEvent(d, channel) {
+  if (!d || typeof d !== 'object' || !sameChannel(d.channel, channel)) return null;
+  const mediaId = /^[0-9a-f]{32}$/.test(String(d.mediaId || '')) ? String(d.mediaId) : null;
+  const state = ['visible', 'removed', 'unavailable'].includes(d.state) ? d.state : null;
+  if (!mediaId || !state) return null;
+  const messages = state === 'visible' && Array.isArray(d.messages) ? d.messages.filter((m) => m && typeof m === 'object' && m.id && m.platform) : [];
+  return { mediaId, state, messages };
+}
+
+/** Id média GIFu ve zprávě (`msg.gif.url`), nebo null. */
+export const gifMsgMediaId = (msg) => (msg?.gif?.url ? gifMediaIdOf(msg.gif.url) : null);
+
+/** Zpráva s GIFem ve zprávě `el` → štítek „[GIF nedostupný]“ (soubor smazán ze serveru). Vrací počet. */
+export function setGifUnavailable(doc, el) {
+  if (!el || typeof el.querySelectorAll !== 'function') return 0;
+  const list = [...el.querySelectorAll('.uc-gif')];
+  for (const w of list) gifFallback(doc, w, GIF_UNAVAILABLE_TEXT, 'uc-gif--unavailable');
+  return list.length;
+}
 
 /**
  * Médium GIFu jako prvek `<div class="uc-gif">` (do zprávy pod text, nebo do karty).
@@ -323,6 +368,8 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
   const wrap = doc.createElement('div');
   wrap.className = 'uc-gif';
   if (!g) return wrap;
+  // Soubor smazán ze serveru (stažený GIF) → štítek, nic nenačítat.
+  if (g.unavailable) { gifFallback(doc, wrap, GIF_UNAVAILABLE_TEXT, 'uc-gif--unavailable'); return wrap; }
   const fit = gifFitSize(g.width, g.height, maxW, maxH);
   const video = isGifVideo(g);
   const m = doc.createElement(video ? 'video' : 'img');
@@ -342,12 +389,7 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     log?.('Gif', `médium se nenačetlo ${g.url}${token ? ' (s tokenem)' : ''}`);
     // Hostitel si může říct o nový token a médium vykreslit znovu (zamítnuté GIFy moda) → true = vyřízeno.
     if (onError && onError({ wrap, url: g.url, token }) === true) return;
-    try { if (video) gifVideoObserver(doc.defaultView)?.unobserve(m); } catch { /* ignore */ }
-    const a = doc.createElement('span');
-    a.className = 'uc-gif-fallback';
-    a.textContent = GIF_REMOVED_TEXT;
-    wrap.replaceChildren(a);
-    wrap.classList.add('uc-gif--failed');
+    gifFallback(doc, wrap, GIF_REMOVED_TEXT);
   };
   m.addEventListener('error', fail);
   if (video) {
@@ -426,14 +468,17 @@ export function gifAlreadyDecidedText(status, decidedBy) {
 /** Dříve zamítnuto (karta moda): „Dříve zamítnuto 25. 9. 14:05 · modik (Twitch)“. */
 export function gifPrevRejectedText(pr) {
   if (!pr || typeof pr !== 'object') return '';
-  const at = Number(pr.at);
-  let when = '';
-  if (Number.isFinite(at) && at > 0) {
-    const d = new Date(at);
-    when = ` ${d.getDate()}. ${d.getMonth() + 1}. ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
-  }
+  const when = gifShortDate(pr.at);
   const by = pr.by ? ` · ${actorLabel(pr.by)}` : '';
-  return `Dříve zamítnuto${when}${by}`;
+  return `Dříve zamítnuto${when ? ` ${when}` : ''}${by}`;
+}
+
+/** Čas (ms) → „25. 9. 14:05“ (místní čas); neplatný → ''. */
+export function gifShortDate(ms) {
+  const at = Number(ms);
+  if (!Number.isFinite(at) || at <= 0) return '';
+  const d = new Date(at);
+  return `${d.getDate()}. ${d.getMonth() + 1}. ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /** Id média z URL `…/media/gif/<32 hex>` (nebo null). */
@@ -952,6 +997,7 @@ export class GifRequests {
 export function gifMediaHtml(gif) {
   const g = gif && isGifMediaUrl(gif.url) ? gif : null;
   if (!g) return '';
+  if (g.unavailable === true) return `<div class="uc-gif uc-gif--failed uc-gif--unavailable"><span class="uc-gif-fallback">${GIF_UNAVAILABLE_TEXT}</span></div>`;
   const fit = gifFitSize(g.width, g.height);
   const size = fit ? ` width="${fit.width}" height="${fit.height}" style="width:${fit.width}px;aspect-ratio:${g.width} / ${g.height}"` : '';
   const cls = `uc-gif${fit ? '' : ' uc-gif--nosize'}`;

@@ -11,7 +11,7 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText } from './gif.js';
+import { createGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate } from './gif.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining } from './soundboard.js';
 
@@ -673,16 +673,93 @@ export function normalizeDuplicate(x, opts = {}) {
   return { id: String(x.id), score: clamp(Number(x.score) || 0, 0, 1), first, second };
 }
 
+/** „1 den“ / „2 dny“ / „5 dní“ (tři tvary množného čísla). */
+export function gifDaysText(n) {
+  const a = Math.abs(Math.trunc(Number(n) || 0));
+  if (a === 1) return '1 den';
+  if (a >= 2 && a <= 4) return `${a} dny`;
+  return `${a} dní`;
+}
+
+/** Odpočet smazání: „smaže se za 6 dní“ / „smaže se dnes“ (zbytek dne se počítá jako celý den). */
+export function gifDeleteInText(at, now) {
+  const days = Math.ceil((Number(at) - now) / 86_400_000);
+  return days <= 0 ? 'smaže se dnes' : `smaže se za ${gifDaysText(days)}`;
+}
+
 /** „Zamítl modik (Twitch) · smaže se za 3 dny“ / „Vault — nesmaže se“. */
 export function rejectedMetaText(item, now) {
   const by = item?.rejectedBy ? `Zamítl ${actorLabel(item.rejectedBy)}` : 'Zamítnuto';
   if (item?.vault) return `${by} · Vault — nesmaže se`;
   if (!item?.deleteAt) return by;
-  const days = Math.ceil((item.deleteAt - now) / 86_400_000);
-  if (days <= 0) return `${by} · smaže se dnes`;
-  const d = days === 1 ? '1 den' : days >= 2 && days <= 4 ? `${days} dny` : `${days} dní`;
-  return `${by} · smaže se za ${d}`;
+  return `${by} · ${gifDeleteInText(item.deleteAt, now)}`;
 }
+
+/**
+ * Položka `/moderation/gif/withdrawn|purging` → { …médium, status: withdrawn|purging, purgedAt, purgedBy, purgeAt,
+ * restoreTo: approved|rejected }, nebo null.
+ */
+export function normalizeDiscardedItem(x, opts = {}) {
+  const base = normalizeLibraryItem({ ...x, tags: x?.tags || [] }, opts);
+  if (!base || !['withdrawn', 'purging'].includes(x.status)) return null;
+  return {
+    ...base, status: x.status, purgedAt: Number(x.purgedAt) || null, purgedBy: x.purgedBy ? String(x.purgedBy) : null,
+    purgeAt: Number(x.purgeAt) || null, restoreTo: x.restoreTo === 'approved' ? 'approved' : 'rejected',
+  };
+}
+
+/** „Zahodil modik (Twitch) · zprávy zůstaly“ (stažený) / „Zahodil modik (Twitch) · smaže se za 6 dní“ (ke smazání). */
+export function discardedMetaText(item, now) {
+  const by = item?.purgedBy ? `Zahodil ${actorLabel(item.purgedBy)}` : 'Zahozeno';
+  if (item?.status === 'withdrawn') return `${by} · zprávy zůstaly`;
+  if (!item?.purgeAt) return by;
+  return `${by} · ${gifDeleteInText(item.purgeAt, now)}`;
+}
+
+/** Rozměry a druh pro náhled: „498 × 280 px · GIF“ (bez rozměrů jen druh). */
+export function gifDimText(item) {
+  const kind = { gif: 'GIF', webp: 'WebP', mp4: 'MP4' }[item?.kind] || 'GIF';
+  return item?.width && item?.height ? `${item.width} × ${item.height} px · ${kind}` : kind;
+}
+
+/** „Použito 1×“. */
+const usedText = (n) => `Použito ${Math.max(0, Number(n) || 0)}×`;
+
+/**
+ * Řádek „kdo / kdy“ v náhledu podle sekce: knihovna (použití), zamítnuté (kdo, kdy, vault), duplikát (stav),
+ * stažené / ke smazání (kdo zahodil, kdy, co dál).
+ */
+export function gifPreviewMeta(item, sec, now) {
+  if (!item) return '';
+  const when = (ms) => (gifShortDate(ms) ? ` · ${gifShortDate(ms)}` : '');
+  switch (sec) {
+    case 'rej': {
+      const by = item.rejectedBy ? `Zamítl ${actorLabel(item.rejectedBy)}` : 'Zamítnuto';
+      return `${by}${when(item.rejectedAt)}${item.vault ? ' · Vault' : ''}`;
+    }
+    case 'dup': return `${item.status === 'approved' ? 'V knihovně' : item.status === 'rejected' ? 'Zamítnutý' : 'Čeká na schválení'} · ${usedText(item.useCount).toLowerCase()}`;
+    case 'wd': case 'pg': {
+      const by = item.purgedBy ? `Zahodil ${actorLabel(item.purgedBy)}` : 'Zahozeno';
+      return `${by}${when(item.purgedAt)} · ${item.status === 'withdrawn' ? 'zprávy zůstaly' : gifDeleteInText(item.purgeAt, now)}`;
+    }
+    default: return usedText(item.useCount);
+  }
+}
+
+/** Texty potvrzovacích dialogů (Trvale zahodit / Odstranit ze serveru). */
+export const GIF_CONFIRM_TEXT = {
+  purge: {
+    title: 'Trvale zahodit GIF?',
+    lines: [
+      'Zahodit, zprávy nechat: GIF zmizí z knihovny i ze zamítnutých, staré zprávy ho dál ukazují. Nový odkaz na něj se do chatu nepustí.',
+      'Zahodit i se zprávami: zprávy s GIFem se hned schovají a za 7 dní se GIF smaže ze serveru. Do té doby ho jde obnovit v Zamítnutých (Ke smazání).',
+    ],
+  },
+  'remove-file': {
+    title: 'Odstranit GIF ze serveru?',
+    lines: ['Staré zprávy ukážou [GIF nedostupný]. Nejde vrátit.'],
+  },
+};
 
 /** Chyba akce knihovny → česky. */
 export function gifLibraryErrorText(e) {
@@ -693,6 +770,9 @@ export function gifLibraryErrorText(e) {
     case 'not_mod': return 'Tohle můžou jen modi.';
     case 'not_rejected': return 'GIF už není mezi zamítnutými.';
     case 'not_approved': return 'GIF už není v knihovně.';
+    case 'already_purged': return 'GIF už je zahozený.';
+    case 'not_purging': return 'GIF už není ke smazání.';
+    case 'not_withdrawn': return 'GIF už není mezi staženými.';
     case 'rate_limited': return 'Moc rychle za sebou, chvíli počkej.';
     case 'not_ready': return 'Knihovna ještě není připravená, zkus to později.';
     default: return e?.status === 401 ? 'Přihlášení vypršelo, přihlas se znovu.' : 'Akce se nepovedla, zkus to znovu.';
@@ -709,8 +789,13 @@ const LIB_THUMB_H = 96;
 
 /**
  * Obsah záložky „GIFy“ (mount do panelu emotů). Divák bez odměny knihovnu vidí, poslat nemůže (hláška).
- * Mod / streamer: nahoře taby GIFy | Zamítnuté GIFy, v GIFech sekce „Možné duplikáty (N)“ a u GIFu menu
- * (Odebrat z knihovny / Trvale zahodit s potvrzením). Zamítnuté: Schválit / Vault / Trvale zahodit.
+ * Každá dlaždice má nabídku ⋯ s „Náhled“ (i divák v knihovně); náhled = překryv nad panelem (větší GIF, rozměry,
+ * tagy, u zamítnutých kdo / kdy; zavření ×, klik mimo, Esc). V knihovně klik posílá GIF, v Zamítnutých a
+ * duplikátech otevře náhled.
+ * Mod / streamer: nahoře taby GIFy | Zamítnuté GIFy, v GIFech sekce „Možné duplikáty (N)“ a v nabídce GIFu
+ * Odebrat z knihovny / Trvale zahodit… Zamítnuté: Schválit / Vault / Trvale zahodit, pod nimi sekce „Stažené GIFy“
+ * (Odstranit ze serveru s potvrzením) a „Ke smazání“ (odpočet, Obnovit). „Trvale zahodit“ = dialog se dvěma
+ * variantami (zprávy nechat / i se zprávami, spec 2026-09-27-gif-nahled-zahozeni-design.md).
  *
  * @param {object} o
  * @param {HTMLElement} o.pane                     kontejner záložky
@@ -737,7 +822,12 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   const st = {
     tab: 'lib', q: '', items: [], cursor: null, loaded: false, loading: false, error: '', channel: '',
     rej: [], rejBefore: null, rejLoaded: false, rejLoading: false, rejError: '',
-    dups: [], dupsLoaded: false, token: null, tokenRetried: false, visible: false, flash: false, menu: null, confirm: null, msg: '',
+    // Zahozené: wd = Stažené GIFy (withdrawn), pg = Ke smazání (purging).
+    wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, discLoading: false,
+    dups: [], dupsLoaded: false, token: null, tokenRetried: false, visible: false, flash: false,
+    // menu = klíč dlaždice `<sekce>:<mediaId>` (stejné médium může být v knihovně i v duplikátech);
+    // confirm = { kind: purge|remove-file, mediaId, from }; preview = { sec, id }.
+    menu: null, confirm: null, preview: null, msg: '',
   };
 
   pane.classList.add('uc-gl');
@@ -750,6 +840,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     <div class="uc-gl-search"><input type="search" placeholder="Hledat GIF podle tagů…" autocomplete="off" spellcheck="false" aria-label="Hledat GIF"></div>
     <div class="uc-gl-msg" role="alert" hidden></div>
     <div class="uc-gl-body"></div>
+    <div class="uc-gl-preview" role="dialog" aria-modal="true" aria-label="Náhled GIFu" hidden></div>
     <div class="uc-gl-confirm" role="alertdialog" hidden></div>`;
   const tabsEl = pane.querySelector('.uc-gl-tabs');
   const rewardEl = pane.querySelector('.uc-gl-reward');
@@ -758,6 +849,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   const msgEl = pane.querySelector('.uc-gl-msg');
   const body = pane.querySelector('.uc-gl-body');
   const confirmEl = pane.querySelector('.uc-gl-confirm');
+  const previewEl = pane.querySelector('.uc-gl-preview');
 
   const ch = () => String(channel?.() || '').toLowerCase();
 
@@ -866,6 +958,40 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     }
   }
 
+  /**
+   * Zahozené GIFy kanálu (Stažené = withdrawn, Ke smazání = purging) do záložky Zamítnuté. `which` = jen jedna sekce
+   * (další stránka), jinak obě. Ke smazání se ukazuje s tokenem (purging jen s tokenem).
+   */
+  let discSeq = 0;
+  async function loadDiscarded({ which = null, more = false } = {}) {
+    // Nové načtení (po akci, přepnutí záložky) vždy — platí výsledek posledního; další stránka jen nad hotovým.
+    if (!isMod() || (more && st.discLoading)) return;
+    const c = ch();
+    const seq = ++discSeq;
+    st.discLoading = true;
+    const kinds = which ? [which] : ['withdrawn', 'purging'];
+    const key = (k) => (k === 'withdrawn' ? 'wd' : 'pg');
+    try {
+      await ensureToken();
+      const res = await Promise.all(kinds.map((k) => {
+        const before = more ? st[`${key(k)}Before`] : null;
+        return api(`/moderation/gif/${k}?channel=${encodeURIComponent(c)}${before ? `&before=${encodeURIComponent(before)}` : ''}`)
+          .then((j) => ({ k, j }), (e) => ({ k, e }));
+      }));
+      if (seq !== discSeq || c !== ch()) return;
+      for (const { k, j, e } of res) {
+        if (e) { L(`${k} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); continue; }
+        const items = (Array.isArray(j?.items) ? j.items : []).map((x) => normalizeDiscardedItem(x, opts)).filter(Boolean);
+        st[key(k)] = more ? [...st[key(k)], ...items.filter((x) => !st[key(k)].some((y) => y.mediaId === x.mediaId))] : items;
+        st[`${key(k)}Before`] = j?.nextBefore || null;
+        L(`${k === 'withdrawn' ? 'stažené' : 'ke smazání'} ${c}: ${items.length}${more ? ' (další stránka)' : ''}`);
+      }
+      if (!which) st.discLoaded = true;
+    } finally {
+      if (seq === discSeq) { st.discLoading = false; paintBody(); }
+    }
+  }
+
   async function ensureToken() {
     if (st.token || !tokens) return st.token;
     st.token = await tokens.get();
@@ -902,24 +1028,44 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     pick.setAttribute('aria-label', `Poslat GIF${item.tags.length ? `: ${item.tags.slice(0, 3).join(', ')}` : ''}`);
     pick.appendChild(thumb(item));
     el.appendChild(pick);
-    if (isMod()) {
-      el.insertAdjacentHTML('beforeend', `<button type="button" class="uc-gl-more" data-act="menu" aria-label="Akce s GIFem" aria-haspopup="menu" title="Akce">⋯</button>
-        <div class="uc-gl-menu" role="menu"${st.menu === item.mediaId ? '' : ' hidden'}>
-          <button type="button" role="menuitem" data-act="unapprove">Odebrat z knihovny</button>
-          <button type="button" role="menuitem" class="uc-gl-danger" data-act="purge-ask">Trvale zahodit…</button>
-        </div>`);
-    }
+    // Nabídka ⋯ pro všechny (Náhled), mod navíc Odebrat z knihovny / Trvale zahodit.
+    tileMenu(el, 'lib', item.mediaId, isMod() ? [['unapprove', 'Odebrat z knihovny'], ['purge-ask', 'Trvale zahodit…', true]] : []);
     return el;
+  }
+
+  /** Dlaždice sekce `sec` (lib | rej | dup | wd | pg) — klíč nabídky a náhledu. */
+  function tileKey(el, sec, mediaId, extra = '') {
+    el.dataset.id = mediaId;
+    el.dataset.sec = sec;
+    el.dataset.mkey = `${sec}:${extra ? `${extra}:` : ''}${mediaId}`;
+    return el.dataset.mkey;
+  }
+
+  /** Tlačítko ⋯ + nabídka (první položka vždy „Náhled“). `items` = [[act, text, danger?]]. */
+  function tileMenu(el, sec, mediaId, items = [], extra = '') {
+    const key = tileKey(el, sec, mediaId, extra);
+    const btns = [['preview', 'Náhled'], ...items].map(([act, text, danger]) => `<button type="button" role="menuitem"${danger ? ' class="uc-gl-danger"' : ''} data-act="${act}">${esc(text)}</button>`).join('');
+    el.insertAdjacentHTML('beforeend', `<button type="button" class="uc-gl-more" data-act="menu" aria-label="Akce s GIFem" aria-haspopup="menu" title="Akce">⋯</button>
+      <div class="uc-gl-menu" role="menu"${st.menu === key ? '' : ' hidden'}>${btns}</div>`);
+  }
+
+  /** Náhled dlaždice (Zamítnuté, duplikáty, zahozené): klik otevře náhled. */
+  function previewBox(item, withToken) {
+    const box = doc.createElement('button');
+    box.type = 'button';
+    box.className = 'uc-gl-pick uc-gl-pick--preview';
+    box.dataset.act = 'preview';
+    box.title = 'Náhled';
+    box.setAttribute('aria-label', `Náhled GIFu${item.tags?.length ? `: ${item.tags.slice(0, 3).join(', ')}` : ''}`);
+    box.appendChild(thumb(item, { withToken }));
+    return box;
   }
 
   function rejItem(item) {
     const el = doc.createElement('div');
     el.className = `uc-gl-i uc-gl-i--rej${item.vault ? ' uc-gl-i--vault' : ''}`;
-    el.dataset.id = item.mediaId;
-    const box = doc.createElement('div');
-    box.className = 'uc-gl-pick uc-gl-pick--static';
-    box.appendChild(thumb(item, { withToken: true }));
-    el.appendChild(box);
+    el.appendChild(previewBox(item, true));
+    tileMenu(el, 'rej', item.mediaId);
     const meta = doc.createElement('div');
     meta.className = 'uc-gl-meta';
     meta.textContent = rejectedMetaText(item, clock());
@@ -930,6 +1076,36 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="purge-ask">Trvale zahodit</button>
     </div>`);
     return el;
+  }
+
+  /** Stažený GIF (withdrawn): Odstranit ze serveru. Ke smazání (purging): odpočet + Obnovit (náhled s tokenem). */
+  function discItem(item) {
+    const wd = item.status === 'withdrawn';
+    const el = doc.createElement('div');
+    el.className = `uc-gl-i uc-gl-i--${item.status}`;
+    el.appendChild(previewBox(item, !wd));
+    tileMenu(el, wd ? 'wd' : 'pg', item.mediaId);
+    const meta = doc.createElement('div');
+    meta.className = 'uc-gl-meta';
+    meta.textContent = discardedMetaText(item, clock());
+    el.appendChild(meta);
+    el.insertAdjacentHTML('beforeend', wd
+      ? '<div class="uc-gl-acts"><button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="remove-ask">Odstranit ze serveru</button></div>'
+      : `<div class="uc-gl-acts"><button type="button" class="uc-gif-btn uc-gif-btn--approve" data-act="restore" title="${esc(item.restoreTo === 'approved' ? 'Vrátit do knihovny' : 'Vrátit mezi zamítnuté')}">Obnovit</button></div>`);
+    return el;
+  }
+
+  /** Sekce záložky Zamítnuté: nadpis + mřížka + „Načíst další“. */
+  function section(title, items, render, moreAct, cls) {
+    const h = doc.createElement('div');
+    h.className = 'uc-gl-h';
+    h.textContent = title;
+    body.appendChild(h);
+    const grid = doc.createElement('div');
+    grid.className = `uc-gl-grid ${cls}`;
+    for (const it of items) grid.appendChild(render(it));
+    body.appendChild(grid);
+    if (moreAct) body.insertAdjacentHTML('beforeend', `<button type="button" class="uc-gl-moreload" data-act="${moreAct}">Načíst další</button>`);
   }
 
   function dupSection() {
@@ -949,7 +1125,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       for (const [lbl, m] of [['První', d.first], ['Druhý', d.second]]) {
         const c = doc.createElement('div');
         c.className = `uc-gl-pair-i uc-gl-pair-i--${m.status}`;
-        c.appendChild(thumb(m, { withToken: m.status === 'rejected' }));
+        c.appendChild(previewBox(m, m.status === 'rejected'));
+        tileMenu(c, 'dup', m.mediaId, [], d.id);
         const cap = doc.createElement('div');
         cap.className = 'uc-gl-pair-cap';
         cap.textContent = `${lbl} · ${m.status === 'approved' ? 'v knihovně' : m.status === 'rejected' ? 'zamítnutý' : 'čeká'} · použito ${m.useCount}×`;
@@ -985,17 +1162,10 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       if (st.rejLoading && !st.rej.length) body.innerHTML = '<div class="uc-gl-empty">Načítám zamítnuté GIFy…</div>';
       else if (st.rejError) body.innerHTML = `<div class="uc-gl-empty">${esc(st.rejError)} <button type="button" class="uc-gl-retry" data-act="retry">Zkusit znovu</button></div>`;
       else if (!st.rej.length) body.innerHTML = '<div class="uc-gl-empty">Žádné zamítnuté GIFy.</div>';
-      else {
-        const h = doc.createElement('div');
-        h.className = 'uc-gl-h';
-        h.textContent = `Zamítnuté (${gifCountText(st.rej.length)}${st.rejBefore ? '+' : ''})`;
-        body.appendChild(h);
-        const grid = doc.createElement('div');
-        grid.className = 'uc-gl-grid uc-gl-grid--rej';
-        for (const it of st.rej) grid.appendChild(rejItem(it));
-        body.appendChild(grid);
-        if (st.rejBefore) body.insertAdjacentHTML('beforeend', '<button type="button" class="uc-gl-moreload" data-act="more-rej">Načíst další</button>');
-      }
+      else section(`Zamítnuté (${gifCountText(st.rej.length)}${st.rejBefore ? '+' : ''})`, st.rej, rejItem, st.rejBefore ? 'more-rej' : null, 'uc-gl-grid--rej');
+      // Zahozené: jen když nějaké jsou (divák / mod bez nich je nevidí).
+      if (st.wd.length) section(`Stažené GIFy (${st.wd.length}${st.wdBefore ? '+' : ''})`, st.wd, discItem, st.wdBefore ? 'more-wd' : null, 'uc-gl-grid--disc uc-gl-grid--wd');
+      if (st.pg.length) section(`Ke smazání (${st.pg.length}${st.pgBefore ? '+' : ''})`, st.pg, discItem, st.pgBefore ? 'more-pg' : null, 'uc-gl-grid--disc uc-gl-grid--pg');
     } else {
       const dups = dupSection();
       if (dups) body.appendChild(dups);
@@ -1013,38 +1183,131 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     }
     body.scrollTop = top;
     paintConfirm();
+    paintPreview();
   }
 
+  /**
+   * Potvrzení: Trvale zahodit = dvě varianty („Zahodit, zprávy nechat“ / „Zahodit i se zprávami“) + Zrušit
+   * s vysvětlením; Odstranit ze serveru (stažený) = jedno tlačítko + Zrušit.
+   */
   function paintConfirm() {
     const c = st.confirm;
     confirmEl.hidden = !c;
-    if (!c) { confirmEl.replaceChildren(); return; }
-    confirmEl.innerHTML = `<div class="uc-gl-confirm-box"><b>Trvale zahodit GIF?</b><p></p>
-      <div class="uc-gl-acts"><button type="button" class="uc-gif-btn" data-act="confirm-no">Zrušit</button>
-      <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="confirm-yes">Trvale zahodit</button></div></div>`;
-    confirmEl.querySelector('p').textContent = c.from === 'lib' ? 'Zmizí i ze starých zpráv.' : 'GIF se smaže natrvalo, nejde vrátit.';
+    if (!c) { confirmEl.replaceChildren(); delete confirmEl.dataset.kind; return; }
+    const t = GIF_CONFIRM_TEXT[c.kind] || GIF_CONFIRM_TEXT.purge;
+    confirmEl.dataset.kind = c.kind;
+    const btns = c.kind === 'remove-file'
+      ? '<button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="confirm-remove">Odstranit ze serveru</button>'
+      : '<button type="button" class="uc-gif-btn" data-act="confirm-keep">Zahodit, zprávy nechat</button><button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="confirm-purge">Zahodit i se zprávami</button>';
+    confirmEl.innerHTML = `<div class="uc-gl-confirm-box"><b></b>${t.lines.map(() => '<p></p>').join('')}
+      <div class="uc-gl-acts uc-gl-confirm-acts"><button type="button" class="uc-gif-btn" data-act="confirm-no">Zrušit</button>${btns}</div></div>`;
+    confirmEl.querySelector('b').textContent = t.title;
+    confirmEl.querySelectorAll('p').forEach((p, i) => { p.textContent = t.lines[i]; });
+  }
+
+  /** Položka náhledu podle sekce a id (data se mohly mezitím změnit → null = náhled zavřít). */
+  function previewItem(p) {
+    if (!p) return null;
+    const find = (list) => list.find((x) => x.mediaId === p.id) || null;
+    switch (p.sec) {
+      case 'lib': return find(st.items);
+      case 'rej': return find(st.rej);
+      case 'wd': return find(st.wd);
+      case 'pg': return find(st.pg);
+      case 'dup': { for (const d of st.dups) for (const m of [d.first, d.second]) if (m.mediaId === p.id) return m; return null; }
+      default: return null;
+    }
+  }
+  /** Náhled potřebuje token (zamítnuté, ke smazání, zamítnutý v duplikátu). */
+  const previewNeedsToken = (p, item) => p.sec === 'rej' || p.sec === 'pg' || (p.sec === 'dup' && item?.status === 'rejected');
+
+  /** Překryv náhledu nad GIF panelem: GIF ve větší velikosti (fit do panelu), rozměry, tagy, kdo / kdy. */
+  function paintPreview() {
+    const p = st.preview;
+    const item = previewItem(p);
+    if (p && !item) { st.preview = null; L(`náhled ${p.sec}:${p.id} zavřen — GIF už v seznamu není`); }
+    previewEl.hidden = !st.preview;
+    if (!st.preview) { if (previewEl.firstChild) { previewEl.replaceChildren(); delete previewEl.dataset.key; } return; }
+    const needTok = previewNeedsToken(p, item);
+    const key = `${p.sec}:${p.id}|${needTok ? st.token || '' : ''}`;
+    if (previewEl.dataset.key === key) return;   // stejný náhled — média znovu nenačítat
+    previewEl.dataset.key = key;
+    previewEl.innerHTML = `<div class="uc-gl-preview-box">
+        <button type="button" class="uc-gl-preview-x" data-act="preview-close" aria-label="Zavřít náhled" title="Zavřít (Esc)">×</button>
+        <div class="uc-gl-preview-media"></div>
+        <div class="uc-gl-preview-info"><div class="uc-gl-preview-dim"></div><div class="uc-gl-preview-tags"></div><div class="uc-gl-preview-meta"></div></div>
+      </div>`;
+    const maxW = Math.max(160, (pane.clientWidth || 360) - 44);
+    const maxH = Math.max(120, (pane.clientHeight || 360) - 150);
+    const m = createGifMedia(doc, item, { lazy: false, log, maxW, maxH, token: needTok ? st.token : null, onError: needTok ? onTokenMediaError : null });
+    m.classList.add('uc-gl-preview-gif');
+    previewEl.querySelector('.uc-gl-preview-media').appendChild(m);
+    previewEl.querySelector('.uc-gl-preview-dim').textContent = gifDimText(item);
+    const tags = previewEl.querySelector('.uc-gl-preview-tags');
+    if (item.tags?.length) for (const t of item.tags) { const s = doc.createElement('span'); s.className = 'uc-gl-tag'; s.textContent = t; tags.appendChild(s); }
+    else { tags.textContent = 'Bez tagů'; tags.classList.add('uc-gl-preview-tags--none'); }
+    previewEl.querySelector('.uc-gl-preview-meta').textContent = gifPreviewMeta(item, p.sec, clock());
+  }
+
+  function openPreview(sec, id) {
+    st.menu = null;
+    st.preview = { sec, id };
+    L(`náhled ${sec}:${id}`);
+    paintBody();
+    previewEl.querySelector('.uc-gl-preview-x')?.focus({ preventScroll: true });
+  }
+  function closePreview(why) {
+    if (!st.preview) return false;
+    L(`náhled zavřen (${why})`);
+    st.preview = null;
+    paintPreview();
+    return true;
   }
 
   // ---- akce ----
-  async function mediaAction(mediaId, action, from) {
-    L(`${action} ${mediaId} (${from})`);
+  /** Seznam dlaždic sekce (lib | rej | wd | pg). */
+  const LIST = { lib: 'items', rej: 'rej', wd: 'wd', pg: 'pg' };
+  const dropFrom = (from, mediaId) => { const k = LIST[from]; if (k) st[k] = st[k].filter((x) => x.mediaId !== mediaId); };
+
+  /** Hláška po akci. */
+  function actionMsg(action, r, body) {
+    switch (action) {
+      case 'unapprove': return 'GIF odebrán z knihovny.';
+      case 'purge': return body.keepMessages ? 'GIF zahozen, staré zprávy ho dál ukazují.' : 'GIF zahozen i se zprávami. Do 7 dní ho jde obnovit v sekci Ke smazání.';
+      case 'restore': return r?.status === 'approved' ? 'GIF obnoven zpět do knihovny.' : 'GIF obnoven zpět mezi zamítnuté.';
+      case 'remove-file': return 'Soubor GIFu je smazaný ze serveru.';
+      case 'approve': return 'GIF schválen do knihovny.';
+      case 'vault': return 'GIF je ve vaultu.';
+      default: return '';
+    }
+  }
+
+  /**
+   * Akce nad médiem (mod): POST /moderation/gif/:id/<action> { keepMessages? }. `from` = sekce dlaždice.
+   * Po zahození / obnově / odstranění souboru se dotčené seznamy načtou znovu (hned, když je záložka vidět).
+   */
+  async function mediaAction(mediaId, action, from, body = {}) {
+    L(`${action} ${mediaId} (${from})${action === 'purge' ? ` keepMessages=${!!body.keepMessages}` : ''}`);
     try {
-      const r = await api(`/moderation/gif/${encodeURIComponent(mediaId)}/${action}`, { method: 'POST', body: {} });
-      L(`${action} ${mediaId} → ok${r?.requests ? ` (žádostí ${r.requests})` : ''}`);
-      if (from === 'lib') st.items = st.items.filter((x) => x.mediaId !== mediaId);
-      if (from === 'rej') {
-        if (action === 'vault') st.rej = st.rej.map((x) => (x.mediaId === mediaId ? { ...x, vault: true } : x));
-        else st.rej = st.rej.filter((x) => x.mediaId !== mediaId);
-        if (action === 'approve') st.loaded = false;   // knihovna se při dalším zobrazení načte znovu
+      const r = await api(`/moderation/gif/${encodeURIComponent(mediaId)}/${action}`, { method: 'POST', body });
+      L(`${action} ${mediaId} → ok${r?.status ? ` (${r.status})` : ''}${r?.requests ? ` (žádostí ${r.requests})` : ''}`);
+      if (action === 'vault') st.rej = st.rej.map((x) => (x.mediaId === mediaId ? { ...x, vault: true } : x));
+      else dropFrom(from, mediaId);
+      if (action === 'approve' || (action === 'restore' && r?.status === 'approved')) st.loaded = false;   // knihovna znovu
+      if (action === 'unapprove' || (action === 'restore' && r?.status !== 'approved')) st.rejLoaded = false;
+      if (action === 'purge' || action === 'restore' || action === 'remove-file') st.discLoaded = false;
+      if (st.preview?.id === mediaId && action !== 'vault') st.preview = null;
+      showMsg(actionMsg(action, r, body));
+      if (st.visible && st.tab === 'rej') {
+        if (!st.rejLoaded) loadRejected();
+        if (!st.discLoaded) loadDiscarded();
       }
-      if (action === 'unapprove') st.rejLoaded = false;
-      showMsg(action === 'unapprove' ? 'GIF odebrán z knihovny.' : action === 'purge' ? 'GIF trvale zahozen.' : action === 'approve' ? 'GIF schválen do knihovny.' : action === 'vault' ? 'GIF je ve vaultu.' : '');
     } catch (e) {
       L(`${action} ${mediaId} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
       showMsg(gifLibraryErrorText(e));
       if (e?.status === 404 || e?.status === 409) {
-        if (from === 'lib') st.items = st.items.filter((x) => x.mediaId !== mediaId);
-        if (from === 'rej') st.rej = st.rej.filter((x) => x.mediaId !== mediaId);
+        dropFrom(from, mediaId);
+        if (from === 'wd' || from === 'pg') st.discLoaded = false;
       }
     }
     paintBody();
@@ -1088,6 +1351,9 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
 
   pane.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
   pane.addEventListener('click', (e) => {
+    // Klik mimo rámeček náhledu (na ztmavené pozadí) = zavřít.
+    if (e.target === previewEl) { closePreview('klik mimo'); return; }
+    if (e.target === confirmEl) { st.confirm = null; paintConfirm(); return; }
     const tab = e.target.closest('[data-gl-tab]');
     if (tab) {
       st.tab = tab.dataset.glTab;
@@ -1095,28 +1361,54 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       L(`tab ${st.tab}`);
       paintBody();
       if (st.tab === 'rej' && !st.rejLoaded) loadRejected();
+      if (st.tab === 'rej' && !st.discLoaded) loadDiscarded();
       if (st.tab === 'lib' && !st.loaded) loadLibrary();
       return;
     }
     const b = e.target.closest('[data-act]');
     if (!b) { if (st.menu) { st.menu = null; paintBody(); } return; }
-    const itemEl = b.closest('.uc-gl-i');
-    const id = itemEl?.dataset.id;
+    const tile = b.closest('[data-sec]');
+    const id = tile?.dataset.id;
+    const sec = tile?.dataset.sec;
     const act = b.dataset.act;
+    if (act === 'preview-close') { closePreview('×'); return; }
     if (act === 'retry') { if (st.tab === 'rej') loadRejected(); else loadLibrary(); return; }
     if (act === 'more') { loadLibrary({ more: true }); return; }
     if (act === 'more-rej') { loadRejected({ more: true }); return; }
+    if (act === 'more-wd') { loadDiscarded({ which: 'withdrawn', more: true }); return; }
+    if (act === 'more-pg') { loadDiscarded({ which: 'purging', more: true }); return; }
     if (act === 'confirm-no') { st.confirm = null; paintConfirm(); return; }
-    if (act === 'confirm-yes') { const c = st.confirm; st.confirm = null; paintConfirm(); if (c) mediaAction(c.mediaId, 'purge', c.from); return; }
+    if (act === 'confirm-keep' || act === 'confirm-purge' || act === 'confirm-remove') {
+      const c = st.confirm;
+      st.confirm = null;
+      paintConfirm();
+      if (!c) return;
+      if (act === 'confirm-remove') mediaAction(c.mediaId, 'remove-file', c.from);
+      else mediaAction(c.mediaId, 'purge', c.from, { keepMessages: act === 'confirm-keep' });
+      return;
+    }
     const dup = b.closest('.uc-gl-dup')?.dataset.dup;
     if (dup && /^keep-(first|second|both)$/.test(act)) { b.disabled = true; dupAction(dup, act); return; }
     if (!id) return;
     if (act === 'pick') { const it = st.items.find((x) => x.mediaId === id); if (it) pick(it); return; }
-    if (act === 'menu') { st.menu = st.menu === id ? null : id; paintBody(); return; }
+    if (act === 'menu') { const k = tile.dataset.mkey; st.menu = st.menu === k ? null : k; paintBody(); return; }
+    if (act === 'preview') { openPreview(sec, id); return; }
     if (act === 'unapprove') { st.menu = null; mediaAction(id, 'unapprove', 'lib'); return; }
-    if (act === 'purge-ask') { st.menu = null; st.confirm = { mediaId: id, from: st.tab }; paintBody(); return; }
+    if (act === 'purge-ask') { st.menu = null; st.confirm = { kind: 'purge', mediaId: id, from: sec }; L(`potvrzení trvale zahodit ${id} (${sec})`); paintBody(); return; }
+    if (act === 'remove-ask') { st.menu = null; st.confirm = { kind: 'remove-file', mediaId: id, from: sec }; L(`potvrzení odstranit ze serveru ${id}`); paintBody(); return; }
+    if (act === 'restore') { b.disabled = true; mediaAction(id, 'restore', sec); return; }
     if (act === 'approve' || act === 'vault') { b.disabled = true; mediaAction(id, act, 'rej'); }
   });
+  // Esc zavře náhled / potvrzení dřív, než zavře celý panel emotů (ten poslouchá keydown na dokumentu).
+  const onKey = (e) => {
+    if (e.key !== 'Escape' || !st.visible || (!st.preview && !st.confirm)) return;
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    e.preventDefault();
+    if (st.preview) closePreview('Esc');
+    else { st.confirm = null; paintConfirm(); }
+  };
+  doc.addEventListener('keydown', onKey, true);
   let searchT = null;
   search.addEventListener('input', () => {
     if (searchT) win.clearTimeout(searchT);
@@ -1127,6 +1419,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (body.scrollTop + body.clientHeight < body.scrollHeight - 80) return;
     if (st.tab === 'lib' && st.cursor && !st.loading) loadLibrary({ more: true });
     if (st.tab === 'rej' && st.rejBefore && !st.rejLoading) loadRejected({ more: true });
+    if (st.tab === 'rej' && !st.discLoading && (st.wdBefore || st.pgBefore)) loadDiscarded({ which: st.pgBefore ? 'purging' : 'withdrawn', more: true });
   }, { passive: true });
 
   // Odpočet odměny v hlavičce + pásek na záložce (1 s), jen když je co počítat.
@@ -1143,30 +1436,44 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     pane,
     show() {
       st.visible = true;
-      if (st.channel && st.channel !== ch()) { st.loaded = false; st.rejLoaded = false; st.dupsLoaded = false; st.items = []; st.rej = []; st.dups = []; st.token = null; }
+      if (st.channel && st.channel !== ch()) { st.loaded = false; st.rejLoaded = false; st.dupsLoaded = false; st.discLoaded = false; st.items = []; st.rej = []; st.wd = []; st.pg = []; st.dups = []; st.token = null; st.preview = null; }
       paintBody();
       if (!st.loaded) loadLibrary();
       if (isMod() && !st.dupsLoaded) loadDuplicates();
       if (st.tab === 'rej' && !st.rejLoaded) loadRejected();
+      if (st.tab === 'rej' && !st.discLoaded) loadDiscarded();
       refreshReward?.();
       arm();
       if (!(typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) && st.tab === 'lib') search.focus();
     },
-    hide() { st.visible = false; st.menu = null; st.confirm = null; arm(); },
+    hide() { st.visible = false; st.menu = null; st.confirm = null; st.preview = null; paintConfirm(); paintPreview(); arm(); },
     /** Stav odměny / role se změnil → hlavička, pásek, taby. */
     update() {
-      if (!isMod() && (st.tab === 'rej' || st.dups.length)) { st.tab = 'lib'; st.dups = []; st.dupsLoaded = false; }
+      if (!isMod() && (st.tab === 'rej' || st.dups.length)) {
+        st.tab = 'lib'; st.dups = []; st.dupsLoaded = false; st.wd = []; st.pg = []; st.discLoaded = false;
+        if (st.preview && st.preview.sec !== 'lib') st.preview = null;
+      }
       if (st.visible) { paintBody(); if (isMod() && !st.dupsLoaded) loadDuplicates(); } else paintReward();
       arm();
     },
     /** Přepnutí kanálu: data pryč, při dalším zobrazení znovu. */
     reset() {
-      Object.assign(st, { items: [], cursor: null, loaded: false, rej: [], rejBefore: null, rejLoaded: false, dups: [], dupsLoaded: false, token: null, tokenRetried: false, menu: null, confirm: null, tab: isMod() ? st.tab : 'lib' });
+      Object.assign(st, { items: [], cursor: null, loaded: false, rej: [], rejBefore: null, rejLoaded: false, wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, dups: [], dupsLoaded: false, token: null, tokenRetried: false, menu: null, confirm: null, preview: null, tab: isMod() ? st.tab : 'lib' });
       if (st.visible) this.show(); else paintReward();
     },
     reload() { st.loaded = false; if (st.visible) loadLibrary(); },
-    state: () => ({ tab: st.tab, items: st.items.length, rejected: st.rej.length, duplicates: st.dups.length }),
-    destroy() { if (timer) win.clearInterval(timer); timer = null; pane.replaceChildren(); },
+    /**
+     * SSE `gif-media` (stav média se změnil jinde — jiný mod, Židolišta): seznamy knihovny / zamítnutých / zahozených
+     * načíst znovu (hned, když je záložka vidět; jinak při dalším zobrazení).
+     */
+    mediaChanged() {
+      st.loaded = false; st.rejLoaded = false; st.discLoaded = false;
+      if (!st.visible) return;
+      if (st.tab === 'lib') loadLibrary();
+      else { loadRejected(); loadDiscarded(); }
+    },
+    state: () => ({ tab: st.tab, items: st.items.length, rejected: st.rej.length, withdrawn: st.wd.length, purging: st.pg.length, duplicates: st.dups.length, preview: st.preview ? `${st.preview.sec}:${st.preview.id}` : null }),
+    destroy() { if (timer) win.clearInterval(timer); timer = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
   };
 }
 
