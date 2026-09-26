@@ -854,8 +854,8 @@ export function createGifFlow(deps: GifFlowDeps) {
           }
         } else {
           deps.log.info({ channel: p.ucChannel, platform: m.platform, host: safeHost(p.candidate.url), code: res.code }, 'gif: převod odkazu selhal (běžný odkaz)');
-          // Režim „jen schválené": náš odkaz na neznámé médium je taky nový GIF.
-          if (mode === 'approved' && p.candidate.mode === 'own') {
+          // Režim „jen schválené": náš odkaz na neznámé médium je taky nový GIF (smazaný filtrem už je pryč).
+          if (mode === 'approved' && p.candidate.mode === 'own' && p.preDeleted !== 'link_filter') {
             await dropOriginal(p, GIF_NOT_ALLOWED_REASON);
             notice('approved_only');
             return finish('not_allowed');
