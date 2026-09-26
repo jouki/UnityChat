@@ -229,10 +229,14 @@ Promise.all([
   check('GIF_UNAVAILABLE_TEXT', g.GIF_UNAVAILABLE_TEXT === '[GIF nedostupný]');
   check('gifMediaHtml (OBS): unavailable → štítek bez média', g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }) === '<div class="uc-gif uc-gif--failed uc-gif--unavailable"><span class="uc-gif-fallback">[GIF nedostupný]</span></div>'
     && !g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }).includes('<img'));
-  const ev = g.normalizeGifMediaEvent({ channel: 'RobDiesALot', mediaId: ID, state: 'visible', messages: [{ id: 'gif-1', platform: 'twitch' }, { id: 'x' }, null] }, 'robdiesalot');
-  check('normalizeGifMediaEvent: visible se zprávami (jen platné)', ev?.state === 'visible' && ev.mediaId === ID && eq(ev.messages.map((m) => m.id), ['gif-1']), JSON.stringify(ev));
-  check('normalizeGifMediaEvent: removed / unavailable bez zpráv', eq(g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'removed', messages: [{ id: 'a', platform: 'twitch' }] }, 'rob')?.messages, [])
-    && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'unavailable' }, 'rob')?.state === 'unavailable');
+  const ev = g.normalizeGifMediaEvent({ channel: 'RobDiesALot', mediaId: ID, state: 'visible', messageIds: ['twitch:gif-1', 'twitch:gif-1', 'evil:x', 'kick:gif-2', null] }, 'robdiesalot');
+  check('normalizeGifMediaEvent: visible s klíči zpráv (jen platné, bez duplicit)', ev?.state === 'visible' && ev.mediaId === ID && eq(ev.messageIds, ['twitch:gif-1', 'kick:gif-2']), JSON.stringify(ev));
+  check('normalizeGifMediaEvent: strop 200 klíčů', g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'visible', messageIds: Array.from({ length: 250 }, (_, i) => `twitch:gif-${i}`) }, 'rob').messageIds.length === 200);
+  check('normalizeGifMediaEvent: removed / unavailable / library bez zpráv', eq(g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'removed', messageIds: ['twitch:a'] }, 'rob')?.messageIds, [])
+    && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'unavailable' }, 'rob')?.state === 'unavailable'
+    && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'library' }, 'rob')?.state === 'library');
+  check('gifMessagesPath: GET /chat/messages s kanálem a klíči; bez klíčů null', g.gifMessagesPath('RobDiesALot', ['twitch:gif-1', 'kick:gif-2']) === `/chat/messages?channel=robdiesalot&ids=${encodeURIComponent('twitch:gif-1,kick:gif-2')}`
+    && g.gifMessagesPath('rob', []) === null && g.gifMessagesPath('rob', ['evil:x']) === null);
   check('normalizeGifMediaEvent: jiný kanál / neznámý stav / špatné id → null', g.normalizeGifMediaEvent({ channel: 'jiny', mediaId: ID, state: 'removed' }, 'rob') === null
     && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'purging' }, 'rob') === null && g.normalizeGifMediaEvent({ channel: 'rob', mediaId: 'abc', state: 'removed' }, 'rob') === null);
   check('gifMsgMediaId', g.gifMsgMediaId({ gif: { url: URL_OK } }) === ID && g.gifMsgMediaId({}) === null && g.gifMsgMediaId(null) === null);

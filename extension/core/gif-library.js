@@ -637,6 +637,8 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
 // ---------------------------------------------------------------------------
 
 export const GIF_LIBRARY_PAGE = 50;
+/** Načtení panelu po SSE gif-media se rozprostře náhodně do 0–2 s. */
+export const MEDIA_REFETCH_SPREAD_MS = 2000;
 /** Retence zamítnutých (server maže po 14 dnech, kromě vaultu). */
 export const GIF_REJECTED_RETENTION_DAYS = 14;
 
@@ -1218,6 +1220,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       default: return null;
     }
   }
+  /** Token, se kterým je vykreslený aktuální náhled (jen v paměti). */
+  let previewTok = null;
   /** Náhled potřebuje token (zamítnuté, ke smazání, zamítnutý v duplikátu). */
   const previewNeedsToken = (p, item) => p.sec === 'rej' || p.sec === 'pg' || (p.sec === 'dup' && item?.status === 'rejected');
 
@@ -1227,11 +1231,14 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     const item = previewItem(p);
     if (p && !item) { st.preview = null; L(`náhled ${p.sec}:${p.id} zavřen — GIF už v seznamu není`); }
     previewEl.hidden = !st.preview;
-    if (!st.preview) { if (previewEl.firstChild) { previewEl.replaceChildren(); delete previewEl.dataset.key; } return; }
+    if (!st.preview) { if (previewEl.firstChild) { previewEl.replaceChildren(); delete previewEl.dataset.key; previewTok = null; } return; }
     const needTok = previewNeedsToken(p, item);
-    const key = `${p.sec}:${p.id}|${needTok ? st.token || '' : ''}`;
-    if (previewEl.dataset.key === key) return;   // stejný náhled — média znovu nenačítat
+    const key = `${p.sec}:${p.id}`;
+    const tok = needTok ? st.token || null : null;
+    // Stejný náhled se stejným tokenem — média znovu nenačítat. Token jen v paměti (ne v DOM atributu).
+    if (previewEl.dataset.key === key && previewTok === tok) return;
     previewEl.dataset.key = key;
+    previewTok = tok;
     previewEl.innerHTML = `<div class="uc-gl-preview-box">
         <button type="button" class="uc-gl-preview-x" data-act="preview-close" aria-label="Zavřít náhled" title="Zavřít (Esc)">×</button>
         <div class="uc-gl-preview-media"></div>
@@ -1418,10 +1425,16 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   body.addEventListener('scroll', () => {
     if (body.scrollTop + body.clientHeight < body.scrollHeight - 80) return;
     if (st.tab === 'lib' && st.cursor && !st.loading) loadLibrary({ more: true });
-    if (st.tab === 'rej' && st.rejBefore && !st.rejLoading) loadRejected({ more: true });
-    if (st.tab === 'rej' && !st.discLoading && (st.wdBefore || st.pgBefore)) loadDiscarded({ which: st.pgBefore ? 'purging' : 'withdrawn', more: true });
+    if (st.tab !== 'rej') return;
+    // Sekce v pořadí jako v DOM: Zamítnuté → Stažené GIFy → Ke smazání; další až po dotažení předchozí.
+    if (st.rejBefore) { if (!st.rejLoading) loadRejected({ more: true }); return; }
+    if (st.discLoading) return;
+    if (st.wdBefore) loadDiscarded({ which: 'withdrawn', more: true });
+    else if (st.pgBefore) loadDiscarded({ which: 'purging', more: true });
   }, { passive: true });
 
+  // Rozprostřené načtení po SSE gif-media (mediaChanged).
+  let refetchT = null;
   // Odpočet odměny v hlavičce + pásek na záložce (1 s), jen když je co počítat.
   let timer = null;
   function arm() {
@@ -1464,16 +1477,22 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     reload() { st.loaded = false; if (st.visible) loadLibrary(); },
     /**
      * SSE `gif-media` (stav média se změnil jinde — jiný mod, Židolišta): seznamy knihovny / zamítnutých / zahozených
-     * načíst znovu (hned, když je záložka vidět; jinak při dalším zobrazení).
+     * načíst znovu — při zobrazené záložce s náhodným zpožděním 0–2 s (všichni otevření klienti naráz = špička
+     * na /gifs/library), víc událostí za sebou = jedno načtení; skrytý panel až při dalším zobrazení.
      */
-    mediaChanged() {
+    mediaChanged({ delayMs = Math.random() * MEDIA_REFETCH_SPREAD_MS } = {}) {
       st.loaded = false; st.rejLoaded = false; st.discLoaded = false;
-      if (!st.visible) return;
-      if (st.tab === 'lib') loadLibrary();
-      else { loadRejected(); loadDiscarded(); }
+      if (!st.visible || refetchT) return;
+      L(`gif-media → načíst znovu za ${Math.round(delayMs)} ms`);
+      refetchT = win.setTimeout(() => {
+        refetchT = null;
+        if (!st.visible) return;
+        if (st.tab === 'lib') { if (!st.loaded) loadLibrary(); }
+        else { if (!st.rejLoaded) loadRejected(); if (!st.discLoaded) loadDiscarded(); }
+      }, Math.max(0, delayMs));
     },
     state: () => ({ tab: st.tab, items: st.items.length, rejected: st.rej.length, withdrawn: st.wd.length, purging: st.pg.length, duplicates: st.dups.length, preview: st.preview ? `${st.preview.sec}:${st.preview.id}` : null }),
-    destroy() { if (timer) win.clearInterval(timer); timer = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
+    destroy() { if (timer) win.clearInterval(timer); timer = null; if (refetchT) win.clearTimeout(refetchT); refetchT = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
   };
 }
 

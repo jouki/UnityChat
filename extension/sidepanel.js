@@ -5224,19 +5224,29 @@ class UnityChat {
    * / odebrané z knihovny → zprávy s ním „smazané“ (gif_removed); soubor smazán → štítek „[GIF nedostupný]“;
    * obnoveno / znovu vidět → zprávy z události se vykreslí na místě jako obnovené (klient je má bez obsahu).
    */
-  _onGifMedia(d) {
+  async _onGifMedia(d) {
     const core = window.UC_CORE;
     const n = core.normalizeGifMediaEvent?.(d, this.config.channel || '');
     if (!n) { this._ucLog('Gif', `gif-media ignorováno (${d?.channel || '?'} ${d?.mediaId || '?'} ${d?.state || '?'})`); return; }
     let hit = 0;
-    if (n.state === 'visible') {
-      for (const m of n.messages) {
-        const g = core.normalizeGifMedia(m.gif, { origins: UC_GIF_ORIGINS });
-        // Jen zprávy, které chat má (starší, dosud nenačtené přijdou z historie už správně) — nic nepřidávat.
+    if (n.state === 'library') {
+      // Viditelnost zpráv beze změny — jen otevřený panel GIFů.
+    } else if (n.state === 'visible') {
+      // Jen zprávy, které chat má (starší, dosud nenačtené přijdou z historie už správně) — obsah z GET /chat/messages.
+      const keys = n.messageIds.filter((k) => { const i = k.indexOf(':'); const m = this.store.get(k.slice(i + 1)); return !!m && m.platform === k.slice(0, i); });
+      const path = core.gifMessagesPath(this.config.channel || '', keys);
+      let list = [];
+      if (path) {
+        try { list = (await this._ucApi(path))?.messages || []; }
+        catch (e) { this._ucLog('Gif', `gif-media visible: /chat/messages FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); }
+      }
+      for (const m of Array.isArray(list) ? list : []) {
+        const g = core.normalizeGifMedia(m?.gif, { origins: UC_GIF_ORIGINS });
         if (!g || !this.store.get(String(m.id))) continue;
         this._unhideMessage({ platform: m.platform, messageId: m.id, message: { ...m, gif: g } }, { restore: true });
         hit++;
       }
+      this._ucLog('Gif', `gif-media visible: ${n.messageIds.length} id v události, ${keys.length} v chatu, ${hit} obnoveno`);
     } else {
       for (const msg of this.store.slice()) {
         if (core.gifMsgMediaId(msg) !== n.mediaId) continue;
@@ -5248,7 +5258,7 @@ class UnityChat {
         }
       }
     }
-    this._ucLog('Gif', `gif-media ${n.mediaId} → ${n.state} (${hit} zpráv v chatu${n.state === 'visible' ? `, ${n.messages.length} v události` : ''})`);
+    this._ucLog('Gif', `gif-media ${n.mediaId} → ${n.state} (${hit} zpráv v chatu)`);
     this._gifPanel?.mediaChanged?.();
   }
 

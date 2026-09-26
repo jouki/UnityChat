@@ -329,17 +329,31 @@ function gifFallback(doc, wrap, text, extraClass = '') {
   wrap.classList.remove('uc-gif--nosize');
 }
 
+/** Max klíčů zpráv v `gif-media` / GET /chat/messages (stejně jako server). */
+export const GIF_MEDIA_MESSAGES_MAX = 200;
+const MSG_KEY_RE = /^(twitch|kick|youtube):[\w.:-]{1,200}$/;
+
 /**
- * SSE `gif-media` (/nicknames/stream) → { mediaId, state: visible|removed|unavailable, messages } pro aktuální kanál,
- * nebo null. `messages` (jen u visible) = zprávy s obsahem ve tvaru /chat/history (klient je vykreslí jako obnovené).
+ * SSE `gif-media` (/nicknames/stream) → { mediaId, state: visible|removed|unavailable|library, messageIds } pro aktuální
+ * kanál, nebo null. `messageIds` (jen u visible) = klíče `<platform>:<id>` zpráv, které se znovu ukážou — obsah si
+ * hostitel dotáhne přes GET /chat/messages (gifMessagesPath). `library` = jen obnovit otevřený panel GIFů.
  */
 export function normalizeGifMediaEvent(d, channel) {
   if (!d || typeof d !== 'object' || !sameChannel(d.channel, channel)) return null;
   const mediaId = /^[0-9a-f]{32}$/.test(String(d.mediaId || '')) ? String(d.mediaId) : null;
-  const state = ['visible', 'removed', 'unavailable'].includes(d.state) ? d.state : null;
+  const state = ['visible', 'removed', 'unavailable', 'library'].includes(d.state) ? d.state : null;
   if (!mediaId || !state) return null;
-  const messages = state === 'visible' && Array.isArray(d.messages) ? d.messages.filter((m) => m && typeof m === 'object' && m.id && m.platform) : [];
-  return { mediaId, state, messages };
+  const messageIds = state === 'visible' && Array.isArray(d.messageIds)
+    ? [...new Set(d.messageIds.map((k) => String(k ?? '')).filter((k) => MSG_KEY_RE.test(k)))].slice(0, GIF_MEDIA_MESSAGES_MAX)
+    : [];
+  return { mediaId, state, messageIds };
+}
+
+/** Cesta GET /chat/messages pro klíče zpráv (nejvýš GIF_MEDIA_MESSAGES_MAX), nebo null bez klíčů. */
+export function gifMessagesPath(channel, keys) {
+  const list = (Array.isArray(keys) ? keys : []).filter((k) => MSG_KEY_RE.test(String(k))).slice(0, GIF_MEDIA_MESSAGES_MAX);
+  if (!list.length) return null;
+  return `/chat/messages?channel=${encodeURIComponent(String(channel || '').toLowerCase())}&ids=${encodeURIComponent(list.join(','))}`;
 }
 
 /** Id média GIFu ve zprávě (`msg.gif.url`), nebo null. */
