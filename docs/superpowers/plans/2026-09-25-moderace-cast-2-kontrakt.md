@@ -658,8 +658,10 @@ navíc `previouslyRejected: { at, by }`.
 ### GIF knihovna (2026-09-26, spec `docs/superpowers/specs/2026-09-26-gif-knihovna-design.md`, plán Task 1)
 **SQL `backend/sql/2026-09-26-gif-library.sql` spustit PŘED nasazením** (idempotentní):
 `gif_media` + `channel`, `source_url_norm`, `status` (`pending|approved|rejected`), `approved_at`, `rejected_at`,
-`rejected_by`, `vault`, `use_count`, `last_used_at` (staré řádky doplněné ze žádostí; unikátní
-`(channel, source_url_norm)` pro schválené, indexy `(channel, sha256)`, zamítnuté, FIFO čekajících);
+`rejected_by`, `vault`, `use_count`, `last_used_at` (staré řádky: `approved` jen s aspoň jednou žádostí `approved`,
+média jen se smazanými zprávami → `rejected` (`rejected_by: "backfill"`), schválené duplikáty obsahu → nejstarší
+zůstává schválené, ostatní čekající alias; unikátní `(channel, source_url_norm)` i `(channel, sha256)` pro schválené,
+indexy zamítnutých a FIFO čekajících);
 `gif_rejections(channel, media_id, platform, user_id, count, last_at)`; `gif_bans(channel, media_id, until, by)`;
 `gif_access_tokens(id, account_id|null, integration_slug|null, token_hash, created_at, revoked_at)`.
 
@@ -678,6 +680,11 @@ sha256 obsahu. Známé médium se znovu neukládá (přednost `approved` > `reje
   žádost s `previouslyRejected: { at, by }` (poslední zamítnutí média).
 - Zamítnutí modem: médium `rejected` (`rejected_at/by`), `gif_rejections.count + 1` pro uživatele žádosti. Médium se
   **nemaže** (retence 14 dní). Propadnutí maže médium jen když je `pending` a nečeká na něj jiná žádost.
+- Souběh (dvě stažení téhož obsahu dřív, než se kterékoli uloží): při schválení druhého média unikátní index
+  `(channel, sha256)` pozná, že stejný obsah už je schválený → žádosti se přesměrují na schválené médium, duplikát
+  se smaže (gif-message nese URL schváleného média).
+- Cache `/media/gif`: v paměti jen **schválená** média; čekající a zamítnutá se čtou pokaždé z DB (stav se mění
+  rozhodnutím, propadnutím, novou žádostí).
 
 **Režim `approved`** (`gif-access.mode`, platí i pro mody): projde jen známé **schválené** médium (URL, sha256, náš
 odkaz). Cokoli jiného → zpráva smazaná (`reason: "gif_not_allowed"`, SSE `message-deleted`, na platformě botem;
@@ -715,22 +722,28 @@ Po připojení `/account/stream` přijdou čekající `gif-pending` a pro každ�
 jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už rozhodl X".
 
 **Zamítnuté GIFy (mod kanálu):**
-- `POST /moderation/gif/access-token { channel? }` (Bearer, mod kanálu, rate limit 5 + 1/10 s) →
-  `{ ok, token }` — nový náhodný token účtu (starý se zneplatní), **vrací se jen tady**; v DB jen SHA-256.
-  Klient ho přidává do odkazů na zamítnutá média `…/media/gif/<id>?t=<token>`.
+- `POST /moderation/gif/access-token { channel? }` (Bearer, mod kanálu, rate limit 5 + 1/10 s, `no-store`) →
+  `{ ok, token }` — nový náhodný token, **vrací se jen tady**; v DB jen SHA-256. Klient (zařízení / session) si ho
+  drží a přidává do odkazů na zamítnutá média `…/media/gif/<id>?t=<token>`. Účet má **nejvýš 5 aktivních tokenů**
+  (jeden na zařízení); šestý zneplatní nejstarší, ostatní platí dál. **Když klient s tokenem dostane `404`, vyžádá si
+  jednou nový token a načte znovu** (token mohl vypadnout jako nejstarší, nebo účet přestal být modem — pak 403).
+  URL požadavků se loguje bez hodnot `t`, `token`, `access_token`, `key` (`***`).
 - Ověření v `/media/gif/:id?t=`: aktivní token + účet je **stále mod kanálu média** (`accountModIdentities`), nebo
   integrační token Židolišty (`integration_slug` = workspace kanálu; vydání přes integraci — Task 2). Výsledek
   v cache 60 s (odebraný mod / zneplatněný token přestane platit do minuty). Bez / špatný token = `404`.
-- `GET /moderation/gif/rejected?channel=&before=<rejectedAt ms>` (Bearer, mod) →
+- `GET /moderation/gif/rejected?channel=&before=<rejectedAt ms>:<mediaId>` (Bearer, mod) →
   `{ ok, items: [{ mediaId, url, kind, width, height, rejectedAt, rejectedBy, vault, deleteAt|null }], nextBefore|null }`
-  (nejnovější první, stránka 50; `url` bez tokenu, `deleteAt` = `rejectedAt` + 14 dní, vault `null`).
+  (nejnovější první podle `(rejectedAt, mediaId)`, stránka 50; `nextBefore` = kurzor `"<ms>:<mediaId>"` poslední
+  položky, jinak `null`; neplatný kurzor `400 before`; `url` bez tokenu, `deleteAt` = `rejectedAt` + 14 dní, vault `null`).
 - `POST /moderation/gif/:mediaId/approve|vault|purge|ban12h` (Bearer, mod kanálu **média**) →
   `200 { ok, mediaId, action }` (ban12h: `{ ok, mediaId, bannedUntil, rejected: <počet zamítnutých čekajících> }`);
   `404 not_found`; `403 not_mod`; approve/vault/purge nad nezamítnutým `409 { error: "not_rejected", status }`,
   ban12h nad schváleným `409 { error: "approved" }`.
-  - `approve` — do knihovny (approved), **do chatu nic**; `vault` — zůstane zamítnutý, retence se na něj nevztahuje;
-    `purge` — trvale smazat (i počítadla a zákaz); `ban12h` — „Automaticky zahazovat 12 h" (od všech) + **čekající
-    žádosti na médium se hned zamítnou** (`by` = mod).
+  - `approve` — do knihovny (approved); samo do chatu nic, ale **čekající žádosti na totéž médium se schválí**
+    (jejich GIFy pak jdou do chatu jako při běžném schválení; odpověď `requests: N`); `vault` — zůstane zamítnutý,
+    retence se na něj nevztahuje; `purge` — **nejdřív zamítne čekající žádosti na médium** (`requests: N`), pak trvale
+    smaže (i počítadla a zákaz); `ban12h` — „Automaticky zahazovat 12 h" (od všech), médium se označí `rejected` a
+    **čekající žádosti na médium se hned zamítnou** (`by` = mod).
   - Audit `moderation_actions` `gif_media_<akce>` (`platform: "uc"`).
 - Retence: 1×/h se mažou zamítnutá média s `rejected_at` starším 14 dní bez vaultu (a bez čekající žádosti);
   propadlé zákazy se uklidí.

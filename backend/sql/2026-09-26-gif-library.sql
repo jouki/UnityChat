@@ -15,19 +15,38 @@ ALTER TABLE gif_media ADD COLUMN IF NOT EXISTS vault            boolean     NOT 
 ALTER TABLE gif_media ADD COLUMN IF NOT EXISTS use_count        integer     NOT NULL DEFAULT 0;
 ALTER TABLE gif_media ADD COLUMN IF NOT EXISTS last_used_at     timestamptz;
 
--- Doplnění starých řádků (jen kde ještě chybí): kanál ze žádosti, schválené podle žádosti approved/deleted.
+-- Doplnění starých řádků (jen kde ještě chybí): kanál ze žádosti.
 UPDATE gif_media m SET channel = r.channel
   FROM gif_requests r WHERE r.media_id = m.id AND m.channel IS NULL;
+-- Do knihovny (approved) jen média s aspoň jednou žádostí `approved` (GIF je v chatu vidět).
 UPDATE gif_media m SET status = 'approved',
-       approved_at = COALESCE(m.approved_at, (SELECT min(r.decided_at) FROM gif_requests r WHERE r.media_id = m.id AND r.status IN ('approved', 'deleted'))),
+       approved_at = COALESCE(m.approved_at, (SELECT min(r.decided_at) FROM gif_requests r WHERE r.media_id = m.id AND r.status = 'approved')),
        use_count = GREATEST(m.use_count, (SELECT count(*) FROM gif_requests r WHERE r.media_id = m.id AND r.status IN ('approved', 'deleted'))),
        last_used_at = COALESCE(m.last_used_at, (SELECT max(r.decided_at) FROM gif_requests r WHERE r.media_id = m.id AND r.status IN ('approved', 'deleted')))
   WHERE m.status = 'pending'
-    AND EXISTS (SELECT 1 FROM gif_requests r WHERE r.media_id = m.id AND r.status IN ('approved', 'deleted'));
+    AND EXISTS (SELECT 1 FROM gif_requests r WHERE r.media_id = m.id AND r.status = 'approved');
+-- Média, jejichž všechny žádosti mají zprávu smazanou modem (status deleted) → zamítnutá (retence 14 dní).
+-- Podmínka „všechny deleted" platí i při opakovaném spuštění: médium schválené ze Zamítnutých má vždy i žádost rejected.
+UPDATE gif_media m SET status = 'rejected', approved_at = NULL,
+       rejected_at = COALESCE(m.rejected_at, (SELECT max(r.decided_at) FROM gif_requests r WHERE r.media_id = m.id), now()),
+       rejected_by = COALESCE(m.rejected_by, 'backfill')
+  WHERE m.status IN ('pending', 'approved')
+    AND EXISTS (SELECT 1 FROM gif_requests r WHERE r.media_id = m.id)
+    AND NOT EXISTS (SELECT 1 FROM gif_requests r WHERE r.media_id = m.id AND r.status <> 'deleted');
 
--- Dedup: stejná URL = jeden schválený GIF na kanál; obsah podle sha256 (po stažení).
+-- Schválené duplikáty obsahu (před dedupem) — ponechat nejstarší schválené, ostatní jako čekající alias
+-- (staré zprávy na ně odkazují přes content_raw.gif.mediaId, musí zůstat veřejné; dedup najde schválené).
+UPDATE gif_media m SET status = 'pending'
+  WHERE m.status = 'approved'
+    AND EXISTS (SELECT 1 FROM gif_media o
+                WHERE o.status = 'approved' AND o.channel = m.channel AND o.sha256 = m.sha256 AND o.id <> m.id
+                  AND (COALESCE(o.approved_at, o.created_at), o.id) < (COALESCE(m.approved_at, m.created_at), m.id));
+
+-- Dedup: stejná URL / stejný obsah = jeden schválený GIF na kanál (souběh řeší setMediaApproved).
 CREATE UNIQUE INDEX IF NOT EXISTS gif_media_channel_url_approved_uq
   ON gif_media (channel, source_url_norm) WHERE status = 'approved' AND source_url_norm IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS gif_media_channel_sha_approved_uq
+  ON gif_media (channel, sha256) WHERE status = 'approved' AND channel IS NOT NULL;
 CREATE INDEX IF NOT EXISTS gif_media_channel_url_idx ON gif_media (channel, source_url_norm);
 CREATE INDEX IF NOT EXISTS gif_media_channel_sha_idx ON gif_media (channel, sha256);
 -- Zamítnuté GIFy kanálu (seznam pro mody) + retence.
