@@ -729,21 +729,91 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
   jednou nový token a načte znovu** (token mohl vypadnout jako nejstarší, nebo účet přestal být modem — pak 403).
   URL požadavků se loguje bez hodnot `t`, `token`, `access_token`, `key` (`***`).
 - Ověření v `/media/gif/:id?t=`: aktivní token + účet je **stále mod kanálu média** (`accountModIdentities`), nebo
-  integrační token Židolišty (`integration_slug` = workspace kanálu; vydání přes integraci — Task 2). Výsledek
+  integrační token Židolišty (`integration_slug` = workspace kanálu; vydání `POST /integrations/:slug/gifs/access-token`,
+  viz „GIF knihovna — Task 2"). Výsledek
   v cache 60 s (odebraný mod / zneplatněný token přestane platit do minuty). Bez / špatný token = `404`.
 - `GET /moderation/gif/rejected?channel=&before=<rejectedAt ms>:<mediaId>` (Bearer, mod) →
   `{ ok, items: [{ mediaId, url, kind, width, height, rejectedAt, rejectedBy, vault, deleteAt|null }], nextBefore|null }`
   (nejnovější první podle `(rejectedAt, mediaId)`, stránka 50; `nextBefore` = kurzor `"<ms>:<mediaId>"` poslední
   položky, jinak `null`; neplatný kurzor `400 before`; `url` bez tokenu, `deleteAt` = `rejectedAt` + 14 dní, vault `null`).
-- `POST /moderation/gif/:mediaId/approve|vault|purge|ban12h` (Bearer, mod kanálu **média**) →
+- `POST /moderation/gif/:mediaId/approve|vault|purge|ban12h|unapprove` (Bearer, mod kanálu **média**) →
   `200 { ok, mediaId, action }` (ban12h: `{ ok, mediaId, bannedUntil, rejected: <počet zamítnutých čekajících> }`);
-  `404 not_found`; `403 not_mod`; approve/vault/purge nad nezamítnutým `409 { error: "not_rejected", status }`,
-  ban12h nad schváleným `409 { error: "approved" }`.
+  `404 not_found`; `403 not_mod`; approve/vault nad nezamítnutým a purge nad čekajícím `409 { error: "not_rejected", status }`,
+  ban12h nad schváleným `409 { error: "approved" }`, unapprove nad neschváleným `409 { error: "not_approved", status }`.
   - `approve` — do knihovny (approved); samo do chatu nic, ale **čekající žádosti na totéž médium se schválí**
     (jejich GIFy pak jdou do chatu jako při běžném schválení; odpověď `requests: N`); `vault` — zůstane zamítnutý,
     retence se na něj nevztahuje; `purge` — **nejdřív zamítne čekající žádosti na médium** (`requests: N`), pak trvale
     smaže (i počítadla a zákaz); `ban12h` — „Automaticky zahazovat 12 h" (od všech), médium se označí `rejected` a
     **čekající žádosti na médium se hned zamítnou** (`by` = mod).
+  - **Odebrat z knihovny** (Task 2): `unapprove` — schválený GIF → zamítnutý (`rejected_at/by`, bez `approved_at`
+    a vaultu → retence 14 dní, od té chvíle jen s tokenem; staré zprávy s ním ho bez tokenu nenačtou); `purge` nad
+    **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou).
   - Audit `moderation_actions` `gif_media_<akce>` (`platform: "uc"`).
 - Retence: 1×/h se mažou zamítnutá média s `rejected_at` starším 14 dní bez vaultu (a bez čekající žádosti);
   propadlé zákazy se uklidí.
+
+### GIF knihovna — Task 2 (knihovna, tagy, perceptuální hash, API pro Židolištu)
+**SQL `backend/sql/2026-09-26-gif-phash.sql` spustit PŘED nasazením** (idempotentní, navazuje na `2026-09-26-gif-library.sql`):
+`gif_media` + `tags text[]` (výchozí `{}`), `phash text[]` (dHashy, 16 hex; `NULL` = nespočítáno / selhalo), `phash_at`
+(pokus o hash, i neúspěšný), `dup_checked_at`; index knihovny `(channel, use_count desc, last_used_at desc, id desc)`
+pro schválené; `gif_duplicates(id, channel, a, b, score, status 'pending'|'kept_both', created_at, decided_at, decided_by)`,
+`a`/`b` → `gif_media` `ON DELETE CASCADE`, dvojice unikátní bez ohledu na pořadí (`LEAST/GREATEST`).
+Docker image backendu má `ffmpeg` (MP4); `sharp` (GIF/WebP) je v závislostech.
+
+**Použití:** `use_count + 1` a `last_used_at` při každé zprávě, která zobrazí schválený GIF (schválení žádosti,
+dedup známého schváleného média i odkaz `api.jouki.cz/media/gif/<id>` = okamžité schválení z knihovny; kaskáda
+čekajících žádostí na totéž médium se počítá po jedné). Beze změny od Tasku 1 (`decideCore`).
+
+**Tagy:** při stažení ze **stránky** Tenor / Giphy / Imgur (HTML, které se stahuje kvůli `og:video`, žádný požadavek
+navíc): `og:title` / `twitter:title` bez přípony zdroje („… GIF - … - Discover & Share GIFs“, „… GIF by X - Find &
+Share on GIPHY“), `<meta name="keywords">` a `keywords` z JSON-LD. Normalizace (i při úpravě): malá písmena, bez `#`,
+bez obecných slov (`gif`, `animated gif`, `sticker`, `tenor`, `giphy` …) a duplicit, každý tag ≤ 40 znaků, nejvýš
+20 tagů. Přímý odkaz na soubor tagy nemá.
+
+**Perceptuální hash a návrhy duplikátů:** dHash 64 bit z **8 snímků rovnoměrně v čase** (GIF/WebP přes `sharp` podle
+délek snímků, MP4 přes `ffprobe` + `ffmpeg -vf fps=8/délka` od půlky prvního intervalu); podobnost = podíl snímků
+s Hammingovou vzdáleností **≤ 10** přes posunuté zarovnání sekvencí (vůči kratší sekvenci), **≥ 0,6** = návrh. Plochý
+snímek se za shodu nepočítá. Na pozadí **1 médium za 2 s** (bez práce / chyba 30 s): nejdřív hash rozhodnutých médií
+(`approved` přednostně, pak `rejected`; čekající až po rozhodnutí), pak porovnání jednoho média s médii **téhož
+kanálu** → `gif_duplicates` jen pro dvojici, která ještě nemá záznam (`a` = starší = „první"). Chybí `ffmpeg`/`sharp`
+nebo selže → `phash` zůstane `NULL`, varování `gif phash: výpočet selhal`, médium funguje dál (znovu se nezkouší).
+Nic se neslučuje samo.
+
+**Veřejné — knihovna (addon, web, OBS; divák bez odměny ji vidí):**
+- `GET /gifs/library?channel=&q=&cursor=&limit=` (bez auth, rate limit per IP 10 + 5/s, `no-store`) →
+  `{ ok, items: [{ mediaId, url, kind, width, height, tags, useCount, lastUsedAt|null }], nextCursor|null }` — jen
+  `approved` kanálu, řazení `useCount` desc, `lastUsedAt` desc (bez použití poslední), `mediaId` desc; `url` =
+  `https://api.jouki.cz/media/gif/<id>` (výběr → tenhle odkaz do chatu → dedup = rovnou schválený); `q` = podřetězec
+  v tagech (malými); `limit` výchozí 50, max 100; `cursor` = `nextCursor` (`<useCount>:<lastUsedMs|0>:<mediaId>`),
+  neplatný `400 cursor`, špatný kanál `400 channel`.
+
+**Mod v UC (Bearer, mod kanálu):**
+- `GET /moderation/gif/duplicates?channel=` → `{ ok, items: [<návrh>] }` (čekající, nejstarší první, max 50), návrh:
+  `{ id, channel, score, status, createdAt, first: <médium>, second: <médium> }`, médium
+  `{ mediaId, url, kind, width, height, status, tags, useCount, createdAt }` (`url` bez tokenu — u zamítnutého ho klient
+  přidá sám). `first` = starší.
+- `POST /moderation/gif/duplicates/:id/keep-first|keep-second|keep-both` (mod kanálu **návrhu**) →
+  `200 { ok, id, action, kept?, removed? }`; `404 not_found` (i neznámá akce); `403 not_mod`;
+  už rozhodnuto `409 { error: "already_decided", status }`; médium mezitím pryč (souběh) `409 { error: "gone" }`.
+  - `keep-both` → `kept_both` (znovu se nenavrhne).
+  - `keep-first` / `keep-second` = **sloučení** do ponechaného média (transakce): žádosti a syntetické zprávy
+    `gif-<requestId>` (`content_raw.gif.mediaId`) se přesměrují, `use_count` se sečte, `last_used_at` pozdější, tagy
+    sjednocené, vault; když bylo v knihovně odebírané médium a ponechané ne, ponechané se schválí. Druhé médium se smaže
+    (jeho počítadla zamítnutí, zákaz a ostatní návrhy kaskádou), `/media/gif` tombstone.
+  - Audit `moderation_actions` `gif_duplicate_keep_first|keep_second|keep_both` (`platform: "uc"`).
+- `POST /moderation/gif/:mediaId/unapprove` — viz „Odebrat z knihovny" výš.
+
+**Integrace Židolišty (`inboundAuthorized` — X-Api-Key + podpis; kanál JEN ze slugu, médium / návrh jiného kanálu
+`404 not_found`; neznámý slug `404 unknown_workspace`; rate limit per workspace 30 + 10/s; `no-store`):**
+- `GET /integrations/:slug/gifs?q=&cursor=&limit=` — knihovna, tvar jako `/gifs/library`.
+- `PUT /integrations/:slug/gifs/:mediaId/tags { tags: string[], actor? }` → `{ ok, mediaId, tags }` (normalizované);
+  špatné tělo `400 body`.
+- `GET /integrations/:slug/gifs/rejected?before=<ms>:<mediaId>` — tvar jako `/moderation/gif/rejected`.
+- `POST /integrations/:slug/gifs/:mediaId/approve|vault|purge|ban12h|unapprove { actor? }` — stejné akce a odpovědi
+  jako mod v UC (`by` = `zidolista:<actor.userId>`, bez aktéra `zidolista`).
+- `GET /integrations/:slug/gifs/duplicates` a `POST /integrations/:slug/gifs/duplicates/:id/keep-first|keep-second|keep-both { actor? }`
+  — jako mod v UC.
+- `POST /integrations/:slug/gifs/access-token` (rate limit 5 + 1/10 s) → `{ ok, token }` — **integrační token** pro
+  zamítnutá média (`/media/gif/<id>?t=<token>`), platí pro kanál workspace; vrací se **jen tady**, v DB jen SHA-256,
+  nový zneplatní předchozí. Dashboard si ho drží; `404` na médiu = vyžádat nový.
+- `actor` (volitelný) = `{ source: "zidolista", userId, name, role }` jako u moderace; neplatný `400 body`.
