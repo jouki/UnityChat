@@ -51,6 +51,7 @@ import { registryPlatformChannel } from './lib/platformChannels.js';
 import { db } from './db/index.js';
 import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
+import integrationGifRoutes from './routes/integrationGif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
 import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
@@ -296,6 +297,7 @@ await app.register(accountWarningRoutes, {
   },
 });
 await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: gifMedia });
+await app.register(integrationGifRoutes, { flow: gifFlow, media: gifMedia });
 await app.register(soundboardRoutes);
 await app.register(sfxRequestRoutes);
 await app.register(donateRoutes);
