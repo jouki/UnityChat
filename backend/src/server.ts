@@ -63,6 +63,8 @@ import { onMessageDeleted, forgetPublished } from './lib/messageDeletes.js';
 import { broadcast } from './sse/bus.js';
 import { publishIntegrationEvent } from './sse/integrationStream.js';
 
+import { reqSerializer } from './lib/logRedact.js';
+
 const startedAt = Date.now();
 
 const app = Fastify({
@@ -72,6 +74,8 @@ const app = Fastify({
   trustProxy: true,
   logger: {
     level: config.LOG_LEVEL,
+    // URL požadavku bez tajných query parametrů (token zamítnutých GIFů `?t=`, token, access_token, key).
+    serializers: { req: reqSerializer },
     ...(config.NODE_ENV === 'development' && {
       transport: {
         target: 'pino-pretty',
