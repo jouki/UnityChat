@@ -5,7 +5,8 @@
 //   GET  /moderation/gif/pending?channel=         (Bearer, mod) čekající žádosti kanálu, FIFO
 //   POST /moderation/gif/access-token             (Bearer, mod) vydá/obnoví vlastní token pro zamítnutá média (jen jednou)
 //   GET  /moderation/gif/rejected?channel&before  (Bearer, mod) zamítnuté GIFy kanálu
-//   POST /moderation/gif/:mediaId/{approve|vault|purge|ban12h}  (Bearer, mod kanálu média)
+//   POST /moderation/gif/:mediaId/{approve|vault|purge|ban12h|unapprove}  (Bearer, mod kanálu média;
+//        unapprove = odebrat schválený z knihovny → zamítnutý, purge = i schválený trvale)
 //   GET  /gif/state?channel=&platform=&review=1   (Bearer) cooldown + režim odměny pro vlastní účet (bublina u pole)
 //
 // Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající a zamítnuté `private, no-store`,
@@ -18,7 +19,7 @@ import { gifAccess, type GifAccess, type GifAccessQuery, type GifMode } from '..
 import { workspaceForChannel, type Platform } from '../lib/zidolista.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { MEDIA_ID_RE, gifMediaUrl } from '../lib/gifIds.js';
-import { pendingView, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
+import { pendingView, GIF_MEDIA_ACTIONS, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
 import { createGifTokenVerifier, dbGifTokenStore, issueAccountToken, type GifTokenVerifier } from '../lib/gifTokens.js';
 import { parseChannel } from './moderation.js';
 import { RateLimiter, toClientMessage, type ClientMessage } from './chat.js';
@@ -401,7 +402,7 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
   });
 
   // Akce nad médiem: approve / vault / purge (zamítnuté) a ban12h („Automaticky zahazovat 12 h"). Kanál z média.
-  for (const action of ['approve', 'vault', 'purge', 'ban12h'] as const) {
+  for (const action of GIF_MEDIA_ACTIONS) {
     app.post<{ Params: { requestId: string } }>(`/moderation/gif/:requestId/${action}`, { preHandler: session }, async (req, reply) => {
       // Parametr sdílí jméno s /decide (router); tady je to id média (32 hex).
       const mediaId = String(req.params.requestId || '');

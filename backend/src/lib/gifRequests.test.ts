@@ -48,6 +48,12 @@ function memStore(now: () => number) {
       log.push(`merge:${from}->${to}`);
     },
     async setMediaRejected(id, by, at) { const x = media.get(id); if (x && x.status !== 'approved') Object.assign(x, { status: 'rejected', rejectedAt: at, rejectedBy: by }); },
+    async setMediaUnapproved(id, by, at) {
+      const x = media.get(id);
+      if (!x || x.status !== 'approved') return false;
+      Object.assign(x, { status: 'rejected', approvedAt: null, rejectedAt: at, rejectedBy: by, vault: false });
+      return true;
+    },
     async markMediaUsed(id) { const x = media.get(id); if (x) x.useCount++; },
     async rejectionCount(ch, id, pl, u) { return rejections.get(rk(ch, id, pl, u)) ?? 0; },
     async addRejection(ch, id, pl, u) { const n = (rejections.get(rk(ch, id, pl, u)) ?? 0) + 1; rejections.set(rk(ch, id, pl, u), n); return n; },
@@ -733,7 +739,7 @@ test('zamítnuté médium: schválit (jen do knihovny) / vault / trvale zahodit;
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'approve', by: 'twitch:moda', accountId: 1 })).status, 200);
   assert.equal(s.mem.media.get(MEDIA)!.status, 'approved');
   assert.equal(names(s.calls).includes('broadcast:gif-message'), false);
-  assert.deepEqual((await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 })).body, { ok: false, error: 'not_rejected', status: 'approved' });
+  assert.deepEqual((await s.flow.mediaAction({ mediaId: MEDIA, action: 'vault', by: 'twitch:moda', accountId: 1 })).body, { ok: false, error: 'not_rejected', status: 'approved' });
   assert.equal((await s.flow.mediaAction({ mediaId: 'e'.repeat(32), action: 'vault', by: 'x', accountId: 1 })).status, 404);
 
   // Retence: zamítnuté starší 14 dní bez vaultu pryč, mladší zůstávají; trvale zahodit hned.
@@ -749,6 +755,36 @@ test('zamítnuté médium: schválit (jen do knihovny) / vault / trvale zahodit;
   const p = setup({ mediaDeleted: (id) => gone.push(`p:${id}`) });
   await p.flow.intercept(from('42', 'm1'));
   await p.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  assert.equal((await p.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 })).status, 200);
+  assert.equal(p.mem.media.size, 0);
+  assert.ok(gone.includes(`p:${MEDIA}`));
+});
+
+test('odebrat z knihovny: unapprove = schválený → zamítnutý (retence, token); purge schváleného = trvale pryč; čekající ani jedno', async () => {
+  const gone: string[] = [];
+  const changed: string[] = [];
+  const s = setup({ mediaDeleted: (id) => gone.push(id), mediaChanged: (id) => changed.push(id) });
+  await s.flow.intercept(from('42', 'm1'));
+  // Čekající médium: odebrat z knihovny nejde (není v ní), trvale zahodit taky ne.
+  assert.deepEqual((await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:moda', accountId: 1 })).body, { ok: false, error: 'not_approved', status: 'pending' });
+  assert.deepEqual((await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 })).body, { ok: false, error: 'not_rejected', status: 'pending' });
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'approved');
+  changed.length = 0;
+  const out = await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:modb', accountId: 2 });
+  assert.deepEqual(out, { status: 200, body: { ok: true, mediaId: MEDIA, action: 'unapprove' } });
+  const md = s.mem.media.get(MEDIA)!;
+  assert.equal(md.status, 'rejected');
+  assert.equal(md.rejectedBy, 'twitch:modb');
+  assert.equal(md.approvedAt, null);
+  assert.deepEqual(changed, [MEDIA], 'cache /media/gif zahodit (schválené bylo veřejné)');
+  // Znovu → 409.
+  assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:modb', accountId: 2 })).status, 409);
+
+  // Trvale smazat schválený GIF.
+  const p = setup({ mediaDeleted: (id) => gone.push(`p:${id}`) });
+  await p.flow.intercept(from('42', 'm1'));
+  await p.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
   assert.equal((await p.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 })).status, 200);
   assert.equal(p.mem.media.size, 0);
   assert.ok(gone.includes(`p:${MEDIA}`));

@@ -170,6 +170,8 @@ export interface GifStore {
   mergeMedia(fromId: string, toId: string): Promise<void>;
   /** rejected + rejected_at/by (schválené médium se nemění). */
   setMediaRejected(id: string, by: string, at: Date): Promise<void>;
+  /** Odebrat z knihovny: jen approved → rejected (approved_at pryč, rejected_at/by, bez vaultu). false = nebylo schválené. */
+  setMediaUnapproved(id: string, by: string, at: Date): Promise<boolean>;
   markMediaUsed(id: string, at: Date): Promise<void>;
   rejectionCount(channel: string, mediaId: string, platform: string, userId: string): Promise<number>;
   /** +1 zamítnutí uživatele; vrací nový počet. */
@@ -260,6 +262,11 @@ export const dbGifStore: GifStore = {
   },
   async setMediaRejected(id, by, at) {
     await db.update(gifMedia).set({ status: 'rejected', rejectedAt: at, rejectedBy: by }).where(and(eq(gifMedia.id, id), ne(gifMedia.status, 'approved')));
+  },
+  async setMediaUnapproved(id, by, at) {
+    const rows = await db.update(gifMedia).set({ status: 'rejected', approvedAt: null, rejectedAt: at, rejectedBy: by, vault: false })
+      .where(and(eq(gifMedia.id, id), eq(gifMedia.status, 'approved'))).returning({ id: gifMedia.id });
+    return rows.length > 0;
   },
   async markMediaUsed(id, at) {
     await db.update(gifMedia).set({ useCount: sql`${gifMedia.useCount} + 1`, lastUsedAt: at }).where(eq(gifMedia.id, id));
@@ -538,7 +545,11 @@ export interface GifInterceptParams {
   lateReview?: () => boolean;
 }
 
-export type GifInterceptResult = 'requested' | 'approved' | 'denied' | 'failed' | 'cancelled' | 'rejected' | 'not_allowed';
+/** Akce moda / Židolišty nad médiem (routes/gif.ts, routes/integrationGif.ts). */
+export const GIF_MEDIA_ACTIONS = ['approve', 'vault', 'purge', 'ban12h', 'unapprove'] as const;
+export type GifMediaAction = typeof GIF_MEDIA_ACTIONS[number];
+
+export type GifInterceptResult ='requested' | 'approved' | 'denied' | 'failed' | 'cancelled' | 'rejected' | 'not_allowed';
 
 /**
  * Čekání na zápis původní zprávy do archivu (ingest dávkuje po 500 ms): přeznačení/obnovení v DB musí
@@ -967,14 +978,30 @@ export function createGifFlow(deps: GifFlowDeps) {
      * Akce nad médiem (mod už ověřený routou podle kanálu média):
      *  - approve (jen zamítnuté): do knihovny, do chatu nic;
      *  - vault (jen zamítnuté): retence 14 dní se na něj nevztahuje;
-     *  - purge (jen zamítnuté): trvale smazat (i počítadla a zákaz);
+     *  - purge (zamítnuté i schválené = „odebrat z knihovny trvale"): trvale smazat (i počítadla a zákaz);
+     *  - unapprove (jen schválené): „odebrat z knihovny" → zamítnuté (retence 14 dní, jen s tokenem);
      *  - ban12h (ne schválené): „Automaticky zahazovat 12 h" od všech + čekající žádosti na médium zamítnout.
      */
-    async mediaAction(p: { mediaId: string; action: 'approve' | 'vault' | 'purge' | 'ban12h'; by: string; accountId: number | null }): Promise<{ status: number; body: Record<string, unknown> }> {
+    async mediaAction(p: { mediaId: string; action: GifMediaAction; by: string; accountId: number | null }): Promise<{ status: number; body: Record<string, unknown> }> {
       const md = await deps.store.getMedia(p.mediaId);
       if (!md || !md.channel) return { status: 404, body: { ok: false, error: 'not_found' } };
       const at = new Date(deps.now());
       const record = (result: object) => safe('moderation_actions', async () => deps.recordAction?.({ channel: md.channel!, accountId: p.accountId, actor: p.by, action: `gif_media_${p.action}`, platform: 'uc', targetLogin: null, params: { mediaId: md.id }, result }));
+      if (p.action === 'unapprove') {
+        if (md.status !== 'approved') return { status: 409, body: { ok: false, error: 'not_approved', status: md.status } };
+        if (!(await deps.store.setMediaUnapproved(md.id, p.by, at))) return { status: 409, body: { ok: false, error: 'not_approved', status: 'rejected' } };
+        // Schválené bylo v paměťové cache jako veřejné → zahodit (teď jen s tokenem).
+        deps.mediaChanged?.(md.id);
+        await record({ ok: true });
+        return { status: 200, body: { ok: true, mediaId: md.id, action: p.action } };
+      }
+      if (p.action === 'purge' && md.status === 'approved') {
+        // Odebrat z knihovny trvale: médium pryč (staré zprávy s GIFem ho už nenačtou), tombstone v cache.
+        await deps.store.deleteMedia(md.id);
+        deps.mediaDeleted?.(md.id);
+        await record({ ok: true, approved: true });
+        return { status: 200, body: { ok: true, mediaId: md.id, action: p.action } };
+      }
       if (p.action === 'ban12h') {
         if (md.status === 'approved') return { status: 409, body: { ok: false, error: 'approved', status: md.status } };
         const until = new Date(at.getTime() + GIF_BAN_MS);
