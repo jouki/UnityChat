@@ -3,12 +3,25 @@ import { createReadStream, existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { exec, execSync } from 'child_process';
 import { join, resolve } from 'path';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
+import { config } from '../config.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const EXT_DIR = join(REPO_ROOT, 'extension');
 const ZIP_PATH = '/tmp/unitychat-dev.zip';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'unitychat-dev-deploy';
+
+/**
+ * GitHub `X-Hub-Signature-256: sha256=<hex HMAC-SHA256(secret, raw body)>`.
+ * Povinný: bez hlavičky, bez raw těla nebo bez secretu → false. Porovnání v konstantním čase.
+ */
+export function verifyGithubSignature(header: unknown, rawBody: string | undefined, secret: string): boolean {
+  if (!secret || typeof header !== 'string' || typeof rawBody !== 'string') return false;
+  const m = /^sha256=([0-9a-f]{64})$/i.exec(header.trim());
+  if (!m) return false;
+  const expected = createHmac('sha256', secret).update(rawBody, 'utf8').digest();
+  const got = Buffer.from(m[1], 'hex');
+  return got.length === expected.length && timingSafeEqual(got, expected);
+}
 
 async function buildZip(): Promise<void> {
   execSync(`cd "${EXT_DIR}" && zip -r "${ZIP_PATH}" . -x "*.DS_Store" "*.log"`, {
@@ -16,7 +29,9 @@ async function buildZip(): Promise<void> {
   });
 }
 
-export default async function devDownloadRoutes(app: FastifyInstance) {
+export default async function devDownloadRoutes(app: FastifyInstance, opts: { webhookSecret?: string } = {}) {
+  const secret = opts.webhookSecret ?? config.WEBHOOK_SECRET;
+
   // Dev manifest.json (extension version from dev branch)
   app.get('/dev/manifest.json', async (_req, reply) => {
     try {
@@ -157,17 +172,16 @@ export default async function devDownloadRoutes(app: FastifyInstance) {
     return reply.send(createReadStream(ZIP_PATH));
   });
 
-  // GitHub webhook → git pull (tsx watch auto-restarts on file changes)
+  // GitHub webhook → git pull (tsx watch auto-restarts on file changes).
+  // Bez WEBHOOK_SECRET v env se route vůbec nezaregistruje; podpis je povinný (audit I5, 2026-09-26).
+  if (!secret) {
+    app.log.warn('WEBHOOK_SECRET není nastavený — /webhook/deploy se neregistruje');
+    return;
+  }
   app.post('/webhook/deploy', async (req, reply) => {
-    // Verify GitHub signature
-    const sig = req.headers['x-hub-signature-256'] as string;
-    const body = JSON.stringify(req.body);
-    if (sig) {
-      const expected = 'sha256=' + createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex');
-      if (sig !== expected) {
-        reply.code(403);
-        return { ok: false, error: 'Invalid signature' };
-      }
+    if (!verifyGithubSignature(req.headers['x-hub-signature-256'], req.rawBody, secret)) {
+      reply.code(403);
+      return { ok: false, error: 'Invalid signature' };
     }
 
     // Only deploy on dev branch pushes
