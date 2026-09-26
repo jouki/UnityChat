@@ -11,7 +11,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireWebSession, listIdentities, type PublicIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, chatRole, type ChatRole } from '../lib/chatRole.js';
-import { gifAccess, type GifAccess, type GifAccessQuery } from '../lib/gifAccess.js';
+import { gifAccess, type GifAccess, type GifAccessQuery, type GifMode } from '../lib/gifAccess.js';
 import { workspaceForChannel, type Platform } from '../lib/zidolista.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { MEDIA_ID_RE } from '../lib/gifIds.js';
@@ -131,6 +131,10 @@ export interface GifStateView {
   /** Délka cooldownu odměny (s) — klient ji po odeslání GIFu nastaví lokálně. */
   cooldownSec: number;
   serverNow: number;
+  /** Režim odměny (`approved` = jen GIFy z knihovny, platí i pro mody); bez odpovědi Židolišty `all`. */
+  mode: GifMode;
+  /** Cooldown celého chatu (s) ze Židolišty — jen k zobrazení (`cooldownUntil` už je pozdější z obou). */
+  cooldownGlobalSec: number;
   /** Mod / broadcaster bez Dev módu: GIF se schválí rovnou, cooldown se neuplatňuje. */
   mod?: true;
 }
@@ -142,7 +146,7 @@ export interface GifStateView {
  */
 export async function gifStateFor(accountId: number, q: { channel: string; platform?: Platform | null; review?: boolean }, deps: GifStateDeps): Promise<GifStateView> {
   const now = deps.now();
-  const none: GifStateView = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: now };
+  const none: GifStateView = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: now, mode: 'all', cooldownGlobalSec: 0 };
   const slug = await deps.workspaceSlug(q.channel);
   if (!slug) return none;
   const ids = await deps.identities(accountId);
@@ -150,8 +154,10 @@ export async function gifStateFor(accountId: number, q: { channel: string; platf
   if (!ident) return none;
   const pc = ident.platform === 'twitch' ? q.channel : await deps.platformChannel(q.channel, ident.platform);
   const role = pc ? await deps.role(ident.platform, ident.login, pc) : 'viewer';
-  if ((role === 'moderator' || role === 'broadcaster') && !q.review) return { ...none, allowed: true, mod: true };
   const a = await deps.access({ workspace: slug, platform: ident.platform, userId: ident.platformUserId, login: ident.login.toLowerCase(), role });
+  const extra = { mode: a?.mode ?? 'all', cooldownGlobalSec: a?.cooldownGlobalSec ?? 0 } as const;
+  // Mod: povoleno a bez cooldownu; ze Židolišty jen režim (approved platí i pro mody).
+  if ((role === 'moderator' || role === 'broadcaster') && !q.review) return { ...none, ...extra, allowed: true, mod: true };
   if (!a) return none;
   return {
     ok: true,
@@ -159,6 +165,7 @@ export async function gifStateFor(accountId: number, q: { channel: string; platf
     cooldownUntil: a.cooldownUntil !== null && a.cooldownUntil > now ? a.cooldownUntil : null,
     cooldownSec: a.cooldownSec,
     serverNow: now,
+    ...extra,
   };
 }
 

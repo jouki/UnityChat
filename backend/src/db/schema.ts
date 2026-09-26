@@ -161,6 +161,53 @@ export const gifMedia = pgTable('gif_media', {
   width: integer('width'),
   height: integer('height'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // GIF knihovna (backend/sql/2026-09-26-gif-library.sql): kanál, dedup URL, stav, počítadla použití.
+  channel: text('channel'),                          // UC kanál (knihovna je per kanál)
+  sourceUrlNorm: text('source_url_norm'),            // normalizovaná URL zdroje (lib/gifMedia.ts normalizeSourceUrl)
+  status: text('status').notNull().default('pending'), // pending | approved | rejected
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+  rejectedBy: text('rejected_by'),
+  vault: boolean('vault').notNull().default(false),  // zamítnutý, ale retence 14 dní se na něj nevztahuje
+  useCount: integer('use_count').notNull().default(0),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+});
+export type GifMediaRow = typeof gifMedia.$inferSelect;
+
+// Kolikrát byl GIF zamítnut uživateli (3.+ pokus = automaticky zamítnuto).
+export const gifRejections = pgTable(
+  'gif_rejections',
+  {
+    channel: text('channel').notNull(),
+    mediaId: text('media_id').notNull(),
+    platform: text('platform').notNull(),
+    userId: text('user_id').notNull(),
+    count: integer('count').notNull().default(0),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.mediaId, t.platform, t.userId], name: 'gif_rejections_pkey' }) }),
+);
+
+// „Automaticky zahazovat 12 h" (GIF od všech).
+export const gifBans = pgTable(
+  'gif_bans',
+  {
+    channel: text('channel').notNull(),
+    mediaId: text('media_id').notNull(),
+    until: timestamp('until', { withTimezone: true }).notNull(),
+    by: text('by'),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.mediaId], name: 'gif_bans_pkey' }) }),
+);
+
+// Tokeny pro zamítnutá média (/media/gif/:id?t=) — v DB jen SHA-256 hash.
+export const gifAccessTokens = pgTable('gif_access_tokens', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }),
+  integrationSlug: text('integration_slug'),
+  tokenHash: text('token_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
 });
 
 export const gifRequests = pgTable(
@@ -179,7 +226,7 @@ export const gifRequests = pgTable(
     kind: text('kind').notNull(),
     width: integer('width'),
     height: integer('height'),
-    meta: jsonb('meta').notNull().default({}),       // { color, badges } z původní zprávy (vykreslení jména)
+    meta: jsonb('meta').notNull().default({}),       // { displayName, sentAt, color, badges, auto?, instant?, previouslyRejected? }
     status: text('status').notNull().default('pending'), // pending | approved | rejected | expired | deleted
     decidedBy: text('decided_by'),
     decidedAt: timestamp('decided_at', { withTimezone: true }),

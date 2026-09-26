@@ -70,25 +70,36 @@ function stateDeps(over: Partial<GifStateDeps> = {}, log: unknown[] = []): GifSt
 test('gifStateFor: cooldown vlastní identity na platformě, kam píše (role z archivu), serverNow', async () => {
   const log: unknown[] = [];
   const s = await gifStateFor(7, { channel: 'robdiesalot', platform: 'kick' }, stateDeps({}, log));
-  assert.deepEqual(s, { ok: true, allowed: true, cooldownUntil: 2_030_000, cooldownSec: 120, serverNow: 2_000_000 });
+  assert.deepEqual(s, { ok: true, allowed: true, cooldownUntil: 2_030_000, cooldownSec: 120, serverNow: 2_000_000, mode: 'all', cooldownGlobalSec: 0 });
   assert.deepEqual(log[0], { workspace: 'rob', platform: 'kick', userId: 'k9', login: 'divak_k', role: 'sub' });
   // Prošlý cooldown → null; bez platformy první identita.
   const past = await gifStateFor(7, { channel: 'robdiesalot' }, stateDeps({ access: async () => ({ allowed: true, until: null, cooldownUntil: 1, cooldownSec: 60, requestTtlSec: 300 }) }));
   assert.equal(past.cooldownUntil, null);
 });
 
-test('gifStateFor: mod bez Dev módu = povoleno bez cooldownu (Židolišta se neptá); s review jako divák', async () => {
+test('gifStateFor: mod bez Dev módu = povoleno bez cooldownu (Židolišta jen kvůli režimu); s review jako divák', async () => {
   const log: unknown[] = [];
   const mod = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator' }, log));
-  assert.deepEqual(mod, { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 2_000_000, mod: true });
-  assert.equal(log.length, 0);
+  assert.deepEqual(mod, { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 2_000_000, mode: 'all', cooldownGlobalSec: 0, mod: true });
+  // Režim „jen schválené" platí i pro mody → i jim se vrací.
+  const modApproved = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator', access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300, mode: 'approved' }) }));
+  assert.equal(modApproved.mode, 'approved');
+  assert.equal(modApproved.allowed, true);
+  assert.equal((await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator', access: async () => null }))).mode, 'all');
+  log.length = 0;
   const rev = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch', review: true }, stateDeps({ role: async () => 'moderator' }, log));
   assert.equal(rev.cooldownUntil, 2_030_000);
   assert.equal((log[0] as { role: string }).role, 'moderator');
 });
 
+test('gifStateFor: režim a globální cooldown ze Židolišty (klient je zobrazí)', async () => {
+  const s = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 300, mode: 'approved', cooldownGlobalSec: 30 }) }));
+  assert.equal(s.mode, 'approved');
+  assert.equal(s.cooldownGlobalSec, 30);
+});
+
 test('gifStateFor: neznámý kanál / bez identity na platformě / Židolišta nedostupná → neodemčeno', async () => {
-  const none = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: 2_000_000 };
+  const none = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: 2_000_000, mode: 'all', cooldownGlobalSec: 0 };
   assert.deepEqual(await gifStateFor(7, { channel: 'cizi' }, stateDeps()), none);
   assert.deepEqual(await gifStateFor(7, { channel: 'robdiesalot', platform: 'youtube' }, stateDeps()), none);
   assert.deepEqual(await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => null })), none);

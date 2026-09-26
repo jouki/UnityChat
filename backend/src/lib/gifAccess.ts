@@ -1,7 +1,8 @@
 // Odměna „Posílání GIFů" (moderace část 4): má uživatel GIFy odemčené? Zdroj pravdy = Židolišta (typ akce
 // v labelu, časovač, cooldown). Kontrakt (2026-09-25, session robjewsalot):
 //   GET  <ZIDOLISTA_API_BASE>/integrations/:slug/gif-access?platform=&userId=&login=&role=
-//        → { ok, serverNow, allowed, until|null, cooldownUntil|null, cooldownSec, requestTtlSec }
+//        → { ok, serverNow, allowed, until|null, cooldownUntil|null, cooldownSec, requestTtlSec, mode, cooldownGlobalSec }
+//          (mode 'all'|'approved' a cooldownGlobalSec od 2026-09-26; cooldownUntil = pozdější z globálního a osobního)
 //   POST <ZIDOLISTA_API_BASE>/integrations/:slug/gif-used { platform, userId } → { ok, cooldownUntil }
 //   Webhook POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } } → cache workspace pryč.
 // Cache 60 s per (workspace, platforma, uživatel, role). Čas Židolišty se převádí na lokální přes serverNow
@@ -28,7 +29,16 @@ export interface GifAccess {
   cooldownSec: number;
   /** Jak dlouho čeká žádost na schválení (s), výchozí 300. */
   requestTtlSec: number;
+  /**
+   * Režim odměny (GIF knihovna 2026-09-26): `all` = nové GIFy přes schvalování + knihovna, `approved` = jen
+   * schválené (knihovna, známé duplikáty) — platí i pro mody. Chybí = `all`.
+   */
+  mode?: GifMode;
+  /** Cooldown celého chatu (s) — jen pro zobrazení v /gif/state; `cooldownUntil` už je pozdější z obou. */
+  cooldownGlobalSec?: number;
 }
+
+export type GifMode = 'all' | 'approved';
 
 export const DEFAULT_REQUEST_TTL_SEC = 300;
 const CACHE_MS = 60_000;
@@ -46,12 +56,15 @@ export function normalizeGifAccess(raw: unknown, localNow: number): GifAccess {
   const shift = (v: unknown): number | null => { const t = toMs(v); return t === null ? null : t - serverNow + localNow; };
   const ttl = Number(r.requestTtlSec);
   const cd = Number(r.cooldownSec);
+  const gcd = Number(r.cooldownGlobalSec);
   return {
     allowed: r.allowed === true,
     until: shift(r.until),
     cooldownUntil: shift(r.cooldownUntil),
     cooldownSec: Number.isFinite(cd) && cd >= 0 ? Math.min(cd, 86_400) : 0,
     requestTtlSec: Number.isFinite(ttl) && ttl >= 30 ? Math.min(ttl, 3600) : DEFAULT_REQUEST_TTL_SEC,
+    mode: r.mode === 'approved' ? 'approved' : 'all',
+    cooldownGlobalSec: Number.isFinite(gcd) && gcd >= 0 ? Math.min(gcd, 86_400) : 0,
   };
 }
 

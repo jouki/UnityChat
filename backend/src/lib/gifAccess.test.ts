@@ -7,11 +7,19 @@ const quiet = { warn() {} };
 
 test('normalizeGifAccess: čas Židolišty → lokální (serverNow), výchozí requestTtlSec 300, jen allowed === true', () => {
   const a = normalizeGifAccess({ ok: true, serverNow: 10_000, allowed: true, until: 70_000, cooldownUntil: 20_000, cooldownSec: 30, requestTtlSec: 120 }, 1_000_000);
-  assert.deepEqual(a, { allowed: true, until: 1_060_000, cooldownUntil: 1_010_000, cooldownSec: 30, requestTtlSec: 120 });
+  assert.deepEqual(a, { allowed: true, until: 1_060_000, cooldownUntil: 1_010_000, cooldownSec: 30, requestTtlSec: 120, mode: 'all', cooldownGlobalSec: 0 });
   const iso = normalizeGifAccess({ serverNow: '2026-09-25T10:00:00Z', allowed: true, until: '2026-09-25T10:01:00Z', cooldownUntil: null }, 5000);
   assert.equal(iso.until, 65_000);
   assert.equal(iso.requestTtlSec, 300);
   assert.equal(normalizeGifAccess({ allowed: 'true' }, 0).allowed, false);
+});
+
+test('normalizeGifAccess: mode all|approved (chybí / neznámé = all), cooldownGlobalSec', () => {
+  assert.equal(normalizeGifAccess({ allowed: true, mode: 'approved' }, 0).mode, 'approved');
+  assert.equal(normalizeGifAccess({ allowed: true, mode: 'cokoli' }, 0).mode, 'all');
+  assert.equal(normalizeGifAccess({ allowed: true }, 0).mode, 'all');
+  assert.equal(normalizeGifAccess({ allowed: false, mode: 'all', cooldownGlobalSec: 45 }, 0).cooldownGlobalSec, 45);
+  assert.equal(normalizeGifAccess({ cooldownGlobalSec: -3 }, 0).cooldownGlobalSec, 0);
 });
 
 test('gifUsable: odemčeno, nevypršelo, bez cooldownu', () => {
