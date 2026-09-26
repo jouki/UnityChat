@@ -330,6 +330,24 @@ check('A2 živě: schválený GIF nahradí původní zprávu na jejím místě',
   && await ev(`document.querySelector('.msg[data-msg-id="gif-50"]').nextElementSibling?.dataset.msgId || null`) === 'e2e-live2', `prev=${prevLive1} order=${await order()}`);
 mock.sse.push(DEL('e2e-live2', 'gif_rejected'));
 check('A2 živě: zamítnuto (gif_rejected) → běžně smazaná zpráva', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live2"]'); return !!m && getComputedStyle(m).display !== 'none' && m.classList.contains('uc-deleted') && !m.classList.contains('uc-gif-held'); })()`, 8000));
+// Živě 2026-09-26 (web): mod poslal GIF odkaz, server ho schválil rovnou → gif-N s časem původní zprávy, text jen
+// UC marker, `replaces`. Původní zpráva byla poslední a schovaná (0 px) → GIF na jejím místě musí zůstat ve výhledu
+// (uživatel dole zůstane dole), jednou, i když gif-message dorazí dvakrát.
+for (let i = 0; i < 25; i++) mock.sse.push(LIVE(`e2e-fill${i}`, `výplň ${i}`, Date.now() + i));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-fill24"]')`, 8000);
+await ev(`(() => { const c = document.getElementById('chat'); c.scrollTop = c.scrollHeight; return true; })()`);
+await sleep(500);
+const TS60 = Date.now() + 100;
+mock.sse.push(LIVE('e2e-live60', `${URL4} ⠀`, TS60));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-live60"]')`, 8000);
+mock.sse.push(DEL('e2e-live60', 'gif_request'));
+check('A2 živě GIF modem: původní zpráva (poslední) schovaná', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-live60"]'); return !!m && getComputedStyle(m).display === 'none'; })()`, 8000));
+const GM60 = ['gif-message', { channel: 'robdiesalot', requestId: 60, message: { platform: 'twitch', id: 'gif-60', username: 'Jouki', userId: 'u5', message: '⠀', timestamp: TS60, historical: false, color: '#1e90ff', badgesRaw: 'moderator/1', gif: { url: murl(MEDIA.ok), kind: 'gif', width: 60, height: 120 }, replaces: 'twitch:e2e-live60' } }];
+mock.sse.push(GM60, GM60);
+check('A2 živě GIF modem: gif-60 vidět na místě původní zprávy, jednou, s médiem', await until(`(() => { const els = document.querySelectorAll('.msg[data-msg-id="gif-60"]'); const m = els[0]; return els.length === 1 && getComputedStyle(m).display !== 'none' && !!m.querySelector('.uc-gif img') && !document.querySelector('.msg[data-msg-id="e2e-live60"]'); })()`, 8000), await order());
+const gifInView = `(() => { const c = document.getElementById('chat'); const m = document.querySelector('.msg[data-msg-id="gif-60"]'); if (!m) return false; return c.scrollHeight - c.scrollTop - c.clientHeight < 2 && m.getBoundingClientRect().bottom <= c.getBoundingClientRect().bottom + 1; })()`;
+check('A2 živě GIF modem: chat zůstal dole, gif-60 celý ve výhledu', await until(gifInView, 3000),
+  await ev(`(() => { const c = document.getElementById('chat'); const m = document.querySelector('.msg[data-msg-id="gif-60"]'); return JSON.stringify({ gap: c.scrollHeight - c.scrollTop - c.clientHeight, bottom: m && Math.round(m.getBoundingClientRect().bottom), chatBottom: Math.round(c.getBoundingClientRect().bottom) }); })()`));
 // Mod (bez Dev módu) píše GIF: stav mod → bez bubliny, odeslání bez gifReview.
 const typeIn = (text) => ev(`(() => { const i = document.getElementById('msg-input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 const clickSend = () => ev(`(() => { const b = document.getElementById('btn-send'); b.disabled = false; b.click(); return true; })()`);
