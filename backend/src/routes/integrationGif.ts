@@ -4,7 +4,9 @@
 //   GET  /integrations/:slug/gifs?q=&cursor=&limit=                         schválené GIFy kanálu + tagy (jako /gifs/library)
 //   PUT  /integrations/:slug/gifs/:mediaId/tags { tags, actor? }            úprava tagů (normalizace)
 //   GET  /integrations/:slug/gifs/rejected?before=<ms>:<mediaId>            zamítnuté GIFy (jako /moderation/gif/rejected)
-//   POST /integrations/:slug/gifs/:mediaId/{approve|vault|purge|ban12h|unapprove} { actor? }
+//   GET  /integrations/:slug/gifs/{withdrawn|purging}?before=<ms>:<mediaId> zahozené (Stažené / Ke smazání)
+//   POST /integrations/:slug/gifs/:mediaId/{approve|vault|purge|ban12h|unapprove|restore|remove-file} { actor?, keepMessages? }
+//        purge bez keepMessages = „Zahodit i se zprávami“ (7 dní, restore); keepMessages:true = stažený (remove-file)
 //   GET  /integrations/:slug/gifs/duplicates                                návrhy duplikátů (čekající)
 //   POST /integrations/:slug/gifs/duplicates/:id/{keep-first|keep-second|keep-both} { actor? }
 //   POST /integrations/:slug/gifs/access-token                              integrační token pro zamítnutá média (jen jednou)
@@ -26,14 +28,14 @@ import {
   type DuplicateDeps, type GifLibraryStore,
 } from '../lib/gifLibrary.js';
 import { ActorSchema } from './integrationModeration.js';
-import { parseRejectedCursor, rejectedView, type MediaServer } from './gif.js';
+import { parseRejectedCursor, rejectedView, discardedPage, parseMediaActionBody, DISCARDED_STATUSES, type MediaServer } from './gif.js';
 import { RateLimiter } from './chat.js';
 
 export interface IntegrationGifOpts {
   flow: Pick<GifFlow, 'mediaAction'>;
   media: MediaServer;
   /** Testy; chybí = DB. */
-  store?: Pick<GifStore, 'getMedia' | 'listRejected'>;
+  store?: Pick<GifStore, 'getMedia' | 'listRejected' | 'listDiscarded'>;
   library?: GifLibraryStore;
   workspaceBySlug?: (slug: string) => Promise<WorkspaceInfo | null>;
   /** Ověření požadavku (testy); chybí = inboundAuthorized. true = pustit, jinak odpověď už odešla. */
@@ -118,6 +120,18 @@ export default async function integrationGifRoutes(app: FastifyInstance, opts: I
     } catch (e) { return fail(reply, e, 'zamítnuté'); }
   });
 
+  // Zahozené GIFy (Stažené = withdrawn, Ke smazání = purging) jako /moderation/gif/withdrawn|purging.
+  for (const status of DISCARDED_STATUSES) {
+    app.get<{ Params: { slug: string }; Querystring: { before?: string } }>(`/integrations/:slug/gifs/${status}`, async (req, reply) => {
+      const g = await gate(req, reply);
+      if (!g) return reply;
+      const before = parseRejectedCursor(req.query.before);
+      if (before === false) return reply.code(400).send({ ok: false, error: 'before' });
+      try { return reply.send(await discardedPage(store, g.channel, status, before)); }
+      catch (e) { return fail(reply, e, status === 'withdrawn' ? 'stažené' : 'ke smazání'); }
+    });
+  }
+
   app.get<{ Params: { slug: string } }>('/integrations/:slug/gifs/duplicates', async (req, reply) => {
     const g = await gate(req, reply);
     if (!g) return reply;
@@ -157,12 +171,14 @@ export default async function integrationGifRoutes(app: FastifyInstance, opts: I
     const mediaId = String(req.params.mediaId || '');
     if (!action || !MEDIA_ID_RE.test(mediaId)) return reply.code(404).send({ ok: false, error: 'not_found' });
     const by = actorOf(req.body);
-    if (by === null) return reply.code(400).send({ ok: false, error: 'body' });
+    // purge: `keepMessages` (boolean); chybí = „Zahodit i se zprávami“ (dnešní dashboard, 7 dní na obnovu).
+    const body = parseMediaActionBody(req.body);
+    if (by === null || !body) return reply.code(400).send({ ok: false, error: 'body' });
     try {
       // Médium musí patřit kanálu workspace (izolace workspaců).
       const md = await store.getMedia(mediaId);
       if (!md || md.channel !== g.channel) return reply.code(404).send({ ok: false, error: 'not_found' });
-      const out = await opts.flow.mediaAction({ mediaId, action, by, accountId: null });
+      const out = await opts.flow.mediaAction({ mediaId, action, by, accountId: null, keepMessages: body.keepMessages });
       if (out.status === 200) req.log.info({ workspace: g.slug, action }, 'integration gif: akce nad médiem');
       return reply.code(out.status).send(out.body);
     } catch (e) { return fail(reply, e, 'akce nad médiem'); }

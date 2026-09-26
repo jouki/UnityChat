@@ -166,7 +166,9 @@ export const gifMedia = pgTable('gif_media', {
   // GIF knihovna (backend/sql/2026-09-26-gif-library.sql): kanál, dedup URL, stav, počítadla použití.
   channel: text('channel'),                          // UC kanál (knihovna je per kanál)
   sourceUrlNorm: text('source_url_norm'),            // normalizovaná URL zdroje (lib/gifMedia.ts normalizeSourceUrl)
-  status: text('status').notNull().default('pending'), // pending | approved | rejected
+  // pending | approved | rejected | withdrawn (zahozeno, zprávy nechat) | purging (zahozeno i se zprávami, smaže se
+  // v purge_at) | unavailable (stažený GIF, soubor smazán; řádek zůstává kvůli štítku ve zprávách a dedupu)
+  status: text('status').notNull().default('pending'),
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   rejectedAt: timestamp('rejected_at', { withTimezone: true }),
   rejectedBy: text('rejected_by'),
@@ -178,6 +180,12 @@ export const gifMedia = pgTable('gif_media', {
   phash: text('phash').array(),                      // dHashy (16 hex) z 8 snímků; null = nespočítáno / selhalo
   phashAt: timestamp('phash_at', { withTimezone: true }),          // pokus o hash (i neúspěšný); null = čeká
   dupCheckedAt: timestamp('dup_checked_at', { withTimezone: true }), // porovnáno s médii kanálu
+  // „Trvale zahodit“ (backend/sql/2026-09-27-gif-purge.sql): kdy a kým, kdy se smaže (jen purging) a stav před
+  // zahozením (obnova: approved zpět do knihovny, rejected zpět do zamítnutých).
+  purgedAt: timestamp('purged_at', { withTimezone: true }),
+  purgedBy: text('purged_by'),
+  purgeAt: timestamp('purge_at', { withTimezone: true }),
+  statusBeforePurge: text('status_before_purge'),
 });
 export type GifMediaRow = typeof gifMedia.$inferSelect;
 

@@ -124,3 +124,25 @@ test('I2 gifMediaGone + toClientMessage: GIF odebraný z knihovny / zahozený �
   // Bez množiny (živé zprávy, jiná místa) beze změny.
   assert.equal(toClientMessage(rows[1]).gif !== undefined, true);
 });
+
+test('gifMediaGone: zahozené GIFy v historii — withdrawn normálně, purging smazaná (gif_removed), unavailable se štítkem', async () => {
+  const W = 'a'.repeat(32), P = 'b'.repeat(32), U = 'c'.repeat(32);
+  const gifRow = (n: number, mediaId: string): Message => ({ ...base, id: n, platformMessageId: `gif-${n}`, content: 'hele lol', isReply: false, replyToMessageId: null, contentRaw: { gif: { mediaId, kind: 'gif', width: 10, height: 10 } } });
+  const rows = [gifRow(1, W), gifRow(2, P), gifRow(3, U)];
+  const gone = await gifMediaGone(rows, async () => new Map([[W, 'withdrawn'], [P, 'purging'], [U, 'unavailable']]));
+  assert.deepEqual([...gone], [P]);
+  assert.deepEqual([...(gone.unavailable ?? [])], [U]);
+  const w = toClientMessage(rows[0], true, gone);
+  assert.equal(w.gif?.unavailable, undefined);
+  assert.equal(w.deleted, undefined);
+  assert.equal(toClientMessage(rows[1], true, gone).deletedReason, 'gif_removed');
+  const u = toClientMessage(rows[2], true, gone);
+  assert.equal(u.deleted, undefined, 'zpráva zůstává');
+  assert.equal(u.message, 'hele lol', 'text nad GIFem zůstává');
+  assert.equal(u.gif?.unavailable, true);
+  assert.equal(u.gif?.url.endsWith(`/media/gif/${U}`), true, 'URL zůstává (starší klienti: 404 → „GIF odebrán“)');
+  // Jen unavailable (bez smazaných) — toClientMessage ho pozná i při prázdné množině gone.
+  const onlyU = await gifMediaGone([rows[2]], async () => new Map([[U, 'unavailable']]));
+  assert.equal(onlyU.size, 0);
+  assert.equal(toClientMessage(rows[2], true, onlyU).gif?.unavailable, true);
+});

@@ -29,6 +29,7 @@ function setup(over: Partial<IntegrationGifOpts> = {}) {
     store: {
       getMedia: async (id) => (mediaCh[id] ? { id, channel: mediaCh[id], status: 'rejected', kind: 'gif', width: 1, height: 2, sha256: 'x', approvedAt: null, rejectedAt: new Date(5000), rejectedBy: 'twitch:m', vault: false } : null),
       listRejected: async (ch, before, limit) => { calls.push(['listRejected', { ch, before, limit }]); return []; },
+      listDiscarded: async () => [],
     },
     library: library as GifLibraryStore,
     issueToken: async (slug) => { calls.push(['issueToken', slug]); return 'TAJNY-TOKEN'; },
@@ -54,6 +55,8 @@ test('integrace GIF: bez platného podpisu (inboundAuthorized) 401 na všech rou
     ['GET', '/integrations/rob/gifs'], ['PUT', `/integrations/rob/gifs/${M('a')}/tags`], ['GET', '/integrations/rob/gifs/rejected'],
     ['POST', `/integrations/rob/gifs/${M('a')}/approve`], ['POST', `/integrations/rob/gifs/${M('a')}/unapprove`],
     ['GET', '/integrations/rob/gifs/duplicates'], ['POST', '/integrations/rob/gifs/duplicates/3/keep-both'],
+    ['GET', '/integrations/rob/gifs/withdrawn'], ['GET', '/integrations/rob/gifs/purging'],
+    ['POST', `/integrations/rob/gifs/${M('a')}/restore`], ['POST', `/integrations/rob/gifs/${M('a')}/remove-file`],
     ['POST', '/integrations/rob/gifs/access-token'],
   ];
   for (const [method, url] of routes) {
@@ -108,6 +111,30 @@ test('integrace GIF: tagy, zamítnuté, akce nad médiem (by zidolista:<id>), du
   assert.deepEqual(tok.json(), { ok: true, token: 'TAJNY-TOKEN' });
   assert.equal(tok.headers['cache-control'], 'no-store');
   assert.deepEqual(calls.find((c) => c[0] === 'issueToken'), ['issueToken', 'rob']);
+  await a.close();
+});
+
+test('integrace GIF: purge bez keepMessages = i se zprávami (zpětná kompatibilita), keepMessages true/false, restore, remove-file, withdrawn/purging seznamy', async () => {
+  const listed: unknown[] = [];
+  const { opts, calls } = setup();
+  opts.store = { ...opts.store!, listDiscarded: async (ch, status, before, limit) => { listed.push({ ch, status, before, limit }); return []; } };
+  const a = await app(opts);
+  await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('a')}/purge`, payload: { actor } });
+  await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('a')}/purge`, payload: { actor, keepMessages: true } });
+  await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('a')}/purge`, payload: { actor, keepMessages: false } });
+  assert.equal((await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('a')}/purge`, payload: { actor, keepMessages: 1 } })).statusCode, 400);
+  for (const action of ['restore', 'remove-file']) assert.equal((await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('a')}/${action}`, payload: { actor } })).statusCode, 200, action);
+  const acts = calls.filter((c) => c[0] === 'mediaAction').map((c) => c[1] as { action: string; keepMessages: boolean });
+  assert.deepEqual(acts.map((x) => [x.action, x.keepMessages]), [['purge', false], ['purge', true], ['purge', false], ['restore', false], ['remove-file', false]]);
+  // Cizí médium i pro nové akce 404.
+  assert.equal((await a.inject({ method: 'POST', url: `/integrations/rob/gifs/${M('b')}/restore`, payload: { actor } })).statusCode, 404);
+  assert.deepEqual((await a.inject({ method: 'GET', url: '/integrations/rob/gifs/withdrawn' })).json(), { ok: true, items: [], nextBefore: null });
+  await a.inject({ method: 'GET', url: `/integrations/rob/gifs/purging?before=5000:${M('a')}` });
+  assert.deepEqual(listed, [
+    { ch: 'robdiesalot', status: 'withdrawn', before: null, limit: 50 },
+    { ch: 'robdiesalot', status: 'purging', before: { at: new Date(5000), id: M('a') }, limit: 50 },
+  ]);
+  assert.equal((await a.inject({ method: 'GET', url: '/integrations/rob/gifs/purging?before=zz' })).statusCode, 400);
   await a.close();
 });
 

@@ -131,6 +131,10 @@
   i když dorazí dřív než výsledek platformy (očekávané echo se ohlásí před voláním, po selhání se zruší);
   re-timeout odjinud s jinou délkou projde (nové `until`).
 
+`gif-media` (2026-09-27) — změna viditelnosti zpráv se schváleným GIFem po zahození / obnově / odstranění souboru
+/ odebrání z knihovny: `{ channel, mediaId, state: "visible"|"removed"|"unavailable", messages? }`, viz Část 4
+„Trvale zahodit — dvě varianty".
+
 ## Integrace Židolišty (X-Api-Key + HMAC, `inboundAuthorized`)
 
 `POST /integrations/:slug/moderation/timeout | ban | unban`
@@ -755,9 +759,11 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
   ban12h nad schváleným `409 { error: "approved" }`, unapprove nad neschváleným `409 { error: "not_approved", status }`.
   - `approve` — do knihovny (approved); samo do chatu nic, ale **čekající žádosti na totéž médium se schválí**
     (jejich GIFy pak jdou do chatu jako při běžném schválení; odpověď `requests: N`); `vault` — zůstane zamítnutý,
-    retence se na něj nevztahuje; `purge` — **nejdřív zamítne čekající žádosti na médium** (`requests: N`), pak trvale
-    smaže (i počítadla a zákaz); `ban12h` — „Automaticky zahazovat 12 h" (od všech), médium se označí `rejected` a
-    **čekající žádosti na médium se hned zamítnou** (`by` = mod).
+    retence se na něj nevztahuje; `purge` — **nejdřív zamítne čekající žádosti na médium** (`requests: N`), pak
+    **od 2026-09-27 nemaže hned**: viz „Trvale zahodit — dvě varianty" níž (`keepMessages`, bez něj 7 dní na obnovu);
+    `ban12h` — „Automaticky zahazovat 12 h" (od všech), médium se označí `rejected` a
+    **čekající žádosti na médium se hned zamítnou** (`by` = mod); nad zahozeným `409 { error: "already_purged" }`.
+  - Položka zamítnutých nese od 2026-09-27 i `tags` (náhled).
   - **Odebrat z knihovny** (Task 2): `unapprove` — schválený GIF → zamítnutý (`rejected_at/by`, bez `approved_at`
     a vaultu → retence 14 dní, od té chvíle jen s tokenem; staré zprávy s ním ho bez tokenu nenačtou); `purge` nad
     **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou). **Záměrně:** `unapprove`
@@ -845,3 +851,67 @@ Nic se neslučuje samo.
   zamítnutá média (`/media/gif/<id>?t=<token>`), platí pro kanál workspace; vrací se **jen tady**, v DB jen SHA-256,
   nový zneplatní předchozí. Dashboard si ho drží; `404` na médiu = vyžádat nový.
 - `actor` (volitelný) = `{ source: "zidolista", userId, name, role }` jako u moderace; neplatný `400 body`.
+
+### Trvale zahodit — dvě varianty + náhled (2026-09-27, spec `docs/superpowers/specs/2026-09-27-gif-nahled-zahozeni-design.md`)
+**SQL `backend/sql/2026-09-27-gif-purge.sql` spustit PŘED nasazením** (idempotentní): `gif_media` + `purged_at`,
+`purged_by`, `purge_at`, `status_before_purge`; indexy pro seznamy zahozených a retenční tick. `status` je text bez CHECK
+— nové stavy **`withdrawn`**, **`purging`**, **`unavailable`**. Bez SQL backend na nové sloupce padá (42703).
+
+**Stavy a přechody:**
+- `approved | rejected` —`purge { keepMessages: true }`→ **`withdrawn`** („Zahodit, zprávy nechat"): mimo knihovnu
+  i zamítnuté, soubor zůstává, staré zprávy GIF ukazují **veřejně** (i dříve odebrané z knihovny se znovu ukážou).
+- `approved | rejected` —`purge` bez `keepMessages` / `false`→ **`purging`** („Zahodit i se zprávami"): zprávy hned
+  schované (`gif_removed`), `purge_at` = teď + **7 dní**; retenční tick (1×/h) pak smaže soubor i záznam.
+  **Zpětně kompatibilní:** dnešní `purge` bez parametru = tahle varianta (dřív mazal hned, teď 7 dní + obnova).
+- `purging` —`restore`→ stav před zahozením (`status_before_purge`: approved zpět do knihovny + zprávy vidět, rejected
+  zpět do zamítnutých). Stejný obsah mezitím schválený jako jiné médium → sloučení do něj (jako duplikát).
+- `withdrawn` —`remove-file`→ **`unavailable`**: bajty smazané, záznam zůstává; zprávy ukážou štítek „[GIF nedostupný]".
+  **Nevratné.** `/media/gif` tombstone.
+- Čekající žádosti na médium `purge` nejdřív zamítne (`requests: N`). Zahozené se nesloučí jako duplikát (návrhy
+  s ním se neukazují, sloučení `409 gone`) a nedostane `ban12h` (`409 already_purged`).
+
+**Dedup:** nový odkaz (stejná normalizovaná URL / sha256 / náš odkaz `…/media/gif/<id>`) na `withdrawn`, `purging` nebo
+`unavailable` médium = **automaticky zamítnuto** (jako zákaz 12 h; i od moda — auto-schválení by zahozené vrátilo
+do knihovny): původní zpráva smazaná `gif_rejected`, odesílateli `gif-notice { kind: "auto_rejected", reason: "purged" }`,
+audit `gif_auto_reject` (`reason: "purged"`). Pořadí `findMedia`: approved > zahozené > rejected > pending.
+
+**UC routy (Bearer, mod kanálu média):**
+- `POST /moderation/gif/:mediaId/purge { keepMessages?: boolean }` → `200 { ok, mediaId, action: "purge", status:
+  "withdrawn"|"purging", purgeAt?: <ms>, requests? }`; čekající médium `409 not_rejected`, už zahozené
+  `409 { error: "already_purged", status }`, `keepMessages` jiného typu než boolean `400 body`.
+- `POST /moderation/gif/:mediaId/restore` → `200 { ok, mediaId, action, status: "approved"|"rejected" }`; jiný stav
+  než purging `409 { error: "not_purging", status }`.
+- `POST /moderation/gif/:mediaId/remove-file` → `200 { ok, mediaId, action, status: "unavailable" }`; jiný stav než
+  withdrawn `409 { error: "not_withdrawn", status }`.
+- `GET /moderation/gif/withdrawn?channel=&before=` a `GET /moderation/gif/purging?channel=&before=` (mod kanálu,
+  `no-store`) → `{ ok, items: [{ mediaId, url, kind, width, height, tags, status, purgedAt, purgedBy, purgeAt|null,
+  restoreTo: "approved"|"rejected" }], nextBefore|null }` — nejnovější zahození první, stránka 50, kurzor
+  `"<purgedAt ms>:<mediaId>"`, neplatný `400 before`. `url` bez tokenu (purging ho potřebuje).
+- Audit `moderation_actions` `gif_media_purge` (`params.keepMessages`), `gif_media_restore`, `gif_media_remove_file`.
+
+**Integrace Židolišty:** stejné akce `POST /integrations/:slug/gifs/:mediaId/purge|restore|remove-file { actor?,
+keepMessages? }` (purge bez `keepMessages` = i se zprávami) a `GET /integrations/:slug/gifs/withdrawn|purging?before=`.
+
+**`/media/gif/:id`:** `withdrawn` veřejně (`public, max-age=300`, v paměťové cache), `purging` jen s tokenem moda /
+integrace (`private, no-store`; náhled v „Ke smazání"), `unavailable` `404`. Cache se invaliduje při každé změně stavu
+(zahození, obnova, odebrání), `remove-file` a smazání po 7 dnech = tombstone.
+
+**Zprávy (`/chat/history`, Profil, stream):** podle stavu média (`gifMessageState`, jeden dotaz na stránku):
+`approved`, `pending` (alias), `withdrawn` → GIF normálně; `rejected`, `purging`, médium neexistuje → smazaná
+`{ message: '', deleted: true, deletedReason: "gif_removed" }` bez `gif`; `unavailable` → **nesmazaná** zpráva s textem
+a `gif: { url, kind, width, height, unavailable: true }` (URL zůstává — starší klient dostane 404 → „GIF odebrán").
+
+**SSE `gif-media` na `/nicknames/stream` (veřejné) — jen když se změní viditelnost zpráv s GIFem:**
+`{ channel, mediaId, state: "visible"|"removed"|"unavailable", messages?: [<zpráva jako /chat/history>] }`.
+- `removed` (unapprove, purge → purging): klient zprávy s tímto médiem ukáže jako smazané `gif_removed`.
+- `unavailable` (remove-file): klient místo média ukáže štítek „[GIF nedostupný]" (text zůstává).
+- `visible` (restore do knihovny, approve ze zamítnutých, purge odebraného z knihovny se `keepMessages`): nese
+  `messages` (nejvýš 200 nejnovějších syntetických zpráv `gif-<id>` s obsahem, nesmazané modem) — klient je
+  vykreslí na místě jako obnovené (má je jen jako smazané bez obsahu). Bez zpráv se nepošle.
+- Nenese interní stav média ani kdo zahodil. Řeší i dřívější M5 (odebrání z knihovny se otevřeným klientům projeví hned).
+
+**Klient (core `gif-library.js`, `gif.js`):** každá dlaždice (knihovna, Zamítnuté, duplikáty) má nabídku ⋯ s „Náhled"
+(i divák v knihovně); v Zamítnutých a duplikátech otevře náhled i klik. Náhled = překryv nad GIF panelem (větší GIF,
+rozměry, tagy, u zamítnutých kdo/kdy; zavření ×, klik mimo, Esc). „Trvale zahodit" = dialog se dvěma tlačítky
+(„Zahodit, zprávy nechat" / „Zahodit i se zprávami") + Zrušit. Záložka Zamítnuté má sekce „Stažené GIFy"
+(Odstranit ze serveru s potvrzením) a „Ke smazání" (odpočet „smaže se za 6 dní", Obnovit).

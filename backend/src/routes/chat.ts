@@ -8,7 +8,7 @@ import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply, gifReviews } f
 import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
-import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
+import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, gifMessageState, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -76,7 +76,7 @@ export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platfo
  * `goneGifs` = id médií, která už nejsou veřejná (gifMediaGone) — zpráva se schváleným GIFem na takové médium
  * jde jako smazaná (`gif_removed`) bez obsahu a bez `gif`.
  */
-export function toClientMessage(row: ClientRow, historical = true, goneGifs?: ReadonlySet<string>): ClientMessage {
+export function toClientMessage(row: ClientRow, historical = true, goneGifs?: GifGone): ClientMessage {
   // Smazaná / skrytá zpráva: text, emoty i reply-to zůstávají jen v DB (audit) — klient nikdy nedostane obsah.
   const meta = {
     platform: row.platform,
@@ -92,13 +92,14 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Re
   if (row.deletedAt) return { ...meta, deleted: true, deletedReason: row.deletedReason };
   if (row.hiddenAt) return { ...meta, hidden: true, segments: [] };
   // GIF odebraný z knihovny / trvale zahozený: bez obsahu (text nad GIFem patří k GIFu), klient „Zpráva smazána“, OBS skryje.
-  const gifId = goneGifs?.size ? gifMediaIdFromRaw(row.contentRaw) : null;
+  const gifId = goneGifs?.size || goneGifs?.unavailable?.size ? gifMediaIdFromRaw(row.contentRaw) : null;
   if (gifId && goneGifs!.has(gifId)) return { ...meta, deleted: true, deletedReason: GIF_REMOVED_REASON };
   const out = toClientContent(row, historical);
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
   if (gif) {
-    out.gif = gif;
+    // Soubor smazán („Odstranit ze serveru“): zpráva zůstává, klient místo GIFu ukáže „[GIF nedostupný]“.
+    out.gif = gifId && goneGifs?.unavailable?.has(gifId) ? { ...gif, unavailable: true } : gif;
     const rep = gifReplaces(row.contentRaw);
     if (rep) out.replaces = rep;
     const origin = gifOrigin(row.contentRaw);
@@ -133,8 +134,11 @@ export function toModeratedContent(row: ClientRow): ClientMessage {
   return out;
 }
 
-/** Stav média pro gifMediaGone: id → status (`approved` | `pending` | `rejected`); chybějící id = médium neexistuje. */
+/** Stav média pro gifMediaGone: id → status (lib/gifRequests.ts GifMediaStatus); chybějící id = médium neexistuje. */
 export type GifMediaStatusLookup = (ids: string[]) => Promise<Map<string, string>>;
+
+/** Média, jejichž zprávy jdou jako smazané (`gif_removed`); `unavailable` = soubor smazán, zpráva se štítkem. */
+export type GifGone = ReadonlySet<string> & { unavailable?: ReadonlySet<string> };
 
 const dbGifMediaStatus: GifMediaStatusLookup = async (ids) => {
   const rows = await db.select({ id: gifMedia.id, status: gifMedia.status }).from(gifMedia).where(inArray(gifMedia.id, ids));
@@ -142,17 +146,21 @@ const dbGifMediaStatus: GifMediaStatusLookup = async (ids) => {
 };
 
 /**
- * Média schválených GIFů v `rows`, která už nejsou veřejná: neexistují (trvale zahozená, sloučená) nebo jsou
- * zamítnutá (odebraná z knihovny). Jeden dotaz na stránku (ne N+1); bez GIFů se DB nevolá. Čekající médium
- * (alias z backfillu, `servableMedia` ho vydá veřejně) zůstává vidět. Chyba DB → prázdná množina (GIF se ukáže
- * jako dosud, klient pak po 404 napíše „GIF odebrán“).
+ * Média schválených GIFů v `rows`, která už nejsou veřejná (lib/gifIds.ts gifMessageState `removed`): neexistují
+ * (smazaná po 7 dnech, sloučená), zamítnutá (odebraná z knihovny) nebo zahozená i se zprávami (purging).
+ * `.unavailable` = stažená se smazaným souborem (zpráva zůstává, místo GIFu štítek). Jeden dotaz na stránku (ne N+1);
+ * bez GIFů se DB nevolá. Čekající (alias z backfillu) a stažené (withdrawn) médium zůstává vidět. Chyba DB → prázdná
+ * množina (GIF se ukáže jako dosud, klient pak po 404 napíše „GIF odebrán“).
  */
-export async function gifMediaGone(rows: ReadonlyArray<Pick<ClientRow, 'contentRaw'>>, lookup: GifMediaStatusLookup = dbGifMediaStatus): Promise<Set<string>> {
+export async function gifMediaGone(rows: ReadonlyArray<Pick<ClientRow, 'contentRaw'>>, lookup: GifMediaStatusLookup = dbGifMediaStatus): Promise<Set<string> & { unavailable?: Set<string> }> {
   const ids = [...new Set(rows.map((r) => gifMediaIdFromRaw(r.contentRaw)).filter((x): x is string => !!x))];
   if (!ids.length) return new Set();
   let st: Map<string, string>;
   try { st = await lookup(ids); } catch { return new Set(); }
-  return new Set(ids.filter((id) => { const s = st.get(id); return !s || s === 'rejected'; }));
+  const gone: Set<string> & { unavailable?: Set<string> } = new Set(ids.filter((id) => gifMessageState(st.get(id)) === 'removed'));
+  const un = ids.filter((id) => gifMessageState(st.get(id)) === 'unavailable');
+  if (un.length) gone.unavailable = new Set(un);
+  return gone;
 }
 
 function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage {

@@ -128,6 +128,9 @@ export function libraryErrorReply(e: unknown): Out {
 
 export type MergeResult ={ ok: true } | { ok: false; error: 'gone' } | { ok: false; error: 'already_decided'; status: string };
 
+/** Médium, které smí být v návrhu duplikátu (ne trvale zahozené). */
+export const duplicateCandidate = (status: string): boolean => status === 'approved' || status === 'rejected' || status === 'pending';
+
 /** Vault po sloučení: schválené médium vault nemá (vault = zamítnutý bez retence). */
 export const mergedVault = (resultApproved: boolean, keepVault: boolean, dropVault: boolean): boolean => (resultApproved ? false : keepVault || dropVault);
 
@@ -249,7 +252,8 @@ export const dbGifLibraryStore: GifLibraryStore = {
     const out: DuplicatePair[] = [];
     for (const r of rows) {
       const a = by.get(r.a), b = by.get(r.b);
-      if (a && b) out.push({ id: r.id, channel: r.channel, score: r.score, status: r.status, createdAt: r.createdAt, first: a, second: b });
+      // Trvale zahozené médium (withdrawn / purging / unavailable) se nenavrhuje (sloučení by ho vrátilo do hry).
+      if (a && b && duplicateCandidate(a.status) && duplicateCandidate(b.status)) out.push({ id: r.id, channel: r.channel, score: r.score, status: r.status, createdAt: r.createdAt, first: a, second: b });
     }
     return out;
   },
@@ -274,7 +278,8 @@ export const dbGifLibraryStore: GifLibraryStore = {
         tags: gifMedia.tags, vault: gifMedia.vault, approvedAt: gifMedia.approvedAt,
       }).from(gifMedia).where(inArray(gifMedia.id, [keep, drop])).for('update');
       const k = rows.find((r) => r.id === keep), d = rows.find((r) => r.id === drop);
-      if (!k || !d) return { ok: false, error: 'gone' };
+      // Mezitím trvale zahozené médium = jako by zmizelo (nesloučit — zprávy by se přesměrovaly / vzkřísily).
+      if (!k || !d || !duplicateCandidate(k.status) || !duplicateCandidate(d.status)) return { ok: false, error: 'gone' };
       // Syntetické zprávy a žádosti → ponechané médium (jinak by GIFy v historii zmizely), drop pryč, jeho URL zdroje
       // převzít, když ji ponechané nemá (moveMediaInto — stejná cesta jako souběh dedupu při schválení).
       await moveMediaInto(tx, drop, keep);

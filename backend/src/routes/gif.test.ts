@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
+import { servableStatus } from '../lib/gifRequests.js';
+import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, discardedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
 import type { Message } from '../db/schema.js';
 
 const entry = (status: MediaEntry['status'] = 'pending'): MediaEntry => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status });
@@ -125,7 +126,7 @@ test('GET /media/gif/:id: zamítnuté bez tokenu / se špatným 404, s platným 
   assert.equal(ok.statusCode, 200);
   assert.equal(ok.headers['cache-control'], 'private, no-store');
   // Bez přihlášení → 401 (route existuje, ne 404).
-  for (const a of ['approve', 'vault', 'purge', 'ban12h', 'unapprove', 'decide']) {
+  for (const a of ['approve', 'vault', 'purge', 'ban12h', 'unapprove', 'restore', 'remove-file', 'decide']) {
     assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} })).statusCode, 401, a);
   }
   assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: {} })).statusCode, 401);
@@ -186,9 +187,92 @@ test('rejectedView: tvar pro záložku Zamítnuté GIFy (smazání za 14 dní, v
   const md = { id: 'a'.repeat(32), channel: 'robdiesalot', status: 'rejected' as const, kind: 'mp4', width: 498, height: 280, sha256: 'x', approvedAt: null, rejectedAt: new Date(1000), rejectedBy: 'twitch:moda', vault: false };
   assert.deepEqual(rejectedView(md), {
     mediaId: md.id, url: `http://localhost:3000/media/gif/${md.id}`, kind: 'mp4', width: 498, height: 280,
-    rejectedAt: 1000, rejectedBy: 'twitch:moda', vault: false, deleteAt: 1000 + 14 * 86_400_000,
+    tags: [], rejectedAt: 1000, rejectedBy: 'twitch:moda', vault: false, deleteAt: 1000 + 14 * 86_400_000,
   });
   assert.equal(rejectedView({ ...md, vault: true }).deleteAt, null);
+  assert.deepEqual(rejectedView({ ...md, tags: ['cat'] }).tags, ['cat']);
+});
+
+test('discardedView: Stažené / Ke smazání — kdy, kým, kdy se smaže, kam se obnoví, tagy', () => {
+  const md = { id: 'a'.repeat(32), channel: 'robdiesalot', status: 'purging' as const, kind: 'gif', width: 10, height: 20, sha256: 'x', approvedAt: null, rejectedAt: null, rejectedBy: null, vault: false, tags: ['cat'], purgedAt: new Date(1000), purgedBy: 'twitch:moda', purgeAt: new Date(1000 + 7 * 86_400_000), statusBeforePurge: 'approved' };
+  assert.deepEqual(discardedView(md), {
+    mediaId: md.id, url: `http://localhost:3000/media/gif/${md.id}`, kind: 'gif', width: 10, height: 20, tags: ['cat'],
+    status: 'purging', purgedAt: 1000, purgedBy: 'twitch:moda', purgeAt: 1000 + 7 * 86_400_000, restoreTo: 'approved',
+  });
+  const w = discardedView({ ...md, status: 'withdrawn', purgeAt: null, statusBeforePurge: 'rejected', tags: undefined });
+  assert.equal(w.purgeAt, null);
+  assert.equal(w.restoreTo, 'rejected');
+  assert.deepEqual(w.tags, []);
+});
+
+test('média podle stavu: withdrawn veřejně (cache 300 s, cachuje se), purging jen s tokenem; unavailable = 404 (servableStatus)', async () => {
+  assert.equal(mediaCacheControl('withdrawn'), 'public, max-age=300');
+  assert.equal(mediaCacheControl('purging'), 'private, no-store');
+  const verify = async (t: string | undefined | null) => t === 'dobry';
+  const purging = { ...entry('purging'), channel: 'robdiesalot' };
+  assert.equal(await mediaAllowed(entry('withdrawn'), undefined, verify), true);
+  assert.equal(await mediaAllowed(purging, undefined, verify), false);
+  assert.equal(await mediaAllowed(purging, 'dobry', verify), true);
+  assert.equal(servableStatus('withdrawn', false), 'withdrawn');
+  assert.equal(servableStatus('purging', true), 'purging');
+  assert.equal(servableStatus('unavailable', false), null);
+  assert.equal(servableStatus('rejected', true), 'pending');
+  assert.equal(servableStatus('rejected', false), 'rejected');
+  assert.equal(servableStatus('pending', false), 'pending');
+  let loads = 0;
+  const s = new MediaServer(async () => { loads++; return entry('withdrawn'); });
+  await s.get('a'); await s.get('a');
+  assert.equal(loads, 1, 'withdrawn se stavem nemění → cache');
+  let status: MediaEntry['status'] = 'purging';
+  const p = new MediaServer(async () => { loads++; return { ...entry(), status }; });
+  loads = 0;
+  await p.get('b'); await p.get('b');
+  assert.equal(loads, 2, 'purging se necachuje');
+  status = 'approved';
+  p.invalidate('b');
+  assert.equal((await p.get('b'))!.status, 'approved');
+});
+
+test('routy zahození: purge { keepMessages }, restore, remove-file (mod kanálu média), GET withdrawn / purging s kurzorem purgedAt:id', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const id = 'a'.repeat(32);
+  const md = { id, channel: 'robdiesalot', status: 'withdrawn' as const, kind: 'gif', width: 1, height: 1, sha256: 'x', approvedAt: null, rejectedAt: null, rejectedBy: null, vault: false, tags: [], purgedAt: new Date(7000), purgedBy: 'twitch:moda', purgeAt: null, statusBeforePurge: 'approved' };
+  const listed: unknown[] = [];
+  const store = {
+    getMedia: async (m: string) => (m === id ? md : null),
+    listDiscarded: async (_ch: string, status: string, before: unknown, limit: number) => { listed.push([status, before]); return Array.from({ length: limit }, () => ({ ...md, status })); },
+  };
+  const actions: unknown[] = [];
+  const flow = { mediaAction: async (p: { action: string; keepMessages?: boolean }) => { actions.push([p.action, p.keepMessages]); return { status: 200, body: { ok: true } }; } };
+  let account = 1;
+  const app = Fastify();
+  await app.register(gifRoutes, {
+    flow: flow as never, store: store as never, media: new MediaServer(async () => null),
+    tokens: { issue: async () => 'x', verify: async () => false },
+    auth: async (req) => { req.webAccountId = account; },
+    modIdentities: async (acc) => (acc === 7 ? [{ platform: 'twitch', login: 'moda' }] : []),
+  });
+  for (const u of ['/moderation/gif/withdrawn?channel=robdiesalot', '/moderation/gif/purging?channel=robdiesalot']) assert.equal((await app.inject({ method: 'GET', url: u })).statusCode, 403);
+  assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/restore`, payload: {} })).statusCode, 403);
+  account = 7;
+  const w = await app.inject({ method: 'GET', url: '/moderation/gif/withdrawn?channel=robdiesalot' });
+  assert.equal(w.statusCode, 200);
+  assert.equal(w.headers['cache-control'], 'no-store');
+  assert.equal(w.json().items[0].status, 'withdrawn');
+  assert.equal(w.json().nextBefore, `7000:${id}`);
+  await app.inject({ method: 'GET', url: `/moderation/gif/purging?channel=robdiesalot&before=7000:${id}` });
+  assert.deepEqual(listed.at(-1), ['purging', { at: new Date(7000), id }]);
+  assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/purging?channel=robdiesalot&before=x' })).statusCode, 400);
+  // purge: keepMessages true / false / chybí (= i se zprávami) / neplatný typ → 400.
+  await app.inject({ method: 'POST', url: `/moderation/gif/${id}/purge`, payload: { keepMessages: true } });
+  await app.inject({ method: 'POST', url: `/moderation/gif/${id}/purge`, payload: { keepMessages: false } });
+  await app.inject({ method: 'POST', url: `/moderation/gif/${id}/purge`, payload: {} });
+  assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/purge`, payload: { keepMessages: 'ano' } })).statusCode, 400);
+  await app.inject({ method: 'POST', url: `/moderation/gif/${id}/restore`, payload: {} });
+  await app.inject({ method: 'POST', url: `/moderation/gif/${id}/remove-file`, payload: {} });
+  assert.deepEqual(actions, [['purge', true], ['purge', false], ['purge', false], ['restore', false], ['remove-file', false]]);
+  await app.close();
 });
 
 function stateDeps(over: Partial<GifStateDeps> = {}, log: unknown[] = []): GifStateDeps {

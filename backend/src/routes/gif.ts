@@ -5,12 +5,16 @@
 //   GET  /moderation/gif/pending?channel=         (Bearer, mod) čekající žádosti kanálu, FIFO
 //   POST /moderation/gif/access-token             (Bearer, mod) vydá/obnoví vlastní token pro zamítnutá média (jen jednou)
 //   GET  /moderation/gif/rejected?channel&before  (Bearer, mod) zamítnuté GIFy kanálu
-//   POST /moderation/gif/:mediaId/{approve|vault|purge|ban12h|unapprove}  (Bearer, mod kanálu média;
-//        unapprove = odebrat schválený z knihovny → zamítnutý, purge = i schválený trvale)
+//   GET  /moderation/gif/{withdrawn|purging}?channel&before  (Bearer, mod) zahozené: Stažené GIFy / Ke smazání
+//   POST /moderation/gif/:mediaId/{approve|vault|purge|ban12h|unapprove|restore|remove-file}  (Bearer, mod kanálu média;
+//        unapprove = odebrat schválený z knihovny → zamítnutý; purge { keepMessages } = trvale zahodit schválený
+//        i zamítnutý: true → withdrawn (zprávy nechat), jinak → purging (i se zprávami, 7 dní); restore = jen purging;
+//        remove-file = jen withdrawn → unavailable)
 //   GET  /gif/state?channel=&platform=&review=1   (Bearer) cooldown + režim odměny pro vlastní účet (bublina u pole)
 //
-// Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající a zamítnuté `private, no-store`,
-// schválené `public, max-age=300`. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
+// Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající, zamítnuté a purging
+// `private, no-store` (zamítnuté a purging jen s tokenem), schválené a stažené (withdrawn) `public, max-age=300`,
+// unavailable 404. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
 import type { FastifyInstance, FastifyReply, preHandlerAsyncHookHandler } from 'fastify';
 import { z } from 'zod';
 import { requireWebSession, listIdentities, type PublicIdentity } from '../lib/webAuth.js';
@@ -19,7 +23,7 @@ import { gifAccess, type GifAccess, type GifAccessQuery, type GifMode } from '..
 import { workspaceForChannel, type Platform } from '../lib/zidolista.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { MEDIA_ID_RE, gifMediaUrl } from '../lib/gifIds.js';
-import { pendingView, GIF_MEDIA_ACTIONS, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
+import { pendingView, GIF_MEDIA_ACTIONS, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifDiscardedStatus, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
 import { createGifTokenVerifier, dbGifTokenStore, issueAccountToken, type GifTokenVerifier } from '../lib/gifTokens.js';
 import { parseChannel } from './moderation.js';
 import { RateLimiter, toClientMessage, type ClientMessage } from './chat.js';
@@ -31,7 +35,7 @@ import { dbGifLibraryStore, duplicateView, libraryErrorReply, libraryPage, resol
 import { channelMatches } from '../lib/messageDeletes.js';
 import { publishRestored } from '../lib/linkRestore.js';
 
-export type MediaEntry = { bytes: Buffer; contentType: string; status: GifMediaStatus; channel?: string | null };
+export type MediaEntry = { bytes: Buffer; contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel?: string | null };
 
 export interface GifRouteOpts {
   flow: GifFlow;
@@ -63,15 +67,20 @@ const IdParam = z.object({ requestId: z.coerce.number().int().positive().max(Num
  * v prohlížečích a na proxy projeví nejpozději do 5 minut; rozhodnutí 2026-09-26).
  */
 export function mediaCacheControl(status: MediaEntry['status']): string {
-  return status === 'approved' ? 'public, max-age=300' : 'private, no-store';
+  // Stažený GIF (withdrawn, „Zahodit, zprávy nechat“) staré zprávy dál ukazují veřejně jako schválený.
+  return status === 'approved' || status === 'withdrawn' ? 'public, max-age=300' : 'private, no-store';
 }
 
+/** Stav média, které se vydá jen s tokenem moda / integrace: zamítnuté a zahozené i se zprávami (náhled „Ke smazání“). */
+const TOKEN_ONLY: ReadonlySet<string> = new Set(['rejected', 'purging']);
+
 /**
- * Smí se médium vydat? Schválené (veřejné, i Discord embed) a čekající (náhodné id) ano; zamítnuté jen
- * s tokenem `?t=` platným pro kanál média (mod kanálu / integrace jeho workspace). Jinak 404 (neprozradit existenci).
+ * Smí se médium vydat? Schválené a stažené (veřejné, i Discord embed) a čekající (náhodné id) ano; zamítnuté
+ * a purging jen s tokenem `?t=` platným pro kanál média (mod kanálu / integrace jeho workspace). Jinak 404
+ * (neprozradit existenci). Unavailable (soubor smazán) sem vůbec nedojde (servableMedia → null).
  */
 export async function mediaAllowed(m: MediaEntry, token: string | undefined, verify: (t: string | undefined, channel: string) => Promise<boolean>): Promise<boolean> {
-  if (m.status !== 'rejected') return true;
+  if (!TOKEN_ONLY.has(m.status)) return true;
   if (!m.channel) return false;
   return verify(token, m.channel);
 }
@@ -88,10 +97,39 @@ export function parseRejectedCursor(raw: string | undefined): { at: Date; id: st
 export function rejectedView(md: GifMediaInfo) {
   const at = md.rejectedAt ? md.rejectedAt.getTime() : null;
   return {
-    mediaId: md.id, url: gifMediaUrl(md.id), kind: md.kind, width: md.width, height: md.height,
+    mediaId: md.id, url: gifMediaUrl(md.id), kind: md.kind, width: md.width, height: md.height, tags: md.tags ?? [],
     rejectedAt: at, rejectedBy: md.rejectedBy, vault: md.vault,
     deleteAt: md.vault || at === null ? null : at + REJECTED_RETENTION_MS,
   };
+}
+
+/**
+ * Zahozené médium → položka sekce „Stažené GIFy“ (withdrawn) / „Ke smazání“ (purging): kdy a kým zahozeno, kdy
+ * se smaže (jen purging), kam se obnoví (`restoreTo` = stav před zahozením). URL bez tokenu (purging ho potřebuje).
+ */
+export function discardedView(md: GifMediaInfo) {
+  return {
+    mediaId: md.id, url: gifMediaUrl(md.id), kind: md.kind, width: md.width, height: md.height, tags: md.tags ?? [],
+    status: md.status, purgedAt: md.purgedAt ? md.purgedAt.getTime() : null, purgedBy: md.purgedBy ?? null,
+    purgeAt: md.purgeAt ? md.purgeAt.getTime() : null, restoreTo: md.statusBeforePurge === 'approved' ? 'approved' : 'rejected',
+  };
+}
+
+/** Stránka zahozených (UC mod i integrace): `{ ok, items, nextBefore }`, kurzor `<purgedAt ms>:<mediaId>`. */
+export async function discardedPage(store: Pick<GifStore, 'listDiscarded'>, channel: string, status: GifDiscardedStatus, before: { at: Date; id: string } | null) {
+  const rows = await store.listDiscarded(channel, status, before, DISCARDED_PAGE);
+  const items = rows.map(discardedView);
+  const last = items[items.length - 1];
+  return { ok: true, items, nextBefore: rows.length === DISCARDED_PAGE && last?.purgedAt != null ? `${last.purgedAt}:${last.mediaId}` : null };
+}
+export const DISCARDED_PAGE = 50;
+export const DISCARDED_STATUSES = ['withdrawn', 'purging'] as const satisfies readonly GifDiscardedStatus[];
+
+/** Tělo akce nad médiem: `keepMessages` jen boolean (u purge; chybí = i se zprávami). null = neplatné. */
+export function parseMediaActionBody(body: unknown): { keepMessages: boolean } | null {
+  const k = body && typeof body === 'object' ? (body as Record<string, unknown>).keepMessages : undefined;
+  if (k !== undefined && typeof k !== 'boolean') return null;
+  return { keepMessages: k === true };
 }
 
 /**
@@ -110,8 +148,9 @@ export class MediaServer {
   constructor(private readonly load: (id: string) => Promise<MediaEntry | null>, private readonly maxBytes = 64 * 1024 * 1024) {}
 
   /**
-   * Cachuje se JEN schválené médium (veřejné, stav se mění jen smazáním). Čekající a zamítnuté se čtou vždy
-   * z DB (souběžná čtení sdílí jedno načtení) — stav se mění rozhodnutím, propadnutím, novou žádostí.
+   * Cachuje se JEN veřejné médium se stálým stavem: schválené a stažené (withdrawn). Změnu stavu (odebrání,
+   * zahození, odstranění souboru) hlásí flow přes invalidate / forget. Čekající, zamítnuté a purging se čtou vždy
+   * z DB (souběžná čtení sdílí jedno načtení) — stav se mění rozhodnutím, propadnutím, novou žádostí, obnovou.
    */
   async get(id: string): Promise<MediaEntry | null> {
     if (this.tombstones.has(id)) return null;
@@ -124,7 +163,7 @@ export class MediaServer {
         // Smazáno během načítání → nevracet a necachovat.
         if (!v || this.tombstones.has(id)) return null;
         // Stav se mezitím změnil (invalidate) → vrátit, ale necachovat.
-        if (v.status === 'approved' && (this.gen.get(id) ?? 0) === gen) this.put(id, v);
+        if ((v.status === 'approved' || v.status === 'withdrawn') && (this.gen.get(id) ?? 0) === gen) this.put(id, v);
         return v;
       }).finally(() => { if (this.inflight.get(id) === mine) this.inflight.delete(id); });
       p = mine;
@@ -415,19 +454,39 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     return { ok: true, items, nextBefore: rows.length === REJECTED_PAGE && last?.rejectedAt != null ? `${last.rejectedAt}:${last.mediaId}` : null };
   });
 
-  // Akce nad médiem: approve / vault / purge (zamítnuté) a ban12h („Automaticky zahazovat 12 h"). Kanál z média.
+  // Zahozené GIFy kanálu (záložka Zamítnuté: „Stažené GIFy“ / „Ke smazání“), nejnovější zahození první;
+  // `before` = `<purgedAt ms>:<mediaId>` (nextBefore).
+  for (const status of DISCARDED_STATUSES) {
+    app.get<{ Querystring: { channel?: string; before?: string } }>(`/moderation/gif/${status}`, { preHandler: session }, async (req, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const accountId = req.webAccountId!;
+      if (!modLimiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+      const channel = parseChannel(req.query.channel, DEFAULT_CHANNEL);
+      if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
+      const before = parseRejectedCursor(req.query.before);
+      if (before === false) return reply.code(400).send({ ok: false, error: 'before' });
+      if (!(await modsOf(accountId, channel)).length) return reply.code(403).send({ ok: false, error: 'not_mod' });
+      try { return await discardedPage(opts.store, channel, status, before); }
+      catch (e) { return libraryFail(reply, e, `moderation/gif/${status}`); }
+    });
+  }
+
+  // Akce nad médiem: approve / vault (zamítnuté), purge { keepMessages } (schválené / zamítnuté), restore (purging),
+  // remove-file (withdrawn), unapprove (schválené) a ban12h („Automaticky zahazovat 12 h"). Kanál z média.
   for (const action of GIF_MEDIA_ACTIONS) {
     app.post<{ Params: { requestId: string } }>(`/moderation/gif/:requestId/${action}`, { preHandler: session }, async (req, reply) => {
       // Parametr sdílí jméno s /decide (router); tady je to id média (32 hex).
       const mediaId = String(req.params.requestId || '');
       if (!MEDIA_ID_RE.test(mediaId)) return reply.code(404).send({ ok: false, error: 'not_found' });
+      const body = parseMediaActionBody(req.body);
+      if (!body) return reply.code(400).send({ ok: false, error: 'body' });
       const accountId = req.webAccountId!;
       if (!modLimiter.allow(String(accountId))) return reply.code(429).send({ ok: false, error: 'rate_limited' });
       const md = await opts.store.getMedia(mediaId);
       if (!md?.channel) return reply.code(404).send({ ok: false, error: 'not_found' });
       const mods = await modsOf(accountId, md.channel);
       if (!mods.length) return reply.code(403).send({ ok: false, error: 'not_mod' });
-      const out = await opts.flow.mediaAction({ mediaId, action, by: `${mods[0].platform}:${mods[0].login}`, accountId });
+      const out = await opts.flow.mediaAction({ mediaId, action, by: `${mods[0].platform}:${mods[0].login}`, accountId, keepMessages: body.keepMessages });
       return reply.code(out.status).send(out.body);
     });
   }

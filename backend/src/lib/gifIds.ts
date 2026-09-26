@@ -13,7 +13,25 @@ export function gifMediaUrl(mediaId: string, base: string = config.PUBLIC_BASE_U
   return `${base.replace(/\/$/, '')}/media/gif/${mediaId}`;
 }
 
-export interface GifMediaView { url: string; kind: string; width: number | null; height: number | null }
+/**
+ * `unavailable`: soubor média byl smazán ze serveru („Odstranit ze serveru“ u staženého GIFu) — zpráva zůstává,
+ * klient místo GIFu ukáže štítek „[GIF nedostupný]“ (URL zůstává kvůli starším klientům: 404 → „GIF odebrán“).
+ */
+export interface GifMediaView { url: string; kind: string; width: number | null; height: number | null; unavailable?: true }
+
+/**
+ * Stav média → jak se ukáže zpráva se schváleným GIFem (spec 2026-09-27-gif-nahled-zahozeni-design.md):
+ *  - `visible`: approved (knihovna), withdrawn („Zahodit, zprávy nechat“), pending (alias z backfillu);
+ *  - `removed`: rejected (odebráno z knihovny), purging („Zahodit i se zprávami“, 7 dní), médium neexistuje
+ *    → smazaná zpráva `gif_removed` bez obsahu;
+ *  - `unavailable`: soubor smazán („Odstranit ze serveru“) → zpráva s textem, místo GIFu štítek.
+ */
+export type GifMessageState = 'visible' | 'removed' | 'unavailable';
+export function gifMessageState(status: string | null | undefined): GifMessageState {
+  if (status === 'approved' || status === 'withdrawn' || status === 'pending') return 'visible';
+  if (status === 'unavailable') return 'unavailable';
+  return 'removed';
+}
 
 /** content_raw.gif syntetické zprávy → tvar pro klienty; cokoli jiného → null. */
 export function gifFromRaw(raw: unknown): GifMediaView | null {
