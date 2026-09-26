@@ -3,8 +3,10 @@
 //
 //  - render schváleného GIFu ve zprávě (createGifMedia): <img> nebo <video autoplay loop muted playsinline>,
 //    max 400 × 250 px se zachovaným poměrem, lazy load, při chybě odkaz;
-//  - karty ke schválení pro mody + stav pro odesílatele (GifRequests): SSE `gif-pending` / `gif-decided`
-//    z /account/stream, POST /moderation/gif/:id/decide, GET /moderation/gif/pending.
+//  - fronta ke schválení pro mody (GifRequests, GIF knihovna 2026-09-26): FIFO — jedna karta = nejstarší čekající +
+//    „+N čeká“, SSE `gif-pending` / `gif-decided` / `gif-queue` z /account/stream, zámek tlačítek 1 s / 0,3 s,
+//    POST /moderation/gif/:id/decide (409 → „Už rozhodl X“), GET /moderation/gif/pending, ban12h.
+//    Stav pro odesílatele ukazuje štítek u zprávy (core/gif-library.js GifOutbox), ne karta.
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer).
 // Cizí text jde do DOM jen přes textContent / escapeAttr.
@@ -190,6 +192,10 @@ export function normalizeGifPending(d, opts = {}) {
     createdAt: Number(d.createdAt) || null,
     expiresAt,
     own: d.own === true,
+    // Dříve zamítnutý GIF: mod dostane { at, by }, odesílatel jen { at } (⚠ „tento GIF byl už dříve zamítnut“).
+    previouslyRejected: d.previouslyRejected && typeof d.previouslyRejected === 'object'
+      ? { at: Number(d.previouslyRejected.at) || null, by: d.previouslyRejected.by ? String(d.previouslyRejected.by) : null }
+      : null,
   };
 }
 
@@ -306,8 +312,10 @@ function gifVideoObserver(win) {
  * `lazy`: obrázek `loading="lazy"`; video se spouští / zastavuje podle viditelnosti (sdílený IO).
  * Chyba načtení → odkaz „GIF se nepodařilo načíst“ (otevře médium v nové kartě).
  */
-export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H } = {}) {
+export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H, token = null, onError = null } = {}) {
   const g = gif && gif.url && isGifMediaUrl(gif.url) ? gif : null;
+  // Zamítnuté médium jen s tokenem moda (`?t=`); URL se ověřuje BEZ tokenu, token se do logu nepíše.
+  const src = g && token ? `${g.url}?t=${encodeURIComponent(token)}` : g?.url;
   const wrap = doc.createElement('div');
   wrap.className = 'uc-gif';
   if (!g) return wrap;
@@ -327,7 +335,9 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
   }
   const fail = () => {
     if (!wrap.contains(m)) return;
-    log?.('Gif', `médium se nenačetlo ${g.url}`);
+    log?.('Gif', `médium se nenačetlo ${g.url}${token ? ' (s tokenem)' : ''}`);
+    // Hostitel si může říct o nový token a médium vykreslit znovu (zamítnuté GIFy moda) → true = vyřízeno.
+    if (onError && onError({ wrap, url: g.url, token }) === true) return;
     try { if (video) gifVideoObserver(doc.defaultView)?.unobserve(m); } catch { /* ignore */ }
     const a = doc.createElement('a');
     a.className = 'uc-gif-fallback';
@@ -350,18 +360,18 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     const io = lazy ? gifVideoObserver(doc.defaultView) : null;
     if (io) {
       m.preload = 'none';
-      m.dataset.ucSrc = g.url;
+      m.dataset.ucSrc = src;
       io.observe(m);
     } else {
       m.preload = 'auto';
-      m.src = g.url;
+      m.src = src;
       playSafe(m);
     }
   } else {
     m.alt = 'GIF';
     m.decoding = 'async';
     if (lazy) m.loading = 'lazy';
-    m.src = g.url;
+    m.src = src;
   }
   wrap.appendChild(m);
   return wrap;
@@ -383,32 +393,96 @@ export function removeGifMedia(el) {
 }
 
 // ---------------------------------------------------------------------------
-// Karty ke schválení (mod) + stav pro odesílatele
+// Fronta ke schválení (mod) — FIFO, jedna karta (GIF knihovna 2026-09-26)
 // ---------------------------------------------------------------------------
 
+/** Zámek tlačítek po aktualizaci fronty od jiného moda (proti omylem schválenému dalšímu GIFu). */
+export const GIF_LOCK_OTHER_MS = 1000;
+/** Zámek po vlastním kliku (proti dvojkliku). */
+export const GIF_LOCK_OWN_MS = 300;
+/** Jak dlouho zůstane hláška „Už rozhodl X“ / „Schváleno · X“ nad kartou. */
+export const GIF_NOTICE_MS = 2500;
+
+/** „+3 čeká“ (počet dalších čekajících za kartou). */
+export const gifWaitingText = (n) => `+${Math.max(0, Math.trunc(Number(n) || 0))} čeká`;
+
+/** „1 GIF“ / „2 GIFy“ / „5 GIFů“. */
+export function gifCountText(n) {
+  const a = Math.abs(Math.trunc(Number(n) || 0));
+  if (a === 1) return '1 GIF';
+  if (a >= 2 && a <= 4) return `${a} GIFy`;
+  return `${a} GIFů`;
+}
+
+/** 409 already_decided `{ status, decidedBy }` → „Už rozhodl modik (Twitch)“. */
+export function gifAlreadyDecidedText(status, decidedBy) {
+  if (decidedBy === 'library') return 'Už schváleno z knihovny';
+  if (decidedBy) return `Už rozhodl ${actorLabel(decidedBy)}`;
+  if (status === 'expired') return 'Propadlo — nikdo nerozhodl včas';
+  return 'Už rozhodl jiný mod';
+}
+
+/** Dříve zamítnuto (karta moda): „Dříve zamítnuto 25. 9. 14:05 · modik (Twitch)“. */
+export function gifPrevRejectedText(pr) {
+  if (!pr || typeof pr !== 'object') return '';
+  const at = Number(pr.at);
+  let when = '';
+  if (Number.isFinite(at) && at > 0) {
+    const d = new Date(at);
+    when = ` ${d.getDate()}. ${d.getMonth() + 1}. ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+  const by = pr.by ? ` · ${actorLabel(pr.by)}` : '';
+  return `Dříve zamítnuto${when}${by}`;
+}
+
+/** Id média z URL `…/media/gif/<32 hex>` (nebo null). */
+export function gifMediaIdOf(url) {
+  const m = /\/media\/gif\/([0-9a-f]{32})(?:[/?#]|$)/.exec(String(url || ''));
+  return m ? m[1] : null;
+}
+
 /**
- * Seznam čekajících GIFů nad chatem.
+ * Zámek tlačítek karty (čisté hodiny `now` → testy s falešným časem).
+ * lock(ms) prodlužuje, nikdy nezkracuje běžící zámek.
+ */
+export class GifCardLock {
+  constructor(now = Date.now) { this.now = now; this.until = 0; }
+  lock(ms) { this.until = Math.max(this.until, this.now() + Math.max(0, Number(ms) || 0)); return this.until; }
+  locked() { return this.now() < this.until; }
+  remaining() { return Math.max(0, this.until - this.now()); }
+  reset() { this.until = 0; }
+}
+
+/** Pořadí FIFO: nejstarší první (createdAt, pak requestId). */
+const fifoCmp = (a, b) => ((a.createdAt ?? 0) - (b.createdAt ?? 0)) || (Number(a.requestId) - Number(b.requestId));
+
+/**
+ * Fronta GIFů ke schválení nad chatem — jen mod, jen JEDNA karta = nejstarší čekající + „+N čeká“.
+ * Synchronizace napříč mody: SSE `gif-queue` (pendingCount, headId), `gif-pending`, `gif-decided`.
+ * Po změně karty jsou Schválit / Zamítnout chvíli zamčené: 1 s po aktualizaci od jiného moda, 0,3 s po
+ * vlastním kliku. 409 already_decided → hláška „Už rozhodl X“ a další karta.
+ * Odesílatel (divák) kartu nemá — jeho stav ukazuje štítek u zprávy (core/gif-library.js GifOutbox).
  *
  *   const gifs = new GifRequests({ doc, container, api, channel: () => 'robdiesalot', canModerate: () => true });
- *   accountStream: 'gif-pending' → gifs.onPending(data), 'gif-decided' → gifs.onDecided(data)
+ *   accountStream: 'gif-pending' → gifs.onPending(d), 'gif-decided' → gifs.onDecided(d), 'gif-queue' → gifs.onQueue(d)
  *   mod na kanálu / přepnutí kanálu → gifs.clear(); gifs.loadPending()
  */
 export class GifRequests {
   /**
    * @param {object} o
    * @param {Document} [o.doc]
-   * @param {HTMLElement} [o.container]  kontejner chatu (position: relative); karty se skládají u jeho spodku
-   * @param {(path: string, opts?: {method?: string, body?: object}) => Promise<any>} o.api  backend s Bearer; chyba = throw {error, status}
+   * @param {HTMLElement} [o.container]  kontejner chatu (position: relative); karta u jeho spodku
+   * @param {(path: string, opts?: {method?: string, body?: object}) => Promise<any>} o.api  backend s Bearer; chyba = throw {error, status, body}
    * @param {() => string} o.channel      aktuální kanál UnityChatu (Twitch login streamera)
-   * @param {() => boolean} [o.canModerate]  jsem mod kanálu (tlačítka i u vlastního GIFu)
+   * @param {() => boolean} [o.canModerate]  jsem mod kanálu
    * @param {(platform: string) => string|null} [o.platformIcon]  URL loga platformy
    * @param {(tag: string, text: string) => void} [o.log]
    * @param {() => number} [o.now]
-   * @param {(n: number) => void} [o.onChange]  počet karet (hostitel může přizpůsobit layout)
-   * @param {number} [o.lingerMs]  jak dlouho zůstane rozhodnutá karta
+   * @param {(n: number) => void} [o.onChange]  počet čekajících (hostitel může přizpůsobit layout)
    * @param {string[]} [o.origins]  povolené originy médií
+   * @param {number} [o.lockOtherMs] / [o.lockOwnMs] / [o.noticeMs]  (testy)
    */
-  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, lingerMs = GIF_DECIDED_LINGER_MS, origins = null, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
+  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
     this.doc = doc;
     this.container = container || doc.body;
     this.api = api;
@@ -418,72 +492,59 @@ export class GifRequests {
     this.log = log || (() => {});
     this.now = now || (() => Date.now());
     this.onChange = onChange || (() => {});
-    this.lingerMs = lingerMs;
     this.origins = origins;
+    this.lockOtherMs = lockOtherMs;
+    this.lockOwnMs = lockOwnMs;
+    this.noticeMs = noticeMs;
     const w = doc.defaultView || globalThis;
     this._si = si || w.setInterval.bind(w);
     this._ci = ci || w.clearInterval.bind(w);
     this._st = st || w.setTimeout.bind(w);
     this._ct = ctm || w.clearTimeout.bind(w);
-    this._cards = new Map();   // requestId → { req, el, state }
+    this._cards = new Map();   // requestId → { req, busy, error }
     this._decided = new Map(); // requestId → status (rozhodnutí přišlo dřív než žádost / opakované gif-pending)
+    this._queue = null;        // { pendingCount, headId } z gif-queue
+    this._shownId = null;      // karta, která je právě vidět
+    this._ownDecidedId = null; // karta, o které jsem rozhodl já (další karta → zámek 0,3 s)
+    this._lock = new GifCardLock(() => this.now());
+    this._lockT = null;
+    this._notice = null;       // { text, kind }
+    this._noticeT = null;
     this._timer = null;
+    this._loadingPending = null;
     this.el = null;
   }
 
-  get size() { return [...this._cards.values()].filter((c) => c.state === 'pending').length; }
-  get requests() { return [...this._cards.values()].map((c) => ({ ...c.req, state: c.state })); }
+  /** Počet čekajících (lokálně známé žádosti). */
+  get size() { return this._cards.size; }
+  get requests() { return [...this._cards.values()].map((c) => ({ ...c.req, state: 'pending' })); }
   has(requestId) { return this._cards.has(String(requestId)); }
+  /** Id karty, která je vidět (nejstarší čekající), nebo null. */
+  get headId() { return this._shownId; }
+  /** Tlačítka karty jsou zamčená (zámek po změně karty). */
+  get locked() { return this._lock.locked(); }
+  /** Zbývající zámek karty v ms (ladění / e2e). */
+  get lockMs() { return this._lock.remaining(); }
 
   _L(t) { this.log('Gif', t); }
 
-  _root() {
-    if (this.el && this.el.isConnected) return this.el;
-    const el = this.doc.createElement('div');
-    el.className = 'uc-gif-stack';
-    el.setAttribute('role', 'region');
-    el.setAttribute('aria-label', 'GIFy ke schválení');
-    el.addEventListener('click', (e) => {
-      const b = e.target.closest?.('[data-act]');
-      if (!b || !el.contains(b)) return;
-      if (b.dataset.act === 'more') { e.stopPropagation(); this._expanded = !this._expanded; this._layout(); return; }
-      const card = b.closest('.uc-gif-card');
-      if (!card) return;
-      e.stopPropagation();
-      if (b.dataset.act === 'approve') this.decide(card.dataset.requestId, true);
-      else if (b.dataset.act === 'reject') this.decide(card.dataset.requestId, false);
-      else if (b.dataset.act === 'dismiss') this._remove(card.dataset.requestId);
-    });
-    const more = this.doc.createElement('button');
-    more.type = 'button';
-    more.className = 'uc-gif-more';
-    more.dataset.act = 'more';
-    more.hidden = true;
-    el.appendChild(more);
-    this.container.appendChild(el);
-    this.el = el;
-    return el;
+  /** Počet čekajících pro „+N čeká“: server (gif-queue), jinak lokální. */
+  pendingCount() {
+    const local = this._cards.size;
+    const q = this._queue;
+    return q && Number.isFinite(q.pendingCount) ? Math.max(q.pendingCount, q.headId && this._cards.has(String(q.headId)) ? 1 : 0) : local;
   }
 
-  /** Nejvýš GIF_STACK_VISIBLE karet, zbytek za řádkem „+N dalších“ (klik rozbalí / sbalí). */
-  _layout() {
-    const el = this.el;
-    if (!el) return;
-    const cards = [...this._cards.values()].map((c) => c.el).filter(Boolean);
-    const extra = Math.max(0, cards.length - GIF_STACK_VISIBLE);
-    if (!extra) this._expanded = false;
-    cards.forEach((c, i) => { c.hidden = !this._expanded && i >= GIF_STACK_VISIBLE; });
-    const more = el.querySelector('.uc-gif-more');
-    if (more) {
-      more.hidden = !extra;
-      more.textContent = this._expanded ? 'Sbalit' : gifMoreText(extra);
-      more.setAttribute('aria-expanded', String(!!this._expanded));
-      el.appendChild(more);   // vždy poslední
-    }
-    el.classList.toggle('uc-gif-stack--expanded', !!this._expanded);
+  /** Nejstarší čekající, kterou smím vidět (mod), nebo null. */
+  _head() {
+    if (!this.canModerate()) return null;
+    const qh = this._queue?.headId != null ? String(this._queue.headId) : null;
+    if (qh && this._cards.has(qh)) return this._cards.get(qh);
+    const list = [...this._cards.values()].sort((a, b) => fifoCmp(a.req, b.req));
+    return list[0] || null;
   }
 
-  /** SSE `gif-pending` (i po připojení streamu). Vrací true, když karta vznikla / se obnovila. */
+  /** SSE `gif-pending` (i po připojení streamu). Vrací true, když přibyla nová žádost. */
   onPending(d) {
     const req = normalizeGifPending(d, { origins: this.origins });
     if (!req) { this._L(`gif-pending ignorováno (chybná data ${d?.requestId ?? '?'})`); return false; }
@@ -494,20 +555,15 @@ export class GifRequests {
     if (!req.own && !this.canModerate()) { this._L(`gif-pending ${req.requestId} cizí, nejsem mod → bez karty`); return false; }
     const prev = this._cards.get(req.requestId);
     if (prev) {
-      if (prev.state !== 'pending') return false;
-      // Opakovaně (reconnect streamu, GET pending) — `own` se jen doplní.
-      if (req.own && !prev.req.own) { prev.req.own = true; this._paint(prev); }
+      // Opakovaně (reconnect streamu, GET pending) — `own` / previouslyRejected se jen doplní.
+      if (req.own && !prev.req.own) prev.req.own = true;
+      if (req.previouslyRejected && !prev.req.previouslyRejected) prev.req.previouslyRejected = req.previouslyRejected;
+      if (this._shownId === req.requestId) this._paint();
       return false;
     }
-    const card = { req, el: null, state: 'pending', error: '' };
-    this._cards.set(req.requestId, card);
-    card.el = this._build(card);
-    const root = this._root();
-    root.insertBefore(card.el, root.querySelector('.uc-gif-more'));
-    this._layout();
-    this._startTimer();
-    this._L(`gif-pending ${req.requestId} ${req.platform}:${req.login}${req.own ? ' (můj)' : ''} ${req.media.kind} ${req.media.width || '?'}×${req.media.height || '?'} zbývá ${formatCountdown(req.expiresAt - this.now())}`);
-    this.onChange(this.size);
+    this._cards.set(req.requestId, { req, busy: false, error: '' });
+    this._L(`gif-pending ${req.requestId} ${req.platform}:${req.login}${req.own ? ' (můj)' : ''}${req.previouslyRejected ? ' (dříve zamítnutý)' : ''} ${req.media.kind} ${req.media.width || '?'}×${req.media.height || '?'} zbývá ${formatCountdown(req.expiresAt - this.now())}`);
+    this._render();
     return true;
   }
 
@@ -519,81 +575,159 @@ export class GifRequests {
     const card = this._cards.get(x.requestId);
     this._L(`gif-decided ${x.requestId} ${x.status} by=${x.by || '-'}${card ? '' : ' (bez karty)'}`);
     if (!card) return false;
-    // Vlastní rozhodnutí už karta ukazuje („tebou“) — SSE ho jen potvrdí.
-    if (card.state === x.status && card.by === 'me') return true;
-    this._finish(card, x.status, x.by);
+    const wasHead = this._shownId === x.requestId;
+    this._cards.delete(x.requestId);
+    this._queueDrop(x.requestId);
+    // Rozhodl jiný mod o kartě, kterou mám před sebou → řeknout kdo (vlastní rozhodnutí už hláška nepotřebuje).
+    if (wasHead && this._ownDecidedId !== x.requestId) this._setNotice(gifDecisionText(x.status, x.by), x.status);
+    this._render();
     return true;
   }
 
-  /** Mod: čekající žádosti kanálu (GET /moderation/gif/pending). Divák dostane 403 → nic. */
-  async loadPending() {
-    const ch = String(this.channel() || '').toLowerCase();
-    if (!ch || !this.api) return 0;
-    let j;
-    try { j = await this.api(`/moderation/gif/pending?channel=${encodeURIComponent(ch)}`); }
-    catch (e) { this._L(`pending FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); return 0; }
-    if (!sameChannel(ch, this.channel())) return 0;   // mezitím přepnutý kanál
-    let n = 0;
-    for (const r of Array.isArray(j?.requests) ? j.requests : []) if (this.onPending(r)) n++;
-    this._L(`pending ${ch}: ${Array.isArray(j?.requests) ? j.requests.length : 0} žádostí, ${n} nových karet`);
-    return n;
+  /** SSE `gif-queue` { channel, pendingCount, headId } — stav fronty kanálu po každé změně (jen modům). */
+  onQueue(d) {
+    if (!d || typeof d !== 'object' || !sameChannel(d.channel, this.channel())) return false;
+    const pendingCount = Math.max(0, Math.trunc(Number(d.pendingCount) || 0));
+    const headId = d.headId != null && /^\d+$/.test(String(d.headId)) ? String(d.headId) : null;
+    this._queue = { pendingCount, headId };
+    this._L(`gif-queue ${pendingCount} čeká, první ${headId ?? '-'}`);
+    if (!headId) {
+      // Fronta je prázdná → všechno lokální je rozhodnuté (případné gif-decided mohlo chybět).
+      for (const id of [...this._cards.keys()]) this._cards.delete(id);
+    } else if (this._cards.has(headId)) {
+      // FIFO: co je starší než první čekající, už nečeká.
+      const head = this._cards.get(headId).req;
+      for (const [id, c] of [...this._cards]) if (fifoCmp(c.req, head) < 0) { this._cards.delete(id); this._L(`gif ${id}: podle gif-queue už nečeká`); }
+    } else if (this.canModerate()) {
+      // Server zná žádost, kterou klient nemá (výpadek SSE) → dotáhnout.
+      void this.loadPending();
+    }
+    this._render();
+    return true;
   }
 
-  /** Klik na Schválit / Zamítnout. */
+  /** Mod: čekající žádosti kanálu (GET /moderation/gif/pending, FIFO). Divák dostane 403 → nic. */
+  loadPending() {
+    if (this._loadingPending) return this._loadingPending;
+    const ch = String(this.channel() || '').toLowerCase();
+    if (!ch || !this.api) return Promise.resolve(0);
+    this._loadingPending = (async () => {
+      let j;
+      try { j = await this.api(`/moderation/gif/pending?channel=${encodeURIComponent(ch)}`); }
+      catch (e) { this._L(`pending FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); return 0; }
+      if (!sameChannel(ch, this.channel())) return 0;   // mezitím přepnutý kanál
+      const list = Array.isArray(j?.requests) ? j.requests : [];
+      let n = 0;
+      for (const r of list) if (this.onPending(r)) n++;
+      this._L(`pending ${ch}: ${list.length} žádostí, ${n} nových`);
+      return n;
+    })().finally(() => { this._loadingPending = null; });
+    return this._loadingPending;
+  }
+
+  /** Klik na Schválit / Zamítnout (jen karta, která je vidět, a ne během zámku). */
   async decide(requestId, approve) {
-    const card = this._cards.get(String(requestId));
-    if (!card || card.state !== 'pending' || card.busy) return null;
+    const id = String(requestId);
+    const card = this._cards.get(id);
+    if (!card || card.busy) return null;
+    if (this._shownId === id && this._lock.locked()) { this._L(`decide ${id}: zamčeno ještě ${this._lock.remaining()} ms`); return null; }
     card.busy = true; card.error = '';
-    this._paint(card);
-    this._L(`decide ${card.req.requestId} ${approve ? 'approve' : 'reject'}`);
+    this._paint();
+    this._L(`decide ${id} ${approve ? 'approve' : 'reject'}`);
     try {
-      const r = await this.api(`/moderation/gif/${encodeURIComponent(card.req.requestId)}/decide`, { method: 'POST', body: { approve: !!approve } });
+      const r = await this.api(`/moderation/gif/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { approve: !!approve } });
       card.busy = false;
-      // Mezitím karta zmizela (clear po přepnutí kanálu, odhlášení) → nic nevykreslovat.
-      if (this._cards.get(card.req.requestId) !== card) return null;
+      // Mezitím karta zmizela (clear po přepnutí kanálu, gif-decided jiného moda) → nic nevykreslovat.
+      if (this._cards.get(id) !== card) return null;
       const status = ['approved', 'rejected'].includes(r?.status) ? r.status : (approve ? 'approved' : 'rejected');
-      this._rememberDecided(card.req.requestId, status);
-      if (card.state === 'pending') this._finish(card, status, 'me');
-      if (r?.published === false) this._L(`decide ${card.req.requestId}: schváleno, ale zpráva se nezapsala (published:false)`);
-      this._L(`decide ${card.req.requestId} → ${status}`);
+      if (r?.published === false) this._L(`decide ${id}: schváleno, ale zpráva se nezapsala (published:false)`);
+      this._L(`decide ${id} → ${status}`);
+      this._rememberDecided(id, status);
+      this._ownDecidedId = id;
+      this._cards.delete(id);
+      this._queueDrop(id);
+      this._render();
       return status;
     } catch (e) {
       card.busy = false;
-      if (this._cards.get(card.req.requestId) !== card) return null;
-      this._L(`decide ${card.req.requestId} FAIL ${e?.status || 0} ${e?.error || e?.message || e}${e?.status ? ` status=${e.status}` : ''}`);
+      if (this._cards.get(id) !== card) return null;
+      this._L(`decide ${id} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
       if (e?.error === 'already_decided') {
         // Hostitel vrací HTTP status v `status`; stav žádosti z těla 409 je v `body.status` (nebo řetězcový `status`).
         const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
         const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
-        this._rememberDecided(card.req.requestId, st);
-        if (card.state === 'pending') this._finish(card, st, null, gifDecideErrorText(e));
+        const by = e.body?.decidedBy ?? e.decidedBy ?? null;
+        this._L(`decide ${id}: 409 už rozhodnuto (${st}, ${by ?? '-'})`);
+        this._rememberDecided(id, st);
+        this._cards.delete(id);
+        this._queueDrop(id);
+        this._setNotice(gifAlreadyDecidedText(st, by), st);
+        this._render();
         return st;
       }
-      if (e?.error === 'not_found') { this._finish(card, 'expired', null, gifDecideErrorText(e)); return null; }
+      if (e?.error === 'not_found') {
+        this._cards.delete(id);
+        this._queueDrop(id);
+        this._setNotice(gifDecideErrorText(e), 'closed');
+        this._render();
+        return null;
+      }
       card.error = gifDecideErrorText(e);
-      this._paint(card);
+      this._paint();
       return null;
     }
   }
 
-  /** Role se změnila (mod ↔ divák) → tlačítka a texty karet znovu. */
-  repaint() {
-    const mod = !!this.canModerate();
-    for (const c of [...this._cards.values()]) {
-      // Ztráta role: cizí žádosti už neukazovat (vlastní zůstávají).
-      if (!mod && !c.req.own) { this._L(`gif ${c.req.requestId}: nejsem mod → karta pryč`); this._remove(c.req.requestId); continue; }
-      this._paint(c);
+  /** „Automaticky zahazovat 12 h“ (dříve zamítnutý GIF, od všech) → POST /moderation/gif/:mediaId/ban12h. */
+  async ban12h(requestId) {
+    const id = String(requestId);
+    const card = this._cards.get(id);
+    const mediaId = card ? gifMediaIdOf(card.req.media.url) : null;
+    if (!card || card.busy || !mediaId) return null;
+    if (this._shownId === id && this._lock.locked()) return null;
+    card.busy = true; card.error = '';
+    this._paint();
+    try {
+      const r = await this.api(`/moderation/gif/${mediaId}/ban12h`, { method: 'POST', body: {} });
+      card.busy = false;
+      this._L(`ban12h ${mediaId} (žádost ${id}) → zamítnuto ${r?.rejected ?? '?'} čekajících`);
+      if (this._cards.get(id) === card) {
+        this._rememberDecided(id, 'rejected');
+        this._ownDecidedId = id;
+        this._cards.delete(id);
+        this._queueDrop(id);
+        this._render();
+      }
+      return r;
+    } catch (e) {
+      card.busy = false;
+      this._L(`ban12h ${mediaId} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
+      if (this._cards.get(id) === card) { card.error = gifDecideErrorText(e); this._paint(); }
+      return null;
     }
   }
 
-  /** Přepnutí kanálu / odhlášení: všechny karty pryč. */
+  /** Role se změnila (mod ↔ divák) → cizí žádosti pryč (vlastní zůstávají v datech), karta znovu. */
+  repaint() {
+    if (!this.canModerate()) {
+      for (const [id, c] of [...this._cards]) if (!c.req.own) { this._L(`gif ${id}: nejsem mod → žádost pryč`); this._cards.delete(id); }
+    }
+    this._render();
+  }
+
+  /** Přepnutí kanálu / odhlášení: všechno pryč. */
   clear() {
-    for (const c of this._cards.values()) { if (c.lingerT) this._ct(c.lingerT); this._disposeCard(c); }
     this._cards.clear();
     this._decided.clear();
+    this._queue = null;
+    this._shownId = null;
+    this._ownDecidedId = null;
+    this._lock.reset();
+    if (this._lockT) { this._ct(this._lockT); this._lockT = null; }
+    if (this._noticeT) { this._ct(this._noticeT); this._noticeT = null; }
+    this._notice = null;
     this._stopTimer();
-    this._expanded = false;
-    if (this.el) { this.el.remove(); this.el = null; }
+    if (this.el) { removeGifMedia(this.el); this.el.remove(); this.el = null; }
     this.onChange(0);
   }
 
@@ -603,37 +737,83 @@ export class GifRequests {
 
   _rememberDecided(id, status) {
     this._decided.set(String(id), status);
-    if (this._decided.size > 300) this._decided.delete(this._decided.values().next().value);
+    if (this._decided.size > 300) this._decided.delete(this._decided.keys().next().value);
   }
 
-  _finish(card, status, by, note = '') {
-    card.state = status;
-    card.by = by;
-    card.note = note;
-    card.error = '';
-    this._paint(card);
-    // Náhled čekajícího média už server nevrátí (zamítnuto / propadlo) → zastavit video.
-    const v = card.el?.querySelector('video');
-    if (v) { try { v.pause(); } catch { /* ignore */ } }
-    if (card.lingerT) this._ct(card.lingerT);
-    card.lingerT = this._st(() => this._remove(card.req.requestId), this.lingerMs);
-    this.onChange(this.size);
-    if (!this.size) this._stopTimer();
+  /** Žádost zmizela lokálně → odhad fronty do příští gif-queue (počet − 1, první = neznámá). */
+  _queueDrop(id) {
+    const q = this._queue;
+    if (!q) return;
+    if (q.headId === String(id) || this._cards.size < q.pendingCount) {
+      q.pendingCount = Math.max(0, q.pendingCount - 1);
+      if (q.headId === String(id)) q.headId = null;
+    }
   }
 
-  _remove(id) {
-    const card = this._cards.get(String(id));
-    if (!card) return;
-    this._cards.delete(String(id));
-    this._disposeCard(card);
-    card.el?.remove();
-    if (!this._cards.size && this.el) { this.el.remove(); this.el = null; }
-    else this._layout();
-    this.onChange(this.size);
+  _setNotice(text, kind) {
+    if (!text) return;
+    this._notice = { text, kind };
+    if (this._noticeT) this._ct(this._noticeT);
+    this._noticeT = this._st(() => { this._noticeT = null; this._notice = null; this._render(); }, this.noticeMs);
   }
 
-  _disposeCard(card) {
-    if (card.el) removeGifMedia(card.el);
+  _root() {
+    if (this.el && this.el.isConnected) return this.el;
+    const el = this.doc.createElement('div');
+    el.className = 'uc-gif-stack';
+    el.setAttribute('role', 'region');
+    el.setAttribute('aria-label', 'GIFy ke schválení');
+    el.innerHTML = '<div class="uc-gif-notice" role="status" hidden></div><div class="uc-gif-slot"></div><div class="uc-gif-more" hidden></div>';
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest?.('[data-act]');
+      if (!b || !el.contains(b)) return;
+      const card = b.closest('.uc-gif-card');
+      if (!card) return;
+      e.stopPropagation();
+      if (b.dataset.act === 'approve') this.decide(card.dataset.requestId, true);
+      else if (b.dataset.act === 'reject') this.decide(card.dataset.requestId, false);
+      else if (b.dataset.act === 'ban12h') this.ban12h(card.dataset.requestId);
+    });
+    this.container.appendChild(el);
+    this.el = el;
+    return el;
+  }
+
+  /** Karta = nejstarší čekající; při změně karty zámek (0,3 s po mém rozhodnutí, jinak 1 s). */
+  _render() {
+    const head = this._head();
+    const headId = head?.req.requestId ?? null;
+    if (headId !== this._shownId) {
+      const prev = this._shownId;
+      this._shownId = headId;
+      if (headId) {
+        const own = prev !== null && prev === this._ownDecidedId;
+        const ms = own ? this.lockOwnMs : this.lockOtherMs;
+        this._lock.reset();
+        this._lock.lock(ms);
+        if (this._lockT) this._ct(this._lockT);
+        this._lockT = this._st(() => { this._lockT = null; this._paint(); }, ms + 5);
+        this._L(`karta ${headId} (před ní ${prev ?? '-'}) → zámek ${ms} ms${own ? ' (moje rozhodnutí)' : ''}`);
+      }
+      this._ownDecidedId = null;
+    }
+    if (!headId && !this._notice) {
+      if (this.el) { removeGifMedia(this.el); this.el.remove(); this.el = null; }
+      this._stopTimer();
+      this.onChange(this._cards.size);
+      return;
+    }
+    const root = this._root();
+    const slot = root.querySelector('.uc-gif-slot');
+    const cur = slot.querySelector('.uc-gif-card');
+    if (!headId) { if (cur) { removeGifMedia(cur); cur.remove(); } }
+    else if (!cur || cur.dataset.requestId !== headId) {
+      if (cur) { removeGifMedia(cur); cur.remove(); }
+      slot.appendChild(this._build(head));
+    }
+    this._paint();
+    if (headId) this._startTimer(); else this._stopTimer();
+    this.onChange(this._cards.size);
   }
 
   _startTimer() {
@@ -647,26 +827,29 @@ export class GifRequests {
 
   _tick() {
     const now = this.now();
-    for (const card of this._cards.values()) {
-      if (card.state !== 'pending') continue;
-      if (now >= card.req.expiresAt) {
-        // Server propadnutí ohlásí do 10 s (gif-decided expired) — lokálně hned, ať mod neklikne naprázdno.
-        this._rememberDecided(card.req.requestId, 'expired');
-        this._L(`gif ${card.req.requestId} propadl (lokálně)`);
-        this._finish(card, 'expired', null);
-      } else {
-        const t = card.el?.querySelector('.uc-gif-timer');
-        if (t) t.textContent = formatCountdown(card.req.expiresAt - now);
-      }
+    let changed = false;
+    for (const [id, c] of [...this._cards]) {
+      if (now < c.req.expiresAt) continue;
+      // Server propadnutí ohlásí do 10 s (gif-decided expired) — lokálně hned, ať mod neklikne naprázdno.
+      this._rememberDecided(id, 'expired');
+      this._cards.delete(id);
+      this._queueDrop(id);
+      this._L(`gif ${id} propadl (lokálně)`);
+      if (id === this._shownId) this._setNotice(gifDecisionText('expired'), 'expired');
+      changed = true;
     }
-    if (!this.size) this._stopTimer();
+    if (changed) { this._render(); return; }
+    const head = this._shownId ? this._cards.get(this._shownId) : null;
+    const t = this.el?.querySelector('.uc-gif-timer');
+    if (head && t) t.textContent = formatCountdown(head.req.expiresAt - now);
+    if (!this._cards.size) this._stopTimer();
   }
 
   _build(card) {
     const doc = this.doc;
     const { req } = card;
     const el = doc.createElement('div');
-    el.className = 'uc-gif-card';
+    el.className = 'uc-gif-card uc-gif-card--pending';
     el.dataset.requestId = req.requestId;
     el.innerHTML = `
       <div class="uc-gif-card-head">
@@ -676,10 +859,11 @@ export class GifRequests {
         <span class="uc-gif-timer" title="Zbývá do propadnutí"></span>
       </div>
       <div class="uc-gif-card-text"></div>
+      <div class="uc-gif-card-prev" hidden></div>
       <div class="uc-gif-card-media"></div>
-      <div class="uc-gif-card-status" role="status"></div>
       <div class="uc-gif-card-err" role="alert" hidden></div>
       <div class="uc-gif-card-actions">
+        <button type="button" class="uc-gif-btn uc-gif-btn--ban" data-act="ban12h" hidden title="Tento GIF bude 12 hodin automaticky zamítnut u všech">Automaticky zahazovat 12 h</button>
         <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="reject">Zamítnout</button>
         <button type="button" class="uc-gif-btn uc-gif-btn--approve" data-act="approve">Schválit</button>
       </div>`;
@@ -697,34 +881,43 @@ export class GifRequests {
     el.querySelector('.uc-gif-card-text').hidden = !req.text;
     el.querySelector('.uc-gif-card-media').appendChild(createGifMedia(doc, req.media, { lazy: false, log: this.log, maxW: GIF_MAX_W, maxH: GIF_CARD_MAX_H }));
     el.querySelector('.uc-gif-timer').textContent = formatCountdown(req.expiresAt - this.now());
-    this._paint({ ...card, el });
     return el;
   }
 
-  _paint(card) {
-    const el = card.el;
-    if (!el) return;
-    const { req, state } = card;
-    const mod = !!this.canModerate();
-    el.classList.toggle('uc-gif-card--own', req.own);
-    el.classList.toggle('uc-gif-card--mod', mod);
-    for (const s of ['pending', 'approved', 'rejected', 'expired', 'closed']) el.classList.toggle(`uc-gif-card--${s}`, state === s);
+  /** Stav karty (zámek, busy, chyba, dříve zamítnuto) + hláška + „+N čeká“. */
+  _paint() {
+    const root = this.el;
+    if (!root) return;
+    const notice = root.querySelector('.uc-gif-notice');
+    notice.textContent = this._notice?.text || '';
+    notice.hidden = !this._notice;
+    notice.className = `uc-gif-notice${this._notice?.kind ? ` uc-gif-notice--${this._notice.kind}` : ''}`;
+    const more = root.querySelector('.uc-gif-more');
+    const extra = this._shownId ? Math.max(0, this.pendingCount() - 1) : 0;
+    more.hidden = !extra;
+    more.textContent = extra ? gifWaitingText(extra) : '';
+    const el = root.querySelector('.uc-gif-card');
+    const card = el ? this._cards.get(el.dataset.requestId) : null;
+    if (!el || !card) return;
+    const { req } = card;
+    const locked = this._lock.locked();
+    el.classList.toggle('uc-gif-card--own', !!req.own);
+    el.classList.toggle('uc-gif-card--mod', true);
     el.classList.toggle('uc-gif-card--busy', !!card.busy);
+    el.classList.toggle('uc-gif-card--locked', locked);
     el.querySelector('.uc-gif-card-kind').textContent = req.own ? 'Tvůj GIF' : 'Chce poslat GIF';
-    const status = el.querySelector('.uc-gif-card-status');
-    if (state === 'pending') status.textContent = req.own ? gifOwnStatusText('pending') : '';
-    else status.textContent = card.note || (req.own && !mod ? gifOwnStatusText(state) : gifDecisionText(state, card.by));
-    status.hidden = !status.textContent;
+    const prevEl = el.querySelector('.uc-gif-card-prev');
+    prevEl.textContent = req.previouslyRejected ? gifPrevRejectedText(req.previouslyRejected) : '';
+    prevEl.hidden = !req.previouslyRejected;
     const err = el.querySelector('.uc-gif-card-err');
     err.textContent = card.error || '';
     err.hidden = !card.error;
-    const actions = el.querySelector('.uc-gif-card-actions');
-    actions.hidden = !(mod && state === 'pending');
-    for (const b of actions.querySelectorAll('button')) b.disabled = !!card.busy;
-    el.querySelector('.uc-gif-timer').hidden = state !== 'pending';
-    el.setAttribute('aria-label', `${req.own ? 'Tvůj GIF' : `GIF od ${req.login}`}${status.textContent ? `: ${status.textContent}` : ''}`);
+    el.querySelector('.uc-gif-btn--ban').hidden = !req.previouslyRejected;
+    for (const b of el.querySelectorAll('.uc-gif-card-actions button')) b.disabled = !!card.busy || locked;
+    el.setAttribute('aria-label', `${req.own ? 'Tvůj GIF' : `GIF od ${req.login}`}${extra ? `, ${gifWaitingText(extra)}` : ''}`);
   }
 }
+
 
 /** Atribut-bezpečné HTML média pro hostitele, který skládá zprávu jako řetězec (OBS / raw režim webu). */
 export function gifMediaHtml(gif) {

@@ -101,7 +101,8 @@ Promise.all([
   check('gifCooldownText', cd.gifCooldownText(true) === 'Můžeš až za:' && cd.gifCooldownText(false) === 'GIF můžeš poslat za');
   check('gifCooldownRing: 30 s z 60 → 180°, číslo 30', eq(cd.gifCooldownRing(30_000, 60_000), { deg: 180, sec: 30 }));
   check('gifCooldownRing: 0,2 s → číslo 1, 60 s bez celkové délky → 0°', cd.gifCooldownRing(200, 60_000).sec === 1 && cd.gifCooldownRing(60_000, 0).deg === 0);
-  check('normalizeGifState: posun hodin přes serverNow', eq(cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: 15_000, cooldownSec: 60, serverNow: 5_000 }, 100_000), { allowed: true, until: 110_000, sec: 60, mod: false, at: 100_000 }));
+  check('normalizeGifState: posun hodin přes serverNow', eq(cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: 15_000, cooldownSec: 60, serverNow: 5_000 }, 100_000), { allowed: true, until: 110_000, sec: 60, mod: false, mode: 'all', rewardUntil: null, rewardTotalMs: null, at: 100_000 }));
+  check('normalizeGifState: režim approved + konec odměny (posun hodin)', (() => { const s = cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 5_000, mode: 'approved', rewardUntil: 65_000, rewardTotalMs: 600_000 }, 100_000); return s.mode === 'approved' && s.rewardUntil === 160_000 && s.rewardTotalMs === 600_000; })());
   check('normalizeGifState: mod, bez cooldownu; chyba → null', cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true }, 5).mod === true && cd.normalizeGifState({ ok: false }, 1) === null);
 
   // Minimální DOM pro GifCooldown.

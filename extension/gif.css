@@ -170,3 +170,165 @@
 #msg-input.uc-gif-input-blocked,
 #msg-input.uc-gif-input-blocked:focus,
 .uc-gif-input-blocked { border-color: #e5484d !important; box-shadow: 0 0 0 1px rgba(229, 72, 77, 0.35); }
+
+/* =====================================================================================================
+   GIF knihovna (2026-09-26, core/gif.js GifRequests FIFO + core/gif-library.js)
+   ===================================================================================================== */
+
+/* ---- FIFO karta moda: jen nejstarší čekající + „+N čeká“, hláška „Už rozhodl X“, zámek tlačítek ---- */
+.uc-gif-slot:empty { display: none; }
+div.uc-gif-more { cursor: default; }
+.uc-gif-notice {
+  align-self: center;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary, #efeff1);
+  font-size: 12px;
+  font-weight: 700;
+}
+.uc-gif-notice[hidden] { display: none; }
+.uc-gif-notice--approved { border-color: #2fbf5b; color: #6ee08f; }
+.uc-gif-notice--rejected { border-color: #e5484d; color: #ff9a9d; }
+.uc-gif-card-prev { margin-top: 4px; color: #f5a524; font-size: 11px; font-weight: 700; }
+.uc-gif-card-prev::before { content: '⚠ '; }
+.uc-gif-card-prev[hidden], .uc-gif-btn[hidden] { display: none; }
+.uc-gif-btn--ban { margin-right: auto; color: #f5a524; font-weight: 600; font-size: 11px; }
+/* Zámek po změně karty (1 s jiný mod, 0,3 s po vlastním kliku): tlačítka ztlumená. */
+.uc-gif-card--locked .uc-gif-btn:disabled { opacity: .45; cursor: wait; }
+
+/* ---- Štítek u vlastní GIF zprávy (odesílatel): kolečko %, peach „Schvalování moderátorem ( )“, červený ---- */
+.uc-gif-st {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0 1px;
+  padding: 2px 9px 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.uc-gif-st--progress { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); }
+.uc-gif-st-ring { width: 16px; height: 16px; }
+.uc-gif-st-ring i { -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px); mask: radial-gradient(circle, transparent 5px, #000 5.5px); }
+.uc-gif-st-pct { font-variant-numeric: tabular-nums; min-width: 3.2em; }
+.uc-gif-st--pending { background: rgba(255, 170, 120, 0.16); border: 1px solid rgba(255, 170, 120, 0.45); color: #ffbe98; padding-left: 9px; }
+.uc-gif-st-wait { display: inline-flex; align-items: center; gap: 1px; }
+.uc-gif-st-spin {
+  display: inline-block; width: 8px; height: 8px; margin: 0 2px;
+  border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: uc-gif-st-spin 0.9s linear infinite;
+}
+@keyframes uc-gif-st-spin { to { transform: rotate(360deg); } }
+.uc-gif-st--pending .uc-gif-st-txt { animation: uc-gif-st-pulse 1.8s ease-in-out infinite; }
+@keyframes uc-gif-st-pulse { 50% { opacity: .6; } }
+.uc-gif-st-warn { display: inline-flex; cursor: help; }
+.uc-gif-st-warn[hidden] { display: none; }
+.uc-gif-st--rejected, .uc-gif-st--expired, .uc-gif-st--not_allowed { background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.55); color: #ff8a8e; padding-left: 9px; }
+@media (prefers-reduced-motion: reduce) {
+  .uc-gif-st-spin, .uc-gif-st--pending .uc-gif-st-txt { animation: none; }
+}
+
+/* ---- Panel emotů se svislými bočními záložkami (Emoty | GIFy) — core/emote-picker.js tabs ---- */
+.uc-ep.uc-ep--tabs { flex-direction: row; width: min(420px, calc(100% - 20px)); height: min(400px, 62vh); }
+.uc-ep-side {
+  flex: 0 0 52px; display: flex; flex-direction: column; gap: 4px; padding: 6px 4px;
+  border-right: 1px solid var(--border, #2f2f35); background: var(--bg-secondary, #18181b);
+}
+.uc-ep-tab {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 2px 7px; border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--text-secondary, #9a9aa6); font: inherit; font-size: 10px; font-weight: 700; cursor: pointer;
+}
+.uc-ep-tab:hover { background: var(--bg-hover, #26262c); color: var(--text-primary, #efeff1); }
+.uc-ep-tab.on { color: var(--accent-light, #ffc800); background: var(--bg-tertiary, #1f1f23); border-color: rgba(255, 140, 0, 0.45); }
+/* Časový pásek odměny (jako soundboard .uc-sb-bar) na záložce i pod tlačítkem emotů. */
+.uc-ep-tab-bar { position: absolute; left: 5px; right: 5px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-tab-bar[hidden], .uc-ep-btn-bar[hidden] { display: none; }
+.uc-ep-tab-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
+.uc-ep-btn-bar { position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-btn-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-ep-p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
+.uc-ep-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.uc-ep-pane[hidden] { display: none; }
+
+/* ---- Záložka GIFy (core/gif-library.js createGifPanel) ---- */
+.uc-gl { position: relative; overflow: hidden; }
+.uc-gl-tabs { display: flex; gap: 4px; padding: 6px 8px 0; }
+.uc-gl-tabs[hidden] { display: none; }
+.uc-gl-tab {
+  flex: 1; padding: 5px 6px; border: 1px solid var(--border, #2f2f35); border-radius: 5px; background: var(--bg-secondary, #18181b);
+  color: var(--text-secondary, #9a9aa6); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.uc-gl-tab.on { color: var(--accent-light, #ffc800); border-color: rgba(255, 140, 0, 0.55); }
+.uc-gl-reward { position: relative; padding: 6px 10px 7px; font-size: 11px; color: var(--text-secondary, #9a9aa6); border-bottom: 1px solid var(--border, #2f2f35); }
+.uc-gl-reward[hidden] { display: none; }
+.uc-gl-reward--active, .uc-gl-reward--mod { color: var(--accent-light, #ffc800); }
+.uc-gl-reward--locked, .uc-gl-reward--login { color: #ffbe98; }
+.uc-gl-reward--flash { animation: uc-gl-flash 0.4s ease-in-out 3; }
+@keyframes uc-gl-flash { 50% { background: rgba(229, 72, 77, 0.25); } }
+.uc-gl-reward-bar { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.uc-gl-reward-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); background: var(--accent-gradient); transition: width 1s linear; }
+.uc-gl-search { padding: 6px 8px; }
+.uc-gl-search[hidden] { display: none; }
+.uc-gl-search input {
+  width: 100%; box-sizing: border-box; padding: 6px 9px; background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35); border-radius: 5px; color: var(--text-primary, #efeff1); font: inherit; font-size: 13px; outline: none;
+}
+.uc-gl-search input:focus { border-color: var(--accent, #ff8c00); }
+.uc-gl-msg { margin: 0 8px 4px; padding: 4px 8px; border-radius: 5px; background: rgba(255, 255, 255, 0.06); font-size: 12px; color: var(--text-primary, #efeff1); }
+.uc-gl-msg[hidden] { display: none; }
+.uc-gl-body { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.uc-gl-h {
+  position: sticky; top: 0; z-index: 1; padding: 8px 0 4px; background: var(--bg-tertiary, #1f1f23);
+  color: var(--text-secondary, #9a9aa6); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+}
+.uc-gl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.uc-gl-i { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.uc-gl-pick {
+  display: flex; align-items: center; justify-content: center; height: 84px; padding: 2px; overflow: hidden;
+  border: 1px solid transparent; border-radius: 6px; background: var(--bg-secondary, #18181b); cursor: pointer;
+}
+.uc-gl-pick:hover { border-color: rgba(255, 140, 0, 0.55); }
+.uc-gl-pick--static { cursor: default; }
+.uc-gl--locked .uc-gl-pick:not(.uc-gl-pick--static) { opacity: .55; cursor: not-allowed; }
+.uc-gl-media.uc-gif { margin: 0; max-width: 100%; }
+.uc-gl-media .uc-gif-media { max-height: 78px; width: auto !important; max-width: 100%; object-fit: contain; }
+.uc-gl-more {
+  position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px;
+  background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s;
+}
+.uc-gl-i:hover .uc-gl-more, .uc-gl-more:focus-visible { opacity: 1; }
+.uc-gl-menu {
+  position: absolute; top: 27px; right: 3px; z-index: 3; display: flex; flex-direction: column; min-width: 150px;
+  padding: 4px; border: 1px solid var(--border, #2f2f35); border-radius: 6px; background: var(--bg-tertiary, #1f1f23); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+}
+.uc-gl-menu[hidden] { display: none; }
+.uc-gl-menu button { padding: 6px 8px; border: none; border-radius: 4px; background: transparent; color: var(--text-primary, #efeff1); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.uc-gl-menu button:hover { background: var(--bg-hover, #26262c); }
+.uc-gl-menu .uc-gl-danger { color: #ff9a9d; }
+.uc-gl-meta { font-size: 10px; color: var(--text-secondary, #9a9aa6); line-height: 1.3; }
+.uc-gl-i--vault .uc-gl-meta { color: #9ecbff; }
+.uc-gl-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.uc-gl-acts .uc-gif-btn { padding: 3px 7px; font-size: 11px; }
+.uc-gl-grid--rej { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.uc-gl-dups { margin-bottom: 6px; }
+.uc-gl-dup { padding: 6px; margin-bottom: 6px; border: 1px dashed rgba(255, 140, 0, 0.5); border-radius: 6px; }
+.uc-gl-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.uc-gl-pair-i { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.uc-gl-pair-cap { font-size: 10px; color: var(--text-secondary, #9a9aa6); text-align: center; }
+.uc-gl-pair-i--rejected .uc-gl-pair-cap { color: #ff9a9d; }
+.uc-gl-dup-score { margin: 4px 0; font-size: 11px; font-weight: 700; color: var(--accent-light, #ffc800); }
+.uc-gl-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary, #9a9aa6); font-size: 12px; }
+.uc-gl-retry, .uc-gl-moreload {
+  margin: 8px auto 0; display: block; padding: 4px 12px; border: 1px solid var(--border, #2f2f35); border-radius: 12px;
+  background: var(--bg-secondary, #18181b); color: var(--text-primary, #efeff1); font: inherit; font-size: 12px; cursor: pointer;
+}
+.uc-gl-confirm { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.6); }
+.uc-gl-confirm[hidden] { display: none; }
+.uc-gl-confirm-box { max-width: 260px; padding: 12px; border: 1px solid #e5484d; border-radius: 8px; background: var(--bg-tertiary, #1f1f23); font-size: 13px; }
+.uc-gl-confirm-box p { margin: 6px 0 10px; color: var(--text-secondary, #9a9aa6); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .uc-gl-reward--flash { animation: none; outline: 1px solid #e5484d; } }
