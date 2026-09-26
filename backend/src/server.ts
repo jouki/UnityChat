@@ -109,7 +109,7 @@ const gifUnlocker = createUnlocker({
 const gifUnlockEstimator = createUnlockEstimator();
 const gifFlow = createGifFlow({
   store: dbGifStore,
-  resolve: (src, hooks) => resolveGif(src, { unlocker: gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress }),
+  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   publishDeleted: (p) => publishDeleted(p),

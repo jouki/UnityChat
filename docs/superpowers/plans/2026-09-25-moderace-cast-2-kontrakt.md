@@ -682,7 +682,9 @@ sha256 obsahu. Známé médium se znovu neukládá (přednost `approved` > `reje
 **Režim `approved`** (`gif-access.mode`, platí i pro mody): projde jen známé **schválené** médium (URL, sha256, náš
 odkaz). Cokoli jiného → zpráva smazaná (`reason: "gif_not_allowed"`, SSE `message-deleted`, na platformě botem;
 v UC neodkryvatelná jako `gif_rejected`), nic se neukládá, `gif-notice { kind: "approved_only" }` odesílateli,
-audit `gif_not_allowed`. Neznámá URL se kvůli sha256 přesto stáhne (průběh běží).
+audit `gif_not_allowed`. Neznámá URL se kvůli sha256 přesto stáhne (průběh běží), ale **jen přímo — Bright Data se
+v tomto režimu nevolá**; skončí-li přímé stažení `bot_protection` (Cloudflare), bere se odkaz jako nový GIF (smazat
++ `approved_only`). Jiná chyba převodu = běžný odkaz.
 
 **Soukromé SSE `/account/stream` (nové):**
 ```

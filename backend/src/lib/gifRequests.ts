@@ -454,7 +454,8 @@ export type GifIntegration =
 
 export interface GifFlowDeps {
   store: GifStore;
-  resolve: (src: GifSource, hooks?: { onProgress?: (e: GifFetchProgress) => void }) => Promise<ResolvedGif>;
+  /** `noUnlock`: bez fallbacku přes Bright Data (režim approved — neznámý GIF nesmí stát kredit). */
+  resolve: (src: GifSource, hooks?: { onProgress?: (e: GifFetchProgress) => void; noUnlock?: boolean }) => Promise<ResolvedGif>;
   access: (q: GifAccessQuery) => Promise<GifAccess | null>;
   used: (p: { workspace: string; platform: Platform; userId: string }) => Promise<unknown>;
   /** publishDeleted (SSE message-deleted + chat.deleted). */
@@ -762,7 +763,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           if (byUrl) return { ok: true, known: byUrl, fresh: null, sha256: byUrl.sha256 };
           let v: ResolvedGif;
           try {
-            v = await deps.resolve(p.candidate, { onProgress: (e) => {
+            v = await deps.resolve(p.candidate, { noUnlock: mode === 'approved', onProgress: (e) => {
               if (e.phase === 'unlock') { progress('unlock', 50, { estimateMs: e.estimateMs, elapsedMs: e.elapsedMs }); return; }
               const frac = e.total ? e.loaded / e.total : 1 - Math.exp(-e.loaded / UNKNOWN_SIZE_SCALE);
               const pct = Math.min(50, 10 + Math.floor(40 * Math.max(0, Math.min(1, frac))));
@@ -854,8 +855,9 @@ export function createGifFlow(deps: GifFlowDeps) {
           }
         } else {
           deps.log.info({ channel: p.ucChannel, platform: m.platform, host: safeHost(p.candidate.url), code: res.code }, 'gif: převod odkazu selhal (běžný odkaz)');
-          // Režim „jen schválené": náš odkaz na neznámé médium je taky nový GIF (smazaný filtrem už je pryč).
-          if (mode === 'approved' && p.candidate.mode === 'own' && p.preDeleted !== 'link_filter') {
+          // Režim „jen schválené": náš odkaz na neznámé médium i odkaz za ochranou proti botům (Bright Data se
+          // v tomhle režimu nevolá) je nový GIF (smazaný filtrem už je pryč).
+          if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection') && p.preDeleted !== 'link_filter') {
             await dropOriginal(p, GIF_NOT_ALLOWED_REASON);
             notice('approved_only');
             return finish('not_allowed');

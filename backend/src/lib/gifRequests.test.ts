@@ -607,6 +607,27 @@ test('režim approved: nový GIF → zpráva smazána (gif_not_allowed) + gif-no
   await b.flow._idle();
 });
 
+test('režim approved: neznámá URL se stahuje jen přímo (bez Bright Data); bot_protection = nový GIF → smazat + approved_only', async () => {
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const seen: Array<boolean | undefined> = [];
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const s = setup({
+    access,
+    toSender: async () => (e: string, d: object) => { told.push([e, d as Record<string, unknown>]); },
+    resolve: async (_src, hooks) => { seen.push(hooks?.noUnlock); throw new GifError('bot_protection'); },
+  });
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  assert.deepEqual(seen, [true], 'unlocker vypnutý');
+  assert.equal(told.find(([e]) => e === 'gif-notice')![1].kind, 'approved_only');
+  assert.equal(events(s.calls, 'broadcast:message-deleted')[0].reason, 'gif_not_allowed');
+  assert.ok(names(s.calls).includes('deletePlatform'));
+  await s.flow._idle();
+  // Režim all: unlocker povolený.
+  const a = setup({ resolve: async (_src, hooks) => { seen.push(hooks?.noUnlock as boolean); return resolved; } });
+  await a.flow.intercept(from('42', 'm1'));
+  assert.equal(seen[1], false);
+});
+
 test('náš odkaz v režimu all: schválené → gif-message; neznámé id → běžný odkaz (failed)', async () => {
   const s = setup();
   await s.flow.intercept(from('42', 'm1'));
