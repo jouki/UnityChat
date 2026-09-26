@@ -140,6 +140,10 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-26 (session unitychat-8f)
+
+- **CLAUDE.md** — milestone v3.41.38–42 (GIF knihovna: backend, core, addon, web, OBS). Memory `project_gif_library.md` + index.
+
 ### 2026-09-24 (session unitychat-8f)
 
 - **CLAUDE.md** — milestone v3.40.26–28 (Kick badge, slide-in animace, odpovědi napříč platformami, odhlášení všech platforem).
