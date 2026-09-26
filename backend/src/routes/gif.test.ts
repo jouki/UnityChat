@@ -206,7 +206,7 @@ function stateDeps(over: Partial<GifStateDeps> = {}, log: unknown[] = []): GifSt
 test('gifStateFor: cooldown vlastní identity na platformě, kam píše (role z archivu), serverNow', async () => {
   const log: unknown[] = [];
   const s = await gifStateFor(7, { channel: 'robdiesalot', platform: 'kick' }, stateDeps({}, log));
-  assert.deepEqual(s, { ok: true, allowed: true, cooldownUntil: 2_030_000, cooldownSec: 120, serverNow: 2_000_000, mode: 'all', cooldownGlobalSec: 0 });
+  assert.deepEqual(s, { ok: true, allowed: true, cooldownUntil: 2_030_000, cooldownSec: 120, serverNow: 2_000_000, rewardUntil: null, mode: 'all', cooldownGlobalSec: 0 });
   assert.deepEqual(log[0], { workspace: 'rob', platform: 'kick', userId: 'k9', login: 'divak_k', role: 'sub' });
   // Prošlý cooldown → null; bez platformy první identita.
   const past = await gifStateFor(7, { channel: 'robdiesalot' }, stateDeps({ access: async () => ({ allowed: true, until: null, cooldownUntil: 1, cooldownSec: 60, requestTtlSec: 300 }) }));
@@ -232,6 +232,15 @@ test('gifStateFor: režim a globální cooldown ze Židolišty (klient je zobraz
   const s = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 300, mode: 'approved', cooldownGlobalSec: 30 }) }));
   assert.equal(s.mode, 'approved');
   assert.equal(s.cooldownGlobalSec, 30);
+});
+
+test('gifStateFor: konec odemčené odměny (rewardUntil) pro časový pásek; neodemčeno / bez konce → null', async () => {
+  const on = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => ({ allowed: true, until: 2_600_000, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 300 }) }));
+  assert.equal(on.rewardUntil, 2_600_000);
+  const endless = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 300 }) }));
+  assert.equal(endless.rewardUntil, null);
+  const locked = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ access: async () => ({ allowed: false, until: 2_600_000, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 300 }) }));
+  assert.equal(locked.rewardUntil, null);
 });
 
 test('gifStateFor: neznámý kanál / bez identity na platformě / Židolišta nedostupná → neodemčeno', async () => {

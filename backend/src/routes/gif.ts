@@ -197,6 +197,8 @@ export interface GifStateView {
   cooldownGlobalSec: number;
   /** Mod / broadcaster bez Dev módu: GIF se schválí rovnou, cooldown se neuplatňuje. */
   mod?: true;
+  /** Konec odemčené odměny v čase SERVERU (ms), null = bez konce / neodemčeno — časový pásek u ikony emotů. */
+  rewardUntil?: number | null;
 }
 
 /**
@@ -225,6 +227,7 @@ export async function gifStateFor(accountId: number, q: { channel: string; platf
     cooldownUntil: a.cooldownUntil !== null && a.cooldownUntil > now ? a.cooldownUntil : null,
     cooldownSec: a.cooldownSec,
     serverNow: now,
+    rewardUntil: a.allowed && a.until !== null && a.until > now ? a.until : null,
     ...extra,
   };
 }

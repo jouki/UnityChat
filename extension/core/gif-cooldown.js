@@ -37,8 +37,8 @@ export function normalizeGifState(j, localNow) {
   const shift = Number.isFinite(serverNow) ? localNow - serverNow : 0;
   const cd = Number(j.cooldownUntil);
   const sec = Number(j.cooldownSec);
-  // Konec odměny (indikátor — časový pásek jako u soundboardu). Kontrakt /gif/state ho zatím nemá; když ho
-  // server přidá (`rewardUntil` nebo `until` + `rewardTotalMs` / `rewardSec`), pásek se začne ukazovat sám.
+  // Konec odměny (indikátor — časový pásek jako u soundboardu): server posílá `rewardUntil`; délku odměny
+  // (`rewardTotalMs` / `rewardSec`) zatím ne → GifCooldown._rewardTotalFallback.
   const ru = Number(j.rewardUntil ?? j.until);
   const rTotal = Number(j.rewardTotalMs ?? (Number(j.rewardSec) * 1000));
   return {
@@ -117,7 +117,20 @@ export class GifCooldown {
   snapshot() {
     // Jen shoda kanálu / platformy (ne 60s čerstvost): časy (cooldown, konec odměny) se počítají proti hodinám.
     const s = this._state && this._state.key === this._key() ? this._state : null;
-    return s ? { allowed: s.allowed, mod: s.mod, until: s.until, sec: s.sec, mode: s.mode, rewardUntil: s.rewardUntil, rewardTotalMs: s.rewardTotalMs } : null;
+    if (!s) return null;
+    return { allowed: s.allowed, mod: s.mod, until: s.until, sec: s.sec, mode: s.mode, rewardUntil: s.rewardUntil, rewardTotalMs: s.rewardTotalMs || this._rewardTotalFallback(s) };
+  }
+
+  /**
+   * Židolišta posílá jen konec odměny, ne její délku → délka = od chvíle, kdy jsme tento konec poprvé viděli
+   * (pásek začne plný a ubývá). Nový konec (> 2 s rozdíl, nová odměna) = nový začátek.
+   */
+  _rewardTotalFallback(s) {
+    if (!Number.isFinite(s.rewardUntil)) { this._rewardSeen = null; return null; }
+    const seen = this._rewardSeen;
+    if (!seen || Math.abs(seen.until - s.rewardUntil) > 2000) this._rewardSeen = { until: s.rewardUntil, start: Math.min(s.at, this.now()) };
+    const total = s.rewardUntil - this._rewardSeen.start;
+    return total > 0 ? total : null;
   }
 
   get visible() { return !!this.el && !this.el.hidden; }
