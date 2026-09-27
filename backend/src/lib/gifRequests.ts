@@ -269,6 +269,12 @@ export interface GifStore {
   /** Schválený GIF smazaný modem (část 1) → status deleted. */
   markDeletedByMessage(messageId: string): Promise<GifRequest | null>;
   insertApprovedMessage(r: GifRequest, at: Date): Promise<ClientMessage>;
+  /**
+   * Dorovnání (audit A1): schválené žádosti rozhodnuté v intervalu (after, before), kterým chybí syntetická zpráva
+   * `gif-<id>`, nebo jejich médium zůstalo čekající (restart / chyba DB mezi rozhodnutím a zápisem). Nejstarší první.
+   * `mediaStatus` null = médium už neexistuje.
+   */
+  unpublishedApproved(before: Date, after: Date, limit: number): Promise<Array<{ request: GifRequest; mediaStatus: string | null; hasMessage: boolean }>>;
   /** deleted_reason původní zprávy from → to (jen když je smazaná s from). false = řádek nenalezen. */
   retagDeleted(platform: Platform, messageId: string, from: string, to: string): Promise<boolean>;
   /**
@@ -517,6 +523,17 @@ export const dbGifStore: GifStore = {
     const row = approvedMessageRow(r, at);
     await db.insert(messages).values(row).onConflictDoNothing({ target: [messages.platform, messages.platformMessageId] });
     return toClientMessage(row, false);
+  },
+  async unpublishedApproved(before, after, limit) {
+    // Syntetická zpráva schválené žádosti: unikátní (platform, platform_message_id) → korelovaný EXISTS je levný.
+    const msgExists = exists(db.select({ one: sql`1` }).from(messages)
+      .where(and(eq(messages.platform, gifRequests.platform), eq(messages.platformMessageId, sql`'gif-' || ${gifRequests.id}::text`))));
+    const rows = await db.select({ request: gifRequests, mediaStatus: gifMedia.status, hasMessage: sql<boolean>`${msgExists}` })
+      .from(gifRequests).leftJoin(gifMedia, eq(gifMedia.id, gifRequests.mediaId))
+      .where(and(eq(gifRequests.status, 'approved'), lt(gifRequests.decidedAt, before), gt(gifRequests.decidedAt, after),
+        or(sql`not ${msgExists}`, eq(gifMedia.status, 'pending'))))
+      .orderBy(asc(gifRequests.id)).limit(limit);
+    return rows.map((r) => ({ request: r.request, mediaStatus: r.mediaStatus ?? null, hasMessage: !!r.hasMessage }));
   },
   async retagDeleted(platform, messageId, from, to) {
     const rows = await db.update(messages).set({ deletedReason: to })
@@ -773,6 +790,14 @@ export const FLUSH_WAIT_MS = 1500;
  */
 export const SETTLE_RETRY_MS = 5000;
 
+/** Dorovnání schválených žádostí bez zprávy (audit A1): řeší se až po této době od rozhodnutí (souběh s decide). */
+export const RECONCILE_GRACE_MS = 60_000;
+/** … a nejvýš takhle staré (starší schválené bez zprávy už nikdo nečeká). */
+export const RECONCILE_WINDOW_MS = 7 * 86_400_000;
+/** Po tolika neúspěšných pokusech o dopsání se žádost zamítne (původní zpráva nesmí zůstat navždy schovaná). */
+export const RECONCILE_MAX_ATTEMPTS = 10;
+const RECONCILE_BATCH = 50;
+
 /** Bez známé velikosti: průběh stahování 10–50 % jako 1 − e^(−bajty / 2 MB). */
 const UNKNOWN_SIZE_SCALE = 2 * 1024 * 1024;
 
@@ -795,6 +820,8 @@ export function createGifFlow(deps: GifFlowDeps) {
   // rozhodl dřív, než intercept došel k pending.set (GET /moderation/gif/pending žádost ukáže hned po insertu).
   const closed = new Set<number>();
   const userKey = (channel: string, platform: string, userId: string) => `${channel}|${platform}|${userId}`;
+  // Neúspěšné pokusy dorovnání per žádost (audit A1).
+  const reconcileFails = new Map<number, number>();
   const safe = async (what: string, fn: () => Promise<unknown>) => {
     try { await fn(); } catch (e) { deps.log.warn({ err: (e as Error).message }, `gif: ${what} selhalo`); }
   };
@@ -1001,9 +1028,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg!));
       } else {
         published = false;
-        deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán');
-        // Původní zpráva nesmí zůstat navždy schovaná (gif_request) → běžně smazaná (gif_rejected + message-deleted).
-        await rejectOriginal(r);
+        // Žádost zůstává schválená, původní zpráva schovaná (/gif/held: replaced) — zprávu dopíše reconcileTick
+        // (audit A1); když se to nepodaří ani po RECONCILE_MAX_ATTEMPTS pokusech, žádost zamítne.
+        deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán, dopíše ho dorovnání');
       }
       await usedP;
     } else if (r.mediaId) {
@@ -1418,6 +1445,65 @@ export function createGifFlow(deps: GifFlowDeps) {
       return ids.length + purged.length;
     },
 
+    /**
+     * Dorovnání (audit A1; při startu a pak pravidelně): restart nebo chyba DB mezi schválením žádosti a zápisem
+     * zprávy nechal žádost `approved` bez syntetické zprávy `gif-<id>` (původní zpráva navždy schovaná) nebo s médiem
+     * pořád čekajícím (mimo knihovnu). Médium čekající → schválit (souběh dedupu → sloučit); zpráva chybí → zapsat
+     * s časem schválení a rozeslat (gif-message, /chat/stream). Médium zamítnuté / zahozené / pryč a zpráva chybí →
+     * žádost zamítnout a původní zprávu ukázat jako smazanou. Vrací počet vyřízených žádostí.
+     */
+    async reconcileTick(): Promise<number> {
+      const now = deps.now();
+      let rows: Awaited<ReturnType<GifStore['unpublishedApproved']>> = [];
+      try { rows = await deps.store.unpublishedApproved(new Date(now - RECONCILE_GRACE_MS), new Date(now - RECONCILE_WINDOW_MS), RECONCILE_BATCH); }
+      catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: dorovnání schválených žádostí selhalo'); return 0; }
+      const giveUp = async (r: GifRequest, why: string) => {
+        await deps.store.setRequestRejected(r.id, r.decidedBy ?? 'filter', new Date(now));
+        r.status = 'rejected';
+        await rejectOriginal(r);
+        deps.log.warn({ requestId: r.id, channel: r.channel, why }, 'gif: schválenou žádost nejde dopsat → zamítnuta');
+      };
+      let n = 0;
+      for (const { request: r, mediaStatus, hasMessage } of rows) {
+        const at = r.decidedAt ?? new Date(now);
+        try {
+          let status = mediaStatus;
+          if (r.mediaId && status === 'pending') {
+            const effective = await deps.store.setMediaApproved(r.mediaId, at);
+            if (effective === null) status = 'gone';
+            else {
+              if (effective !== r.mediaId) { await deps.store.mergeMedia(r.mediaId, effective); deps.mediaDeleted?.(r.mediaId); r.mediaId = effective; }
+              await deps.store.markMediaUsed(r.mediaId, at);
+              deps.mediaChanged?.(r.mediaId);
+              status = 'approved';
+            }
+          }
+          if (!hasMessage) {
+            if (!r.mediaId || status !== 'approved') await giveUp(r, `media:${status ?? 'none'}`);
+            else {
+              const msg = await deps.store.insertApprovedMessage(r, at);
+              await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
+              deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
+              await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg));
+              deps.log.info({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF bez zprávy → dopsán (dorovnání)');
+            }
+          }
+          reconcileFails.delete(r.id);
+          n++;
+        } catch (e) {
+          const f = (reconcileFails.get(r.id) ?? 0) + 1;
+          reconcileFails.set(r.id, f);
+          if (reconcileFails.size > 2000) reconcileFails.delete(reconcileFails.keys().next().value!);
+          deps.log.warn({ requestId: r.id, attempt: f, err: (e as Error).message }, 'gif: dorovnání žádosti selhalo');
+          if (f >= RECONCILE_MAX_ATTEMPTS) {
+            reconcileFails.delete(r.id);
+            await safe('zamítnutí nedopsatelné žádosti', () => giveUp(r, 'attempts'));
+          }
+        }
+      }
+      return n;
+    },
+
     /** Po startu: čekající žádosti do paměti (jedna žádost na uživatele). */
     async loadPending(): Promise<number> {
       const rows = await deps.store.listPending(new Date(deps.now()));
@@ -1440,3 +1526,31 @@ export function createGifFlow(deps: GifFlowDeps) {
 }
 
 export type GifFlow = ReturnType<typeof createGifFlow>;
+
+type TimerFns = {
+  setTimeout: (fn: () => void, ms: number) => unknown;
+  setInterval: (fn: () => void, ms: number) => unknown;
+  clear: (t: unknown) => void;
+};
+const nodeTimers: TimerFns = {
+  setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+  setInterval: (fn, ms) => { const t = setInterval(fn, ms); t.unref?.(); return t; },
+  clear: (t) => { clearTimeout(t as ReturnType<typeof setTimeout>); clearInterval(t as ReturnType<typeof setInterval>); },
+};
+
+/**
+ * Údržba GIFů na pozadí (server.ts onReady): propadnutí žádostí každých 10 s; dorovnání schválených bez zprávy
+ * (audit A1) 30 s po startu a pak 1×/min; retence (zamítnuté 14 dní, purging 7 dní) 2 min po startu a pak 1×/h —
+ * dřív až hodinu po startu, takže se při častých deployích z dev nespustila vůbec (audit B2). Vrací stop.
+ */
+export function startGifMaintenance(flow: Pick<GifFlow, 'expireTick' | 'reconcileTick' | 'retentionTick'>, timers: TimerFns = nodeTimers): () => void {
+  const handles: unknown[] = [];
+  const run = (fn: () => Promise<unknown>) => () => { void fn().catch(() => {}); };
+  const later = (fn: () => Promise<unknown>, firstMs: number, everyMs: number) => {
+    handles.push(timers.setTimeout(() => { run(fn)(); handles.push(timers.setInterval(run(fn), everyMs)); }, firstMs));
+  };
+  handles.push(timers.setInterval(run(() => flow.expireTick()), 10_000));
+  later(() => flow.reconcileTick(), 30_000, 60_000);
+  later(() => flow.retentionTick(), 120_000, 3600_000);
+  return () => { for (const h of handles) timers.clear(h); };
+}

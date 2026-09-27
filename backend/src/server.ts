@@ -52,7 +52,7 @@ import { db } from './db/index.js';
 import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
 import integrationGifRoutes from './routes/integrationGif.js';
-import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta } from './lib/gifRequests.js';
+import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta, startGifMaintenance } from './lib/gifRequests.js';
 import { claimGifSlot, gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
@@ -236,20 +236,17 @@ app.addHook('onReady', async () => {
   });
   startWorkspaceRefresh(app.log);
   gifFlow.loadPending().then((n) => app.log.info({ n }, 'gif: čekající žádosti načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: načtení žádostí selhalo (tabulka chybí?)'));
-  gifExpiryTimer = setInterval(() => { void gifFlow.expireTick(); }, 10_000);
-  gifExpiryTimer.unref?.();
-  // Retence zamítnutých GIFů (14 dní, kromě vaultu) 1×/h.
-  gifRetentionTimer = setInterval(() => { void gifFlow.retentionTick(); }, 3600_000);
-  gifRetentionTimer.unref?.();
+  // Propadnutí (10 s), dorovnání schválených bez zprávy (30 s po startu, pak 1×/min, audit A1) a retence
+  // (2 min po startu, pak 1×/h — audit B2: dev se nasazuje častěji než jednou za hodinu).
+  stopGifMaintenance = startGifMaintenance(gifFlow);
   // Perceptuální hash + návrhy duplikátů na pozadí (1 médium za 2 s; bez práce / chyba → 30 s).
   stopPhashWorker = startPhashWorker(phashWorker);
   loadActivePermits().then((n) => app.log.info({ n }, 'link filter: aktivní permity načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'link filter: načtení permitů selhalo'));
   loadBotLogins().then((n) => app.log.info({ n }, 'bot identities loaded')).catch((err) => app.log.warn({ err: (err as Error).message }, 'bot identities: load failed (tabulka chybí?)'));
 });
-let gifExpiryTimer: ReturnType<typeof setInterval> | null = null;
-let gifRetentionTimer: ReturnType<typeof setInterval> | null = null;
+let stopGifMaintenance: (() => void) | null = null;
 let stopPhashWorker: (() => void) | null = null;
-app.addHook('onClose', async () => { if (gifExpiryTimer) clearInterval(gifExpiryTimer); if (gifRetentionTimer) clearInterval(gifRetentionTimer); stopPhashWorker?.(); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
+app.addHook('onClose', async () => { stopGifMaintenance?.(); stopPhashWorker?.(); await ingest.stop(); stopWorkspaceRefresh(); disconnectAllIntegrationStreams(); disconnectAllAccountStreams(); });
 
 app.get('/', async () => ({
   service: 'unitychat-backend',

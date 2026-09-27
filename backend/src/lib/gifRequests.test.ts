@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
+import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
@@ -18,6 +18,7 @@ function memStore(now: () => number) {
   let seq = 0;
   let mediaSeq = 0;
   let retagOk = true;
+  const msgs = new Set<number>();
   const rk = (ch: string, id: string, pl: string, u: string) => `${ch}|${id}|${pl}|${u}`;
   // Schválení ruší tresty média (zamítnutí všech uživatelů + zákaz), jako clearMediaStrikes v DB.
   const clearStrikes = (id: string) => {
@@ -154,7 +155,12 @@ function memStore(now: () => number) {
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id);
     },
     async markDeletedByMessage(messageId) { const r = reqs.get(Number(messageId.slice(4))); if (r?.status === 'approved') { r.status = 'deleted'; return r; } return null; },
-    async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); return toClientMessage(approvedMessageRow(r, at), false); },
+    async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); msgs.add(r.id); return toClientMessage(approvedMessageRow(r, at), false); },
+    async unpublishedApproved(before, after, limit) {
+      return [...reqs.values()].filter((r) => r.status === 'approved' && r.decidedAt && r.decidedAt < before && r.decidedAt > after)
+        .map((r) => ({ request: r, mediaStatus: r.mediaId ? media.get(r.mediaId)?.status ?? null : null, hasMessage: msgs.has(r.id) }))
+        .filter((x) => !x.hasMessage || x.mediaStatus === 'pending').slice(0, limit);
+    },
     async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); return retagOk; },
     async statusByMessages(keys) {
       const out = new Map();
@@ -413,20 +419,32 @@ test('intercept: text nad GIFem bez odkazů, které by filtr zablokoval (bod 5)'
   assert.equal(s.mem.reqs.get(1)!.textWithoutLink, 'hele a a youtu.be/abc');
 });
 
-test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, cooldown ano (bod 8); médium se předehřeje před rozesláním', async () => {
+test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, cooldown ano (bod 8); dopíše ho reconcileTick (audit A1); médium se předehřeje před rozesláním', async () => {
   const s = setup({ mediaApproved: async () => { s.calls.push(['warm', null]); } });
   await s.flow.intercept(params());
   let tries = 0;
+  const insert = s.mem.store.insertApprovedMessage.bind(s.mem.store);
   s.mem.store.insertApprovedMessage = async () => { tries++; throw new Error('db down'); };
   s.calls.length = 0;
   const out = await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
   assert.deepEqual(out.body, { ok: true, requestId: 1, status: 'approved', published: false });
   assert.equal(tries, 2);
-  // Původní zpráva nezůstane navždy schovaná: gif_request → gif_rejected + message-deleted.
-  assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'), s.mem.log.join(' | '));
-  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: null, reason: 'gif_rejected', at: 1_000_000 });
+  // Žádost zůstává schválená, původní zpráva schovaná (/gif/held: replaced) — zprávu dopíše reconcileTick.
+  assert.equal(s.mem.reqs.get(1)!.status, 'approved');
+  assert.equal(s.mem.log.includes('retag:m1:gif_request->gif_rejected'), false, s.mem.log.join(' | '));
   assert.equal(names(s.calls).some((n) => n === 'broadcast:gif-message' || n === 'publishChat' || n === 'warm'), false);
   assert.equal(names(s.calls).includes('used'), true);
+  assert.equal(await s.flow.reconcileTick(), 0, 'rozhodnutí před chvílí (souběh s decide) se neřeší');
+  s.advance(61_000);
+  assert.equal(await s.flow.reconcileTick(), 0, 'DB pořád dole');
+  s.mem.store.insertApprovedMessage = insert;
+  s.calls.length = 0;
+  assert.equal(await s.flow.reconcileTick(), 1);
+  const pub = events(s.calls, 'broadcast:gif-message')[0];
+  assert.equal(pub.requestId, 1);
+  assert.equal((pub.message as Record<string, unknown>).timestamp, 1_000_000, 'čas schválení');
+  assert.deepEqual(names(s.calls).filter((n) => n === 'warm' || n === 'publishChat'), ['warm', 'publishChat']);
+  assert.equal(await s.flow.reconcileTick(), 0, 'dopsané se už neřeší');
 
   const ok = setup({ mediaApproved: async () => { ok.calls.push(['warm', null]); } });
   await ok.flow.intercept(params());
@@ -623,6 +641,79 @@ test('A2: GIF z knihovny souběžně s „Odebrat z knihovny“ → instantní s
   assert.equal(await s.flow.intercept(from('44', 'm3', TENOR, { auto: true })), 'approved');
   assert.equal(s.mem.media.get(MEDIA)!.status, 'approved');
   await s.flow._idle();
+});
+
+test('B2: údržba GIFů — propadnutí po 10 s, dorovnání brzy po startu a pak 1×/min, retence 2 min po startu a pak 1×/h', () => {
+  const timers: Array<{ kind: string; ms: number; fn: () => void }> = [];
+  const ran: string[] = [];
+  const stop = startGifMaintenance(
+    { expireTick: async () => { ran.push('expire'); return 0; }, reconcileTick: async () => { ran.push('reconcile'); return 0; }, retentionTick: async () => { ran.push('retention'); return 0; } },
+    {
+      setTimeout: (fn, ms) => { timers.push({ kind: 'once', ms, fn }); return timers.length as never; },
+      setInterval: (fn, ms) => { timers.push({ kind: 'every', ms, fn }); return timers.length as never; },
+      clear: () => { ran.push('clear'); },
+    },
+  );
+  const sched = timers.map((t) => `${t.kind}:${t.ms}`).sort();
+  assert.deepEqual(sched, ['every:10000', 'once:120000', 'once:30000'].sort());
+  // Po prvním běhu se naplánuje pravidelný.
+  for (const t of timers.filter((x) => x.kind === 'once')) t.fn();
+  assert.deepEqual(ran.sort(), ['reconcile', 'retention']);
+  assert.deepEqual(timers.filter((x) => x.kind === 'every').map((t) => t.ms).sort((a, b) => a - b), [10_000, 60_000, 3_600_000]);
+  stop();
+  assert.ok(ran.includes('clear'));
+});
+
+test('A1: restart mezi schválením a zápisem zprávy → reconcileTick dopíše zprávu a schválí médium (čekající zůstalo)', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  // Simulace restartu: žádost schválená (autocommit UPDATE), médium ani zpráva už ne.
+  Object.assign(s.mem.reqs.get(1)!, { status: 'approved', decidedBy: 'twitch:moda', decidedAt: new Date(s.now()) });
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'pending');
+  s.advance(61_000);
+  assert.equal(await s.flow.reconcileTick(), 1);
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'approved', 'médium do knihovny');
+  assert.ok(s.mem.log.includes('message:1'));
+  assert.equal(events(s.calls, 'broadcast:gif-message').length, 1);
+  assert.equal(await s.flow.reconcileTick(), 0);
+});
+
+test('A1: zpráva existuje, ale médium zůstalo čekající (setMediaApproved selhalo) → reconcile jen schválí médium; zahozené → žádost zamítnuta, původní zpráva smazaná', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  const approve = s.mem.store.setMediaApproved.bind(s.mem.store);
+  s.mem.store.setMediaApproved = async () => { throw new Error('db blip'); };
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'pending');
+  s.mem.store.setMediaApproved = approve;
+  s.calls.length = 0;
+  s.advance(61_000);
+  assert.equal(await s.flow.reconcileTick(), 1);
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'approved');
+  assert.equal(events(s.calls, 'broadcast:gif-message').length, 0, 'zpráva už je');
+  // Médium mezitím zahozené (purging) a zpráva chybí → žádost zamítnout, původní zprávu ukázat jako smazanou.
+  const p = setup();
+  await p.flow.intercept(from('42', 'm1'));
+  Object.assign(p.mem.reqs.get(1)!, { status: 'approved', decidedBy: 'twitch:moda', decidedAt: new Date(p.now()) });
+  Object.assign(p.mem.media.get(MEDIA)!, { status: 'purging' });
+  p.advance(61_000);
+  assert.equal(await p.flow.reconcileTick(), 1);
+  assert.equal(p.mem.reqs.get(1)!.status, 'rejected');
+  assert.ok(p.mem.log.includes('retag:m1:gif_request->gif_rejected'));
+  assert.equal(events(p.calls, 'broadcast:gif-message').length, 0);
+});
+
+test('A1: zápis zprávy selhává trvale → po RECONCILE_MAX_ATTEMPTS pokusech žádost zamítnout (původní zpráva nezůstane navždy schovaná)', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  s.mem.store.insertApprovedMessage = async () => { throw new Error('constraint'); };
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  s.advance(61_000);
+  for (let i = 0; i < RECONCILE_MAX_ATTEMPTS - 1; i++) await s.flow.reconcileTick();
+  assert.equal(s.mem.reqs.get(1)!.status, 'approved');
+  await s.flow.reconcileTick();
+  assert.equal(s.mem.reqs.get(1)!.status, 'rejected');
+  assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'));
 });
 
 test('SEC-8: okamžité schválení (knihovna / mod) při běžícím globálním cooldownu chatu → neprojde, zpráva se vrátí (bez žádosti)', async () => {
