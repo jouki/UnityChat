@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { servableStatus } from '../lib/gifRequests.js';
-import { MediaServer, mediaCacheControl, mediaAllowed, rejectedView, discardedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
+import { MediaServer, MEDIA_CACHE_TTL_MS, mediaCacheControl, mediaAllowed, rejectedView, discardedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
 import type { Message } from '../db/schema.js';
 
 const entry = (status: MediaEntry['status'] = 'pending'): MediaEntry => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status });
@@ -102,6 +102,44 @@ test('GET /media/gif: zamítnuté médium i s čekající žádostí jen s token
   assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}?t=dobry` })).statusCode, 200);
   assert.equal(byteLoads, 1);
   await app.close();
+});
+
+test('L7: prewarm souběžný s odebráním z knihovny (invalidate) médium do cache nevloží; cache má TTL 10 min', async () => {
+  let status: MediaEntry['status'] = 'approved';
+  let loads = 0;
+  const d = deferred<MediaEntry | null>();
+  let first = true;
+  let now = 0;
+  const s = new MediaServer(async () => { loads++; if (first) { first = false; return d.promise; } return { ...entry(), status }; }, undefined, undefined, () => now);
+  const warm = s.prewarm('a');
+  status = 'rejected';
+  s.invalidate('a'); // unapprove během předehřívání
+  d.resolve(entry('approved'));
+  await warm;
+  assert.equal((await s.get('a'))!.status, 'rejected', 'stav z DB, ne zastaralé approved z prewarm');
+  // TTL: schválené v cache nejdéle 10 min, pak znovu z DB.
+  status = 'approved';
+  s.invalidate('a');
+  await s.get('a');
+  const n = loads;
+  await s.get('a');
+  assert.equal(loads, n, 'z cache');
+  now += MEDIA_CACHE_TTL_MS + 1;
+  await s.get('a');
+  assert.equal(loads, n + 1, 'po TTL z DB');
+  assert.equal(MEDIA_CACHE_TTL_MS, 10 * 60_000);
+});
+
+test('B4: přeplnění generací (invalidate mnoha médií) nesmí nechat zastaralé načtení v cache', async () => {
+  const d = deferred<MediaEntry | null>();
+  let loads = 0;
+  const s = new MediaServer(async () => { loads++; return loads === 1 ? d.promise : entry('rejected'); });
+  const p = s.get('a');
+  s.invalidate('a');
+  for (let i = 0; i < 10_050; i++) s.invalidate(`x${i}`);
+  d.resolve(entry('approved'));
+  await p;
+  assert.equal((await s.get('a'))!.status, 'rejected', 'zastaralé approved se neuložilo');
 });
 
 test('MediaServer.get(id, gate): metadata před bajty; zamítnuto branou = null bez načtení; schválené z cache bez metadat', async () => {

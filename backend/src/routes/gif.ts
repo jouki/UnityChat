@@ -135,9 +135,13 @@ export function parseMediaActionBody(body: unknown): { keepMessages: boolean } |
   return { keepMessages: k === true };
 }
 
+/** Jak dlouho smí schválené / stažené médium zůstat v paměťové cache bez načtení z DB (audit L7). */
+export const MEDIA_CACHE_TTL_MS = 10 * 60_000;
+const MEDIA_GEN_MAX = 10_000;
+
 /**
  * Médium z DB pro GET /media/gif/:id:
- * - LRU cache v paměti (strop v bajtech) se stavem žádosti;
+ * - LRU cache v paměti (strop v bajtech, TTL 10 min) se stavem žádosti;
  * - souběžná čtení téhož id sdílí jedno rozpracované načtení (bytea jde z Postgresu v hexu = 2× velikost;
  *   stovky diváků hned po schválení by jinak držely stovky kopií naráz);
  * - tombstone: id smazané/zamítnuté/propadlé se už nevrátí, ani když načtení z DB běželo souběžně se smazáním.
@@ -147,7 +151,16 @@ export class MediaServer {
   private size = 0;
   private inflight = new Map<string, Promise<MediaEntry | null>>();
   private tombstones = new Set<string>();
+  /** Kdy se položka dostala do cache (TTL). */
+  private at = new Map<string, number>();
+  /**
+   * Generace: invalidate(id) = globálně rostoucí pořadí. Načtení se uloží jen, když od jeho začátku médium nikdo
+   * neinvalidoval. Přeplnění vyhazuje nejstarší záznamy a pamatuje si nejvyšší vyhozenou generaci (`genFloor`) —
+   * dřív clear() vrátil vše na 0 a zastaralé načtení se uložilo (audit B4).
+   */
   private gen = new Map<string, number>();
+  private seq = 0;
+  private genFloor = 0;
   /**
    * `loadMeta` (produkce: servableMeta): stav a kanál bez bajtů. S branou v `get` se nejdřív ověří metadata a bajty
    * se z DB načtou až po průchodu (audit SEC-2 — jinak každý požadavek bez tokenu na zamítnuté médium tahal až 10 MB).
@@ -156,7 +169,13 @@ export class MediaServer {
     private readonly load: (id: string) => Promise<MediaEntry | null>,
     private readonly maxBytes = 64 * 1024 * 1024,
     private readonly loadMeta?: (id: string) => Promise<MediaMeta | null>,
+    private readonly now: () => number = Date.now,
   ) {}
+
+  /** Médium od `since` (seq) neinvalidované? Vyhozená generace (přeplnění) se bere jako možná změna. */
+  private unchangedSince(id: string, since: number): boolean {
+    return (this.gen.get(id) ?? this.genFloor) <= since;
+  }
 
   /**
    * Cachuje se JEN veřejné médium se stálým stavem: schválené a stažené (withdrawn). Změnu stavu (odebrání,
@@ -166,7 +185,8 @@ export class MediaServer {
    */
   async get(id: string, gate?: MediaGate): Promise<MediaEntry | null> {
     if (this.tombstones.has(id)) return null;
-    const hit = this.m.get(id);
+    let hit = this.m.get(id);
+    if (hit && this.now() - (this.at.get(id) ?? 0) >= MEDIA_CACHE_TTL_MS) { this.drop(id); hit = undefined; }
     if (hit) {
       this.m.delete(id); this.m.set(id, hit);
       return !gate || (await gate(hit)) ? hit : null;
@@ -182,12 +202,12 @@ export class MediaServer {
   private loadShared(id: string): Promise<MediaEntry | null> {
     let p = this.inflight.get(id);
     if (!p) {
-      const gen = this.gen.get(id) ?? 0;
+      const since = this.seq;
       const mine: Promise<MediaEntry | null> = this.load(id).then((v) => {
         // Smazáno během načítání → nevracet a necachovat.
         if (!v || this.tombstones.has(id)) return null;
         // Stav se mezitím změnil (invalidate) → vrátit, ale necachovat.
-        if ((v.status === 'approved' || v.status === 'withdrawn') && (this.gen.get(id) ?? 0) === gen) this.put(id, v);
+        if ((v.status === 'approved' || v.status === 'withdrawn') && this.unchangedSince(id, since)) this.put(id, v);
         return v;
       }).finally(() => { if (this.inflight.get(id) === mine) this.inflight.delete(id); });
       p = mine;
@@ -201,25 +221,36 @@ export class MediaServer {
     const cur = this.m.get(id);
     if (cur) { cur.status = 'approved'; return; }
     this.invalidate(id);
+    const since = this.seq;
     const v = await this.load(id).catch(() => null);
-    if (v && !this.tombstones.has(id)) this.put(id, { ...v, status: 'approved' });
+    // Mezitím odebráno z knihovny / zahozeno (invalidate) → nevkládat jako approved (audit L7).
+    if (v && !this.tombstones.has(id) && this.unchangedSince(id, since)) this.put(id, { ...v, status: 'approved' });
   }
 
   /** Stav média se změnil → zahodit z cache i rozběhnuté načtení, další čtení z DB. */
   invalidate(id: string): void {
-    this.gen.set(id, (this.gen.get(id) ?? 0) + 1);
-    if (this.gen.size > 10_000) this.gen.clear();
+    this.gen.delete(id);
+    this.gen.set(id, ++this.seq);
+    while (this.gen.size > MEDIA_GEN_MAX) {
+      const [k, g] = this.gen.entries().next().value!;
+      this.gen.delete(k);
+      this.genFloor = Math.max(this.genFloor, g);
+    }
     this.inflight.delete(id);
+    this.drop(id);
+  }
+
+  private drop(id: string): void {
     const v = this.m.get(id);
     if (v) { this.size -= v.bytes.length; this.m.delete(id); }
+    this.at.delete(id);
   }
 
   /** Médium smazané (propadlé, trvale zahozené, retence) → pryč a už nikdy nevracet. */
   forget(id: string): void {
     this.tombstones.add(id);
     if (this.tombstones.size > 10_000) this.tombstones.delete(this.tombstones.values().next().value!);
-    const v = this.m.get(id);
-    if (v) { this.size -= v.bytes.length; this.m.delete(id); }
+    this.drop(id);
   }
 
   private put(id: string, v: MediaEntry): void {
@@ -227,7 +258,8 @@ export class MediaServer {
     const old = this.m.get(id);
     if (old) { this.size -= old.bytes.length; this.m.delete(id); }
     this.m.set(id, v); this.size += v.bytes.length;
-    for (const [k, e] of this.m) { if (this.size <= this.maxBytes) break; this.m.delete(k); this.size -= e.bytes.length; }
+    this.at.set(id, this.now());
+    for (const [k, e] of this.m) { if (this.size <= this.maxBytes) break; this.m.delete(k); this.at.delete(k); this.size -= e.bytes.length; }
   }
 
   get _inflightSize(): number { return this.inflight.size; }
