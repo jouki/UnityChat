@@ -47,3 +47,50 @@ export function ucReplyPayload(reply) {
     ...(reply.authorUc ? { authorUc: true } : {}),
   };
 }
+
+// ---- Citace rodičovské zprávy (↩ @jméno text) — addon, web i OBS ----
+
+/**
+ * Odkazy v HTML z EmoteManageru (`<a href=… target=_blank rel=noopener>text</a>`, text je escapovaný) nahradí prostým
+ * textem `.uc-link-off`: citace rodiče nikdy nenese živý odkaz (review 2026-09-27 I2 — odpověď bota na smazaný GIF
+ * by jinak odkaz z `reply-parent-msg-body` znovu ukázala). Emoty zůstávají.
+ */
+export function stripLinksHtml(html) {
+  return String(html ?? '').replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, '<span class="uc-link-off">$1</span>');
+}
+
+/** Rodičovská zpráva je smazaná (moderace, GIF i schovaná gif_request) → citace jen „↩ @jméno“ bez textu. */
+export function isReplyParentGone(parent) {
+  return !!parent && !!(parent._deleted || parent.deleted);
+}
+
+/**
+ * Tělo citace (` <span class="rctx-body">…</span>`) platformním renderem EmoteManageru bez živých odkazů, nebo ''
+ * (bez textu / rodič smazaný).
+ * @param {{ message?: string }} rt       msg.replyTo
+ * @param {string} platform              platforma citované zprávy
+ * @param {{ renderKick: Function, renderTwitch: Function, renderPlain: Function }} emotes
+ */
+export function replyBodyHtml(rt, platform, emotes, { parentGone = false } = {}) {
+  if (!rt?.message || parentGone) return '';
+  const b = platform === 'kick' ? emotes.renderKick(rt.message)
+    : platform === 'twitch' ? emotes.renderTwitch(rt.message, null)
+      : emotes.renderPlain(rt.message);
+  return ` <span class="rctx-body">${stripLinksHtml(b)}</span>`;
+}
+
+/**
+ * Rodič se smazal až po vykreslení odpovědi → text citací pryč (uzly `.reply-ctx[data-rctx-id="<id>"]` pod `roots`,
+ * i samotné kořeny). Vrací počet upravených citací.
+ */
+export function dropReplyBodies(roots, id) {
+  if (id == null || id === '') return 0;
+  const esc = String(id).replace(/["\\]/g, '\\$&');
+  const sel = `.reply-ctx[data-rctx-id="${esc}"] .rctx-body`;
+  let n = 0;
+  for (const r of roots || []) {
+    if (!r) continue;
+    for (const b of [...(r.querySelectorAll?.(sel) || [])]) { b.remove(); n++; }
+  }
+  return n;
+}

@@ -1163,7 +1163,7 @@ class UnityChat {
     try { window.ucGifHold = () => this._gifHold(); } catch {}
     // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o) }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
 
     this._init();
   }
@@ -4183,16 +4183,12 @@ class UnityChat {
     const replyRawName = (rt.username || '').replace(/^@/, '');
     const replyProfile = this.nicknames.get(rp, replyRawName);
     const replyDisplayName = replyProfile?.nickname || replyRawName;
-    let replyBodyHtml = '';
-    if (rt.message) {
-      // Render emotes in reply context using platform-specific parser.
-      // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
-      let body;
-      if (rp === 'kick') body = this.emotes.renderKick(rt.message);
-      else if (rp === 'twitch') body = this.emotes.renderTwitch(rt.message, null);
-      else body = this.emotes.renderPlain(rt.message);
-      replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
-    }
+    // Citace s emoty (platformní render, Twitch bez pozic emotů), nikdy s živým odkazem; smazaný rodič (moderace,
+    // GIF — i odpověď bota na nepovolený GIF) jen „↩ @jméno“ (core uc-reply.js, review 2026-09-27 I2).
+    const parent = rt.id != null ? this.store.get(String(rt.id)) : null;
+    const parentGone = window.UC_CORE.isReplyParentGone(parent && (!parent.platform || parent.platform === rp) ? parent : null);
+    const replyBodyHtml = window.UC_CORE.replyBodyHtml(rt, rp, this.emotes, { parentGone });
+    if (rt.id != null) ctx.dataset.rctxId = String(rt.id);
     // Odpověď na zprávu z jiné platformy: malé logo té platformy.
     // Zlaté logo, když autor citované zprávy je uživatel UnityChatu (jako .pi.uc u jeho zprávy).
     const authorUc = !!rt.authorUc || !!(rt.id && this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(String(rt.id))}"] .pi.uc`));
@@ -4847,6 +4843,8 @@ class UnityChat {
     const key = hidden ? '_hidden' : '_deleted';
     const srv = hidden ? '_srvHidden' : '_srvDeleted';
     for (const el of els) this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' });
+    // Citace smazané zprávy v odpovědích jen „↩ @jméno“ (odkaz smazaného GIFu se nesmí vrátit, review I2).
+    if (!hidden) window.UC_CORE.dropReplyBodies([this.chatEl, ...(this._parkedTop || []), ...(this._parkedBottom || [])], id);
     return els.length;
   }
 
@@ -7722,6 +7720,13 @@ class UnityChat {
   // messages.
   /** Tělo zprávy → HTML (emoty, odkazy, cenzura z blacklistu). Sdílí render i přerenderování. */
   _renderMsgBody(msg) {
+    // Vlastní GIF v konečném stavu (zamítnuto / vypršelo / nepovolený, core syncGifOwnFinal → _gifOwnFinal): odkaz
+    // v textu nesmí ožít při žádném překreslení (review 2026-09-27 M6).
+    const html = this._renderMsgBodyRaw(msg);
+    return msg?._gifOwnFinal ? window.UC_CORE.stripLinksHtml(html) : html;
+  }
+
+  _renderMsgBodyRaw(msg) {
     const renderCtx = { platform: msg.platform, author: msg.username };
     if (msg.platform === 'twitch') {
       // Reply messages strip the "@username " prefix from the body, but the
@@ -7772,6 +7777,8 @@ class UnityChat {
       } else {
         continue;
       }
+      // Vlastní GIF v konečném stavu: odkaz nesmí ožít ani tady (review M6).
+      if (cached._gifOwnFinal) tx.innerHTML = window.UC_CORE.stripLinksHtml(tx.innerHTML);
       // @mention spans need re-applying since innerHTML wiped them.
       this._processMentions(tx, platform);
       if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);

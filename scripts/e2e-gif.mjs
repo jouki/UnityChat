@@ -730,6 +730,8 @@ await until(`!!document.querySelector('.msg[data-msg-id="e2e-own2"]')`, 8000);
 pushAcc(PR('e2e-own2', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(31, { own: true, login: 'moduser', messageId: 'e2e-own2' })],
   ['gif-decided', { requestId: 31, channel: 'robdiesalot', approved: false, status: 'expired', by: null, own: true }]);
 check('B vypršelo → červený „Vypršelo“', await until(`document.querySelector('.msg[data-msg-id="e2e-own2"] .uc-gif-st-txt')?.textContent === 'Vypršelo'`, 12000), JSON.stringify(await own('e2e-own2')));
+check('B M6 zamítnutá / propadlá vlastní zpráva: překreslení textu z dat odkaz nevrátí', await ev(`(() => { const a = window.ucGif.renderBody('e2e-own1'), b = window.ucGif.renderBody('e2e-own2'); return !a.includes('<a ') && !b.includes('<a ') && a.includes('uc-link-off') && b.includes('uc-link-off'); })()`) === true,
+  JSON.stringify(await ev(`[window.ucGif.renderBody('e2e-own1'), window.ucGif.renderBody('e2e-own2')]`)));
 check('B vypršelo → odesílatel: text bez odkazu + štítek, bez vzhledu smazané zprávy', ownMuted(await naView('e2e-own2'), 'expired', 'Vypršelo'), JSON.stringify(await naView('e2e-own2')));
 check('B gif_rejected vlastní z historie (divák) → štítek bez „Zpráva smazána“', await until(`document.querySelector('.msg[data-msg-id="e2e-rej-own"] .uc-gif-st')?.dataset.kind === 'rejected'`, 5000)
   && ownMuted(await naView('e2e-rej-own'), 'rejected', 'Zamítnuto moderátorem', false), JSON.stringify(await naView('e2e-rej-own')));
@@ -781,6 +783,18 @@ await sleep(800);
 await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-early')`);   // ozvěna smazání z platformy před zprávou
 await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-early', { reason: 'platform' })`);
 await ev(`(window.ucGif.add({ platform: 'twitch', id: 'e2e-na-early', username: 'Divak', userId: 'u9', message: 'pozdní https://tenor.com/view/na-gif-4', timestamp: Date.now(), historical: false, color: '#1e90ff' }), true)`);
+// Review I2: citace rodiče — nikdy živý odkaz; smazaný rodič (nepovolený GIF, i odpověď bota) jen „↩ @jméno“.
+const RMSG = (id, text, replyTo) => ['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: id, by: 'filter', message: { platform: 'twitch', id, username: 'JoukiBOT', userId: 'u88', message: text, timestamp: Date.now(), color: '#1e90ff', replyTo } }];
+const rctx = (id) => ev(`(() => { const c = document.querySelector('.msg[data-msg-id="${id}"] .reply-ctx'); return c ? { user: c.querySelector('.rctx-user')?.textContent || null, body: c.querySelector('.rctx-body')?.textContent ?? null, link: !!c.querySelector('a[href]'), off: !!c.querySelector('.uc-link-off') } : null; })()`);
+mock.sse.push(RMSG('e2e-rc1', 'Nové GIFy teď nejsou povolené', { username: 'Divak', message: 'cizí https://tenor.com/view/na-gif-3', id: 'e2e-na-live2' }));
+check('B I2 odpověď bota na smazaný nepovolený GIF → citace jen „↩ @jméno“ bez textu a odkazu', await until(`!!document.querySelector('.msg[data-msg-id="e2e-rc1"] .reply-ctx')`, 8000)
+  && await (async () => { const c = await rctx('e2e-rc1'); return !!c && c.user === '@Divak' && c.body === null && !c.link; })(), JSON.stringify(await rctx('e2e-rc1')));
+mock.sse.push(NAMSG('e2e-rc-par', 'Divak', 'u9', 'rodič https://example.com/stranka'),
+  RMSG('e2e-rc2', 'odpověď', { username: 'Divak', message: 'rodič https://example.com/stranka', id: 'e2e-rc-par' }));
+check('B I2 citace nesmazaného rodiče s odkazem → text ano, odkaz jen jako text (ne živý)', await until(`!!document.querySelector('.msg[data-msg-id="e2e-rc2"] .reply-ctx')`, 8000)
+  && await (async () => { const c = await rctx('e2e-rc2'); return !!c && /example\.com/.test(c.body || '') && !c.link && c.off; })(), JSON.stringify(await rctx('e2e-rc2')));
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-rc-par', by: 'filter', reason: 'gif_not_allowed' }]);
+check('B I2 rodič smazaný až po vykreslení odpovědi → text citace pryč', await until(`!document.querySelector('.msg[data-msg-id="e2e-rc2"] .reply-ctx .rctx-body') && !!document.querySelector('.msg[data-msg-id="e2e-rc2"] .reply-ctx .rctx-user')`, 8000), JSON.stringify(await rctx('e2e-rc2')));
 check('B gif_not_allowed předběhlo zprávu (IRC později) → zpráva se vykreslí rovnou smazaná se štítkem (nikdy s odkazem)', naDel(await naView('e2e-na-early')), JSON.stringify(await naView('e2e-na-early')));
 // Selhání převodu (běžný odkaz) → štítek pryč
 mock.sse.push(OWNMSG('e2e-own5', 'pátý https://i.4pcdn.org/pol/1.gif'));
