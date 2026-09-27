@@ -608,12 +608,16 @@ data: { "channel": "robdiesalot", "requestId": 12,
   ukážou jako **běžně smazanou**. Zvolen vlastní důvod (ne `mod`): audit ukáže, že šlo o GIF, a mod ji v UnityChatu
   neodkryje (`POST /moderation/restore` → `409 not_restorable`, v klientu bez oka). Historie dává stejný výsledek.
 
-### Mod / broadcaster (UX 2026-09-25)
-- GIF od moda / broadcastera (role z badge zprávy, stejný zdroj jako ostatní moderace) se **schválí rovnou** při
-  zachycení: zpráva se hned schová (`gif_request`), médium se stáhne, žádost vznikne a projde stejnou cestou jako
-  `decide` approve s `by = "<platform>:<login>"` (on sám), audit `gif_approve` s `params.auto: true`. **Mod má vždy
-  povoleno** (odměnu nepotřebuje; `gif-access` se ptá jen kvůli **režimu** — `approved` platí i pro mody, bez odpovědi
-  `all`) a **cooldown se neuplatňuje** (`gif-used` se nevolá). Opakované zamítnutí ani zákaz 12 h se na mody
+### Mod / broadcaster (UX 2026-09-25, **změna 2026-09-27**)
+- **Od 2026-09-27 (spec `2026-09-27-gif-review-upravy-design.md` §5) mod / broadcaster NEMÁ GIF odměnu automaticky:**
+  přístup (`gif-access` s `role: moderator|broadcaster`), cooldown (`gif-used` po schválení) i režim platí stejně jako
+  pro diváka — Židolišta může mody odemknout sama podle role. Mod **bez** odemčené odměny = jako divák bez odměny
+  (GIF cesta se nepoužije, zpráva je běžný odkaz; filtr odkazů mody nemaže, takže zůstane). Mod **s** odemčenou
+  odměnou se dál schvaluje sám (níže), jen s cooldownem.
+- GIF od moda / broadcastera s odemčenou odměnou (role z badge zprávy, stejný zdroj jako ostatní moderace) se
+  **schválí rovnou** při zachycení: zpráva se hned schová (`gif_request`), médium se stáhne, žádost vznikne a projde
+  stejnou cestou jako `decide` approve s `by = "<platform>:<login>"` (on sám), audit `gif_approve` s `params.auto: true`.
+  Přístup z cache `unknown` → zpráva zůstane a ověří se u Židolišty zpětně (`needAccess`), jako u diváka. Opakované zamítnutí ani zákaz 12 h se na mody
   nevztahují (jejich GIF = jejich rozhodnutí, schválí i dříve zamítnuté médium). Nikdo nic neschvaluje → `gif-pending`, `gif.pending`, `gif-decided` ani `gif.decided` se neposílají.
   Převod selže → zpráva se v UC obnoví (`message-restored`, mod filtr nemá).
   Schválení proběhne **hned po insertu žádosti, před mazáním na platformě**; auto žádost (`meta.auto`) se nevrací
@@ -624,14 +628,14 @@ data: { "channel": "robdiesalot", "requestId": 12,
   (záložní cesta přes kartu, po odeslání); backend páruje s echem jako `ucSends` / `ucReplies`
   (`lib/ucSends.ts` `gifReviews`: platforma, kanál, odesílatel, text do 20 s). Hlášení před zprávou → běžná GIF cesta
   (přístup ze Židolišty s rolí moda, cooldown); hlášení po zprávě → zjistí se po stažení média a z auto se stane
-  běžná žádost (bez ověření přístupu — mod má vždy povoleno), cooldown po schválení platí.
-- Mod píšící přímo na platformě (mimo UC) = vždy auto.
+  běžná žádost (přístup už ověřený při zachycení), cooldown po schválení platí.
+- Mod s odemčenou odměnou píšící přímo na platformě (mimo UC) = vždy auto.
 
 ### Bublina cooldownu (klient, UX 2026-09-25)
 `GET /gif/state?channel=&platform=&review=1` (Bearer, rate limit 10 + 1/s per účet, `no-store`) — stav odměny pro
 **vlastní** identitu účtu na platformě, kam uživatel píše (`platform`, jinak první propojená):
-`{ ok, allowed, cooldownUntil|null, cooldownSec, serverNow, mode, cooldownGlobalSec }` (+ `mod: true` = mod bez
-Dev módu: povoleno, bez cooldownu; `mode` i pro něj). `mode: 'all'|'approved'` = režim odměny (v `approved` klient
+`{ ok, allowed, cooldownUntil|null, cooldownSec, serverNow, mode, cooldownGlobalSec, rewardUntil }` — **od 2026-09-27
+i pro moda stejně jako pro diváka** (dřív `mod: true` = povoleno bez cooldownu; pole se už neposílá, klient ho ignoruje). `mode: 'all'|'approved'` = režim odměny (v `approved` klient
 nabízí jen knihovnu), `cooldownGlobalSec` = cooldown celého chatu k zobrazení. Čas `cooldownUntil` je čas serveru, klient přepočte přes `serverNow`. Zdroj = stejný jako zachycení
 (`chatRole` z archivu, `gifAccess` cache 60 s + lokální cooldown po schválení). `review=1` = Dev mód moda (jako divák).
 Klient (core `gif-links.js` = kopie detektoru `lib/gifMedia.ts`, shodu hlídá `gifMedia.test.ts`; core
@@ -769,7 +773,7 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
     **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou). **Záměrně:** `unapprove`
     i `purge` schváleného média GIF skryje (bez tokenu 404) nebo rozbije i ve **starých zprávách v historii** — mod
     GIF odebírá proto, že se nemá zobrazovat (rozhodnutí 2026-09-26). **Od závěrečné review (I2):** `/chat/history`
-    a Profil (`/moderation/user/.../messages`) pošlou zprávu, jejíž médium není veřejné (zamítnuté = odebrané,
+    (a do 2026-09-27 i Profil — od té doby viz „Úpravy po testu“ §3) pošle zprávu, jejíž médium není veřejné (zamítnuté = odebrané,
     neexistuje = trvale zahozené / sloučené), jako **smazanou** `{ …, message: '', deleted: true,
     deletedReason: "gif_removed" }` bez `gif` (divák „Zpráva smazána“ ztlumeně, OBS ji skryje, mod ji neodkryje).
     Stav médií se zjišťuje jedním dotazem na stránku. Čekající médium (alias z backfillu) zůstává vidět. Klienti
@@ -896,7 +900,7 @@ keepMessages? }` (purge bez `keepMessages` = i se zprávami) a `GET /integration
 integrace (`private, no-store`; náhled v „Ke smazání"), `unavailable` `404`. Cache se invaliduje při každé změně stavu
 (zahození, obnova, odebrání), `remove-file` a smazání po 7 dnech = tombstone.
 
-**Zprávy (`/chat/history`, Profil, stream):** podle stavu média (`gifMessageState`, jeden dotaz na stránku):
+**Zprávy (`/chat/history`, stream; Profil moda od 2026-09-27 jinak — viz „Úpravy po testu“ §3):** podle stavu média (`gifMessageState`, jeden dotaz na stránku):
 `approved`, `pending` (alias), `withdrawn` → GIF normálně; `rejected`, `purging`, médium neexistuje → smazaná
 `{ message: '', deleted: true, deletedReason: "gif_removed" }` bez `gif`; `unavailable` → **nesmazaná** zpráva s textem
 a `gif: { url, kind, width, height, unavailable: true }` (URL zůstává — starší klient dostane 404 → „GIF odebrán").
@@ -933,3 +937,41 @@ reason: "purged" }`.
 rozměry, tagy, u zamítnutých kdo/kdy; zavření ×, klik mimo, Esc). „Trvale zahodit" = dialog se dvěma tlačítky
 („Zahodit, zprávy nechat" / „Zahodit i se zprávami") + Zrušit. Záložka Zamítnuté má sekce „Stažené GIFy"
 (Odstranit ze serveru s potvrzením) a „Ke smazání" (odpočet „smaže se za 6 dní", Obnovit).
+
+### Úpravy po testu (2026-09-27, spec `docs/superpowers/specs/2026-09-27-gif-review-upravy-design.md`)
+Bez nového SQL.
+
+**§1 Schválení ruší tresty.** Jakékoli schválení média — `decide` approve (i auto modem, instantní z knihovny,
+kaskáda), `POST …/:mediaId/approve` ze Zamítnutých, `restore` do schváleného, sloučení do schváleného (souběh dedupu,
+obnova sloučená do schváleného, `keep-first|keep-second` s výsledkem schváleným) — v **téže transakci** smaže
+`gif_rejections` (všech uživatelů) i `gif_bans` pro to médium. `unapprove` ani `purge` / `ban12h` strike nepřidávají
+(zamítnutí modem ano, jako dosud). Karta ⚠ „už dříve zamítnut“ (`previouslyRejected`) se u zamítnutého média ukáže
+jen tehdy, když ho někdo opravdu zamítl (existuje strike) — GIF odebraný z knihovny je při dalším poslání **běžná
+žádost bez ⚠**, 3.+ pokus se počítá znovu od nuly.
+
+**§2 Zamítnout + trest (karta fronty, klient).** Split „Zamítnout ▾“: „Zamítnout + timeout“ (číslo + s/m/h, výchozí
+10 min, max 14 dní — stejné jako vlastní délka timeoutu v nabídce moda) a „Zamítnout + permaban…“ (modální
+potvrzení „Trvale zabanovat <login> na <platformě>?“). Provedení: nejdřív `POST /moderation/gif/:id/decide
+{ approve: false }`; jen když rozhodnutí je moje (200, i když SSE předběhlo HTTP), pak stávající
+`POST /moderation/user { channel, platform, userId, login, action: "timeout", durationSec }` / `{ …, action: "ban" }`
+pro odesílatele (identita z `gif-pending` / `GET /moderation/gif/pending`: `platform`, `userId`, `login`; server
+login bere z archivu — původní zpráva `gif_request` v archivu je). Chyba moderace = hláška, zamítnutí platí; `409
+already_decided` = trest se neprovede. Stejné zámky karty (1 s / 0,3 s). Backend beze změny.
+
+**§3 Profil moda — zprávy zahozených GIFů.** `GET /moderation/user-history/messages` (jen mod) posílá zprávu
+s GIFem, jehož médium je `rejected` (i odebrané z knihovny), `purging` nebo `withdrawn`, **se vším obsahem** a
+`gif` + `gifHidden: true` + `gifStatus: "rejected"|"purging"|"withdrawn"` (URL bez tokenu). `unavailable` i médium,
+které už neexistuje → `gif: { …, unavailable: true }` (štítek „[GIF nedostupný]“). `approved` / `pending` normálně.
+Zprávy smazané modem / platformou / filtrem a skryté beze změny. Klient (core `user-history.js`): GIF zprávy
+v Profilu 240×140; `gifHidden` rozmazaně se štítkem („Zamítnutý GIF“, „GIF ke smazání“, „Stažený GIF“), klik
+zaostří, další klik rozmaže; `rejected` / `purging` se načtou až s tokenem moda (`?t=`, po chybě média jednou nový).
+Chat (`/chat/history`, stream, OBS) a veřejný Profil beze změny. Chyba DB při zjištění stavu médií → GIF jako dosud.
+
+**§4 Nabídka ⋯ dlaždice (klient).** Poloha uvnitř panelu (`gifMenuPlacement`): zarovnání k pravé hraně dlaždice,
+u levého okraje posun dovnitř, když se nevejde dolů a nad dlaždici ano, otevře se nahoru.
+
+**§5 Mod bez výjimky z odměny.** Viz „Mod / broadcaster“ výše: `gif-access` (s rolí) a `gif-used` pro mody stejně jako
+pro diváky, `GET /gif/state` bez `mod: true`; s odemčenou odměnou se mod schvaluje sám (bez karty, mimo Dev mód).
+Klient: bez textu „Jako mod posíláš GIFy bez odměny.“, mod vidí zámek, pásek i cooldown jako ostatní; karta fronty
+a mod taby zůstávají. **Pro Židolištu:** když mají mody posílat GIFy jako dřív, musí jim `gif-access` pro
+`role=moderator|broadcaster` vracet `allowed: true` (případně bez cooldownu).
