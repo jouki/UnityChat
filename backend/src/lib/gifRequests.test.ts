@@ -156,7 +156,11 @@ function memStore(now: () => number) {
     async markDeletedByMessage(messageId) { const r = reqs.get(Number(messageId.slice(4))); if (r?.status === 'approved') { r.status = 'deleted'; return r; } return null; },
     async insertApprovedMessage(r, at) { log.push(`message:${r.id}`); return toClientMessage(approvedMessageRow(r, at), false); },
     async retagDeleted(_p, id, from, to) { log.push(`retag:${id}:${from}->${to}`); return retagOk; },
-    async statusByMessage(_p, id) { const r = [...reqs.values()].reverse().find((x) => x.messageId === id); return (r?.status as never) ?? null; },
+    async statusByMessages(keys) {
+      const out = new Map();
+      for (const k of keys) { const r = [...reqs.values()].reverse().find((x) => x.platform === k.platform && x.messageId === k.messageId); if (r) out.set(`${k.platform}:${k.messageId}`, r.status as never); }
+      return out;
+    },
   };
   return { store, reqs, media, rejections, bans, log, setRetag: (v: boolean) => { retagOk = v; } };
 }

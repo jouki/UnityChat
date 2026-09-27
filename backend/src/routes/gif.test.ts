@@ -369,12 +369,16 @@ const row = (id: string, over: Partial<Message> = {}): Message => ({
   receivedAt: new Date(1000), deletedAt: null, deletedBy: null, deletedReason: null, ...over,
 } as Message);
 
+/** Stav žádosti pro všechny dotazované klíče (dávkový dotaz). */
+const allStatus = (st: string) => async (keys: Array<{ platform: string; messageId: string }>) => new Map(keys.map((k) => [`${k.platform}:${k.messageId}`, st as never]));
+
 function heldDeps(rows: Record<string, Message | null>, over: Partial<GifHeldDeps> = {}) {
   const calls: string[] = [];
   const deps: GifHeldDeps = {
     inFlight: () => false,
-    requestStatus: async () => null,
-    row: async (_p, id) => rows[id] ?? null,
+    requestStatuses: async () => new Map(),
+    rows: async (_channels, keys) => keys.map((k) => rows[k.messageId]).filter((r): r is Message => !!r),
+    gone: async () => new Set(),
     platformChannel: async (ch, p) => (p === 'twitch' ? ch : null),
     restore: async (p) => { calls.push(`restore:${p.messageId}`); return 'ok'; },
     retag: async (_p, id, from, to) => { calls.push(`retag:${id}:${from}->${to}`); return true; },
@@ -402,14 +406,14 @@ test('gifHeldState: běžící zachycení / čekající žádost = held; schvál
   const inflight = heldDeps({ a: held }, { inFlight: () => true });
   assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], inflight.deps))[0].state, 'held');
   assert.deepEqual(inflight.calls, []);
-  const pend = heldDeps({ a: held }, { requestStatus: async () => 'pending' });
+  const pend = heldDeps({ a: held }, { requestStatuses: allStatus('pending') });
   // Se žádostí nese položka i `status` (odesílatel podle něj usadí štítek, když se gif-decided ztratilo).
   assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], pend.deps))[0], { platform: 'twitch', messageId: 'a', state: 'held', status: 'pending' });
-  const appr = heldDeps({ a: held }, { requestStatus: async () => 'approved' });
+  const appr = heldDeps({ a: held }, { requestStatuses: allStatus('approved') });
   assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], appr.deps))[0], { platform: 'twitch', messageId: 'a', state: 'replaced', status: 'approved' });
-  const rej = heldDeps({ a: held }, { requestStatus: async () => 'expired' });
+  const rej = heldDeps({ a: held }, { requestStatuses: allStatus('expired') });
   assert.deepEqual((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], rej.deps))[0], { platform: 'twitch', messageId: 'a', state: 'deleted', reason: 'gif_rejected', status: 'expired' });
-  const rj = heldDeps({ a: held }, { requestStatus: async () => 'rejected' });
+  const rj = heldDeps({ a: held }, { requestStatuses: allStatus('rejected') });
   assert.equal((await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'a' }], rj.deps))[0].status, 'rejected');
   assert.deepEqual(rej.calls, ['retag:a:gif_request->gif_rejected']);
 });
@@ -428,6 +432,39 @@ test('gifHeldState: nesmazaný řádek = visible; jiný důvod = deleted; cizí 
   const k = await gifHeldState('robdiesalot', [{ platform: 'kick', messageId: 'ok' }], deps);
   assert.equal(k[0].state, 'unknown');
   assert.deepEqual(calls, []);
+});
+
+test('gifHeldState: syntetické klíče gif-<n> = unknown bez obsahu (enumerace schovaných GIFů, audit SEC-3)', async () => {
+  const gifRow = row('gif-1', { content: 'tajny text nad GIFem', contentRaw: { gif: { mediaId: 'a'.repeat(32), kind: 'gif', width: 1, height: 1, requestId: 1 } } });
+  const asked: string[] = [];
+  const { deps } = heldDeps({ 'gif-1': gifRow }, { rows: async (_c, keys) => { asked.push(...keys.map((k) => k.messageId)); return keys.map(() => gifRow); } });
+  const out = await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'gif-1' }, { platform: 'twitch', messageId: 'gif-2' }], deps);
+  assert.deepEqual(out.map((o) => o.state), ['unknown', 'unknown']);
+  assert.ok(out.every((o) => o.message === undefined));
+  assert.deepEqual(asked, [], 'na syntetické klíče se DB vůbec neptá');
+});
+
+test('gifHeldState: visible jen veřejně viditelná zpráva — GIF odebraný z knihovny / zahozený = deleted gif_removed bez textu (audit SEC-3)', async () => {
+  const mid = 'c'.repeat(32);
+  const withGif = row('x', { content: 'text nad GIFem', contentRaw: { gif: { mediaId: mid, kind: 'gif', width: 1, height: 1, requestId: 3 } } });
+  const { deps } = heldDeps({ x: withGif, ok: row('ok') }, { gone: async () => new Set([mid]) });
+  const out = await gifHeldState('robdiesalot', [{ platform: 'twitch', messageId: 'x' }, { platform: 'twitch', messageId: 'ok' }], deps);
+  assert.deepEqual(out[0], { platform: 'twitch', messageId: 'x', state: 'deleted', reason: 'gif_removed' });
+  assert.equal(out[1].state, 'visible');
+});
+
+test('gifHeldState: dávka = jeden dotaz na řádky a jeden na stavy žádostí (bez N+1, audit C1)', async () => {
+  const rows: Record<string, Message> = {};
+  for (let i = 0; i < GIF_HELD_BATCH; i++) rows[`m${i}`] = row(`m${i}`, { deletedAt: new Date(), deletedReason: 'gif_request' });
+  let rowCalls = 0, stCalls = 0;
+  const { deps } = heldDeps(rows, {
+    rows: async (_c, keys) => { rowCalls++; return keys.map((k) => rows[k.messageId]); },
+    requestStatuses: async (keys) => { stCalls++; return allStatus('pending')(keys); },
+  });
+  const out = await gifHeldState('robdiesalot', Object.keys(rows).map((messageId) => ({ platform: 'twitch' as const, messageId })), deps);
+  assert.equal(out.length, GIF_HELD_BATCH);
+  assert.ok(out.every((o) => o.state === 'held'));
+  assert.deepEqual([rowCalls, stCalls], [1, 1]);
 });
 
 // ---- GIF knihovna (Task 2) ----

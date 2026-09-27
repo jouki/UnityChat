@@ -266,6 +266,8 @@ export const gifRequests = pgTable(
     pendingIdx: index('gif_requests_pending_idx').on(t.status, t.expiresAt),
     channelIdx: index('gif_requests_channel_idx').on(t.channel, t.createdAt),
     mediaIdx: index('gif_requests_media_idx').on(t.mediaId),
+    // GET /gif/held (audit C1, sql/2026-09-27-gif-audit.sql): žádosti podle původní zprávy.
+    messageIdx: index('gif_requests_message_idx').on(t.platform, t.messageId, t.id.desc()),
   }),
 );
 export type GifRequest = typeof gifRequests.$inferSelect;

@@ -270,8 +270,11 @@ export interface GifStore {
   insertApprovedMessage(r: GifRequest, at: Date): Promise<ClientMessage>;
   /** deleted_reason původní zprávy from → to (jen když je smazaná s from). false = řádek nenalezen. */
   retagDeleted(platform: Platform, messageId: string, from: string, to: string): Promise<boolean>;
-  /** Stav poslední žádosti k původní zprávě (GET /gif/held); null = žádná žádost. */
-  statusByMessage(platform: Platform, messageId: string): Promise<GifStatus | null>;
+  /**
+   * Stav poslední žádosti k původním zprávám (GET /gif/held) jedním dotazem (audit C1): klíč `<platform>:<messageId>`
+   * → stav; zpráva bez žádosti v mapě chybí. Index gif_requests_message_idx (sql/2026-09-27-gif-audit.sql).
+   */
+  statusByMessages(keys: Array<{ platform: Platform; messageId: string }>): Promise<Map<string, GifStatus>>;
 }
 
 const mediaCols = {
@@ -519,11 +522,16 @@ export const dbGifStore: GifStore = {
       .returning({ id: messages.id });
     return rows.length > 0;
   },
-  async statusByMessage(platform, messageId) {
-    const rows = await db.select({ status: gifRequests.status }).from(gifRequests)
-      .where(and(eq(gifRequests.platform, platform), eq(gifRequests.messageId, messageId)))
-      .orderBy(desc(gifRequests.id)).limit(1);
-    return (rows[0]?.status as GifStatus | undefined) ?? null;
+  async statusByMessages(keys) {
+    const out = new Map<string, GifStatus>();
+    if (!keys.length) return out;
+    const want = new Set(keys.map((k) => `${k.platform}:${k.messageId}`));
+    const rows = await db.select({ id: gifRequests.id, platform: gifRequests.platform, messageId: gifRequests.messageId, status: gifRequests.status }).from(gifRequests)
+      .where(and(inArray(gifRequests.platform, [...new Set(keys.map((k) => k.platform))]), inArray(gifRequests.messageId, [...new Set(keys.map((k) => k.messageId))])))
+      .orderBy(asc(gifRequests.id));
+    // Vzestupně podle id → poslední žádost ke zprávě přepíše starší.
+    for (const r of rows) { const k = `${r.platform}:${r.messageId}`; if (want.has(k)) out.set(k, r.status as GifStatus); }
+    return out;
   },
 };
 

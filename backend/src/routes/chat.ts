@@ -301,7 +301,7 @@ export function parseMessageKeys(raw: string | undefined, max: number): Array<{ 
 /** Řádky zpráv kanálů `channels` podle klíčů (routa: DB; testy injektují). */
 export type MessageRowsByKeys = (channels: string[], keys: Array<{ platform: string; messageId: string }>) => Promise<Message[]>;
 
-const dbMessageRowsByKeys: MessageRowsByKeys = async (channels, keys) => {
+export const dbMessageRowsByKeys: MessageRowsByKeys = async (channels, keys) => {
   if (!keys.length) return [];
   // (platform, platform_message_id) je unikátní index → oba IN seznamy ho využijí; kanál jako pojistka izolace.
   const rows = await db.select().from(messages).where(and(
