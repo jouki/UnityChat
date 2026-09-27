@@ -703,6 +703,41 @@ jen veřejné SSE `message-deleted` má u `gif_*` `by: null`.
 Propadnutí: kontrola každých 10 s (`status: expired`, `by: null`). `gif.pending` nese při dříve zamítnutém GIFu
 navíc `previouslyRejected: { at, by }`.
 
+**`chat.held_settled` (od 2026-09-27)** — schovaná zpráva (`held`, `gif_request`) přestala čekat. Chodí **právě
+jednou** za zprávu na **všech** cestách, i tam, kde `gif.decided` nechodí (tiché auto-schválení / zamítnutí), takže
+Židolišta podle ní uzavře štítek „čeká na schválení GIFu". `gif.pending`, `gif.decided`, `chat.restored` a
+`chat.deleted` zůstávají beze změny. Zpráva, která schovaná nikdy nebyla (zobrazená a hned zamítnutá / neodemčená),
+`chat.held_settled` nedostane.
+```
+event: chat.held_settled
+data: { "type": "chat.held_settled", "workspace": "rob", "platform": "twitch", "messageId": "abc",
+        "outcome": "approved", "requestId": 12, "by": "twitch:modik" }
+```
+- `outcome`: `approved` | `rejected` | `expired` | `not_allowed` | `restored` | `link_filter`.
+- `requestId`: jen když k zprávě vznikla žádost (u automatického zamítnutí bez žádosti chybí).
+- `by`: kdo rozhodl — mod (`platforma:login`), Židolišta (`zidolista:<id>`), mod sám u vlastního GIFu; automatika
+  (knihovna, filtr, propadnutí, dorovnání) = `"filter"`.
+- `reason` (volitelné, strojový kód): u automatického zamítnutí `repeat` | `ban` | `purged` | `unapproved`;
+  u `restored` / `link_filter` proč GIF neprošel (`denied` = neodemčeno, `cooldown` = globální cooldown chatu,
+  kód převodu `too_large` / `no_media` / `http_403` …, `error`); u `not_allowed` případně kód převodu
+  (`bot_protection`); u vzdaného dorovnání `reconcile:<důvod>`.
+
+| Cesta | `outcome` | `by` |
+|---|---|---|
+| Rozhodnutí moda / Židolišty (i kaskáda na stejné médium, zamítnutí při zahození / zákazu 12 h) | `approved` / `rejected` | mod / `zidolista:<id>` |
+| Propadnutí žádosti | `expired` | `filter` |
+| Okamžité schválení — GIF z knihovny / mod s odemčenou odměnou (až po schování původní zprávy) | `approved` | `filter` / mod sám |
+| Automatické zamítnutí (opakovaně zamítnutý, zákaz 12 h, zahozené médium, médium zahozené během zachycení) | `rejected` + `reason` | `filter` |
+| Režim odměny „jen schválené" | `not_allowed` | `filter` |
+| Převod selhal / neodemčeno / cooldown, filtr odkazů zprávu pouští | `restored` + `reason` (s ním i `chat.restored`) | `filter` |
+| Totéž, ale filtr odkazů by zprávu smazal | `link_filter` + `reason` | `filter` |
+| Schváleno, ale zpráva s GIFem se nezapsala → dopíše ji dorovnání | `approved` až po dopsání | mod |
+| Dorovnání to vzdá (médium zahozené / pokusy vyčerpané) | `rejected`, `reason: "reconcile:…"` | `filter` |
+
+Dedup v paměti procesu (posledních 5000 zpráv): opakovaná cesta (druhý pokus, souběh) událost znovu nepošle.
+Židolišta má přesto brát `chat.held_settled` idempotentně (klíč `platform:messageId`) — paměť restart nepřežije
+a replay po reconnectu (`Last-Event-ID`) ji doručí znovu.
+
 ### GIF knihovna (2026-09-26, spec `docs/superpowers/specs/2026-09-26-gif-knihovna-design.md`, plán Task 1)
 **SQL `backend/sql/2026-09-26-gif-library.sql` spustit PŘED nasazením** (idempotentní):
 `gif_media` + `channel`, `source_url_norm`, `status` (`pending|approved|rejected`), `approved_at`, `rejected_at`,
