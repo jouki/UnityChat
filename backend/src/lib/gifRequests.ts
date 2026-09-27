@@ -798,6 +798,12 @@ export const RECONCILE_WINDOW_MS = 7 * 86_400_000;
 export const RECONCILE_MAX_ATTEMPTS = 10;
 const RECONCILE_BATCH = 50;
 
+/**
+ * Placený fallback Bright Data nejvýš tolikrát za den na uživatele (kanál + platforma + id, audit L4): divák
+ * s odměnou by jinak vlastním serverem s „challenge“ vyčerpal denní strop BRIGHTDATA_DAILY_CAP pro všechny.
+ */
+export const GIF_UNLOCK_PER_USER_DAY = 3;
+
 /** Bez známé velikosti: průběh stahování 10–50 % jako 1 − e^(−bajty / 2 MB). */
 const UNKNOWN_SIZE_SCALE = 2 * 1024 * 1024;
 
@@ -822,6 +828,16 @@ export function createGifFlow(deps: GifFlowDeps) {
   const userKey = (channel: string, platform: string, userId: string) => `${channel}|${platform}|${userId}`;
   // Neúspěšné pokusy dorovnání per žádost (audit A1).
   const reconcileFails = new Map<number, number>();
+  // Pokusy o Bright Data per uživatel a den (audit L4): klíč userKey → { day, n }.
+  const unlocks = new Map<string, { day: number; n: number }>();
+  const today = () => Math.floor(deps.now() / 86_400_000);
+  const unlockAllowed = (k: string) => { const u = unlocks.get(k); return !u || u.day !== today() || u.n < GIF_UNLOCK_PER_USER_DAY; };
+  const unlockUsed = (k: string) => {
+    const d = today();
+    const u = unlocks.get(k);
+    unlocks.set(k, { day: d, n: u && u.day === d ? u.n + 1 : 1 });
+    if (unlocks.size > 5000) for (const [key, v] of unlocks) if (v.day !== d) unlocks.delete(key);
+  };
   const safe = async (what: string, fn: () => Promise<unknown>) => {
     try { await fn(); } catch (e) { deps.log.warn({ err: (e as Error).message }, `gif: ${what} selhalo`); }
   };
@@ -1109,9 +1125,16 @@ export function createGifFlow(deps: GifFlowDeps) {
           const byUrl = urlNorm ? await deps.store.findMedia(p.ucChannel, { url: urlNorm }) : null;
           if (byUrl) return { ok: true, known: byUrl, fresh: null, sha256: byUrl.sha256 };
           let v: ResolvedGif;
+          // Režim approved: neznámý GIF nesmí stát kredit; jinak nejvýš GIF_UNLOCK_PER_USER_DAY pokusů za den (L4).
+          const noUnlock = mode === 'approved' || !unlockAllowed(k);
+          let unlockCounted = false;
           try {
-            v = await deps.resolve(p.candidate, { noUnlock: mode === 'approved', onProgress: (e) => {
-              if (e.phase === 'unlock') { progress('unlock', 50, { estimateMs: e.estimateMs, elapsedMs: e.elapsedMs }); return; }
+            v = await deps.resolve(p.candidate, { noUnlock, onProgress: (e) => {
+              if (e.phase === 'unlock') {
+                if (!unlockCounted) { unlockCounted = true; unlockUsed(k); }
+                progress('unlock', 50, { estimateMs: e.estimateMs, elapsedMs: e.elapsedMs });
+                return;
+              }
               const frac = e.total ? e.loaded / e.total : 1 - Math.exp(-e.loaded / UNKNOWN_SIZE_SCALE);
               const pct = Math.min(50, 10 + Math.floor(40 * Math.max(0, Math.min(1, frac))));
               if (pct > lastPct && (pct >= lastPct + 5 || pct === 50)) progress('download', pct);

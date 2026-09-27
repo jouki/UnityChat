@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
+import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, GIF_UNLOCK_PER_USER_DAY, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
@@ -633,6 +633,26 @@ const from = (userId: string, messageId: string, url = TENOR, over: Record<strin
   ...over,
 });
 const events = (calls: Array<[string, unknown]>, name: string) => calls.filter((c) => c[0] === name).map((c) => c[1] as Record<string, unknown>);
+
+test('L4: Bright Data nejvýš GIF_UNLOCK_PER_USER_DAY pokusů na uživatele za den (vlastní server s challenge nevyčerpá denní strop)', async () => {
+  const noUnlock: boolean[] = [];
+  const s = setup({
+    resolve: async (_src, hooks) => {
+      noUnlock.push(!!hooks?.noUnlock);
+      if (!hooks?.noUnlock) hooks?.onProgress?.({ phase: 'unlock', estimateMs: 1000, elapsedMs: 0 });
+      throw new GifError('bot_protection');
+    },
+  });
+  for (let i = 0; i < GIF_UNLOCK_PER_USER_DAY + 2; i++) await s.flow.intercept(from('42', `m${i}`, `https://evil.example/x${i}.gif`));
+  assert.deepEqual(noUnlock, [...Array(GIF_UNLOCK_PER_USER_DAY).fill(false), true, true]);
+  // Jiný uživatel má vlastní rozpočet; další den zase.
+  await s.flow.intercept(from('43', 'n1', 'https://evil.example/y.gif'));
+  assert.equal(noUnlock.at(-1), false);
+  s.advance(86_400_000);
+  await s.flow.intercept(from('42', 'm99', 'https://evil.example/z.gif'));
+  assert.equal(noUnlock.at(-1), false);
+  await s.flow._idle();
+});
 
 test('A2: GIF z knihovny souběžně s „Odebrat z knihovny“ → instantní schválení médium nevrátí do knihovny, zpráva automaticky zamítnuta', async () => {
   const told: Array<[string, Record<string, unknown>]> = [];
