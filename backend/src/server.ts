@@ -215,6 +215,8 @@ const ingest = createIngest({
     if (isTwitchNotice(m)) { publishChat(m.channel, m.platform, toClientMessage(toRow(m), false)); return; }
     // Filtr odkazů PŘED rozesláním i zápisem: smazaná zpráva jde dál jen jako `deleted` (bez obsahu).
     linkFilter.check(m);
+    // Odpověď na zprávu smazanou kvůli GIFu (i odpověď bota na nepovolený GIF): citace bez původního odkazu.
+    if (gifFlow.scrubReplyParent(m)) app.log.info({ platform: m.platform }, 'gif: citace smazané GIF zprávy v odpovědi vyprázdněna');
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).
     if (ucSends.match(m)) markUc(m, app.log);
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).

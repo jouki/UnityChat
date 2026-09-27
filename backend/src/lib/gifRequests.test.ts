@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, GIF_UNLOCK_PER_USER_DAY, GIF_NOT_ALLOWED_TEXT, GIF_NOT_ALLOWED_REPLY_MS, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
+import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, GIF_UNLOCK_PER_USER_DAY, GIF_NOT_ALLOWED_TEXT, GIF_NOT_ALLOWED_REPLY_MS, GIF_NOT_ALLOWED_REPLY_CHANNEL_MS, GIF_GONE_PARENT_MS, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
@@ -1004,8 +1004,9 @@ test('režim approved, odesílatel bez účtu UnityChatu: bot odpoví na zprávu
   // UC uživatel: štítek (gif-notice), bez odpovědi bota.
   assert.equal(await s.flow.intercept(from('77', 'm4')), 'not_allowed');
   assert.deepEqual(order.slice(5), ['delete:m4']);
-  // Bot nedostupný → jen smazání (bez výjimky).
+  // Bot nedostupný → jen smazání (bez výjimky); jiný uživatel po limitu kanálu (10 s).
   botResult = 'error:bot_unavailable';
+  s.advance(GIF_NOT_ALLOWED_REPLY_CHANNEL_MS);
   assert.equal(await s.flow.intercept(from('43', 'm5')), 'not_allowed');
   assert.deepEqual(order.slice(6), ['reply:m5', 'delete:m5']);
   await s.flow._idle();
@@ -1014,6 +1015,61 @@ test('režim approved, odesílatel bez účtu UnityChatu: bot odpoví na zprávu
   assert.equal(await a.flow.intercept(from('44', 'm6')), 'requested');
   assert.ok(!order.includes('reply:x'));
   await a.flow._idle();
+});
+
+test('odpověď bota na nepovolený GIF: účet odesílatele nezjištěn (chyba) → bez odpovědi; limit kanálu 10 s; YouTube nikdy', async () => {
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const order: string[] = [];
+  let fail = true;
+  const s = setup({
+    access,
+    toSender: async () => { if (fail) throw new Error('db down'); return null; },
+    botReply: async (p) => { order.push(`reply:${p.messageId}`); return 'ok'; },
+    deletePlatform: async (p) => { order.push(`delete:${p.messageId}`); return 'bot'; },
+  });
+  // „Nevím“ (chyba dotazu na účet) → bot mlčí, zpráva se smaže.
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  assert.deepEqual(order, ['delete:m1']);
+  // Prokazatelně bez účtu → odpověď; jiný uživatel do 10 s → limit kanálu, jen smazání; po 10 s zase odpověď.
+  fail = false;
+  assert.equal(await s.flow.intercept(from('42', 'm2')), 'not_allowed');
+  assert.equal(await s.flow.intercept(from('43', 'm3')), 'not_allowed');
+  s.advance(GIF_NOT_ALLOWED_REPLY_CHANNEL_MS);
+  assert.equal(await s.flow.intercept(from('44', 'm4')), 'not_allowed');
+  assert.deepEqual(order.slice(1), ['reply:m2', 'delete:m2', 'delete:m3', 'reply:m4', 'delete:m4']);
+  // YouTube: jen smazání (reply neumí, stojí kvótu).
+  s.advance(GIF_NOT_ALLOWED_REPLY_MS);
+  const yt = from('45', 'y1');
+  yt.m = { ...yt.m, platform: 'youtube' };
+  (yt as { query: object }).query = { ...yt.query, platform: 'youtube' as const };
+  assert.equal(await s.flow.intercept(yt), 'not_allowed');
+  assert.ok(!order.includes('reply:y1'), order.join(','));
+  // Bez deps.toSender (nevím) → bez odpovědi.
+  const b = setup({ access, botReply: async (p) => { order.push(`reply-b:${p.messageId}`); return 'ok'; } });
+  assert.equal(await b.flow.intercept(from('46', 'b1')), 'not_allowed');
+  assert.ok(!order.includes('reply-b:b1'));
+  await s.flow._idle();
+  await b.flow._idle();
+});
+
+test('citace rodiče smazaného kvůli GIFu (i odpověď bota): replyParentBody se vyprázdní (review I2); jiné odpovědi beze změny', async () => {
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const s = setup({ access, toSender: async () => null, botReply: async () => 'ok' });
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  const reply = msg({ platformMessageId: 'r1', platformUserId: '99', isReply: true, replyToMessageId: 'm1', contentRaw: { replyParentBody: 'hele https://tenor.com/view/cat-gif-1', replyParentDisplayName: 'U42' } });
+  assert.equal(s.flow.scrubReplyParent(reply), true);
+  assert.equal((reply.contentRaw as Record<string, unknown>).replyParentBody, null);
+  assert.equal((reply.contentRaw as Record<string, unknown>).replyParentDisplayName, 'U42', 'jméno zůstává');
+  const other = msg({ platformMessageId: 'r2', isReply: true, replyToMessageId: 'jina', contentRaw: { replyParentBody: 'https://example.com' } });
+  assert.equal(s.flow.scrubReplyParent(other), false);
+  assert.equal((other.contentRaw as Record<string, unknown>).replyParentBody, 'https://example.com');
+  // Jiná platforma se stejným id ne; po 30 min se zapomene.
+  const kick = msg({ platform: 'kick', platformMessageId: 'r3', isReply: true, replyToMessageId: 'm1', contentRaw: { replyParentBody: 'x' } });
+  assert.equal(s.flow.scrubReplyParent(kick), false);
+  s.advance(GIF_GONE_PARENT_MS);
+  const late = msg({ platformMessageId: 'r4', isReply: true, replyToMessageId: 'm1', contentRaw: { replyParentBody: 'https://tenor.com/view/cat-gif-1' } });
+  assert.equal(s.flow.scrubReplyParent(late), false);
+  await s.flow._idle();
 });
 
 test('kolo 4 bod 4b: kanál bez bota (no_actor) → vlastní zprávu moda smaže jeho token; divák bez bota zůstane (log)', async () => {

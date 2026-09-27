@@ -147,6 +147,10 @@ export const GIF_NOT_ALLOWED_REASON = 'gif_not_allowed' as const;
 export const GIF_NOT_ALLOWED_TEXT = 'Nové GIFy teď nejsou povolené';
 /** Odpověď bota na nepovolený GIF nejvýš 1× za tuto dobu na kanál + uživatele (smaže se vždy). */
 export const GIF_NOT_ALLOWED_REPLY_MS = 60_000;
+/** … a nejvýš 1× za tuto dobu na kanál (review M4). */
+export const GIF_NOT_ALLOWED_REPLY_CHANNEL_MS = 10_000;
+/** Jak dlouho si server pamatuje GIF zprávu smazanou / schovanou kvůli GIFu (citace v odpovědích bez textu, review I2). */
+export const GIF_GONE_PARENT_MS = 30 * 60_000;
 
 /** Retence zamítnutých médií (bez vaultu). */
 export const REJECTED_RETENTION_MS = 14 * 86_400_000;
@@ -675,10 +679,12 @@ export function createGifNotifier(deps: GifNotifierDeps) {
       for (const acc of deps.connected()) if (await isMod(acc, channel)) { deps.send(acc, event, data); out.push(acc); }
       return out;
     },
-    /** Kanál k odesílateli (gif-progress, gif-notice); null = nemá účet UnityChatu. */
+    /**
+     * Kanál k odesílateli (gif-progress, gif-notice); null = prokazatelně nemá účet UnityChatu. Chyba dotazu se
+     * propaguje (volající rozliší „nemá účet“ od „nevím“ — odpověď bota jen při prvním, review I1).
+     */
     async toSender(platform: Platform, userId: string): Promise<((event: string, data: object) => void) | null> {
-      let acc: number | null = null;
-      try { acc = await deps.senderAccount(platform, userId); } catch { acc = null; }
+      const acc = await deps.senderAccount(platform, userId);
       if (acc === null) return null;
       const a = acc;
       return (event, data) => { deps.send(a, event, data); };
@@ -862,8 +868,18 @@ export function createGifFlow(deps: GifFlowDeps) {
   // rozhodl dřív, než intercept došel k pending.set (GET /moderation/gif/pending žádost ukáže hned po insertu).
   const closed = new Set<number>();
   const userKey = (channel: string, platform: string, userId: string) => `${channel}|${platform}|${userId}`;
-  // Poslední odpověď bota na nepovolený GIF (userKey → čas): nejvýš 1× za GIF_NOT_ALLOWED_REPLY_MS.
+  // Poslední odpověď bota na nepovolený GIF (userKey → čas): nejvýš 1× za GIF_NOT_ALLOWED_REPLY_MS; kanál → čas
+  // (GIF_NOT_ALLOWED_REPLY_CHANNEL_MS).
   const naReplies = new Map<string, number>();
+  const naChannelReplies = new Map<string, number>();
+  // GIF zprávy smazané / schované kvůli GIFu (`platform:messageId` → čas): odpověď na ně (i odpověď bota) nese
+  // v citaci (reply-parent-msg-body) původní odkaz → scrubReplyParent ho z citace vyprázdní (review I2).
+  const goneParents = new Map<string, number>();
+  const markGone = (platform: string, messageId: string) => {
+    const now = deps.now();
+    goneParents.set(`${platform}:${messageId}`, now);
+    if (goneParents.size > 5000) for (const [key, at] of goneParents) if (now - at >= GIF_GONE_PARENT_MS) goneParents.delete(key);
+  };
   /**
    * Nepovolený GIF od odesílatele bez účtu UnityChatu → bot mu odpoví na zprávu (text štítku), dřív než se smaže.
    * Limit na kanál + uživatele; bot nedostupný = jen log. Vrací výsledek pro log / testy.
@@ -871,14 +887,19 @@ export function createGifFlow(deps: GifFlowDeps) {
   const replyNotAllowed = async (p: GifInterceptParams): Promise<string> => {
     const { m } = p;
     if (!deps.botReply) return 'skip:no_bot';
+    // YouTube: sendYoutube odpověď (reply) neumí a každá zpráva stojí kvótu → jen smazání (review M1).
+    if (m.platform === 'youtube') return 'skip:youtube';
     const k = userKey(p.ucChannel, m.platform, m.platformUserId);
     const now = deps.now();
     const last = naReplies.get(k);
-    if (last !== undefined && now - last < GIF_NOT_ALLOWED_REPLY_MS) {
+    const lastCh = naChannelReplies.get(p.ucChannel);
+    if ((last !== undefined && now - last < GIF_NOT_ALLOWED_REPLY_MS) || (lastCh !== undefined && now - lastCh < GIF_NOT_ALLOWED_REPLY_CHANNEL_MS)) {
       deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: nepovolený GIF — odpověď bota v limitu, jen smazání');
       return 'skip:rate_limited';
     }
     naReplies.set(k, now);
+    naChannelReplies.set(p.ucChannel, now);
+    if (naChannelReplies.size > 500) naChannelReplies.clear();
     if (naReplies.size > 2000) for (const [key, at] of naReplies) if (now - at >= GIF_NOT_ALLOWED_REPLY_MS) naReplies.delete(key);
     let result = 'error:exception';
     try { result = await deps.botReply({ workspace: p.workspace, platform: m.platform, messageId: m.platformMessageId, text: GIF_NOT_ALLOWED_TEXT }); }
@@ -1038,6 +1059,7 @@ export function createGifFlow(deps: GifFlowDeps) {
   const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON, why: { reason?: string; requestId?: number; botReply?: boolean } = {}) => {
     const { m } = p;
     const pl = m.platform, id = m.platformMessageId;
+    markGone(pl, id);
     if (p.preDeleted === null) {
       await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', reason }));
     } else {
@@ -1249,6 +1271,21 @@ export function createGifFlow(deps: GifFlowDeps) {
       return true;
     },
 
+    /**
+     * Odpověď na zprávu smazanou / schovanou kvůli GIFu (i odpověď bota na nepovolený GIF): citace rodiče
+     * (`contentRaw.replyParentBody`, z Twitch `reply-parent-msg-body` / Kick) nese původní odkaz → vyprázdnit, dřív než
+     * se zpráva rozešle a zapíše (server.ts onLive, review I2). Vrací true, když citaci vyprázdnil.
+     */
+    scrubReplyParent(m: IngestMessage): boolean {
+      if (!m.isReply || !m.replyToMessageId) return false;
+      const at = goneParents.get(`${m.platform}:${m.replyToMessageId}`);
+      if (at === undefined) return false;
+      if (deps.now() - at >= GIF_GONE_PARENT_MS) { goneParents.delete(`${m.platform}:${m.replyToMessageId}`); return false; }
+      const raw = m.contentRaw as Record<string, unknown>;
+      if (!raw?.replyParentBody) return false;
+      raw.replyParentBody = null;
+      return true;
+    },
     /** Převod + žádost na pozadí. Vrací výsledek (log/testy); nikdy nevyhodí. */
     async intercept(p: GifInterceptParams): Promise<GifInterceptResult> {
       const { m } = p;
@@ -1262,6 +1299,8 @@ export function createGifFlow(deps: GifFlowDeps) {
       let settled = false;
       // Průběh a hlášky jen odesílateli (má-li účet UnityChatu).
       let tell: ((event: string, data: object) => void) | null = null;
+      // Odesílatel PROKAZATELNĚ nemá účet UnityChatu (dotaz uspěl a vrátil null) — jen pak smí odpovědět bot (review I1).
+      let senderNoAccount = false;
       const base = { requestKey: mk, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId };
       let lastPct = -1;
       const progress = (phase: string, pct: number, extra: object = {}) => {
@@ -1301,8 +1340,19 @@ export function createGifFlow(deps: GifFlowDeps) {
       const freeSlot = () => { const r = releaseSlot; releaseSlot = null; try { r?.(); } catch { /* nic */ } };
       try {
         // Addon čte Twitch IRC napřímo → původní zprávu schovat hned, ne až po stažení média.
-        if (p.preDeleted === 'gif_request') await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
-        if (deps.toSender) tell = await deps.toSender(m.platform, m.platformUserId).catch(() => null);
+        if (p.preDeleted === 'gif_request') {
+          markGone(m.platform, m.platformMessageId);
+          await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
+        }
+        if (deps.toSender) {
+          try {
+            tell = await deps.toSender(m.platform, m.platformUserId);
+            senderNoAccount = tell === null;
+          } catch (e) {
+            tell = null;
+            deps.log.warn({ err: (e as Error).message }, 'gif: účet odesílatele nezjištěn → bez hlášek a bez odpovědi bota');
+          }
+        }
         progress('detect', 0);
         // Přístup (cache 60 s): odemčení a cooldown (i mod — spec 2026-09-27-gif-review-upravy §5), requestTtlSec a režim odměny.
         const access = await deps.access(p.query).catch(() => null);
@@ -1378,7 +1428,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           const approvedKnown = known?.status === 'approved';
           // Režim „jen schválené": nový / nerozhodnutý / zamítnutý GIF neprojde (i od moda).
           if (mode === 'approved' && !approvedKnown) {
-            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { botReply: !tell });
+            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { botReply: senderNoAccount });
             notice('approved_only');
             await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_not_allowed', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mode, known: known?.status ?? null }, result: {} }));
             deps.log.info({ channel: p.ucChannel, platform: m.platform, known: known?.status ?? null }, 'gif: režim jen schválené → nový GIF smazán');
@@ -1456,7 +1506,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Režim „jen schválené": náš odkaz na neznámé médium i odkaz za ochranou proti botům (Bright Data se
           // v tomhle režimu nevolá) je nový GIF (smazaný filtrem už je pryč).
           if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection') && p.preDeleted !== 'link_filter') {
-            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: res.code, botReply: !tell });
+            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: res.code, botReply: senderNoAccount });
             notice('approved_only');
             return finish('not_allowed');
           }
