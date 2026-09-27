@@ -280,6 +280,10 @@ export interface GifHook {
   candidate?: (text: string) => GifCandidate | null;
   /** Synchronně z cache (gifAccessSync): unknown spustí načtení na pozadí. */
   accessSync: (q: GifAccessQuery) => 'allowed' | 'denied' | 'unknown';
+  /** Synchronně z cache: konec cooldownu, kvůli kterému je přístup 'denied' (gifCooldownUntilSync); null = jiný důvod. */
+  cooldownUntil?: (q: GifAccessQuery) => number | null;
+  /** GIF odkaz během cooldownu zůstal běžným odkazem → log + hláška odesílateli (createGifFlow().cooldownDenied). */
+  onCooldown?: (p: { m: IngestMessage; ucChannel: string; until: number }) => void;
   /** Rezervace (jedna žádost na uživatele současně); false = GIF cesta se nepoužije. */
   tryReserve: (channel: string, platform: string, userId: string) => boolean;
   /** Převod + žádost na pozadí (lib/gifRequests.ts createGifFlow().intercept). */
@@ -357,7 +361,14 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const modAuto = (roles.isMod || roles.isBroadcaster) && !gif.reviewRequested?.(m);
     const auto = modAuto ? { auto: true, ...(gif.lateReview ? { lateReview: () => gif.lateReview!(m) } : {}) } : {};
     const access = gif.accessSync(query);
-    if (access === 'denied' || !gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
+    if (access === 'denied') {
+      // Cooldown (i mod): odkaz zůstane odkazem, odesílatel se to dozví (jinak mu u zprávy visí kolečko, test2 bod 4.1).
+      let until: number | null = null;
+      try { until = gif.cooldownUntil?.(query) ?? null; } catch { until = null; }
+      if (until !== null) { try { gif.onCooldown?.({ m, ucChannel, until }); } catch { /* nic */ } }
+      return null;
+    }
+    if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
     const filterAct = host ? () => act(m, ucChannel, host) : null;
     if (access === 'allowed' || !host) {
       m.deleted = { by: 'filter', reason: 'gif_request' };

@@ -53,7 +53,7 @@ import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
 import integrationGifRoutes from './routes/integrationGif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta, startGifMaintenance } from './lib/gifRequests.js';
-import { claimGifSlot, gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
+import { claimGifSlot, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
@@ -178,6 +178,9 @@ const linkFilter = createLinkFilter({
   gif: {
     accessSync: (q) => gifAccessSync(q, { log: app.log }),
     tryReserve: (channel, platform, userId) => gifFlow.tryReserve(channel, platform, userId),
+    // GIF odkaz během cooldownu → běžný odkaz, log + gif-notice cooldown odesílateli (test2 bod 4.1).
+    cooldownUntil: (q) => gifCooldownUntilSync(q),
+    onCooldown: (p) => { void gifFlow.cooldownDenied(p).catch(() => {}); },
     intercept: (p) => gifFlow.intercept(p),
     reviewRequested: (m) => gifReviews.requested(m),
     lateReview: (m) => gifReviews.lateRequested(m),

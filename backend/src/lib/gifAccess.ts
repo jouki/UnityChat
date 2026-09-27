@@ -206,6 +206,21 @@ export function gifAccessSync(q: GifAccessQuery, deps: GifAccessDeps = {}): 'all
   return gifUsable(hit.value, now) ? 'allowed' : 'denied';
 }
 
+/**
+ * Synchronně z cache: konec cooldownu, kvůli kterému gifAccessSync vrací 'denied' (lokální po schválení, potvrzený
+ * Židolištou, globální cooldown chatu); null = neodemčeno / bez cooldownu / neznámé. Filtr odkazů podle toho pošle
+ * odesílateli hlášku (test2 bod 4.1). Nespouští načtení.
+ */
+export function gifCooldownUntilSync(q: GifAccessQuery, deps: Pick<GifAccessDeps, 'now'> = {}): number | null {
+  const now = (deps.now ?? Date.now)();
+  const hit = cache.get(keyOf(q));
+  // Neodemčeno (Židolišta řekla ne) = důvod odmítnutí není cooldown.
+  if (hit && hit.at !== 0 && !hit.value?.allowed) return null;
+  if (hit?.value && hit.value.until !== null && hit.value.until <= now) return null;
+  const u = Math.max(localUntil(q, now) ?? 0, globalUntil(q.workspace, now) ?? 0, hit?.value?.cooldownUntil ?? 0);
+  return u > now ? u : null;
+}
+
 export const GIF_USED_RETRY_MS = 2000;
 
 /**

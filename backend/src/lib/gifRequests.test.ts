@@ -1007,6 +1007,98 @@ test('náš odkaz v režimu all: schválené → gif-message; neznámé id → b
   await s.flow._idle();
 });
 
+test('test2 bod 4: náš odkaz na schválené médium (mod) → bez stahování, bez čekání na zápis dávky, okamžitá gif-message, use_count++, bez karty ani průběhu stahování', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.media.get(MEDIA)!.useCount, 1);
+  await s.flow._idle();
+
+  const told: Array<[string, Record<string, unknown>]> = [];
+  let resolveCalls = 0;
+  let released = false;
+  let release: () => void = () => {};
+  let usedAt: number | null = null;
+  const b = setup({
+    store: s.mem.store,
+    resolve: async () => { resolveCalls++; throw new Error('nestahovat'); },
+    // Čekání na zápis dávky ingestu: náš odkaz na schválené médium na něj nesmí čekat.
+    sleep: () => new Promise<void>((r) => { release = () => { released = true; r(); }; }),
+    used: async () => { usedAt = 1_000_000; },
+    // Po schválení (gif-used) běží cooldown → přístup ho vrací (lokální / globální cooldown serveru).
+    access: async () => ({ allowed: true, until: null, cooldownUntil: usedAt === null ? null : usedAt + 45_000, cooldownSec: 0, requestTtlSec: 120 }),
+    toSender: async () => (e: string, d: object) => { told.push([e, d as Record<string, unknown>]); },
+  });
+  const own = `https://api.jouki.cz/media/gif/${MEDIA}`;
+  const p = b.flow.intercept({ ...from('50', 'm9', own), auto: true, candidate: { url: own, mode: 'own' as const, mediaId: MEDIA, token: own } });
+  for (let i = 0; i < 50 && !events(b.calls, 'broadcast:gif-message').length; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(events(b.calls, 'broadcast:gif-message').length, 1, 'gif-message dřív, než doběhne FLUSH_WAIT');
+  assert.equal(released, false);
+  assert.equal(await p, 'approved');
+  release();
+  assert.equal(resolveCalls, 0, 'náš odkaz se nikdy nestahuje');
+  assert.equal(s.mem.media.get(MEDIA)!.useCount, 2, 'use_count++');
+  assert.equal(names(b.calls).includes('notify:gif-pending'), false, 'bez karty');
+  assert.equal(names(b.calls).includes('notify:gif-decided'), false);
+  const phases = told.filter(([e]) => e === 'gif-progress').map(([, d]) => d.phase);
+  assert.equal(phases.includes('download') || phases.includes('unlock'), false, `bez fáze stahování: ${phases.join(',')}`);
+  const done = told.find(([e, d]) => e === 'gif-progress' && d.phase === 'done')![1];
+  assert.equal(done.outcome, 'approved');
+  assert.equal(done.cooldownUntil, 1_045_000, 'odesílatel se dozví konec cooldownu i při tichém schválení');
+  assert.equal(done.serverNow, 1_000_000);
+  await b.flow._idle();
+});
+
+test('test2 bod 4.1: tiché schválení z knihovny (divák) → done approved nese cooldownUntil; bez cooldownu null', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  await s.flow._idle();
+  const told: Array<Record<string, unknown>> = [];
+  const b = setup({ store: s.mem.store, toSender: async () => (e: string, d: object) => { if (e === 'gif-progress') told.push(d as Record<string, unknown>); } });
+  const own = `https://api.jouki.cz/media/gif/${MEDIA}`;
+  assert.equal(await b.flow.intercept({ ...from('51', 'm8', own), candidate: { url: own, mode: 'own' as const, mediaId: MEDIA, token: own } }), 'approved');
+  const done = told.find((d) => d.phase === 'done')!;
+  assert.equal(done.outcome, 'approved');
+  assert.equal(done.cooldownUntil, null, 'přístup bez cooldownu → null');
+  await b.flow._idle();
+});
+
+test('test2 bod 4.1: GIF odkaz v cooldownu (přístup z intercept) → běžný odkaz + log + gif-notice cooldown { until }', async () => {
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const logs: string[] = [];
+  const s = setup({
+    access: async () => ({ allowed: true, until: null, cooldownUntil: 1_030_000, cooldownSec: 60, requestTtlSec: 120 }),
+    toSender: async () => (e: string, d: object) => { told.push([e, d as Record<string, unknown>]); },
+    log: { info: (_o: object, m: string) => { logs.push(m); }, warn() {} },
+  });
+  assert.equal(await s.flow.intercept({ ...from('42', 'm1'), needAccess: true }), 'denied');
+  assert.ok(logs.includes('gif: cooldown → běžný odkaz'), logs.join(' | '));
+  const notice = told.find(([e]) => e === 'gif-notice')![1];
+  assert.deepEqual([notice.kind, notice.until, notice.serverNow, notice.requestKey], ['cooldown', 1_030_000, 1_000_000, 'twitch:m1']);
+  assert.equal(told.at(-1)![1].outcome, 'denied');
+  // Neodemčeno (ne cooldown) → bez hlášky.
+  const told2: Array<[string, Record<string, unknown>]> = [];
+  const n = setup({
+    access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }),
+    toSender: async () => (e: string, d: object) => { told2.push([e, d as Record<string, unknown>]); },
+  });
+  assert.equal(await n.flow.intercept({ ...from('42', 'm1'), needAccess: true }), 'denied');
+  assert.equal(told2.some(([e]) => e === 'gif-notice'), false);
+});
+
+test('test2 bod 4.1: cooldownDenied (filtr odkazů zná cooldown z cache) → log + gif-notice cooldown odesílateli', async () => {
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const logs: string[] = [];
+  const s = setup({
+    toSender: async () => (e: string, d: object) => { told.push([e, d as Record<string, unknown>]); },
+    log: { info: (_o: object, m: string) => { logs.push(m); }, warn() {} },
+  });
+  await s.flow.cooldownDenied({ m: msg({ platformMessageId: 'm7' }), ucChannel: 'robdiesalot', until: 1_020_000 });
+  assert.ok(logs.includes('gif: cooldown → běžný odkaz'));
+  assert.deepEqual(told, [['gif-notice', { requestKey: 'twitch:m7', channel: 'robdiesalot', platform: 'twitch', messageId: 'm7', kind: 'cooldown', until: 1_020_000, serverNow: 1_000_000 }]]);
+});
+
 test('fronta FIFO: listPending podle vzniku; gif-queue { pendingCount, headId } modům po každé změně', async () => {
   const q: Array<Record<string, unknown>> = [];
   const s = setup({ notifyMods: async (ch, e, d) => { if (e === 'gif-queue') q.push({ ch, ...(d as object) }); } });

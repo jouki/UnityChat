@@ -1203,9 +1203,29 @@ export function createGifFlow(deps: GifFlowDeps) {
         lastPct = Math.max(lastPct, pct);
         try { tell('gif-progress', { ...base, phase, pct, ...extra }); } catch { /* ignore */ }
       };
-      const done = (outcome: GifInterceptResult) => { if (tell) progress('done', 100, { outcome: outcome === 'requested' ? 'pending' : outcome }); };
+      const done = (outcome: GifInterceptResult, extra: object = {}) => { if (tell) progress('done', 100, { outcome: outcome === 'requested' ? 'pending' : outcome, ...extra }); };
       const notice = (kind: string, extra: object = {}) => { if (tell) { try { tell('gif-notice', { ...base, kind, ...extra }); } catch { /* ignore */ } } };
-      const finish = (outcome: GifInterceptResult): GifInterceptResult => { done(outcome); return outcome; };
+      const finish = (outcome: GifInterceptResult, extra: object = {}): GifInterceptResult => { done(outcome, extra); return outcome; };
+      /**
+       * Cooldown odesílatele po schválení (gif-used nastaví lokální i globální cooldown, deps.access ho vrací): při tichém
+       * schválení (mod, knihovna) nejde gif-decided → jinak by se klient o cooldownu nedozvěděl (test2 bod 4.1).
+       */
+      const cooldownAfter = async (): Promise<{ cooldownUntil: number | null; serverNow: number }> => {
+        const a = tell ? await deps.access(p.query).catch(() => null) : null;
+        const nowMs = deps.now();
+        const cd = a?.cooldownUntil ?? null;
+        return { cooldownUntil: cd !== null && cd > nowMs ? cd : null, serverNow: nowMs };
+      };
+      /** GIF odkaz během cooldownu → běžný odkaz; odesílatel dostane hlášku (optimistická zpráva bez kolečka). */
+      const cooldownDenied = (until: number) => {
+        deps.log.info({ channel: p.ucChannel, platform: m.platform, until }, 'gif: cooldown → běžný odkaz');
+        notice('cooldown', { until, serverNow: deps.now() });
+      };
+      // Čekání na zápis dávky ingestu (FLUSH_WAIT_MS): náš odkaz na schválené médium na něj nečeká (test2 bod 4) —
+      // přeznačení / obnovení původní zprávy v DB, které ho potřebují, si ho počkají samy (flushed()).
+      let flushP: Promise<void> | null = null;
+      let flushWaited = false;
+      const flushed = async () => { if (!flushWaited && flushP) { flushWaited = true; await flushP; } };
       // Slot globálního cooldownu vzatý okamžitým schválením; uvolní se, když se GIF nezobrazí (review SEC-8),
       // i při neočekávané výjimce (vnější catch).
       let releaseSlot: (() => void) | null = null;
@@ -1218,6 +1238,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         // Přístup (cache 60 s): odemčení a cooldown (i mod — spec 2026-09-27-gif-review-upravy §5), requestTtlSec a režim odměny.
         const access = await deps.access(p.query).catch(() => null);
         if (p.needAccess && !gifUsable(access, deps.now())) {
+          // Odemčeno, ale běží cooldown → hláška odesílateli (jinak mu zůstane kolečko u odkazu).
+          if (access?.allowed && access.cooldownUntil !== null && access.cooldownUntil > deps.now()) cooldownDenied(access.cooldownUntil);
           // Zpráva schovaná předem (neznámý přístup, audit A12) → rozhodnout: filtr by ji smazal = smazat, jinak obnovit.
           if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p, 'denied'); }
           return finish('denied');
@@ -1254,10 +1276,12 @@ export function createGifFlow(deps: GifFlowDeps) {
           const bySha = await deps.store.findMedia(p.ucChannel, { sha256 });
           return bySha ? { ok: true, known: bySha, fresh: null, sha256 } : { ok: true, known: null, fresh: v, sha256 };
         };
-        const [res] = await Promise.all([
-          obtain().catch((e) => ({ ok: false as const, code: e instanceof GifError ? e.code : 'exception' })),
-          deps.sleep(FLUSH_WAIT_MS),
-        ]);
+        flushP = deps.sleep(FLUSH_WAIT_MS);
+        flushP.catch(() => {});   // čeká se jen někdy (flushed) — chyba se projeví tam, jinak by byla neošetřená
+        const res = await obtain().catch((e) => ({ ok: false as const, code: e instanceof GifError ? e.code : 'exception' }));
+        // Náš odkaz (id) na schválené médium, původní zpráva schovaná v paměti (gif_request) → rovnou do chatu.
+        const ownApproved = res.ok && p.candidate.mode === 'own' && res.known?.status === 'approved' && p.preDeleted === 'gif_request';
+        if (!ownApproved) await flushed();
         if (res.ok) progress('verify', 95);
         // Mod z UnityChatu v Dev módu (hlášení došlo po echu) → schvalování jako divák.
         if (auto && p.lateReview?.()) {
@@ -1366,6 +1390,12 @@ export function createGifFlow(deps: GifFlowDeps) {
         }
 
         if (!created) {
+          // Globální cooldown chatu (slot) → hláška odesílateli s koncem cooldownu.
+          if (blocked) {
+            const cd = (await cooldownAfter()).cooldownUntil;
+            if (cd !== null) cooldownDenied(cd);
+          }
+          await flushed();
           // Převod selhal → běžný odkaz: filtr ho smaže, jinak se v UC obnoví (smazali jsme ho my).
           if (p.preDeleted === 'gif_request') {
             settled = true;
@@ -1390,6 +1420,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           else releaseSlot = null; // GIF zobrazen → slot platí, pozdější výjimka ho už nevrací
           // Médium zahozené během stahování / FLUSH_WAIT (souběh s „Trvale zahodit“) → jako zahozený dedup.
           if (instantOut.body.reason === 'purged' || instantOut.body.reason === 'unapproved') {
+            await flushed();
             await dropOriginal(p, GIF_REJECTED_REASON, { reason: instantOut.body.reason, requestId: created.id });
             notice('auto_rejected', { reason: instantOut.body.reason });
             deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id }, 'gif: médium zahozené během zachycení → automaticky zamítnuto');
@@ -1412,7 +1443,8 @@ export function createGifFlow(deps: GifFlowDeps) {
           if (instantOut.status === 200 && instantOut.body.status === 'approved' && instantOut.body.published !== false) {
             await heldSettled({ workspace: created.workspace, platform: created.platform, messageId: created.messageId, outcome: 'approved', requestId: created.id, by: auto ? `${m.platform}:${m.username.toLowerCase()}` : 'filter' });
           }
-          return finish(instantOut.status === 200 ? 'approved' : 'requested');
+          // Tiché schválení (mod / knihovna): gif-decided nejde → konec cooldownu odesílateli v `done` (test2 bod 4.1).
+          return instantOut.status === 200 ? finish('approved', await cooldownAfter()) : finish('requested');
         }
 
         const view = pendingView(created);
@@ -1429,12 +1461,27 @@ export function createGifFlow(deps: GifFlowDeps) {
         deps.log.warn({ err: (e as Error).message }, 'gif: zachycení selhalo');
         freeSlot();
         // Schovaná zpráva bez žádosti nesmí zůstat bez rozhodnutí (s žádostí rozhodne mod / propadnutí).
-        if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', () => settleHeld(p, 'error'));
+        if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', async () => { await flushed().catch(() => {}); await settleHeld(p, 'error'); });
         return finish('failed');
       } finally {
         busy.delete(k);
         inflight.delete(mk);
       }
+    },
+
+    /**
+     * GIF odkaz během cooldownu, který filtr odkazů odmítl synchronně z cache (lib/linkFilter.ts, jiný klient / ručně
+     * vložený odkaz): zpráva zůstává běžným odkazem, odesílatel dostane `gif-notice` `{ kind: 'cooldown', until }`
+     * (klient ukáže hlášku a u optimistické zprávy nenechá kolečko). Nikdy nevyhodí.
+     */
+    async cooldownDenied(p: { m: IngestMessage; ucChannel: string; until: number }): Promise<void> {
+      const { m } = p;
+      deps.log.info({ channel: p.ucChannel, platform: m.platform, until: p.until }, 'gif: cooldown → běžný odkaz');
+      if (!deps.toSender) return;
+      await safe('gif-notice cooldown', async () => {
+        const tell = await deps.toSender!(m.platform as Platform, m.platformUserId);
+        tell?.('gif-notice', { requestKey: `${m.platform}:${m.platformMessageId}`, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, kind: 'cooldown', until: p.until, serverNow: deps.now() });
+      });
     },
 
     /**

@@ -314,6 +314,19 @@ test('L13: odkaz na naše médium s tokenem moda (?t=) → token se zneplatní (
   assert.deepEqual(revoked, ['TOKEN']);
 });
 
+test('test2 bod 4.1: GIF odkaz během cooldownu (cache) → běžný odkaz + onCooldown { until } (hláška odesílateli); neodemčeno bez hlášky', () => {
+  const seen: Array<{ id: string; until: number; ch: string }> = [];
+  const hookWith = (until: number | null) => ({ ...gifHook('denied').hook, cooldownUntil: () => until, onCooldown: (p: { m: { platformMessageId: string }; ucChannel: string; until: number }) => { seen.push({ id: p.m.platformMessageId, until: p.until, ch: p.ucChannel }); } });
+  const a = harness(LINK_FILTER_OFF, { gif: hookWith(1_050_000) });
+  const m = msg({ content: GIF_TEXT, platformMessageId: 'cd1' });
+  assert.equal(a.f.check(m), null, 'běžný odkaz (filtr vypnutý)');
+  assert.equal(m.deleted, undefined);
+  assert.deepEqual(seen, [{ id: 'cd1', until: 1_050_000, ch: 'robdiesalot' }]);
+  const b = harness(LINK_FILTER_OFF, { gif: hookWith(null) });
+  b.f.check(msg({ content: GIF_TEXT, platformMessageId: 'cd2' }));
+  assert.equal(seen.length, 1, 'neodemčeno (ne cooldown) → nic');
+});
+
 test('GIF: odemčeno (cache) → schovat hned jako gif_request, převod na pozadí; i s vypnutým filtrem', () => {
   for (const settings of [undefined, { ...LINK_FILTER_OFF }]) {
     const g = gifHook('allowed');

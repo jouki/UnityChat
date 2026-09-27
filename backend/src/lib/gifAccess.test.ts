@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeGifAccess, gifUsable, gifAccess, gifAccessSync, gifUsed, invalidateGifAccess, claimGifSlot, _resetGifAccessCache, type GifAccessQuery } from './gifAccess.js';
+import { normalizeGifAccess, gifUsable, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed, invalidateGifAccess, claimGifSlot, _resetGifAccessCache, type GifAccessQuery } from './gifAccess.js';
 
 const Q: GifAccessQuery = { workspace: 'rob', platform: 'twitch', userId: '42', login: 'Divak', role: 'viewer' };
 const quiet = { warn() {} };
@@ -119,6 +119,31 @@ test('SEC-8: globální cooldown chatu drží server sám — po zobrazeném GIF
   assert.ok((await gifAccess(B, deps))!.cooldownUntil! >= now + 29_000, 'i /gif/state a intercept vidí globální cooldown');
   now += 31_000;
   assert.equal(gifAccessSync(B, deps), 'allowed', 'po cooldownGlobalSec zase');
+});
+
+test('test2 bod 4.1: gifCooldownUntilSync — konec cooldownu (lokální / Židolišta / globální) jen u odemčeného; neodemčeno null', async () => {
+  _resetGifAccessCache();
+  let now = 1_000;
+  let allowed = true;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response(JSON.stringify({ ok: true, cooldownUntil: 41_000, serverNow: now }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, serverNow: now, allowed, until: null, cooldownUntil: null, cooldownSec: 40, requestTtlSec: 300, cooldownGlobalSec: 20 }), { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
+  assert.equal(gifCooldownUntilSync(Q, deps), null, 'nic v cache');
+  await gifAccess(Q, deps);
+  assert.equal(gifCooldownUntilSync(Q, deps), null, 'odemčeno bez cooldownu');
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42' }, deps);
+  assert.equal(gifAccessSync(Q, deps), 'denied');
+  assert.equal(gifCooldownUntilSync(Q, deps), 41_000, 'potvrzený cooldown Židolišty');
+  const B: GifAccessQuery = { ...Q, userId: '43', login: 'jiny' };
+  await gifAccess(B, deps);
+  assert.equal(gifCooldownUntilSync(B, deps), 21_000, 'globální cooldown chatu');
+  _resetGifAccessCache();
+  allowed = false;
+  now = 50_000;
+  await gifAccess(Q, deps);
+  assert.equal(gifCooldownUntilSync(Q, deps), null, 'neodemčeno → není to cooldown');
 });
 
 test('SEC-8: claimGifSlot — okamžité schválení si globální cooldown zarezervuje synchronně (souběh dvou GIFů z knihovny)', async () => {
