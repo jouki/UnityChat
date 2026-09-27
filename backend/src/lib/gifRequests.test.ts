@@ -218,7 +218,7 @@ test('intercept: přístup z cache → původní zpráva hned pryč v UC, pak pl
   const r = mem.reqs.get(1)!;
   assert.equal(r.textWithoutLink, 'hele lol');
   assert.equal(r.expiresAt.getTime(), now() + 120_000);
-  assert.deepEqual(r.meta, { displayName: 'Divak', sentAt: 1_000_000 - 500, color: '#ff0000', badges: 'subscriber/1' });
+  assert.deepEqual(r.meta, { displayName: 'Divak', sentAt: 1_000_000 - 500, color: '#ff0000', badges: 'subscriber/1', role: 'sub' }, 'role pro gif-used po schválení (bod 5)');
   const pending = calls[2][1] as Record<string, unknown>;
   assert.equal(pending.requestId, 1);
   assert.deepEqual(pending.media, { url: `http://localhost:3000/media/gif/${MEDIA}`, kind: 'gif', width: 320, height: 240 });
@@ -320,7 +320,7 @@ test('decide: první rozhodnutí vyhrává (souběh dvou modů), druhý 409 alre
   assert.equal(pub.message.gifOrigin, 'twitch:m1');
   assert.equal(names(calls).includes('broadcast:message-deleted'), false, 'schválení původní zprávu neukazuje jako smazanou');
   assert.equal(names(calls).filter((n) => n === 'publishChat').length, 1);
-  assert.deepEqual(calls.find((c) => c[0] === 'used')![1], { workspace: 'rob', platform: 'twitch', userId: '42' });
+  assert.deepEqual(calls.find((c) => c[0] === 'used')![1], { workspace: 'rob', platform: 'twitch', userId: '42', role: 'sub' }, 'gif-used s rolí (z žádosti, meta.role)');
   assert.deepEqual(calls.find((c) => c[0] === 'notify:gif-decided')![1], { requestId: 1, channel: 'robdiesalot', approved: true, status: 'approved', by: 'twitch:moda' });
   assert.equal(flow.tryReserve('robdiesalot', 'twitch', '42'), true, 'po rozhodnutí smí poslat další');
 });
@@ -507,6 +507,7 @@ test('intercept auto (mod s odemčenou odměnou): schváleno hned, bez karet, co
   const n = names(s.calls);
   assert.deepEqual(n.filter((x) => x.startsWith('notify:') || x.startsWith('integration:')), ['integration:chat.held_settled'], 'nikdo nic neschvaluje (jen konec čekání pro Židolištu)');
   assert.equal(n.includes('used'), true, 'mod má cooldown jako ostatní');
+  assert.equal((s.calls.find((c) => c[0] === 'used')![1] as { role?: string }).role, 'moderator', 'gif-used s rolí moda (Židolišta jinak počítá jako viewer)');
   assert.ok(n.indexOf('deletePlatform') > n.indexOf('broadcast:gif-message'), 'původní zpráva pryč i z platformy (až po schválení)');
   const pub = s.calls.find((c) => c[0] === 'broadcast:gif-message')![1] as { message: Record<string, unknown> };
   assert.equal(pub.message.gifOrigin, 'twitch:m1');
@@ -849,7 +850,7 @@ test('dedup URL: schválený GIF (i s utm/fragmentem) → rovnou gif-message bez
   const pub = events(s.calls, 'broadcast:gif-message')[0];
   assert.equal((pub.message as Record<string, unknown>).gifOrigin, 'twitch:m2');
   assert.deepEqual((pub.message as Record<string, unknown>).gif, { url: `http://localhost:3000/media/gif/${MEDIA}`, kind: 'gif', width: 320, height: 240 });
-  assert.deepEqual(events(s.calls, 'used')[0], { workspace: 'rob', platform: 'twitch', userId: '43' }, 'divák: cooldown');
+  assert.deepEqual(events(s.calls, 'used')[0], { workspace: 'rob', platform: 'twitch', userId: '43', role: 'sub' }, 'divák: cooldown (s rolí)');
   assert.equal(s.mem.media.size, 1);
   assert.equal(s.mem.media.get(MEDIA)!.useCount, 2);
   assert.equal(s.mem.reqs.get(2)!.status, 'approved');

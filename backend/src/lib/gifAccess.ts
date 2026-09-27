@@ -3,8 +3,10 @@
 //   GET  <ZIDOLISTA_API_BASE>/integrations/:slug/gif-access?platform=&userId=&login=&role=
 //        → { ok, serverNow, allowed, until|null, cooldownUntil|null, cooldownSec, requestTtlSec, mode, cooldownGlobalSec }
 //          (mode 'all'|'approved' a cooldownGlobalSec od 2026-09-26; cooldownUntil = pozdější z globálního a osobního)
-//   POST <ZIDOLISTA_API_BASE>/integrations/:slug/gif-used { platform, userId } → { ok, cooldownUntil }
-//   Webhook POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } } → cache workspace pryč.
+//   POST <ZIDOLISTA_API_BASE>/integrations/:slug/gif-used { platform, userId, role } → { ok, cooldownUntil|null, cooldownSec, cooldownGlobalSec }
+//        (cooldownUntil null = bez cooldownu). Výchozí cooldown UnityChat nemá — platí jen hodnoty Židolišty.
+//   Webhook POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } } → cache workspace pryč
+//        + SSE `gif-access-change { channel }` (gifAccessChanged).
 // Cache 60 s per (workspace, platforma, uživatel, role). Čas Židolišty se převádí na lokální přes serverNow
 // (posun hodin mezi servery nevadí). Chyba / chybějící klíč = odemčené není (zpráva je běžný odkaz).
 import { config } from '../config.js';
@@ -57,11 +59,13 @@ export function normalizeGifAccess(raw: unknown, localNow: number): GifAccess {
   const ttl = Number(r.requestTtlSec);
   const cd = Number(r.cooldownSec);
   const gcd = Number(r.cooldownGlobalSec);
+  const allowed = r.allowed === true;
   return {
-    allowed: r.allowed === true,
+    allowed,
     until: shift(r.until),
-    cooldownUntil: shift(r.cooldownUntil),
-    cooldownSec: Number.isFinite(cd) && cd >= 0 ? Math.min(cd, 86_400) : 0,
+    // Neodemčený: cooldown ze Židolišty je jen její výchozí hodnota pro roli bez oprávnění → ignorovat (bod 5 testu 2026-09-27).
+    cooldownUntil: allowed ? shift(r.cooldownUntil) : null,
+    cooldownSec: allowed && Number.isFinite(cd) && cd >= 0 ? Math.min(cd, 86_400) : 0,
     requestTtlSec: Number.isFinite(ttl) && ttl >= 30 ? Math.min(ttl, 3600) : DEFAULT_REQUEST_TTL_SEC,
     mode: r.mode === 'approved' ? 'approved' : 'all',
     cooldownGlobalSec: Number.isFinite(gcd) && gcd >= 0 ? Math.min(gcd, 86_400) : 0,
@@ -86,7 +90,6 @@ export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: s
  */
 const localCooldown = new Map<string, number>();
 const userPrefix = (workspace: string, platform: string, userId: string) => `${workspace.toLowerCase()}|${platform}|${userId}|`;
-const DEFAULT_COOLDOWN_SEC = 60;
 
 function localUntil(q: GifAccessQuery, now: number): number | null {
   const k = userPrefix(q.workspace, q.platform, q.userId);
@@ -178,7 +181,8 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
       const j = (await r.json()) as { ok?: boolean };
       if (!j || j.ok === false) throw new Error('not ok');
       entry.value = normalizeGifAccess(j, now());
-      lastGlobalSec.set(q.workspace.toLowerCase(), entry.value.cooldownGlobalSec ?? 0);
+      // Globální cooldown jen z odpovědi odemčeného (u neodemčeného je to výchozí hodnota Židolišty, bod 5).
+      if (entry.value.allowed) lastGlobalSec.set(q.workspace.toLowerCase(), entry.value.cooldownGlobalSec ?? 0);
       if (lastGlobalSec.size > 1000) lastGlobalSec.clear();
     } catch (e) {
       deps.log?.warn({ workspace: q.workspace, platform: q.platform, err: (e as Error).message }, 'gif: gif-access selhalo (bere se jako neodemčené)');
@@ -228,13 +232,16 @@ export const GIF_USED_RETRY_MS = 2000;
  * (výchozí 60 s), pak `gif-used`; selhání = jeden opakovaný pokus po 2 s. Potvrzení Židolišty lokální
  * cooldown nahradí jejím; bez potvrzení platí lokální do vypršení. Vrací potvrzený konec cooldownu nebo null.
  */
-export async function gifUsed(p: { workspace: string; platform: Platform; userId: string }, deps: GifAccessDeps = {}): Promise<number | null> {
+export async function gifUsed(p: { workspace: string; platform: Platform; userId: string; role?: GifRole }, deps: GifAccessDeps = {}): Promise<number | null> {
   const now = deps.now ?? Date.now;
   const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
   const prefix = userPrefix(p.workspace, p.platform, p.userId);
-  let cdSec = 0;
-  for (const [k, e] of cache) if (k.startsWith(prefix) && e.value) cdSec = Math.max(cdSec, e.value.cooldownSec);
-  localCooldown.set(prefix, now() + (cdSec || DEFAULT_COOLDOWN_SEC) * 1000);
+  // Lokální cooldown jen podle cooldownSec, které Židolišta skutečně nastavila odemčenému uživateli (bod 5 testu 2026-09-27):
+  // žádná výchozí hodnota — neznámé (prázdná cache) ani 0 cooldown nezakládá. Známá role má přednost.
+  const own = p.role ? cache.get(`${prefix}${p.role}`)?.value : null;
+  let cdSec = own?.allowed ? own.cooldownSec : 0;
+  if (!own?.allowed) for (const [k, e] of cache) if (k.startsWith(prefix) && e.value?.allowed) cdSec = Math.max(cdSec, e.value.cooldownSec);
+  if (cdSec > 0) localCooldown.set(prefix, now() + cdSec * 1000);
   // GIF je v chatu → globální cooldown chatu hned i lokálně (audit SEC-8).
   noteGlobal(p.workspace, now());
   if (localCooldown.size > 5000) for (const [k, u] of localCooldown) if (u <= now()) localCooldown.delete(k);
@@ -246,14 +253,23 @@ export async function gifUsed(p: { workspace: string; platform: Platform; userId
       const r = await zidolistaFetch(`${(deps.base ?? zidolistaBase()).replace(/\/$/, '')}/integrations/${encodeURIComponent(p.workspace.toLowerCase())}/gif-used`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: p.platform, userId: p.userId }),
+        // Role jako v gif-access (Židolišta jinak počítala cooldown pro viewer — po restartu nemá paměť).
+        body: JSON.stringify({ platform: p.platform, userId: p.userId, ...(p.role ? { role: p.role } : {}) }),
         signal: AbortSignal.timeout(5000),
       }, { fetch: deps.fetch, apiKey, signingKey: deps.signingKey });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = (await r.json()) as { cooldownUntil?: unknown; serverNow?: unknown };
+      // { ok, cooldownUntil | null, cooldownSec, cooldownGlobalSec }; cooldownUntil null = BEZ cooldownu (ne neznámo).
+      const j = (await r.json()) as { cooldownUntil?: unknown; serverNow?: unknown; cooldownGlobalSec?: unknown };
       const cd = toMs(j?.cooldownUntil);
       const sn = toMs(j?.serverNow);
       until = cd === null ? null : cd - (sn ?? now()) + now();
+      const gsec = j?.cooldownGlobalSec === undefined || j?.cooldownGlobalSec === null ? NaN : Number(j.cooldownGlobalSec);
+      if (Number.isFinite(gsec) && gsec >= 0) {
+        const w = p.workspace.toLowerCase();
+        lastGlobalSec.set(w, Math.min(gsec, 86_400));
+        // Židolišta hlásí globální cooldown 0 → žádný (lokálně nastavený z dřívější hodnoty pryč); jinak podle ní.
+        if (gsec === 0) globalCooldown.delete(w); else noteGlobal(p.workspace, now());
+      }
       confirmed = true;
     } catch (e) {
       deps.log?.warn({ workspace: p.workspace, platform: p.platform, attempt: attempt + 1, err: (e as Error).message }, 'gif: gif-used selhalo');
@@ -275,6 +291,18 @@ export function invalidateGifAccess(workspace: string): number {
   const prefix = `${workspace.toLowerCase()}|`;
   let n = 0;
   for (const k of cache.keys()) if (k.startsWith(prefix)) { cache.delete(k); n++; }
+  return n;
+}
+
+/**
+ * Webhook `gif-access` (odemčení se v Židolištce změnilo): cache pryč + veřejné SSE `gif-access-change { channel }`
+ * (bez osobních dat) pro každý kanál workspace — otevřené klienty si stav přenačtou sami (GET /gif/state,
+ * rozprostřeně 0–2 s, core GifCooldown.onAccessChange), jinak by pásek u ikony emotů naskočil až po proklikání
+ * (bod 3 testu 2026-09-27). Vrací počet zahozených záznamů cache.
+ */
+export function gifAccessChanged(workspace: string, channels: string[], emit: (event: string, data: object) => void): number {
+  const n = invalidateGifAccess(workspace);
+  for (const channel of channels) emit('gif-access-change', { channel });
   return n;
 }
 

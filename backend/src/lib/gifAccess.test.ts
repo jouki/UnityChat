@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeGifAccess, gifUsable, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed, invalidateGifAccess, claimGifSlot, _resetGifAccessCache, type GifAccessQuery } from './gifAccess.js';
+import { normalizeGifAccess, gifUsable, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed, invalidateGifAccess, gifAccessChanged, claimGifSlot, _resetGifAccessCache, type GifAccessQuery } from './gifAccess.js';
 
 const Q: GifAccessQuery = { workspace: 'rob', platform: 'twitch', userId: '42', login: 'Divak', role: 'viewer' };
 const quiet = { warn() {} };
@@ -175,4 +175,108 @@ test('SEC-8 review: zahození cache webhookem (invalidateGifAccess) globální c
   invalidateGifAccess('rob');
   await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42' }, deps);
   assert.equal(claimGifSlot('rob', now + 1), null, 'globální cooldown platí i po zahození cache');
+});
+
+// ---- test 2026-09-27 bod 5: žádný výchozí cooldown — platí jen to, co nastaví Židolišta ----
+const accessRes = (o: Record<string, unknown>, now: number) => new Response(JSON.stringify({ ok: true, serverNow: now, allowed: true, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300, cooldownGlobalSec: 0, ...o }), { status: 200 });
+
+test('bod 5: cooldownSec 0 a cooldownGlobalSec 0 → po GIFu žádný cooldown (ani před potvrzením gif-used), další GIF projde hned', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) { await gate; return new Response(JSON.stringify({ ok: true, cooldownUntil: null, cooldownSec: 0, cooldownGlobalSec: 0, serverNow: now }), { status: 200 }); }
+    return accessRes({}, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
+  await gifAccess(Q, deps);
+  const p = gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42', role: 'viewer' }, deps);
+  assert.equal(gifAccessSync(Q, deps), 'allowed', 'před potvrzením Židolišty bez lokálního cooldownu');
+  assert.equal(gifCooldownUntilSync(Q, deps), null);
+  assert.equal(typeof claimGifSlot('rob', now), 'function', 'globální cooldown 0 → slot volný');
+  release();
+  assert.equal(await p, null, 'cooldownUntil null = bez cooldownu');
+  assert.equal((await gifAccess(Q, deps))?.cooldownUntil, null);
+  assert.equal(gifAccessSync(Q, deps), 'allowed');
+});
+
+test('bod 5: neznámý cooldownSec (prázdná cache) → žádný výchozí lokální cooldown (dřív 60 s)', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response('x', { status: 503 });
+    return accessRes({ cooldownSec: 20 }, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet, sleep: async () => {} };
+  assert.equal(await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42' }, deps), null);
+  assert.equal((await gifAccess(Q, deps))?.cooldownUntil, null, 'bez známé hodnoty žádný cooldown');
+});
+
+test('bod 5: nastavený cooldownSec → přesně ten (lokálně do potvrzení)', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response('x', { status: 503 });
+    return accessRes({ cooldownSec: 45 }, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet, sleep: async () => {} };
+  await gifAccess(Q, deps);
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42', role: 'viewer' }, deps);
+  assert.equal((await gifAccess(Q, deps))?.cooldownUntil, now + 45_000);
+});
+
+test('bod 5: gif-used posílá roli (viewer|sub|vip|moderator|broadcaster)', async () => {
+  _resetGifAccessCache();
+  const bodies: unknown[] = [];
+  const fetch = (async (url: string, init: RequestInit) => {
+    if (url.endsWith('/gif-used')) { bodies.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ ok: true, cooldownUntil: null, cooldownSec: 0, cooldownGlobalSec: 0 }), { status: 200 }); }
+    return accessRes({}, 1_000);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => 1_000, log: quiet };
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42', role: 'moderator' }, deps);
+  await gifUsed({ workspace: 'rob', platform: 'kick', userId: '7' }, deps);
+  assert.deepEqual(bodies, [{ platform: 'twitch', userId: '42', role: 'moderator' }, { platform: 'kick', userId: '7' }]);
+});
+
+test('bod 5: allowed false s cooldownSec 60 → cooldownSec ignorovat (žádný cooldown ani blokace kvůli cooldownu)', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const a = normalizeGifAccess({ allowed: false, cooldownSec: 60, cooldownUntil: 50_000, serverNow: now }, now);
+  assert.equal(a.cooldownSec, 0);
+  assert.equal(a.cooldownUntil, null);
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response('x', { status: 503 });
+    return accessRes({ allowed: false, cooldownSec: 60, cooldownGlobalSec: 60 }, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet, sleep: async () => {} };
+  await gifAccess(Q, deps);
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42', role: 'viewer' }, deps);
+  assert.equal((await gifAccess(Q, deps))?.cooldownUntil, null, 'žádný lokální cooldown z výchozí hodnoty Židolišty');
+  assert.equal(gifCooldownUntilSync(Q, deps), null);
+  assert.equal(typeof claimGifSlot('rob', now), 'function', 'cooldownGlobalSec neodemčeného se nepamatuje');
+});
+
+test('bod 5: odpověď gif-used s cooldownGlobalSec 0 → globální cooldown pryč', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response(JSON.stringify({ ok: true, cooldownUntil: null, cooldownSec: 0, cooldownGlobalSec: 0, serverNow: now }), { status: 200 });
+    return accessRes({ cooldownSec: 0, cooldownGlobalSec: 30 }, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
+  await gifAccess(Q, deps);
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42', role: 'viewer' }, deps);
+  assert.equal(typeof claimGifSlot('rob', now + 1), 'function', 'Židolišta hlásí globální cooldown 0 → nic neblokuje');
+});
+
+test('bod 3: gifAccessChanged — webhook gif-access zahodí cache a pošle veřejné gif-access-change { channel } bez osobních dat', async () => {
+  _resetGifAccessCache();
+  const fetch = (async () => accessRes({}, 1_000)) as unknown as typeof globalThis.fetch;
+  await gifAccess(Q, { fetch, apiKey: 'k', base: 'https://z.test', now: () => 1_000, log: quiet });
+  const sent: Array<[string, object]> = [];
+  const n = gifAccessChanged('ROB', ['robdiesalot', 'druhy'], (e, d) => sent.push([e, d]));
+  assert.equal(n, 1, 'zahozený záznam cache');
+  assert.equal(gifAccessSync(Q, { fetch, apiKey: 'k', base: 'https://z.test', now: () => 1_000, log: quiet }), 'unknown');
+  assert.deepEqual(sent, [['gif-access-change', { channel: 'robdiesalot' }], ['gif-access-change', { channel: 'druhy' }]]);
 });

@@ -4,7 +4,7 @@ import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
 import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel, workspaceBySlug, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { invalidateLinkFilter } from '../lib/linkFilter.js';
-import { invalidateGifAccess } from '../lib/gifAccess.js';
+import { gifAccessChanged } from '../lib/gifAccess.js';
 import { invalidateBlacklist } from './blacklist.js';
 import { handleSfxWebhook } from './soundboard.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
@@ -169,12 +169,14 @@ export default async function commandRoutes(app: FastifyInstance) {
       app.log.info({ slug: ws.slug, enabled: settings.enabled, version: settings.version }, 'link filter: invalidated');
       return { ok: true, workspace: ws.slug, enabled: settings.enabled, version: settings.version };
     }
-    // Odemčení GIFů (moderace část 4: label s akcí „Posílání GIFů", časovač, cooldown) → cache stavu pryč.
+    // Odemčení GIFů (moderace část 4: label s akcí „Posílání GIFů", časovač, cooldown) → cache stavu pryč
+    // + veřejné SSE gif-access-change { channel } (klienti si GET /gif/state přenačtou rozprostřeně 0–2 s).
     if (reason === 'gif-access') {
       const ws = await workspaceBySlug(slug);
       if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
-      const dropped = invalidateGifAccess(ws.slug);
-      app.log.info({ slug: ws.slug, dropped }, 'gif access: invalidated');
+      const channels = await twitchChannelsOf(ws.slug);
+      const dropped = gifAccessChanged(ws.slug, channels, broadcast);
+      app.log.info({ slug: ws.slug, dropped, channels }, 'gif access: invalidated → gif-access-change');
       return { ok: true, workspace: ws.slug };
     }
     if (reason === 'workspaces') { invalidateWorkspaces(); await getWorkspaces({ force: true, log: app.log }); }

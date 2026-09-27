@@ -490,17 +490,27 @@ retence 14 dní, vault), propadlé se maže jen když na něj nečeká jiná ž�
   (čas ISO nebo ms; přepočet přes `serverNow`). `mode: 'all' | 'approved'` (režim odměny, chybí / neznámé = `all`;
   neodemčený uživatel dostane `all` a rozhoduje `allowed: false`), `cooldownGlobalSec` = cooldown celého chatu
   (`cooldownUntil` je už pozdější z globálního a osobního). Cache 60 s per (workspace, platforma, uživatel, role).
-  Chyba / bez klíče = neodemčeno (a režim `all`).
-- Po schválení `POST …/integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }`. Uživatel je v cooldownu
-  **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access`, výchozí 60 s); selhání `gif-used` = jeden
-  opakovaný pokus po 2 s, bez potvrzení platí lokální cooldown do vypršení. Potvrzení ho nahradí cooldownem Židolišty.
+  Chyba / bez klíče = neodemčeno (a režim `all`). **`allowed: false` → `cooldownSec` / `cooldownUntil` se ignorují**
+  (u role bez oprávnění je to jen výchozí hodnota Židolišty) a jeho `cooldownGlobalSec` si server nepamatuje (2026-09-27).
+- Po schválení `POST …/integrations/:slug/gif-used { platform, userId, role }` (role stejná jako v `gif-access`, uložená
+  v `meta.role` žádosti; staré žádosti bez ní) → `{ ok, cooldownUntil | null, cooldownSec, cooldownGlobalSec }`;
+  **`cooldownUntil: null` = bez cooldownu** (ne neznámo), `cooldownGlobalSec` 0 = globální cooldown pryč. Uživatel je
+  v cooldownu **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access` odemčeného uživatele);
+  **výchozí hodnota neexistuje** (2026-09-27, bod 5): `cooldownSec` 0 ani neznámý (prázdná cache) lokální cooldown
+  nezakládá — platí jen to, co nastaví Židolišta. Selhání `gif-used` = jeden opakovaný pokus po 2 s, bez potvrzení
+  platí lokální cooldown do vypršení. Potvrzení ho nahradí cooldownem Židolišty. Klient (`core/gif-cooldown.js`)
+  výchozí cooldown také nemá (jen `cooldownSec` z `/gif/state`, `done.cooldownUntil`, `gif-notice cooldown`).
   **Globální cooldown chatu drží server i sám (audit 2026-09-27, SEC-8):** po každém GIFu zobrazeném v chatu (schválení
   modem, auto, okamžité schválení z knihovny) nastaví lokálně cooldown celého workspace na `cooldownGlobalSec` (z cache
   `gif-access`). Platí pro zachycení (`gifAccessSync` → neodemčeno), `/gif/state` (`cooldownUntil`) i pro okamžité
   schválení, které si slot bere synchronně (dva GIFy z knihovny naráz neprojdou oba; ten druhý = běžný odkaz, průběh
   `done` s `outcome: denied`). Mody bez výjimky. Dřív uživatelé s „allowed“ v 60s cache cooldown obešli.
 - Webhook `POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } }` → cache workspace pryč;
-  odpověď `{ ok, workspace }`, neznámý workspace `404 unknown_workspace`.
+  odpověď `{ ok, workspace }`, neznámý workspace `404 unknown_workspace`. **Od 2026-09-27** zároveň veřejné SSE
+  `gif-access-change { channel }` na `/nicknames/stream` pro každý Twitch kanál workspace (bez osobních dat —
+  webhook stejně nenese, koho se změna týká). Přihlášený klient (`GifCooldown.onAccessChange`) si pak stav přenačte
+  `GET /gif/state` (i čerstvý) s náhodným zpožděním 0–2 s, víc událostí za sebou = jeden dotaz → pásek a tooltip
+  u ikony emotů naskočí hned po aktivaci odměny (dřív až po otevření záložky / GIF odkazu v poli).
 
 ### Zachycení (ingest, v rámci filtru odkazů)
 - Odkaz na GIF: stránky `tenor.com/view/…` (i `/<jazyk>/view/…`), `giphy.com/gifs/…`, `imgur.com/…` (`/a/`,

@@ -34,8 +34,12 @@ import { gifBans, gifMedia, gifRejections, gifRequests, messages, webIdentities,
 import type { IngestMessage } from '../ingest/types.js';
 import { toRow } from '../ingest/normalize.js';
 import { toClientMessage, type ClientMessage } from '../routes/chat.js';
-import type { GifAccess, GifAccessQuery } from './gifAccess.js';
+import type { GifAccess, GifAccessQuery, GifRole } from './gifAccess.js';
 import { gifUsable } from './gifAccess.js';
+
+const GIF_ROLES = new Set<GifRole>(['broadcaster', 'moderator', 'vip', 'sub', 'viewer']);
+/** Role uložená v meta žádosti → GifRole; staré žádosti bez role → null (gif-used bez role). */
+const gifRoleOf = (v: unknown): GifRole | null => (typeof v === 'string' && GIF_ROLES.has(v as GifRole) ? v as GifRole : null);
 import type { GifCandidate, GifFetchProgress, GifSource, ResolvedGif } from './gifMedia.js';
 import { GifError, normalizeSourceUrl, textWithoutLink } from './gifMedia.js';
 import { gifMediaUrl, gifMessageId, gifMessageState } from './gifIds.js';
@@ -715,7 +719,7 @@ export interface GifFlowDeps {
   /** `noUnlock`: bez fallbacku přes Bright Data (režim approved — neznámý GIF nesmí stát kredit). */
   resolve: (src: GifSource, hooks?: { onProgress?: (e: GifFetchProgress) => void; noUnlock?: boolean }) => Promise<ResolvedGif>;
   access: (q: GifAccessQuery) => Promise<GifAccess | null>;
-  used: (p: { workspace: string; platform: Platform; userId: string }) => Promise<unknown>;
+  used: (p: { workspace: string; platform: Platform; userId: string; role?: GifRole }) => Promise<unknown>;
   /** publishDeleted (SSE message-deleted + chat.deleted). */
   publishDeleted: (p: { channel: string; platform: Platform; messageId: string; by: string; reason: 'gif_request' | 'gif_rejected' | 'gif_not_allowed' }) => Promise<void>;
   /** deletePlatformMessage botem workspace (accountId null). */
@@ -1065,7 +1069,8 @@ export function createGifFlow(deps: GifFlowDeps) {
     if (p.approve) {
       // Cooldown hned (gifUsed ho nastaví lokálně synchronně, před voláním Židolišty), ne až po rozeslání.
       // Platí i pro auto (mod / broadcaster se schvaluje sám, ale cooldown má jako ostatní — spec 2026-09-27 §5).
-      const usedP = Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
+      const role = gifRoleOf((r.meta as Record<string, unknown> | null)?.role);
+      const usedP = Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId, ...(role ? { role } : {}) }))
         .catch((e) => deps.log.warn({ err: (e as Error).message }, 'gif: gif-used selhalo'));
       // Počítadlo použití; souběh dedupu (stejný obsah schválený jako jiné médium) → sloučit.
       if (r.mediaId && effective) {
@@ -1368,6 +1373,8 @@ export function createGifFlow(deps: GifFlowDeps) {
               width: v.width, height: v.height,
               meta: {
                 displayName: m.username, sentAt: m.sentAt.getTime(), ...(raw.color ? { color: raw.color } : {}), ...(raw.badges !== undefined ? { badges: raw.badges } : {}),
+                // Role jako v gif-access → gif-used po schválení (i modem později) ji pošle Židolištce (bod 5 testu 2026-09-27).
+                role: p.query.role,
                 ...(auto ? { auto: true } : {}), ...(approvedKnown && !auto ? { instant: true } : {}), ...(previouslyRejected ? { previouslyRejected } : {}),
                 // Zamítnuté médium zůstává jen s tokenem i s novou žádostí (audit SEC-1) → karta moda ho načte s tokenem.
                 ...(known?.status === 'rejected' ? { tokenRequired: true } : {}),
