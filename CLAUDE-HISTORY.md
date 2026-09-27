@@ -140,6 +140,10 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-27 (session unitychat-8f)
+
+- **CLAUDE.md** — milestone v3.41.43–53 (GIF náhled, dvě varianty zahození, úpravy po testu, závěrečný audit). Memory `project_gif_library.md` přepsaná na stav po auditu.
+
 ### 2026-09-26 (session unitychat-8f)
 
 - **CLAUDE.md** — milestone v3.41.38–42 (GIF knihovna: backend, core, addon, web, OBS). Memory `project_gif_library.md` + index.
