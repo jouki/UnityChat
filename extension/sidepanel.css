@@ -2084,12 +2084,13 @@ body.reply-oneline .reply-ctx {
 .msg .tx {
   color: var(--text-primary);
 }
-.msg .tx a {
+/* Odkaz ve zprávě — v chatu i v Profilu (core/user-history.js `.uc-uh-tx`, addon i web načítají tohle CSS). */
+.msg .tx a, .uc-uh-tx a {
   color: #e8b84b;
   text-decoration: none;
   word-break: break-all;
 }
-.msg .tx a:hover { text-decoration: underline; }
+.msg .tx a:hover, .uc-uh-tx a:hover { text-decoration: underline; }
 
 .msg .tx img.emote {
   display: inline-block;

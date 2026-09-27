@@ -67,7 +67,7 @@ const mock = {
   userResults: { twitch: 'ok', kick: 'bot' },               // /moderation/user results
   deleteResult: 'ok',                                       // /moderation/delete result
 };
-const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera', 3)];
+const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera https://tenor.com/view/profil-odkaz-1', 3)];
 const posts = { user: [], ack: [], send: [], tickets: 0, hist: [], del: [], restore: [], seventv: 0, search: [], media: [] };
 const GIF_1PX = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 // `/user`: server zná i uživatele, kteří v session nepsali (zigi187 z archivu); fulltext najde i „azig“ na Kicku.
@@ -373,6 +373,10 @@ const days = await ev(`[...document.querySelectorAll('.uc-uh-list > .uc-uh-day')
 check('H 3 oddělovače dnů („čtvrtek 25. 9. 2026") před prvním řádkem každého dne', /^(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>d2\|(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>h-old$/.test(days || ''), days);
 const row0 = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="e2e-a1"]'); return { time: r.querySelector('.uc-uh-time').textContent, title: r.querySelector('.uc-uh-time').title, logo: !!r.querySelector('.uc-uh-pi img'), text: r.querySelector('.uc-uh-tx').textContent }; })()`);
 check('H 3 řádek: jen čas HH:MM (datum v title), logo, text', /^\d{2}:\d{2}$/.test(row0?.time || '') && /^\d{1,2}\. \d{1,2}\. \d{4} \d{2}:\d{2}$/.test(row0?.title || '') && row0.logo && row0.text === 'první zpráva testera', JSON.stringify(row0));
+// Odkaz v Profilu vypadá stejně jako odkaz ve zprávě v chatu (sdílené pravidlo v sidepanel.css), ne výchozí modrý podtržený.
+const linkSt = await ev(`(() => { const st = (a) => a && { color: getComputedStyle(a).color, deco: getComputedStyle(a).textDecorationLine };
+  return { uh: st(document.querySelector('.uc-uh-msg[data-id="e2e-a2"] .uc-uh-tx a[href]')), chat: st(document.querySelector('.msg[data-msg-id="e2e-a2"] .tx a[href]')) }; })()`);
+check('H odkaz v Profilu = stejná barva a bez podtržení jako odkaz v chatu', !!linkSt?.uh && !!linkSt.chat && linkSt.uh.color === linkSt.chat.color && linkSt.uh.deco === linkSt.chat.deco && linkSt.uh.deco === 'none' && linkSt.uh.color !== 'rgb(0, 0, 238)', JSON.stringify(linkSt));
 const donRows = await ev(`[...document.querySelectorAll('.uc-uh-don')].map(r => r.querySelector('.uc-uh-don-icon').textContent + r.querySelector('.uc-uh-don-line').textContent + '|' + (r.querySelector('.uc-uh-don-msg')?.textContent || '-') + '|' + (r.querySelector('.uc-uh-don-guess')?.textContent || '-')).join(' / ')`);
 check('H 7 řádek dona: „💸 poslal QR dono 150 Kč" + zpráva; odhad šedě „podle jména"', donRows === '💸poslal QR dono 250\u00a0Kč|-|podle jména / 💸poslal QR dono 150\u00a0Kč|díky za stream|-', donRows);
 // 4: citace odpovědi na jeden řádek, klik = celý text
