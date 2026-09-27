@@ -67,8 +67,8 @@ export const isGifMessageId = (id) => /^gif-\d+$/.test(String(id ?? ''));
 export const GIF_HELD_REASON = 'gif_request';
 export const GIF_REJECTED_REASON = 'gif_rejected';
 /**
- * Nový GIF v režimu odměny „jen schválené“ (backend GIF_NOT_ALLOWED_REASON): odesílatel vidí svou zprávu se štítkem
- * „Nové GIFy teď nejsou povolené“ (bez vzhledu smazané), ostatním (divák, mod, OBS) se nevykresluje vůbec.
+ * Nový GIF v režimu odměny „jen schválené“ (backend GIF_NOT_ALLOWED_REASON): všem v UnityChatu (odesílatel, divák,
+ * mod) smazaná zpráva se štítkem „Nové GIFy teď nejsou povolené“ místo „Smazáno“, v OBS nic (core gif-host).
  */
 export const GIF_NOT_ALLOWED_REASON = 'gif_not_allowed';
 export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;

@@ -128,6 +128,16 @@ import('../extension/core/moderation.js').then((m) => {
     check('applyDeleted dim: štítek "Smazáno"', !!tag && tag.textContent === 'Smazáno');
   }
 
+  // Nový GIF nepovolený (uc-gif-na, user 2026-09-27 v2): místo „Smazáno“ štítek GIFu → žádný .uc-deleted-tag
+  {
+    const { el, tx } = makeMsgEl();
+    el.classList.add('uc-gif-na');
+    m.applyDeleted(el, { mode: 'dim', dimmed: true, tag: true });
+    check('applyDeleted dim + uc-gif-na: bez štítku „Smazáno“, text zůstává', !el.querySelector('.uc-deleted-tag') && tx.textContent === 'původní text zprávy' && el.classList.contains('uc-deleted--dim'));
+    m.clearDeleted(el);
+    check('clearDeleted: uc-gif-na pryč', !el.classList.contains('uc-gif-na') && !el.classList.contains('uc-deleted'));
+  }
+
   // dim + hidden: štítek "Skryto v UnityChatu"
   {
     const { el } = makeMsgEl();

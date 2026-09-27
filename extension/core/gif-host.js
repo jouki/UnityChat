@@ -12,10 +12,12 @@
 //
 // Bez chrome.*. DOM jen přes předané uzly / `doc`, síť přes injektované `api`.
 import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason, GIF_NOT_ALLOWED_REASON } from './gif.js';
-import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, isGifOwnFinal, gifOwnFinalReason, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
+import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, isGifOwnFinal, gifOwnFinalReason, GIF_STATUS_TEXT, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
 import { clearDeleted, disableTextLinks } from './moderation.js';
 
 const isGifReason = (reason) => String(reason || '').startsWith('gif_');
+/** Štítek „Nové GIFy teď nejsou povolené“ u smazané zprávy (gif_not_allowed) pro všechny v UnityChatu. */
+const GIF_NA_VIEW = Object.freeze({ kind: 'not_allowed', text: GIF_STATUS_TEXT.not_allowed });
 const noop = () => {};
 
 // ---------------------------------------------------------------------------
@@ -250,11 +252,13 @@ export function syncGifOwnFinal(msg, view) {
  * nemaluje), false = běžná smazaná zpráva (hostitel pokračuje; médium smazaného GIFu už je pryč).
  *
  *  - vlastní GIF (`own` = gifOwnView): rozpracovaný / čekající zůstává vidět s textem a štítkem (kolečko %,
- *    „Schvalování moderátorem“); konečný červený stav („Zamítnuto moderátorem“, „Vypršelo“, „Nové GIFy teď nejsou
- *    povolené“) = text mírně ztlumený, odkaz neživý, jen štítek — bez vzhledu smazané zprávy a bez „Smazáno“, i pro
- *    moda (user 2026-09-27); schválení = štítek pryč, zpráva se schová jako u ostatních,
+ *    „Schvalování moderátorem“); „Zamítnuto moderátorem“ / „Vypršelo“ = text mírně ztlumený, odkaz neživý, jen
+ *    červený štítek — bez vzhledu smazané zprávy a bez „Smazáno“, i pro moda; schválení = štítek pryč, zpráva se
+ *    schová jako u ostatních,
+ *  - gif_not_allowed (nový GIF v režimu „jen schválené“): VŠEM v UnityChatu (odesílatel, divák, mod; živě i z
+ *    historie) smazaná zpráva podle stylu (divák „Zpráva smazána“, mod svůj styl) s červeným štítkem „Nové GIFy teď
+ *    nejsou povolené“ místo „Smazáno“ (`uc-gif-na`, core applyDeleted), odkaz neživý (user 2026-09-27) → false,
  *  - gif_request (čeká): ostatním schovaná úplně (`uc-gif-held`) + pojistka `hold` (GET /gif/held),
- *  - gif_not_allowed cizí zprávy: schovaná úplně všem (divák, mod, OBS; živě i z historie) — ani „Zpráva smazána“,
  *  - OBS (`raw`): zamítnutý / nepovolený GIF se neukáže ani jako „Smazáno“ (čekající GIF v OBS nikdy),
  *  - smazaný GIF: server médium přestane servírovat → pryč z dat i z DOM.
  *
@@ -266,18 +270,28 @@ export function syncGifOwnFinal(msg, view) {
  * @param {(platform: string, id: string) => void} o.hold / o.release          pojistka GifHoldWatch
  */
 export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasContent, rerender, hold = noop, release = noop, log = noop } = {}) {
-  const deleted = !!(msg._deleted || msg.deleted);
-  const held = deleted && isGifHeldReason(msg.deletedReason);
+  let deleted = !!(msg._deleted || msg.deleted);
+  let held = deleted && isGifHeldReason(msg.deletedReason);
   const pl = msg.platform || el.dataset?.platform;
   const id = msg.id != null ? String(msg.id) : el.dataset?.msgId;
+  let ownNa = false;
   if (own && own.kind !== 'approved' && (held || (deleted && isGifReason(msg.deletedReason)))) {
     el.classList.remove('uc-gif-held');
     if (isGifOwnFinal(own)) {
       syncGifOwnFinal(msg, own);
       release(pl, id);
-      // Rozhodnuto (zamítnuto / vypršelo / nové GIFy nejsou povolené): vlastní text (bez obsahu z historie prázdný)
-      // mírně ztlumený, odkaz neživý + červený štítek; bez vzhledu smazané zprávy a bez „Smazáno“, i pro moda
-      // (user 2026-09-27, sjednoceno se specem).
+    }
+    // Nové GIFy nejsou povolené: odesílatel vidí totéž co ostatní (smazaná + štítek) — pokračuje společnou cestou.
+    if (own.kind === 'not_allowed') {
+      ownNa = true;
+      deleted = !!(msg._deleted || msg.deleted);
+      held = deleted && isGifHeldReason(msg.deletedReason);
+    }
+  }
+  if (!ownNa && own && own.kind !== 'approved' && (held || (deleted && isGifReason(msg.deletedReason)))) {
+    if (isGifOwnFinal(own)) {
+      // Zamítnuto / vypršelo: vlastní text (bez obsahu z historie prázdný) mírně ztlumený, odkaz neživý + červený
+      // štítek; bez vzhledu smazané zprávy a bez „Smazáno“, i pro moda (user 2026-09-27, sjednoceno se specem).
       clearDeleted(el);
       const tx = el.querySelector('.tx');
       if (tx && tx.querySelector('.uc-deleted-label')) {
@@ -294,8 +308,11 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
     if (held) hold(pl, id);
     return true;
   }
-  paintGifStatus(doc, el, null);
-  if (deleted && !held && (msg.deletedReason === GIF_NOT_ALLOWED_REASON || (raw && isGifReason(msg.deletedReason)))) {
+  // Nové GIFy nejsou povolené: všem v UnityChatu štítek místo „Smazáno“ (hostitel dál maluje smazanou zprávu).
+  const na = deleted && msg.deletedReason === GIF_NOT_ALLOWED_REASON && !raw;
+  paintGifStatus(doc, el, na ? (ownNa ? own : GIF_NA_VIEW) : null);
+  el.classList.toggle('uc-gif-na', na);
+  if (deleted && !held && raw && isGifReason(msg.deletedReason)) {
     el.classList.add('uc-gif-held');
     release(pl, id);
     return true;

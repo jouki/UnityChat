@@ -227,10 +227,11 @@ div.uc-gif-more { cursor: default; }
 .uc-gif-card--locked .uc-gif-btn:disabled { opacity: .45; cursor: wait; }
 
 /* ---- Štítek u vlastní GIF zprávy (odesílatel): kolečko %, peach „Schvalování moderátorem ( )“, červený ---- */
-/* Vlastní GIF zpráva v konečném stavu (zamítnuto / vypršelo / nové GIFy nejsou povolené): odesílatel (i mod) ji
-   nevidí jako smazanou — jen mírně ztlumený text bez živého odkazu + červený štítek (user 2026-09-27). */
+/* Vlastní GIF zpráva „Zamítnuto moderátorem“ / „Vypršelo“: odesílatel (i mod) ji nevidí jako smazanou — jen mírně
+   ztlumený text bez živého odkazu + červený štítek. Nové GIFy nejsou povolené (uc-gif-na): smazaná zpráva pro
+   všechny se štítkem místo „Smazáno“ — odkaz taky neživý, ztlumení dává vzhled smazané (user 2026-09-27). */
 .uc-gif-own-final .tx a { pointer-events: none; color: inherit; text-decoration: none; cursor: default; }
-.uc-gif-own-final > .tx { opacity: .6; }
+.uc-gif-own-final:not(.uc-deleted) > .tx { opacity: .6; }
 .uc-gif-st {
   display: flex;
   width: fit-content;

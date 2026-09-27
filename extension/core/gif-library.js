@@ -68,9 +68,9 @@ export const GIF_STATUS_TEXT = {
   not_allowed: 'Nové GIFy teď nejsou povolené',
 };
 /**
- * Konečné (červené) stavy vlastního GIFu → důvod smazání. Odesílatel (divák i mod) vidí svůj text mírně ztlumený, bez
- * živého odkazu, jen se štítkem — bez „SMAZÁNO“ / „Zpráva smazána“ (user 2026-09-27, core gif-host paintGifDeleted).
- * Ostatní: zamítnuto / vypršelo = smazaná zpráva, nové GIFy nejsou povolené (gif_not_allowed) = nevidí vůbec.
+ * Konečné (červené) stavy vlastního GIFu → důvod smazání. Zamítnuto / vypršelo: odesílatel (divák i mod) vidí svůj
+ * text mírně ztlumený, bez živého odkazu, jen se štítkem — bez „SMAZÁNO“ / „Zpráva smazána“; ostatní smazanou zprávu.
+ * Nové GIFy nejsou povolené (gif_not_allowed): všem smazaná zpráva se štítkem (user 2026-09-27, core gif-host).
  */
 const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: GIF_NOT_ALLOWED_REASON };
 export const isGifOwnFinal = (view) => !!view && Object.prototype.hasOwnProperty.call(GIF_OWN_FINAL_REASON, view.kind);

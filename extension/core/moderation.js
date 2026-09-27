@@ -131,8 +131,9 @@ export function applyDeleted(el, opts = {}) {
   const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null);
   const q = (sel) => (typeof el.querySelector === 'function' ? el.querySelector(sel) : null);
   const showLabel = mode === 'label' || !hasContent;
-  // Štítek: vždy u dim/strike s textem; u „Zpráva smazána" jen když ho chce volající (mod).
-  const showTag = forceTag || !showLabel;
+  // Štítek: vždy u dim/strike s textem; u „Zpráva smazána" jen když ho chce volající (mod). Nový GIF nepovolený
+  // (core gif-host paintGifDeleted → uc-gif-na): místo „Smazáno“ červený štítek „Nové GIFy teď nejsou povolené“.
+  const showTag = !el.classList.contains('uc-gif-na') && (forceTag || !showLabel);
 
   if (showLabel) {
     const tx = q('.tx');
@@ -227,6 +228,12 @@ export function clearDeleted(el) {
   // uc-gif-held (původní zpráva s GIFem čeká, gif.css display:none) taky — jinak by obnovená zpráva
   // (message-restored po selhání převodu) zůstala v DOM neviditelná (živě 2026-09-26).
   el.classList.remove('uc-deleted', 'uc-deleted--dimmed', 'uc-deleted--restorable', 'uc-gif-held');
+  // Nepovolený GIF (uc-gif-na) odkrytý / obnovený → štítek „Nové GIFy teď nejsou povolené“ pryč.
+  if (el.classList.contains('uc-gif-na')) {
+    el.classList.remove('uc-gif-na', 'uc-gif-own', 'uc-gif-own-final');
+    const st = typeof el.querySelector === 'function' ? el.querySelector(':scope > .uc-gif-st') : null;
+    if (st && typeof st.remove === 'function') st.remove();
+  }
   for (const m of DELETED_STYLES) el.classList.remove(`uc-deleted--${m}`);
   const tag = typeof el.querySelector === 'function' ? el.querySelector('.uc-deleted-tag') : null;
   if (tag && typeof tag.remove === 'function') tag.remove();
