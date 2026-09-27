@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, revokeAccountTokens, revokeTokenValue, ACCOUNT_TOKEN_TTL_MS, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
+import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, revokeAccountTokens, revokeAccountTokensSafe, revokeTokenValue, ACCOUNT_TOKEN_TTL_MS, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
 
 function memTokens() {
   const rows: Array<GifTokenRow & { tokenHash: string; revokedAt: Date | null }> = [];
@@ -107,6 +107,15 @@ test('L1: odhlášení účtu (signOutAccount) zneplatní všechny jeho tokeny, 
   assert.equal(rows.find((r) => r.accountId === 8)!.revokedAt, null);
   const verify = createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => 10 });
   assert.equal(await verify(t, 'robdiesalot'), false);
+});
+
+test('L1 review: chyba zneplatnění tokenů při odhlášení se jen zaloguje (odhlášení nespadne)', async () => {
+  const { store } = memTokens();
+  store.revokeExcess = async () => { throw new Error('db dole'); };
+  const warns: unknown[] = [];
+  await revokeAccountTokensSafe(7, new Date(1), store, { warn: (o) => { warns.push(o); } });
+  assert.equal(warns.length, 1);
+  assert.equal(JSON.stringify(warns).includes('db dole'), true);
 });
 
 test('L13: token vložený do chatu se zneplatní podle hodnoty (jen ten jeden)', async () => {

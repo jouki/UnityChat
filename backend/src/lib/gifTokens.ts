@@ -78,6 +78,15 @@ export async function revokeAccountTokens(accountId: number, at: Date = new Date
   await store.revokeExcess({ accountId }, 0, at);
 }
 
+/**
+ * Odhlášení: zneplatnění tokenů nesmí odhlášení shodit (review L1) — chyba se jen zaloguje (bez tokenů, jen zpráva).
+ * Tokeny pak doběhnou TTL 30 dní.
+ */
+export async function revokeAccountTokensSafe(accountId: number, at: Date = new Date(), store: GifTokenStore = dbGifTokenStore, log: { warn: (o: object, m?: string) => void } = { warn: (o, m) => console.warn(m ?? '', o) }): Promise<void> {
+  try { await revokeAccountTokens(accountId, at, store); }
+  catch (e) { log.warn({ accountId, err: (e as Error).message }, 'gif: zneplatnění tokenů při odhlášení selhalo'); }
+}
+
 /** Vydá nový integrační token workspace Židolišty (jeden aktivní — starý zneplatní). */
 export async function issueIntegrationToken(slug: string, store: GifTokenStore = dbGifTokenStore, now: () => number = Date.now): Promise<string> {
   const token = newToken();
