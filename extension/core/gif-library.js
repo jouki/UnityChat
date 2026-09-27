@@ -14,7 +14,7 @@
 import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
-import { formatRemaining, LOCK_ICON_SVG, shakeLock } from './soundboard.js';
+import { formatRemaining, shakeLock, rewardStatusHtml, REWARD_STATUS_CLASS } from './soundboard.js';
 import { createSlideIndicator } from './slide-indicator.js';
 import { canAutoFocus } from './panel-morph.js';
 import { gifCooldownText } from './gif-cooldown.js';
@@ -846,9 +846,21 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
   const cd = Number.isFinite(st.until) && st.until > now ? st.until - now : 0;
   const total = Number.isFinite(st.rewardTotalMs) && st.rewardTotalMs > 0 ? st.rewardTotalMs : null;
   const progress = rem !== null && total ? clamp(rem / total, 0, 1) : null;
-  const text = cd > 0 ? `Další GIF můžeš poslat za ${formatRemaining(cd)}`
-    : rem !== null ? `Odměna ještě ${formatRemaining(rem)}` : 'Odměna „Posílání GIFů“ je aktivní';
+  // Celé věty s tečkou — hlavička panelu k nim přidává druhou větu (gifRewardHeadline).
+  const text = cd > 0 ? `Další GIF můžeš poslat za ${formatRemaining(cd)}.`
+    : rem !== null ? `Odměna ještě ${formatRemaining(rem)}.` : 'Odměna „Posílání GIFů“ je aktivní.';
   return { mode: cd > 0 ? 'cooldown' : 'active', canSend: cd <= 0, cooldownMs: cd, remainingMs: rem, progress, approvedOnly, text };
+}
+
+export const GIF_APPROVED_ONLY_LINE = 'Teď jdou jen GIFy z knihovny.';
+
+/**
+ * Hláška v hlavičce GIF panelu z gifRewardView: věta o režimu „jen schválené“ jen v aktivním stavu — v cooldownu
+ * by mátla (bod 4 testu 2026-09-27), zamčeno má jen „Odměna není aktivována“.
+ */
+export function gifRewardHeadline(v) {
+  if (!v) return '';
+  return [v.text, v.approvedOnly && v.mode === 'active' ? GIF_APPROVED_ONLY_LINE : ''].filter(Boolean).join(' ');
 }
 
 /**
@@ -858,7 +870,8 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
  */
 export function gifRewardTip(v) {
   if (!v || v.mode === 'unknown') return null;
-  const lines = v.approvedOnly && v.mode !== 'locked' && v.mode !== 'login' ? ['Teď jdou jen GIFy z knihovny.'] : [];
+  // Věta o knihovně jen v aktivním stavu (v cooldownu mate, bod 4 testu 2026-09-27) — stejně jako hlavička panelu.
+  const lines = v.approvedOnly && v.mode === 'active' ? [GIF_APPROVED_ONLY_LINE] : [];
   if (v.mode === 'login') return { mode: 'locked', title: 'GIFy', lines: [v.text] };
   // Titulek stejný jako hláška v panelu (a soundboard): „Odměna není aktivována“.
   if (v.mode === 'locked') return { mode: 'locked', title: GIF_REWARD_LOCKED_TEXT, lines };
@@ -1136,8 +1149,10 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   // ---- hlavička (odměna) + pásek ----
   function paintReward() {
     const v = rv();
-    rewardEl.className = `uc-gl-reward uc-gl-reward--${v.mode}${st.flash ? ' uc-gl-reward--flash' : ''}`;
-    const txt = st.tab === 'rej' ? 'Zamítnuté GIFy se po 14 dnech mažou (kromě vaultu).' : [v.text, v.approvedOnly && v.mode !== 'locked' ? 'Teď jdou jen GIFy z knihovny.' : ''].filter(Boolean).join(' ');
+    // Sdílený stavový řádek odměny jako soundboard (rewardStatusHtml, bod 6 testu 2026-09-27); záložka Zamítnuté = jen info.
+    const rmode = st.tab === 'rej' ? 'info' : v.mode;
+    rewardEl.className = `uc-gl-reward ${REWARD_STATUS_CLASS} ${REWARD_STATUS_CLASS}--${rmode}${st.flash ? ' uc-gl-reward--flash' : ''}`;
+    const txt = st.tab === 'rej' ? 'Zamítnuté GIFy se po 14 dnech mažou (kromě vaultu).' : gifRewardHeadline(v);
     // Zamčeno: ikona zámku jako soundboard (klik na GIF ji zatřese — shakeLock). Kostra se přestaví jen při změně,
     // jinak by tik (1 s) zámek během zatřesení nahradil novým prvkem.
     const lock = st.tab !== 'rej' && v.mode === 'locked';
@@ -1145,7 +1160,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     const sig = `${lock}|${bar}`;
     if (rewardEl._ucSig !== sig) {
       rewardEl._ucSig = sig;
-      rewardEl.innerHTML = `${lock ? `<span class="uc-lock">${LOCK_ICON_SVG}</span>` : ''}<span class="uc-gl-reward-t"></span>${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
+      rewardEl.innerHTML = `${rewardStatusHtml({ lock, textClass: 'uc-gl-reward-t' })}${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
       // Přestavění během zatřesení → na novém zámku pokračovat od uplynulého času (neutnout ho).
       if (lock && st.shakeAt) shakeLock(rewardEl.querySelector('.uc-lock'), { startedAt: st.shakeAt });
     }

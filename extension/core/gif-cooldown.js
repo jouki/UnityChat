@@ -18,6 +18,11 @@ import { normalizeGifDecided } from './gif.js';
 /** Jak dlouho platí stav bez cooldownu (pak se při dalším GIF odkazu zeptá znovu). */
 export const GIF_STATE_TTL_MS = 60_000;
 export const GIF_COOLDOWN_TICK_MS = 100;
+/**
+ * SSE `gif-access-change` (webhook Židolišty `gif-access`, bod 3 testu 2026-09-27): klienti se ptají rozprostřeně
+ * v 0–2 s, ať GET /gif/state (a za ním gif-access Židolišty) nedostane všechny otevřené panely najednou.
+ */
+export const GIF_ACCESS_REFETCH_SPREAD_MS = 2000;
 
 /** Text bubliny: běžně „GIF můžeš poslat za", po pokusu o odeslání červeně „Můžeš až za:". */
 export function gifCooldownText(blocked) {
@@ -67,7 +72,7 @@ export class GifCooldown {
    * @param {() => number} [o.now]
    * @param {(tag: string, text: string) => void} [o.log]
    */
-  constructor({ doc = globalThis.document, host, input = null, api, channel, platform, review, enabled, now, log, onState, setInterval: si, clearInterval: ci } = {}) {
+  constructor({ doc = globalThis.document, host, input = null, api, channel, platform, review, enabled, now, log, onState, setInterval: si, clearInterval: ci, setTimeout: sto, clearTimeout: cto } = {}) {
     /** Nový stav odměny (GIF záložka, indikátor). */
     this.onState = onState || (() => {});
     this.doc = doc;
@@ -83,6 +88,9 @@ export class GifCooldown {
     const w = doc?.defaultView || globalThis;
     this._si = si || w.setInterval.bind(w);
     this._ci = ci || w.clearInterval.bind(w);
+    this._sto = sto || w.setTimeout.bind(w);
+    this._cto = cto || w.clearTimeout.bind(w);
+    this._accessT = null;   // naplánované načtení po SSE gif-access-change
     this._state = null;     // { key, allowed, until, sec, at, total }
     this._inflight = null;
     this._text = '';
@@ -170,6 +178,21 @@ export class GifCooldown {
       .catch((e) => { this._L(`stav FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); return null; })
       .finally(() => { this._inflight = null; });
     return this._inflight;
+  }
+
+  /**
+   * SSE `gif-access-change { channel }` — odemčení GIFů se v Židolištce změnilo (aktivace / konec odměny, časovač).
+   * Stav se jinak ptá jen na akci uživatele (otevření záložky, GIF v poli) → pásek a tooltip u ikony emotů by se
+   * ukázaly až po proklikání. Načte GET /gif/state znovu (i čerstvý) se zpožděním `delayMs` (výchozí náhodně 0–2 s);
+   * víc událostí za sebou = jeden dotaz. Cizí kanál / nepřihlášený nic.
+   */
+  onAccessChange(d, { delayMs = Math.random() * GIF_ACCESS_REFETCH_SPREAD_MS } = {}) {
+    const ch = String(d?.channel || '').toLowerCase();
+    if (!ch || ch !== String(this.channel() || '').toLowerCase() || !this.enabled()) return false;
+    if (this._accessT) return true;
+    this._L(`gif-access-change → stav znovu za ${Math.round(delayMs)} ms`);
+    this._accessT = this._sto(() => { this._accessT = null; void this.fetchState(); }, Math.max(0, delayMs));
+    return true;
   }
 
   /** Změna textu v poli (input / paste). */

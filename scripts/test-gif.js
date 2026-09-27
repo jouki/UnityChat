@@ -184,6 +184,33 @@ Promise.all([
     E.onServerCooldown(t + 30_000, t);
     check('GifCooldown.onServerCooldown bez načteného stavu → cooldown platí (allowed, zbývá 30 s)', E.remainingMs() === 30_000 && E.snapshot()?.allowed === true && E.checkSend(OWN) === false);
   }
+  // Bod 3 (test 2026-09-27): SSE gif-access-change (webhook Židolišty) → stav odměny znovu, i když je čerstvý,
+  // rozprostřeně 0–2 s; víc událostí za sebou = jeden dotaz; cizí kanál / nepřihlášený nic.
+  {
+    let n = 0;
+    const timers = [];
+    let st3 = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: t };
+    const states = [];
+    const mk = (o = {}) => new cd.GifCooldown({ doc, host: new El('div'), api: async () => { n++; return st3; }, channel: () => 'robdiesalot', platform: () => 'twitch', now: () => t, onState: (x) => states.push(x),
+      setInterval: () => 1, clearInterval: () => {}, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {}, ...o });
+    const A = mk();
+    await A.fetchState();
+    check('gif-access-change: výchozí stav zamčený', n === 1 && A.snapshot()?.allowed === false);
+    st3 = { ...st3, allowed: true, rewardUntil: t + 300_000 };
+    A.onAccessChange({ channel: 'jinykanal' });
+    check('gif-access-change: cizí kanál → nic', timers.length === 0);
+    A.onAccessChange({ channel: 'RobDiesALot' }, { delayMs: 1500 });
+    A.onAccessChange({ channel: 'robdiesalot' });
+    check('gif-access-change: víc událostí = jeden naplánovaný dotaz se zpožděním', timers.length === 1 && timers[0].ms === 1500 && n === 1, JSON.stringify(timers.map((x) => x.ms)));
+    timers[0].fn();
+    await new Promise((r) => setTimeout(r, 0));
+    check('gif-access-change: dotaz i přes čerstvý stav → odemčeno, onState (pásek / tooltip hned)', n === 2 && A.snapshot()?.allowed === true && states.at(-1)?.allowed === true && Number.isFinite(states.at(-1)?.rewardUntil));
+    A.onAccessChange({ channel: 'robdiesalot' });
+    check('gif-access-change: výchozí zpoždění v rozsahu 0–2 s', timers.length === 2 && timers[1].ms >= 0 && timers[1].ms <= cd.GIF_ACCESS_REFETCH_SPREAD_MS && cd.GIF_ACCESS_REFETCH_SPREAD_MS === 2000);
+    const off2 = mk({ enabled: () => false });
+    off2.onAccessChange({ channel: 'robdiesalot' });
+    check('gif-access-change: nepřihlášený → nic', timers.length === 2);
+  }
 
   // --- pojistka GifHoldWatch (zpráva schovaná jako gif_request bez rozhodnutí → GET /gif/held) ---
   {

@@ -205,8 +205,12 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   // ---- vlastní tooltipy (stejné jako u noty soundboardu, core/soundboard.js createIconTip) — test2 body 1 a 3 ----
   const tipStates = new Map();   // key záložky → stav tooltipu (gifRewardTip)
   const plainTip = (title) => ({ mode: 'plain', title });
-  /** Ikona emotů: stav první záložky, která ho hlásí (GIFy), jinak jen „Emoty“. */
-  const buttonTip = () => [...tipStates.values()][0] || plainTip('Emoty');
+  /**
+   * Ikona emotů: tooltip jen s aktivní odměnou záložky (GIFy — aktivní / cooldown). Zamčená nebo neznámá odměna
+   * u ikony nic neukazuje, jinak by to působilo jako zamčené emoty (bod 2 testu 2026-09-27); záložka GIFy ji ukáže dál.
+   */
+  const TIP_ACTIVE = new Set(['active', 'cooldown']);
+  const buttonTip = () => [...tipStates.values()].find((s) => TIP_ACTIVE.has(s?.mode)) || null;
   const tabTipState = (key) => tipStates.get(key) || plainTip(key === 'emotes' ? 'Emoty' : (tabs.find((t) => t.key === key)?.label || key));
   const btnTip = tabs.length ? createIconTip({ host }) : null;
   const tabTip = tabs.length ? createIconTip({ host: panel, placement: 'side' }) : null;

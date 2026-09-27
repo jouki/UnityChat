@@ -246,12 +246,20 @@ Promise.all([
   const locked = RV({ allowed: false, mod: false, until: null }, 0);
   check('gifRewardView: bez odměny zamčeno + hláška jako soundboard (jen „Odměna není aktivována“)', locked.mode === 'locked' && !locked.canSend && locked.text === 'Odměna není aktivována' && locked.text === L.GIF_REWARD_LOCKED_TEXT);
   const act = RV({ allowed: true, mod: false, until: null, rewardUntil: 250_000, rewardTotalMs: 1_000_000 }, 0);
-  check('gifRewardView: aktivní s koncem odměny → pásek 25 % + odpočet', act.mode === 'active' && act.progress === 0.25 && act.text === 'Odměna ještě 4:10', JSON.stringify(act));
+  check('gifRewardView: aktivní s koncem odměny → pásek 25 % + odpočet (věta s tečkou)', act.mode === 'active' && act.progress === 0.25 && act.text === 'Odměna ještě 4:10.', JSON.stringify(act));
   check('gifRewardView: bez konce odměny → bez pásku', RV({ allowed: true, until: null }, 0).progress === null && RV({ allowed: true, until: null }, 0).canSend);
+  check('gifRewardView: bez konce odměny → „Odměna „Posílání GIFů“ je aktivní.“', RV({ allowed: true, until: null }, 0).text === 'Odměna „Posílání GIFů“ je aktivní.', RV({ allowed: true, until: null }, 0).text);
   const cdv = RV({ allowed: true, until: 42_000 }, 0);
-  check('gifRewardView: cooldown → nelze poslat, „Další GIF můžeš poslat za 42 s“', cdv.mode === 'cooldown' && !cdv.canSend && cdv.text === 'Další GIF můžeš poslat za 42 s', cdv.text);
+  check('gifRewardView: cooldown → nelze poslat, „Další GIF můžeš poslat za 42 s.“', cdv.mode === 'cooldown' && !cdv.canSend && cdv.text === 'Další GIF můžeš poslat za 42 s.', cdv.text);
   check('gifRewardView: odměna vypršela → zamčeno', RV({ allowed: true, rewardUntil: 5 }, 10).mode === 'locked');
   check('gifRewardView: režim approved', RV({ allowed: true, mode: 'approved' }, 0).approvedOnly === true);
+  // Hláška v hlavičce GIF panelu (bod 4 testu 2026-09-27): v cooldownu jen cooldown, v aktivním stavu tečka mezi větami.
+  const HL = L.gifRewardHeadline;
+  check('gifRewardHeadline: cooldown + jen schválené → jen „Další GIF můžeš poslat za 35 s.“', HL(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0)) === 'Další GIF můžeš poslat za 35 s.', HL(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0)));
+  check('gifRewardHeadline: aktivní + jen schválené → „Odměna ještě 3:46. Teď jdou jen GIFy z knihovny.“', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)) === 'Odměna ještě 3:46. Teď jdou jen GIFy z knihovny.', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)));
+  check('gifRewardHeadline: aktivní bez konce + jen schválené → „… je aktivní. Teď jdou …“', HL(RV({ allowed: true, until: null, mode: 'approved' }, 0)) === 'Odměna „Posílání GIFů“ je aktivní. Teď jdou jen GIFy z knihovny.');
+  check('gifRewardHeadline: zamčeno (i jen schválené) → jen „Odměna není aktivována“', HL(RV({ allowed: false, mode: 'approved' }, 0)) === 'Odměna není aktivována');
+  check('gifRewardHeadline: neznámý stav → prázdné', HL(RV(null, 0)) === '');
 
   // --- data knihovny ---
   const li = L.normalizeLibraryItem({ mediaId: ID, url: OUR, kind: 'mp4', width: 480, height: 270, tags: ['cat', 'dance'], useCount: 3, lastUsedAt: 7 });
@@ -622,6 +630,8 @@ Promise.all([
     check('gifRewardTip: neznámý stav → null', T(RV(null, 0)) === null);
     const ap = T(RV({ allowed: true, until: null, mode: 'approved' }, 0));
     check('gifRewardTip: režim approved → řádek „Teď jdou jen GIFy z knihovny.“', ap.lines.includes('Teď jdou jen GIFy z knihovny.'));
+    const apCd = T(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0));
+    check('gifRewardTip: cooldown + jen schválené → bez věty o knihovně (bod 4)', apCd.mode === 'cooldown' && !apCd.lines.length, JSON.stringify(apCd));
   }
 
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');

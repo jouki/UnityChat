@@ -48,6 +48,7 @@ const { result: { sessionId } } = await call('Target.attachToTarget', { targetId
 
 // ---- mock backendu ----
 const iso = (ms) => new Date(ms).toISOString();
+let mockGifLocked = false;
 const soundboard = () => ({
   ok: true, channel: 'robdiesalot', platform: 'twitch', serverNow: iso(Date.now()), loggedIn: true,
   tiers: [{ tier: 1, name: 'BASIC', position: 1 }],
@@ -71,6 +72,8 @@ s.onevent = async (d) => {
   if (u.pathname === '/donate/config') return json({ ok: true, enabled: true, iban: 'CZ6508000000192000145399', currencies: { CZK: { min: 50 } }, voices: [], version: 1 });
   if (u.pathname.startsWith('/account/')) return json({ ok: true, email: null, emailVerified: false, warnings: [] });
   if (u.pathname.startsWith('/gifs/library')) return json({ ok: true, items: [], nextCursor: null });
+  // GIF odměna zamčená (test 2026-09-27 body 2 a 6) — až od sekce „stavový řádek“, dřív 404 (stav neznámý).
+  if (u.pathname === '/gif/state' && mockGifLocked) return json({ ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now(), mode: 'approved', cooldownGlobalSec: 0 });
   if (u.pathname.startsWith('/gif') || u.pathname.startsWith('/moderation') || u.pathname.startsWith('/commands')) return json({ ok: false, error: 'e2e' }, 404);
   return call('Fetch.continueRequest', { requestId: rid }, sid);
 };
@@ -295,6 +298,76 @@ await ev(`(() => { const i = document.querySelector('.uc-sb-top input'); i.dispa
 const sh2 = await ev(`(() => { const l = document.querySelector('.uc-sb-sec[data-sec="fav"] .uc-lock'); return { shake: l.classList.contains('uc-lock-shake'), delay: l.style.animationDelay, t: l.getAnimations()[0]?.currentTime }; })()`);
 check('§2 přestavění panelu během zatřesení: nový zámek pokračuje (záporné zpoždění, ~300 ms)', sh2.shake && /^-\d+ms$/.test(sh2.delay) && parseInt(sh2.delay.slice(1)) >= 200 && parseInt(sh2.delay.slice(1)) < 700, JSON.stringify(sh2));
 check('§2 zatřesení doběhne (~1 s)', await until(`!document.querySelector('.uc-sb .uc-lock-shake')`, 2000));
+
+// ---- test 2026-09-27 bod 8: zámek zamčeného zvuku jen při hoveru, uprostřed tlačítka, větší, se stínem ----
+const moveTo = (x, y) => call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0, pointerType: 'mouse' }, sessionId);
+const FAV = '.uc-sb-sec[data-sec="fav"] .uc-sb-s.locked';
+const slock = () => ev(`(() => { const s = document.querySelector('${FAV}'); const l = s?.querySelector('.uc-sb-slock'); if (!l) return null;
+  const sb = s.getBoundingClientRect(), lb = l.getBoundingClientRect();
+  return { op: Number(getComputedStyle(l).opacity), dx: Math.round((lb.left + lb.width / 2) - (sb.left + sb.width / 2)), dy: Math.round((lb.top + lb.height / 2) - (sb.top + sb.height / 2)),
+    w: Math.round(lb.width), filter: getComputedStyle(l).filter, pv: getComputedStyle(s.querySelector('.uc-sb-pv')).display, fav: getComputedStyle(s.querySelector('.uc-sb-fav')).display, shake: l.classList.contains('uc-lock-shake') }; })()`);
+const away = await ev(`(() => { const r = document.querySelector('.uc-sb-top input').getBoundingClientRect(); return { x: r.left + 10, y: r.top + 5 }; })()`);
+await moveTo(away.x, away.y); await sleep(250);
+const l0 = await slock();
+check('bod 8: bez hoveru zámek u zamčeného zvuku není vidět', l0?.op === 0, JSON.stringify(l0));
+const fc0 = await center(FAV);
+await moveTo(fc0.x, fc0.y); await sleep(250);
+const l1 = await slock();
+check('bod 8: hover → zámek vidět uprostřed tlačítka (přes text), ~1,4× větší (15–16 px), jemný stín', l1?.op === 1 && Math.abs(l1.dx) <= 1 && Math.abs(l1.dy) <= 1 && l1.w >= 15 && l1.w <= 16 && /drop-shadow/.test(l1.filter), JSON.stringify(l1));
+check('bod 8: ▶ a ☆ po stranách zůstávají', l1?.pv === 'flex' && l1.fav === 'flex', JSON.stringify(l1));
+await mouse('mousePressed', fc0.x, fc0.y); await mouse('mouseReleased', fc0.x, fc0.y);
+await moveTo(away.x, away.y); await sleep(120);
+const l2 = await slock();
+check('bod 8: klik → zámek se třese a je vidět i bez hoveru, zatřese se i zámek ve stavovém řádku', l2?.shake && l2.op === 1 && await ev(`!!document.querySelector('.uc-sb-status .uc-lock.uc-lock-shake')`) === true, JSON.stringify(l2));
+await until(`!document.querySelector('.uc-sb .uc-lock-shake')`, 2000); await sleep(250);
+check('bod 8: po zatřesení bez hoveru zase schovaný', (await slock())?.op === 0);
+
+// ---- bod 7: posuvník hlasitosti zlatým gradientem (vyplněná část), jezdec zlatý ----
+const vol = await ev(`(async () => { const i = document.querySelector('.uc-sb-vol input'); i.value = '40'; i.dispatchEvent(new Event('input', { bubbles: true }));
+  const cs = getComputedStyle(i); const probe = document.createElement('div'); probe.style.background = 'var(--accent-gradient)'; document.body.appendChild(probe); const grad = getComputedStyle(probe).backgroundImage; probe.remove();
+  const sheet = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules].map((r) => r.cssText); } catch { return []; } }).filter((t) => /uc-sb-vol/.test(t));
+  return { app: cs.appearance || cs.webkitAppearance, v: i.style.getPropertyValue('--uc-vol'), grad, webkit: sheet.some((t) => /::-webkit-slider-runnable-track/.test(t) && /accent-gradient/.test(t)) && sheet.some((t) => /::-webkit-slider-thumb/.test(t) && /accent-light/.test(t)),
+    // Chromium pravidla ::-moz-* do CSSOM nepustí → Firefox část ze zdroje soundboard.css.
+    moz: await fetch('soundboard.css').then((r) => r.text()).then((c) => /::-moz-range-progress\\s*\\{[^}]*var\\(--accent-gradient\\)/.test(c) && /::-moz-range-thumb\\s*\\{[^}]*var\\(--accent-light\\)/.test(c)) }; })()`);
+check('bod 7: posuvník bez nativního vzhledu, vyplněná část = --uc-vol 40 %', vol?.app === 'none' && vol.v === '40%', JSON.stringify(vol));
+check('bod 7: Chromium i Firefox — dráha s --accent-gradient, jezdec --accent-light (bez duplikovaných hodnot)', vol?.webkit && vol.moz && /linear-gradient/.test(vol.grad), JSON.stringify(vol));
+
+// ---- bod 6: stavový řádek odměny — zámek a text vedle sebe vlevo, stejně v soundboardu i GIF panelu ----
+const rowGeom = (sel) => ev(`(() => { const r = document.querySelector(${JSON.stringify(sel)}); if (!r) return null; const l = r.querySelector('.uc-lock'); const t = r.querySelector('.uc-reward-status-t');
+  if (!l || !t || !r.classList.contains('uc-reward-status')) return { missing: true, cls: r.className, html: r.innerHTML.slice(0, 200) };
+  const rb = r.getBoundingClientRect(), lb = l.getBoundingClientRect(), tb = t.getBoundingClientRect(); const cs = getComputedStyle(r), ts = getComputedStyle(t);
+  return { lockLeft: Math.round(lb.left - rb.left), gap: Math.round(tb.left - lb.right), tail: Math.round(rb.right - tb.right) > 40, fs: ts.fontSize, color: ts.color, weight: ts.fontWeight, pad: cs.padding, text: t.textContent }; })()`);
+const sbRow = await rowGeom('.uc-sb-status');
+check('bod 6 soundboard: zámek hned vedle textu, oba vlevo (text netlačený doprava)', sbRow && !sbRow.missing && sbRow.lockLeft === 10 && sbRow.gap >= 4 && sbRow.gap <= 6 && sbRow.tail && sbRow.text === 'Odměna není aktivována', JSON.stringify(sbRow));
+
+// ---- bod 1: tooltip jen s nadpisem svisle vycentrovaný (nota soundboardu bez odměny) ----
+await esc(); await sleep(350);
+const tipCenter = (sel) => ev(`(() => { const t = document.querySelector(${JSON.stringify(sel)}); if (!t || getComputedStyle(t).display === 'none') return null; const h = t.querySelector('.uc-sb-tip-t');
+  const a = t.getBoundingClientRect(), b = h.getBoundingClientRect(); return { title: h.textContent, n: t.children.length, top: Math.round((b.top - a.top) * 10) / 10, bottom: Math.round((a.bottom - b.bottom) * 10) / 10 }; })()`);
+await ev(`document.getElementById('btn-sfx').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tc = await tipCenter('#input-area > .uc-sb-tip:not(.hidden)');
+check('bod 1: tooltip „Odměna není aktivována“ jen s nadpisem — nahoře i dole stejné odsazení', tc?.title === 'Odměna není aktivována' && tc.n === 1 && Math.abs(tc.top - tc.bottom) <= 0.5, JSON.stringify(tc));
+await ev(`document.getElementById('btn-sfx').dispatchEvent(new MouseEvent('mouseleave'))`);
+
+// ---- bod 2: ikona emotů bez aktivní GIF odměny tooltip neukazuje (nepůsobí jako zamčené emoty) ----
+mockGifLocked = true;
+await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
+check('bod 2: GIF odměna zamčená → nad ikonou emotů žádný tooltip', await ev(`![...document.querySelectorAll('#input-area > .uc-sb-tip')].some((t) => !t.classList.contains('hidden') && getComputedStyle(t).display !== 'none')`) === true);
+check('bod 2: … ani pásek pod ikonou', await ev(`(() => { const b = document.querySelector('#btn-emotes .uc-ep-btn-bar'); return !b || b.hidden; })()`) === true);
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
+await realClick('#btn-emotes'); await sleep(350);
+await realClick('.uc-ep-tab[data-tab="gif"]'); await sleep(300);
+const glRow = await rowGeom('.uc-ep-pane[data-pane="gif"] .uc-gl-reward');
+check('bod 6 GIF panel: stejný řádek jako soundboard (odsazení, mezera, velikost, barva, tloušťka)', glRow && !glRow.missing && glRow.text === 'Odměna není aktivována'
+  && ['lockLeft', 'gap', 'fs', 'color', 'weight', 'pad'].every((k) => glRow[k] === sbRow?.[k]), JSON.stringify({ glRow, sbRow }));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tabTc = await tipCenter('.uc-ep > .uc-sb-tip:not(.hidden)');
+check('bod 2: záložka GIFy zamčenou odměnu dál ukazuje (vycentrovaný tooltip jen s nadpisem)', tabTc?.title === 'Odměna není aktivována' && Math.abs(tabTc.top - tabTc.bottom) <= 0.5, JSON.stringify(tabTc));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
+await realClick('.uc-ep-tab[data-tab="emotes"]'); await sleep(200);
+await esc(); await sleep(350);
+await realClick('#btn-sfx'); await sleep(350);
 
 // ---- Esc v soundboardu / QR: fokus zpět do pole (myš), na dotyku ne ----
 await ev(`document.querySelector('.uc-sb-top input').focus()`);

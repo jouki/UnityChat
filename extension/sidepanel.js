@@ -171,6 +171,10 @@ class NicknameManager {
       this._eventSource.addEventListener('gif-media', (e) => {
         try { const d = JSON.parse(e.data); if (this.onGifMedia) this.onGifMedia(d); } catch {}
       });
+      // Odemčení GIFů se v Židolištce změnilo (webhook gif-access) → stav odměny znovu (pásek / tooltip u ikony emotů hned).
+      this._eventSource.addEventListener('gif-access-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifAccessChange) this.onGifAccessChange(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
@@ -1581,6 +1585,8 @@ class UnityChat {
     this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
     this.nicknames.onGifMessage = (d) => this._onGifMessage(d);
     this.nicknames.onGifMedia = (d) => this._onGifMedia(d);
+    // Bez účtu stav odměny nemá smysl (GifCooldown.enabled) — instanci nezakládat zbytečně.
+    this.nicknames.onGifAccessChange = (d) => { if (this._account) this._gifCd().onAccessChange(d); };
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;

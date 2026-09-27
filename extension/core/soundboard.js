@@ -321,6 +321,16 @@ const STAR_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="t
 export const LOCK_ICON_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>';
 const LOCK_SVG = LOCK_ICON_SVG;
 
+/**
+ * Stavový řádek odměny — sdílený soundboardem (`.uc-sb-status`) a GIF panelem (`.uc-gl-reward`), bod 6 testu
+ * 2026-09-27: kontejner dostane `REWARD_STATUS_CLASS` + `--<mode>` (locked | cooldown | active | paused | login | info),
+ * obsah = volitelný zámek (shakeLock) a hned za ním text, oba vlevo. `html` musí být už escapované.
+ */
+export const REWARD_STATUS_CLASS = 'uc-reward-status';
+export function rewardStatusHtml({ lock = false, html = '', textClass = '' } = {}) {
+  return `${lock ? `<span class="uc-lock">${LOCK_ICON_SVG}</span>` : ''}<span class="uc-reward-status-t${textClass ? ` ${textClass}` : ''}">${html}</span>`;
+}
+
 /** Délka zatřesení zámku (ms) — musí sedět s animací .uc-lock-shake v soundboard.css. */
 export const LOCK_SHAKE_MS = 1000;
 
@@ -388,6 +398,9 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   const body = panel.querySelector('.uc-sb-body');
   const foot = panel.querySelector('.uc-sb-foot');
   volInput.value = String(Math.round(vol * 100));
+  // Vyplněná část dráhy (zlatý gradient v Chromiu, soundboard.css .uc-sb-vol; Firefox má ::-moz-range-progress).
+  const paintVol = () => volInput.style.setProperty('--uc-vol', `${volInput.value}%`);
+  paintVol();
 
   // Vlastní tooltip (sdílený s ikonou emotů a záložkou GIFy — createIconTip).
   const iconTip = createIconTip({ host });
@@ -513,13 +526,14 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
 
   function renderStatus() {
     const s = soundboardIconState(state, now());
-    let html = '';
-    if (s.mode === 'active' && s.cooldownMs > 0) html = `<span class="uc-sb-cdtxt">Cooldown ${esc(formatRemaining(s.cooldownMs))}</span>`;
-    // Bez aktivní odměny: zámek + „Odměna není aktivována“ (zmrazená: proč nejdou pustit).
-    else if (s.mode === 'locked' || s.mode === 'paused') html = `<span class="uc-sb-locktxt uc-sb-locktxt-${s.mode}">${s.mode === 'locked' ? `<span class="uc-lock">${LOCK_SVG}</span>` : ''}<b>${esc(s.title)}</b>${(s.lines || []).length ? ` ${s.lines.map(esc).join(' ')}` : ''}</span>`;
+    let html = '', mode = '';
+    // Sdílený stavový řádek odměny (jako GIF panel): cooldown / zámek + „Odměna není aktivována“ / zmrazená odměna.
+    if (s.mode === 'active' && s.cooldownMs > 0) { mode = 'cooldown'; html = rewardStatusHtml({ html: `Cooldown ${esc(formatRemaining(s.cooldownMs))}` }); }
+    else if (s.mode === 'locked') { mode = 'locked'; html = rewardStatusHtml({ lock: true, html: esc(s.title) }); }
+    else if (s.mode === 'paused') { mode = 'paused'; html = rewardStatusHtml({ html: `<b>${esc(s.title)}</b>${(s.lines || []).length ? ` ${s.lines.map(esc).join(' ')}` : ''}` }); }
     // Beze změny nepřepisovat (tik 1 s by zámku uprostřed zatřesení vyměnil prvek).
     if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; resumeShake(); }
-    statusEl.classList.toggle('hidden', !html);
+    statusEl.className = `uc-sb-status ${REWARD_STATUS_CLASS}${mode ? ` ${REWARD_STATUS_CLASS}--${mode}` : ''}${html ? '' : ' hidden'}`;
     const d = state?.denied;
     if (d && Date.now() - d.at < DENIED_SHOW_MS) {
       const retry = d.retryAt ? ` · znovu za ${formatRemaining(d.retryAt - now())}` : '';
@@ -652,6 +666,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   });
   volInput.addEventListener('input', () => {
     vol = Math.min(1, Math.max(0, Number(volInput.value) / 100));
+    paintVol();
     const cur = state?.sounds.find((s) => String(s.id) === audio.dataset.id);
     if (cur && !audio.paused) audioFor(cur);
     else { plainAudio.volume = vol; if (gainNode) gainNode.gain.value = vol; }

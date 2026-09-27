@@ -916,8 +916,8 @@ check('G souběh kanálu: kanál se změnil během dotazu → po doběhnutí zno
 // Odemčená odměna → výběr pošle náš odkaz do chatu
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
-check('G odměna aktivní → hlavička „Odměna „Posílání GIFů“ je aktivní“, odemčeno', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"]').classList.contains('uc-gl--locked')`, 3000)
-  && (await gl())?.reward === 'Odměna „Posílání GIFů“ je aktivní', JSON.stringify(await gl()));
+check('G odměna aktivní → hlavička „Odměna „Posílání GIFů“ je aktivní.“, odemčeno', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"]').classList.contains('uc-gl--locked')`, 3000)
+  && (await gl())?.reward === 'Odměna „Posílání GIFů“ je aktivní.', JSON.stringify(await gl()));
 // X1 (audit 2026-09-27): vlastní GIF ještě čeká → výběr z knihovny se nepošle, hláška „Počkej …“.
 await ev(`(() => { const o = window.ucGif.out(); o.clear(); o.onOwnPending({ requestId: 991, channel: 'robdiesalot', platform: 'twitch', messageId: 'x1-own', login: 'divak', media: { url: '${murl(hex(12))}', kind: 'gif' }, expiresAt: Date.now() + 300000, own: true }); return o.busy(); })()`);
 const sendX1 = posts.send.length;
@@ -941,7 +941,7 @@ const ind = await ev(`(() => { const b = document.getElementById('btn-emotes'); 
   return { timed: b.classList.contains('uc-ep-timed'), bar: !!bar && !bar.hidden && getComputedStyle(bar).display !== 'none', p: Number(b.style.getPropertyValue('--uc-ep-p')), tab: !!tb && !tb.hidden, tabP: Number(tb?.style.getPropertyValue('--p')) }; })()`);
 check('G indikátor: pásek pod tlačítkem emotů i na záložce GIFy (≈ 50 %)', ind?.timed && ind.bar && ind.tab && Math.abs(ind.p - 0.5) < 0.02 && Math.abs(ind.tabP - 0.5) < 0.02, JSON.stringify(ind));
 await ev(`document.getElementById('btn-emotes').click()`);
-check('G odpočet odměny nahoře v záložce', await until(`/^Odměna ještě (5:00|4:5\\d)$/.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
+check('G odpočet odměny nahoře v záložce', await until(`/^Odměna ještě (5:00|4:5\\d)\\.$/.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
 await sleep(1200);
 const ind2 = await ev(`Number(document.getElementById('btn-emotes').style.getPropertyValue('--uc-ep-p'))`);
 check('G pásek ubývá s časem', ind2 < ind.p, `${ind.p} → ${ind2}`);
@@ -977,8 +977,24 @@ await ev(`document.getElementById('btn-emotes').click()`);
 mock.gifState = () => ({ ok: true, allowed: false, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
-const tip3 = await tipOf(TIPSEL);
-check('T2 tooltip zamčeno: „Odměna není aktivována“ (jako panel), bez druhé věty, bez řádku', tip3?.title === 'Odměna není aktivována' && !tip3.lines.length && !tip3.rows.length, JSON.stringify(tip3));
+check('bod 2: zamčená odměna → nad ikonou emotů žádný tooltip (nepůsobí jako zamčené emoty)', await tipOf(TIPSEL) === null);
+check('bod 2: zamčená odměna → pod ikonou emotů žádný pásek', await ev(`(() => { const b = document.querySelector('#btn-emotes .uc-ep-btn-bar'); return !b || b.hidden; })()`) === true);
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
+await ev(`document.getElementById('btn-emotes').click()`);
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tip3 = await tipOf(TABTIP);
+check('T2 tooltip záložky GIFy zamčeno: „Odměna není aktivována“ (jako panel), bez druhé věty, bez řádku', tip3?.title === 'Odměna není aktivována' && !tip3.lines.length && !tip3.rows.length, JSON.stringify(tip3));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
+await ev(`document.getElementById('btn-emotes').click()`);
+// ---- bod 3: aktivace odměny (webhook Židolišty → SSE gif-access-change) → pásek a tooltip u ikony emotů sám, bez kliknutí ----
+const stAcc = posts.state.length;
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now(), rewardUntil: Date.now() + 300_000, rewardTotalMs: 300_000 });
+mock.sse.push(['gif-access-change', { channel: 'jinykanal' }], ['gif-access-change', { channel: 'robdiesalot' }]);
+check('bod 3: SSE gif-access-change → GET /gif/state bez akce uživatele (jeden dotaz, rozprostřeně ≤ 2 s)', await waitFor(() => posts.state.length > stAcc, 6000) && (await sleep(500), posts.state.length - stAcc === 1), String(posts.state.length - stAcc));
+check('bod 3: … pásek pod ikonou emotů se ukáže sám', await until(`(() => { const b = document.querySelector('#btn-emotes .uc-ep-btn-bar'); return !!b && !b.hidden && getComputedStyle(b).display !== 'none'; })()`, 3000));
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tip3b = await tipOf(TIPSEL);
+check('bod 3: … tooltip ikony „GIF odměna aktivní“', tip3b?.title === 'GIF odměna aktivní' && tip3b.rows.length === 1, JSON.stringify(tip3b));
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: Date.now() + 42_000, cooldownSec: 60, serverNow: Date.now(), rewardUntil: Date.now() + 300_000 });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
