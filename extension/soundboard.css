@@ -168,4 +168,11 @@
   46% { transform: none; }
   100% { transform: none; color: var(--text-muted, #7c7c86); }
 }
-@media (prefers-reduced-motion: reduce) { .uc-lock.uc-lock-shake { animation: none; } }
+/* Zámek u zamčeného zvuku v tlačítku. */
+.uc-sb-slock { margin-right: -1px; }
+/* Omezený pohyb: bez třesení, ale zčervenání a návrat do šedé zůstávají (odezva na klik). */
+@keyframes uc-lock-flash {
+  0%, 38% { color: #ff4d4d; }
+  100% { color: var(--text-muted, #7c7c86); }
+}
+@media (prefers-reduced-motion: reduce) { .uc-lock.uc-lock-shake { animation: uc-lock-flash 1s ease-out; } }

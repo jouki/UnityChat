@@ -6,7 +6,9 @@
 //  - ikony v poli: žádný řádek navíc; QR se schová (animovaně) jen při textu v úzkém poli (< 330 px), na dotyku
 //    při fokusu pole;
 //  - dotyk: otevření panelu emotů / přepnutí záložky nedá fokus do hledání (bez klávesnice), myš ano;
-//  - prefers-reduced-motion → vše okamžitě.
+//  - zamčený zvuk (Oblíbené): zámek u zvuku + v hlášce se zatřese, přestavění panelu zatřesení neutne;
+//  - Esc v soundboardu / QR vrátí fokus do pole (myš), na dotyku ne;
+//  - prefers-reduced-motion → vše okamžitě (zámek jen zčervená a zešedne, bez třesení).
 // Backend mockovaný přes Fetch.requestPaused (api.jouki.cz). Spuštění: node scripts/e2e-composer-anim.mjs
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -50,8 +52,9 @@ const soundboard = () => ({
   ok: true, channel: 'robdiesalot', platform: 'twitch', serverNow: iso(Date.now()), loggedIn: true,
   tiers: [{ tier: 1, name: 'BASIC', position: 1 }],
   sounds: [{ id: 1, name: 'boom', displayName: null, tier: 1, emoji: '💥', icon: null, url: 'https://api-zidolista.jouki.cz/public/sfx/rob/e2e.mp3', durationMs: 1000, gainDb: 0 }],
-  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: [{ tier: 1, startedAt: iso(Date.now()), expiresAt: null, paused: false, remainingMs: null, available: true, totalMs: null }], cooldown: { globalReadyAt: null, userReadyAt: null } },
-  favorites: [], recent: [],
+  // Bez odemčeného tieru (panel se otevře, zvuky zamčené) a zvuk v Oblíbených — test zatřesení zámku.
+  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: [], cooldown: { globalReadyAt: null, userReadyAt: null } },
+  favorites: [1], recent: [],
 });
 s.onevent = async (d) => {
   if (d.method !== 'Fetch.requestPaused') return;
@@ -278,6 +281,41 @@ await realClick('#btn-emotes'); await sleep(350);
 check('§4 zpět myš: otevření emotů dá fokus do hledání', await ev(`document.activeElement === document.querySelector('.uc-ep-search input')`) === true);
 await esc(); await sleep(350);
 
+// ---- §2 zamčený zvuk v Oblíbených: zámek u zvuku + v hlášce, ne v hlavičce tieru; přestavění neutne ----
+await realClick('#btn-sfx'); await sleep(350);
+check('§2 soundboard bez odměny: zámek + „Odměna není aktivována“, zamčený zvuk se zámkem', await ev(`!!document.querySelector('.uc-sb-status .uc-lock') && document.querySelector('.uc-sb-status').textContent.trim() === 'Odměna není aktivována' && !!document.querySelector('.uc-sb-sec[data-sec="fav"] .uc-sb-s.locked .uc-sb-slock')`) === true);
+await realClick('.uc-sb-sec[data-sec="fav"] .uc-sb-play');
+await sleep(60);
+const sh1 = await ev(`({ status: !!document.querySelector('.uc-sb-status .uc-lock.uc-lock-shake'), card: !!document.querySelector('.uc-sb-sec[data-sec="fav"] .uc-lock.uc-lock-shake'),
+  tier: !!document.querySelector('.uc-sb-h .uc-lock.uc-lock-shake'), anim: getComputedStyle(document.querySelector('.uc-sb-status .uc-lock')).animationName })`);
+check('§2 klik na zamčený zvuk v Oblíbených: zatřese zámek u zvuku a v hlášce, ne v hlavičce tieru', sh1.status && sh1.card && !sh1.tier && sh1.anim === 'uc-lock-shake', JSON.stringify(sh1));
+await sleep(250);
+// Přestavění panelu (hledání / tik / SSE) — zatřesení na novém prvku pokračuje, nezačíná znovu ani se neutne.
+await ev(`(() => { const i = document.querySelector('.uc-sb-top input'); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+const sh2 = await ev(`(() => { const l = document.querySelector('.uc-sb-sec[data-sec="fav"] .uc-lock'); return { shake: l.classList.contains('uc-lock-shake'), delay: l.style.animationDelay, t: l.getAnimations()[0]?.currentTime }; })()`);
+check('§2 přestavění panelu během zatřesení: nový zámek pokračuje (záporné zpoždění, ~300 ms)', sh2.shake && /^-\d+ms$/.test(sh2.delay) && parseInt(sh2.delay.slice(1)) >= 200 && parseInt(sh2.delay.slice(1)) < 700, JSON.stringify(sh2));
+check('§2 zatřesení doběhne (~1 s)', await until(`!document.querySelector('.uc-sb .uc-lock-shake')`, 2000));
+
+// ---- Esc v soundboardu / QR: fokus zpět do pole (myš), na dotyku ne ----
+await ev(`document.querySelector('.uc-sb-top input').focus()`);
+await esc();
+check('Esc v soundboardu (myš): panel zavřený, fokus v poli pro psaní', await ev(`document.activeElement === document.getElementById('msg-input')`) === true && await until(`document.querySelector('.uc-sb').classList.contains('hidden')`, 1500));
+await ev(`document.getElementById('msg-input').blur()`);
+await realClick('#btn-qrdono'); await sleep(350);
+await esc();
+check('Esc v QR donu (myš): panel zavřený, fokus v poli pro psaní', await ev(`document.activeElement === document.getElementById('msg-input')`) === true && await until(`document.querySelector('.uc-qd').classList.contains('hidden')`, 1500));
+await ev(`document.getElementById('msg-input').blur()`);
+await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, sessionId);
+await call('Emulation.setEmulatedMedia', { features: [{ name: 'pointer', value: 'coarse' }, { name: 'hover', value: 'none' }] }, sessionId);
+await tap('#btn-sfx'); await sleep(350);
+await esc(); await sleep(300);
+check('Esc v soundboardu na dotyku: fokus do pole nevrací (klávesnice)', await ev(`document.activeElement !== document.getElementById('msg-input')`) === true);
+await tap('#btn-qrdono'); await sleep(350);
+await esc(); await sleep(300);
+check('Esc v QR donu na dotyku: fokus do pole nevrací', await ev(`document.activeElement !== document.getElementById('msg-input') && document.querySelector('.uc-qd').classList.contains('hidden')`) === true);
+await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+await call('Emulation.setTouchEmulationEnabled', { enabled: false }, sessionId);
+
 // ---- prefers-reduced-motion → vše okamžitě ----
 await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, sessionId);
 await rec(`() => { const p = document.querySelector('.uc-ep'); return { vis: !p.classList.contains('hidden'), sc: __scale(p), op: Number(getComputedStyle(p).opacity), anims: p.getAnimations().length }; }`);
@@ -289,6 +327,9 @@ await esc();
 check('reduced motion: zavření okamžité', await ev(`document.querySelector('.uc-ep').classList.contains('hidden')`) === true);
 const tr = await ev(`[getComputedStyle(document.querySelector('.uc-slide-ind')).transitionDuration, getComputedStyle(document.getElementById('btn-qrdono')).transitionDuration]`);
 check('reduced motion: indikátor ani ikony bez přechodů', tr.every((d) => d.split(',').every((x) => parseFloat(x) === 0)), JSON.stringify(tr));
+const rl = await ev(`(() => { const l = document.createElement('span'); l.className = 'uc-lock'; document.body.appendChild(l); window.UC_CORE.shakeLock(l);
+  const r = getComputedStyle(l).animationName; l.remove(); return r; })()`);
+check('reduced motion: zámek bez třesení, ale zčervená a zešedne (uc-lock-flash)', rl === 'uc-lock-flash', rl);
 await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);

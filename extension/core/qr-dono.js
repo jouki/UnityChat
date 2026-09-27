@@ -5,7 +5,7 @@
 // Přezdívka je vidět vždy (předvyplněná: UC přezdívka → poslední z dona → jméno z platformy).
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
-import { registerPanel, panelShown } from './panel-morph.js';
+import { registerPanel, panelShown, refocusField } from './panel-morph.js';
 
 export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
@@ -597,7 +597,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   });
   // Tajné gesto: „testmode“ napsané do aktivního panelu mimo pole formuláře.
   panel.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { close(); return; }
+    // Esc: zavřít a fokus zpět do pole pro psaní (jako emoty; na dotyku ne — klávesnice).
+    if (e.key === 'Escape') { close(); refocusField(button); return; }
     if (e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
     // preventDefault: poslední „e“ by jinak spadlo do pole tokenu, kam se po odkrytí přesune fokus.
     if (detectTestmode(e.key)) { e.preventDefault(); revealTestMode(); }

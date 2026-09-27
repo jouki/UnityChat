@@ -978,7 +978,7 @@ mock.gifState = () => ({ ok: true, allowed: false, cooldownUntil: null, cooldown
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
 const tip3 = await tipOf(TIPSEL);
-check('T2 tooltip zamčeno: „GIF odměna není aktivní“ bez druhé věty, bez řádku', tip3?.title === 'GIF odměna není aktivní' && !tip3.lines.length && !tip3.rows.length, JSON.stringify(tip3));
+check('T2 tooltip zamčeno: „Odměna není aktivována“ (jako panel), bez druhé věty, bez řádku', tip3?.title === 'Odměna není aktivována' && !tip3.lines.length && !tip3.rows.length, JSON.stringify(tip3));
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: Date.now() + 42_000, cooldownSec: 60, serverNow: Date.now(), rewardUntil: Date.now() + 300_000 });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);

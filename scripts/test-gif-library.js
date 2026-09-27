@@ -615,7 +615,7 @@ Promise.all([
     const cd = T(RV({ allowed: true, until: 42_000, rewardUntil: 268_000, rewardTotalMs: 400_000 }, 0));
     check('gifRewardTip: cooldown → nadpis „GIF odměna — cooldown“ + cooldown 42 s', cd.mode === 'cooldown' && cd.title === 'GIF odměna — cooldown' && cd.cooldownMs === 42_000 && cd.rows.length === 1, JSON.stringify(cd));
     const lk = T(RV({ allowed: false }, 0));
-    check('gifRewardTip: zamčeno → „GIF odměna není aktivní“ bez druhé věty (spec 2026-09-27 §2)', lk.mode === 'locked' && lk.title === 'GIF odměna není aktivní' && !lk.lines.length && !lk.rows?.length);
+    check('gifRewardTip: zamčeno → „Odměna není aktivována“ (jako panel), bez druhé věty (spec 2026-09-27 §2)', lk.mode === 'locked' && lk.title === 'Odměna není aktivována' && !lk.lines.length && !lk.rows?.length);
     const un = T(RV({ allowed: true, until: null }, 0));
     check('gifRewardTip: bez konce odměny → „bez omezení“ (remainingMs null)', un.rows[0].remainingMs === null && un.rows[0].progress === null);
     check('gifRewardTip: nepřihlášený → výzva', T(RV(null, 0, { loggedIn: false })).lines[0].startsWith('Přihlas se'));

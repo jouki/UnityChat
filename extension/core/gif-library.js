@@ -860,7 +860,8 @@ export function gifRewardTip(v) {
   if (!v || v.mode === 'unknown') return null;
   const lines = v.approvedOnly && v.mode !== 'locked' && v.mode !== 'login' ? ['Teď jdou jen GIFy z knihovny.'] : [];
   if (v.mode === 'login') return { mode: 'locked', title: 'GIFy', lines: [v.text] };
-  if (v.mode === 'locked') return { mode: 'locked', title: 'GIF odměna není aktivní', lines };
+  // Titulek stejný jako hláška v panelu (a soundboard): „Odměna není aktivována“.
+  if (v.mode === 'locked') return { mode: 'locked', title: GIF_REWARD_LOCKED_TEXT, lines };
   const rows = [{ name: 'Posílání GIFů', remainingMs: v.remainingMs ?? null, progress: v.progress ?? null }];
   if (v.mode === 'cooldown') return { mode: 'cooldown', title: 'GIF odměna — cooldown', lines, rows, cooldownMs: v.cooldownMs };
   return { mode: 'active', title: 'GIF odměna aktivní', lines, rows, cooldownMs: 0 };
@@ -1145,6 +1146,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (rewardEl._ucSig !== sig) {
       rewardEl._ucSig = sig;
       rewardEl.innerHTML = `${lock ? `<span class="uc-lock">${LOCK_ICON_SVG}</span>` : ''}<span class="uc-gl-reward-t"></span>${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
+      // Přestavění během zatřesení → na novém zámku pokračovat od uplynulého času (neutnout ho).
+      if (lock && st.shakeAt) shakeLock(rewardEl.querySelector('.uc-lock'), { startedAt: st.shakeAt });
     }
     rewardEl.querySelector('.uc-gl-reward-bar')?.style.setProperty('--p', v.progress?.toFixed(4) ?? '1');
     rewardEl.querySelector('.uc-gl-reward-t').textContent = txt;
@@ -1779,7 +1782,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (!v.canSend) {
       L(`výběr ${item.mediaId} zamčený (${v.mode})`);
       // Bez odměny: zámek se zatřese a zčervená, pak zešedne (stejně jako zamčený zvuk v soundboardu, spec §2).
-      if (v.mode === 'locked') { paintReward(); shakeLock(rewardEl.querySelector('.uc-lock')); return; }
+      if (v.mode === 'locked') { paintReward(); st.shakeAt = shakeLock(rewardEl.querySelector('.uc-lock')); return; }
       st.flash = true;
       paintReward();
       win.setTimeout(() => { st.flash = false; paintReward(); }, 1200);

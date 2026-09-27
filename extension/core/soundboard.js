@@ -9,7 +9,7 @@
 // Návrhy zvuků (core/sfx-request.js): s option `requestApi` je vedle hledání tlačítko
 // „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
 import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
-import { registerPanel, canAutoFocus, panelShown } from './panel-morph.js';
+import { registerPanel, canAutoFocus, panelShown, refocusField } from './panel-morph.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
@@ -321,21 +321,30 @@ const STAR_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="t
 export const LOCK_ICON_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>';
 const LOCK_SVG = LOCK_ICON_SVG;
 
+/** Délka zatřesení zámku (ms) — musí sedět s animací .uc-lock-shake v soundboard.css. */
+export const LOCK_SHAKE_MS = 1000;
+
 /**
  * Zamčené: zámek se zatřese a zčervená, za ~1 s plynule zešedne (klik na zamčený zvuk, GIF bez odměny — spec
  * 2026-09-27 §2). CSS animace .uc-lock-shake (soundboard.css); opakovaný klik ji spustí znovu od začátku.
+ * `startedAt` (Date.now() začátku) = pokračovat v rozběhnutém zatřesení na novém prvku (po přestavění panelu),
+ * ne začínat znovu. Vrací čas začátku (pro pozdější pokračování).
  */
-export function shakeLock(...els) {
-  for (const el of els.flat()) {
-    if (!el?.classList) continue;
+export function shakeLock(els, { startedAt = null } = {}) {
+  const t0 = startedAt ?? Date.now();
+  const elapsed = Math.max(0, Date.now() - t0);
+  for (const el of [els].flat(Infinity)) {
+    if (!el?.classList || elapsed >= LOCK_SHAKE_MS) continue;
     el.classList.remove('uc-lock-shake');
     void el.offsetWidth;   // restart animace
+    el.style.animationDelay = elapsed ? `-${elapsed}ms` : '';
     el.classList.add('uc-lock-shake');
     if (!el._ucShakeEnd) {
-      el._ucShakeEnd = () => el.classList.remove('uc-lock-shake');
+      el._ucShakeEnd = () => { el.classList.remove('uc-lock-shake'); el.style.animationDelay = ''; };
       el.addEventListener('animationend', el._ucShakeEnd);
     }
   }
+  return t0;
 }
 
 /**
@@ -454,7 +463,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     const label = soundLabel(s);
     const why = unlocked.get(s.tier)?.paused ? 'je pozastavený' : 'není odemčený';
     return `<div class="${cls}" data-id="${s.id}" data-why="${locked ? esc(`${tierLabel(state, s.tier)} ${why}`) : ''}">
-      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
+      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${locked ? `<span class="uc-lock uc-sb-slock">${LOCK_SVG}</span>` : ''}${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
       <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
     </div>`;
@@ -499,6 +508,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     }
     body.scrollTop = top;
     renderStatus();
+    resumeShake();
   }
 
   function renderStatus() {
@@ -508,7 +518,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     // Bez aktivní odměny: zámek + „Odměna není aktivována“ (zmrazená: proč nejdou pustit).
     else if (s.mode === 'locked' || s.mode === 'paused') html = `<span class="uc-sb-locktxt uc-sb-locktxt-${s.mode}">${s.mode === 'locked' ? `<span class="uc-lock">${LOCK_SVG}</span>` : ''}<b>${esc(s.title)}</b>${(s.lines || []).length ? ` ${s.lines.map(esc).join(' ')}` : ''}</span>`;
     // Beze změny nepřepisovat (tik 1 s by zámku uprostřed zatřesení vyměnil prvek).
-    if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; }
+    if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; resumeShake(); }
     statusEl.classList.toggle('hidden', !html);
     const d = state?.denied;
     if (d && Date.now() - d.at < DENIED_SHOW_MS) {
@@ -555,11 +565,24 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     } catch (e) { log?.('Soundboard', `náhled ${sound.name} selhal: ${e?.message || e}`); }
   }
 
-  function send(sound) {
+  // Rozběhnuté zatřesení zámku (klik na zamčený zvuk): přestavění panelu / hlášky (tik, SSE) ho nesmí utnout —
+  // na nových prvcích pokračuje od uplynulého času (shakeLock startedAt).
+  let shake = null;   // { at, id, sec }
+  const shakeTargets = (sh) => [statusEl.querySelector('.uc-lock'),
+    body.querySelector(`.uc-sb-sec[data-sec="${sh.sec}"] .uc-sb-s[data-id="${sh.id}"] .uc-lock`)];
+  function resumeShake() {
+    if (!shake) return;
+    if (Date.now() - shake.at >= LOCK_SHAKE_MS) { shake = null; return; }
+    for (const el of shakeTargets(shake)) if (el && !el.classList.contains('uc-lock-shake')) shakeLock(el, { startedAt: shake.at });
+  }
+
+  function send(sound, card = null) {
     const t = now();
     if (!playableTiers(state, t).has(sound.tier)) {
-      // Zamčený zvuk: zatřást zámkem v hláše i v hlavičce jeho tieru (spec 2026-09-27 §2).
-      shakeLock([statusEl.querySelector('.uc-lock'), ...body.querySelectorAll(`.uc-sb-sec[data-sec="t${sound.tier}"] .uc-lock`)]);
+      // Zamčený (i pozastavený) zvuk: zatřást zámkem u zvuku samotného a v hlášce panelu (je vždy vidět) — ne
+      // v hlavičce tieru, která může být mimo obraz (Oblíbené / Často používané) — spec 2026-09-27 §2.
+      shake = { at: Date.now(), id: sound.id, sec: card?.closest('.uc-sb-sec')?.dataset.sec || '' };
+      shake.at = shakeLock(shakeTargets(shake));
       return;
     }
     if (cooldownLeft(state, t) > 0) return;
@@ -617,7 +640,8 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   search.addEventListener('input', renderPanel);
   search.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Escape') close();
+    // Esc: zavřít a fokus zpět do pole pro psaní (jako emoty; na dotyku ne — klávesnice).
+    if (e.key === 'Escape') { close(); refocusField(button); }
     else if (e.key === 'Enter') {
       // Enter = první odemčený zvuk ve výsledcích.
       e.preventDefault();
@@ -669,10 +693,10 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     if (!sound) return;
     if (b.dataset.act === 'preview') preview(sound);
     else if (b.dataset.act === 'fav') toggleFav(sound);
-    else if (b.dataset.act === 'send') send(sound);
+    else if (b.dataset.act === 'send') send(sound, card);
   });
   const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); };
-  const onDocKey = (e) => { if (e.key === 'Escape' && isOpen()) close(); };
+  const onDocKey = (e) => { if (e.key === 'Escape' && isOpen()) { close(); refocusField(button); } };
   doc.addEventListener('mousedown', onDocDown);
   doc.addEventListener('keydown', onDocKey);
 

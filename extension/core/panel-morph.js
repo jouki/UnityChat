@@ -194,6 +194,18 @@ export function canAutoFocus(doc) {
   try { return !win?.matchMedia?.('(pointer: coarse)').matches; } catch { return true; }
 }
 
+/**
+ * Po zavření panelu Escem vrátit fokus do pole pro psaní (jako emoty) — pole najde podle tlačítka panelu
+ * (tlačítka jsou v .msg-input-wrap) nebo dostane `field`. Na dotyku ne: vyskočila by klávesnice.
+ */
+export function refocusField(button, field = null) {
+  const doc = button?.ownerDocument;
+  const f = field || button?.closest?.('.msg-input-wrap')?.querySelector('textarea');
+  if (!doc || !f || f.disabled || f.classList.contains('hidden') || !canAutoFocus(doc)) return false;
+  try { f.focus({ preventScroll: true }); } catch { return false; }
+  return doc.activeElement === f;
+}
+
 /** Panel je otevřený: zobrazený (bez `hidden`) a ne odcházející duch (zavírání / přetvoření). */
 export const panelShown = (panel) => !!panel && !panel.classList.contains('hidden') && !isMorphGhost(panel);
 
