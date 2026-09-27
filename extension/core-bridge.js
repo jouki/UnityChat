@@ -20,6 +20,7 @@ import * as reaction from './core/reaction.js';
 import * as emotePicker from './core/emote-picker.js';
 import * as mentions from './core/mentions.js';
 import * as colonEmotes from './core/colon-emotes.js';
+import * as emoteAutocomplete from './core/emote-autocomplete.js';
 import * as emotePreview from './core/emote-preview.js';
 import * as soundboard from './core/soundboard.js';
 import * as sfxRequest from './core/sfx-request.js';
@@ -45,7 +46,7 @@ import * as gifHost from './core/gif-host.js';
 import * as userSearch from './core/user-search.js';
 import * as anniversary from './core/anniversary.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...userSearch, ...anniversary });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emoteAutocomplete, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...userSearch, ...anniversary });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

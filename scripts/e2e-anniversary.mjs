@@ -7,6 +7,9 @@
 //  - persisted query → PersistedQueryNotFound → plný dotaz; cookie jen v hlavičce, nikdy v logu;
 //  - zavření resubu platí jen pro jeho id (další měsíc = nové id → banner znovu), resub × bez volání Twitche;
 //  - darované předplatné → poděkování dárci; prefers-reduced-motion → bez animace.
+//  - našeptávač emotů v poli zprávy (core/emote-autocomplete.js): Tab doplní a cykluje, šipky, Esc zavře jen seznam,
+//    Enter při otevřeném seznamu neodešle, „:jméno" jen se zapnutou volbou, seznam nad polem a neuříznutý;
+//    regrese hlavního pole (Tab, „:jméno" + Enter vloží bez odeslání, Esc).
 // Backend (api.jouki.cz) mockovaný v panelu, Twitch GQL mockovaný v service workeru (Fetch.requestPaused).
 // Spuštění: node scripts/e2e-anniversary.mjs
 import { spawn } from 'node:child_process';
@@ -96,6 +99,8 @@ const HISTORY = [
     color: '#8A2BE2', badgesRaw: 'subscriber/6', twitchEmotes: null, twitchEmotesOffset: 0, firstMsg: false, isAction: false, replyTo: null,
     isSubEvent: true, subPlan: '1000', subMonths: 7, subStreak: 3 },
 ];
+// Globální 7TV emoty pro našeptávač (řazení: ucZzClap, ucZzHappy, ucZzSad).
+const SEVENTV = ['ucZzHappy', 'ucZzSad', 'ucZzClap'].map((name, i) => ({ id: `e${i}`, name, flags: 0, data: { host: { url: `//cdn.7tv.app/emote/e${i}`, files: [{ name: '2x.webp' }] } } }));
 s.onevent = async (d) => {
   if (d.method === 'Target.targetCreated' && d.params.targetInfo.type === 'service_worker') { attachSw().catch(() => {}); return; }
   if (d.method !== 'Fetch.requestPaused') return;
@@ -117,9 +122,10 @@ s.onevent = async (d) => {
   if (u.pathname === '/auth/me') return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'tester', displayName: 'Tester' }, kick: null, youtube: null }, warnings: [] });
   if (u.pathname === '/chat/history') return json({ ok: true, messages: HISTORY, nextBefore: null });
   if (u.pathname.startsWith('/account/')) return json({ ok: true, email: null, emailVerified: false, warnings: [] });
+  if (u.hostname === '7tv.io' && u.pathname === '/v3/emote-sets/global') return json({ emotes: SEVENTV });
   return json({ ok: false, error: 'e2e' }, 404);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/soundboard', '/chat/history', '/nicknames', '/donate/', '/account/', '/gif', '/moderation/', '/commands', '/users', '/blacklist', '/announcements', '/reactions', '/streamers'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: ['/auth/me', '/soundboard', '/chat/history', '/nicknames', '/donate/', '/account/', '/gif', '/moderation/', '/commands', '/users', '/blacklist', '/announcements', '/reactions', '/streamers'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })).concat([{ urlPattern: '*7tv.io/v3/emote-sets/global*' }]) }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 400) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(100); } return false; };
@@ -152,7 +158,7 @@ check('stav: kontext + resub plným dotazem, ModiversaryStatusQuery hash → Per
   ['UcAnnivContext:query', 'UcAnnivResub:query', 'ModiversaryStatusQuery:hash', 'ModiversaryStatusQuery:query'].every((x) => gqlOps().includes(x)), JSON.stringify(gqlOps()));
 const ms = gqlLog.find((g) => g.op === 'ModiversaryStatusQuery');
 check('ModiversaryStatusQuery: parametrizované proměnné {channelID, userID} + hash z podkladu', ms && ms.variables.channelID === '160028137' && ms.variables.userID === '4242' && ms.hash === '811a62815487547845c1da820f8f9a927ef90f348bf818b3b6c6753246f3aaa0', JSON.stringify(ms));
-check('GQL: cookie jen jako Authorization OAuth', gqlLog.every((g) => g.auth === `OAuth ${COOKIE}`));
+check('GQL: cookie jen jako Authorization OAuth', gqlLog.every((g) => g.auth === `OAuth ${COOKIE}`), JSON.stringify(gqlLog.filter((g) => g.auth !== `OAuth ${COOKIE}`).map((g) => [g.op, g.via, g.auth])));
 
 await click('.uc-anniv-share');
 check('Sdílet → rozbalené pole, Sdílet schované', await until(`document.querySelector('.uc-anniv').classList.contains('uc-anniv--open') && document.querySelector('.uc-anniv-share').hidden`, 2000));
@@ -170,6 +176,82 @@ check('odkaz → Enter nic neodešle', gqlLog.length === gqlBeforeLink);
 await typeInto('.uc-anniv-input', 'Díky Robe!');
 check('bez odkazu → varování zmizí', await ev(`document.querySelector('.uc-anniv-linkwarn').hidden`) === true);
 check('počítadlo 10/500', await txt('.uc-anniv-count') === '10/500');
+
+// ---- našeptávač emotů v poli zprávy (core/emote-autocomplete.js) ----
+const AI = '.uc-anniv-input';
+const key = (sel, k, extra = {}) => ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); const k = new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true, ...${JSON.stringify(extra)} }); e.dispatchEvent(k); return k.defaultPrevented; })()`);
+const val = (sel) => ev(`document.querySelector(${JSON.stringify(sel)}).value`);
+const floatList = () => ev(`(() => { const el = document.querySelector('.emote-suggest--float'); if (!el || el.classList.contains('hidden')) return null; return { items: [...el.querySelectorAll('.es-item')].map((i) => i.querySelector('.es-name-inner').textContent), sel: el.querySelector('.es-item.selected .es-name-inner')?.textContent || null, src: [...el.querySelectorAll('.es-src')].map((x) => x.textContent), ft: !!el.querySelector('#es-fulltext'), img: el.querySelectorAll('.es-item img').length }; })()`);
+const setColon = (on) => ev(`(() => { const b = document.getElementById('chk-ac-colon'); b.checked = ${on}; b.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+check('7TV emoty načtené (mock)', await until(`true`, 10) && await ev(`!!document.querySelector('.uc-anniv-input')`) === true);
+const shares = () => gqlLog.filter((g) => /Share|SendUser/.test(g.op)).length;
+const gqlBeforeAc = shares();
+await typeInto(AI, 'Díky ucZz');
+const tabPrevented = await key(AI, 'Tab');
+check('AC Tab doplní první emote (ucZzClap) a zabrání přesunu fokusu', tabPrevented === true && await val(AI) === 'Díky ucZzClap ', await val(AI));
+const fl1 = await floatList();
+check('AC seznam: 3 emoty, první vybraný, zdroj 7TV, obrázky, Fulltext', !!fl1 && fl1.items.join() === 'ucZzClap,ucZzHappy,ucZzSad' && fl1.sel === 'ucZzClap' && fl1.src.every((x) => x === '7TV') && fl1.img === 3 && fl1.ft, JSON.stringify(fl1));
+const geo = await ev(`(() => { const l = document.querySelector('.emote-suggest--float').getBoundingClientRect(); const i = document.querySelector('.uc-anniv-input').getBoundingClientRect(); return { lTop: l.top, lBottom: l.bottom, lLeft: l.left, lRight: l.right, iTop: i.top, iLeft: i.left, iRight: i.right, vh: innerHeight, vw: innerWidth, h: l.height }; })()`);
+check('AC seznam nad polem, celý v okně (neuříznutý)', geo && Math.abs(geo.lBottom - geo.iTop) <= 1 && geo.lTop >= 0 && geo.lRight <= geo.vw && Math.abs(geo.lLeft - geo.iLeft) <= 1 && geo.h > 40, JSON.stringify(geo));
+check('AC počítadlo se po doplnění přepočítá', await txt('.uc-anniv-count') === `${'Díky ucZzClap '.length}/500`, await txt('.uc-anniv-count'));
+await key(AI, 'Tab');
+check('AC Tab znovu → další emote', await val(AI) === 'Díky ucZzHappy ' && (await floatList())?.sel === 'ucZzHappy');
+await key(AI, 'Tab', { shiftKey: true });
+check('AC Shift+Tab → předchozí', await val(AI) === 'Díky ucZzClap ');
+await key(AI, 'ArrowDown');
+check('AC šipka dolů → další', await val(AI) === 'Díky ucZzHappy ');
+await key(AI, 'ArrowUp');
+check('AC šipka nahoru → předchozí', await val(AI) === 'Díky ucZzClap ');
+const enterPrevented = await key(AI, 'Enter');
+await sleep(300);
+check('AC Enter při otevřeném seznamu: potvrdí, zavře seznam, neodešle', enterPrevented === true && await floatList() === null && shares() === gqlBeforeAc
+  && await val(AI) === 'Díky ucZzClap ' && await ev(`document.querySelector('.uc-anniv').classList.contains('uc-anniv--open')`) === true);
+await typeInto(AI, 'Díky ucZz');
+await key(AI, 'Tab');
+await key(AI, 'Escape');
+check('AC Esc zavře jen seznam (pole zprávy zůstává otevřené)', await floatList() === null && await ev(`document.querySelector('.uc-anniv').classList.contains('uc-anniv--open')`) === true);
+await key(AI, 'Tab');
+await key(AI, 'ArrowRight');
+check('AC → potvrdí a zavře seznam', await floatList() === null && await val(AI) === 'Díky ucZzClap ');
+await setColon(false);
+await typeInto(AI, 'Díky :ucZz');
+check('AC „:ucZz" s vypnutou volbou → žádný seznam', await floatList() === null);
+await setColon(true);
+await typeInto(AI, 'Díky :ucZz');
+const fl2 = await floatList();
+check('AC „:ucZz" se zapnutou volbou → seznam bez Tabu, text beze změny', !!fl2 && fl2.items.length === 3 && await val(AI) === 'Díky :ucZz', JSON.stringify(fl2));
+// Jako v hlavním poli: první šipka / Tab u seznamu otevřeného psaním jen vloží vybraný, další posouvá.
+await key(AI, 'ArrowDown');
+check('AC „:jméno": první šipka vloží vybraný emote', await val(AI) === 'Díky ucZzClap ' && (await floatList())?.sel === 'ucZzClap');
+await key(AI, 'ArrowDown');
+await key(AI, 'Enter');
+await sleep(300);
+check('AC „:jméno" + Enter vloží vybraný emote (bez dvojtečky), neodešle', await val(AI) === 'Díky ucZzHappy ' && await floatList() === null && shares() === gqlBeforeAc, JSON.stringify([await val(AI), await floatList(), shares() - gqlBeforeAc]));
+await typeInto(AI, 'Díky :xyzq');
+check('AC „:xyzq" bez shody → žádný seznam', await floatList() === null);
+await typeInto(AI, 'Díky ucZz');
+await key(AI, 'Tab');
+await click('.uc-anniv-cancel');
+check('AC Zrušit sbalí pole i seznam', await floatList() === null);
+await click('.uc-anniv-share');
+
+// ---- regrese hlavního pole (stejné stavební kusy) ----
+const MI = '#msg-input';
+await ev(`(() => { const e = document.querySelector('#msg-input'); e.value = 'ucZz'; e.setSelectionRange(4, 4); return true; })()`);
+await key(MI, 'Tab');
+const mainList = await ev(`(() => { const el = document.getElementById('emote-suggest'); if (!el || el.classList.contains('hidden')) return null; return { items: [...el.querySelectorAll('.es-item .es-name-inner')].map((i) => i.textContent), sel: el.querySelector('.es-item.selected .es-name-inner')?.textContent, src: el.querySelector('.es-src')?.textContent, ft: !!el.querySelector('#es-fulltext') }; })()`);
+check('hlavní pole: Tab doplní ucZzClap, #emote-suggest se 3 emoty, 7TV, Fulltext', await val(MI) === 'ucZzClap ' && mainList?.items.join() === 'ucZzClap,ucZzHappy,ucZzSad' && mainList.sel === 'ucZzClap' && mainList.src === '7TV' && mainList.ft, JSON.stringify(mainList));
+await key(MI, 'Tab');
+check('hlavní pole: Tab cykluje', await val(MI) === 'ucZzHappy ');
+await key(MI, 'Escape');
+check('hlavní pole: Esc zavře seznam', await ev(`document.getElementById('emote-suggest').classList.contains('hidden')`) === true);
+await typeInto(MI, ':ucZz');
+check('hlavní pole: „:ucZz" se zapnutou volbou otevře seznam', await ev(`!document.getElementById('emote-suggest').classList.contains('hidden')`) === true);
+const mainEnter = await key(MI, 'Enter');
+check('hlavní pole: „:jméno" + Enter vloží emote, neodešle', mainEnter === true && await val(MI) === 'ucZzClap ' && await ev(`document.getElementById('emote-suggest').classList.contains('hidden')`) === true);
+await typeInto(MI, '');
+await setColon(false);
+await typeInto(AI, 'Díky Robe!');
 // Zrušit sbalí, Sdílet znovu otevře s textem.
 await click('.uc-anniv-cancel');
 check('Zrušit sbalí pole', await until(`!document.querySelector('.uc-anniv').classList.contains('uc-anniv--open')`, 1000));

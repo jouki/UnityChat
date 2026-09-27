@@ -2226,46 +2226,28 @@ class UnityChat {
         return;
       }
       // Šipky během aktivního autocomplete
-      if (this._ac && this._ac.matches.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          this._acTab(1);
-          return;
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          this._acTab(-1);
-          return;
-        }
-        if (e.key === 'ArrowRight') {
-          // Potvrdit výběr — kurzor je už za doplněným textem, jen zavřít
-          // suggest list.
-          e.preventDefault();
-          this._acHide();
-          return;
-        }
-        if (e.key === 'Enter') {
-          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern)
-          // a pro „:jméno" emote seznam (jako na Twitchi — Enter vloží
-          // zvýrazněný emote místo odeslání zprávy).
-          // Pro Tab-triggered emote / !cmd / /uc autocomplete propadne dolů
-          // na _sendMessage (původní funkcionalita — Tab/ArrowRight už emote
-          // vložilo, Enter logicky odešle zprávu).
-          if (this._ac.trigger === 'colon' || this._ac._type === 'usercmd') {
-            e.preventDefault();
-            this._acApply();
-            this._acHide();
-            return;
-          }
-          const isUserAc = this._ac.kind === 'user'
-            || this._ac.matches[0]?.startsWith?.('@');
-          if (isUserAc) {
-            e.preventDefault();
-            this._acHide();
-            return;
-          }
-          // Fall through — emote/cmd autocomplete: Enter sends message
-        }
+      // ↓/↑ cyklují, → potvrdí (kurzor je už za doplněným textem, jen zavřít).
+      // Enter potvrdí JEN pro @username autocomplete (chat-app pattern) a pro
+      // „:jméno" emote seznam / `/user` nápovědu (jako na Twitchi — Enter vloží
+      // zvýrazněnou položku místo odeslání zprávy). Pro Tab-triggered emote /
+      // !cmd / /uc propadne dolů na _sendMessage (Tab už emote vložil).
+      // Rozhodnutí sdílí pole výročí (core/emote-autocomplete.js acKeyAction).
+      const acAct = window.UC_CORE.acKeyAction(this._ac, e.key);
+      if (acAct === 'next' || acAct === 'prev') {
+        e.preventDefault();
+        this._acTab(acAct === 'next' ? 1 : -1);
+        return;
+      }
+      if (acAct === 'close') {
+        e.preventDefault();
+        this._acHide();
+        return;
+      }
+      if (acAct === 'apply-close') {
+        e.preventDefault();
+        this._acApply();
+        this._acHide();
+        return;
       }
       // Message history (ArrowUp/Down). Multi-line draft / history zpráva:
       // šipka prvně posouvá kurzor v textu, teprve při dosažení okraje
@@ -2367,41 +2349,18 @@ class UnityChat {
 
   // ---- Emote Tab autocomplete (suggest list) ----
 
+  // Stav, cyklování a vložení sdílí core/emote-autocomplete.js (i pole výročí); tady jen zdroje hlavního pole.
   _acTab(dir) {
     const input = this.msgInput;
-    const text = input.value;
-    const pos = input.selectionStart;
-
-    // Cycling - opakovaný Tab / Shift+Tab
-    if (this._ac && this._ac.end === pos) {
-      if (!this._ac.applied) {
-        // First TAB after input-triggered suggest → confirm current selection
-        this._acApply();
-        return;
-      }
-      const len = this._ac.matches.length;
-      this._ac.index = (this._ac.index + dir + len) % len;
-      this._acApply();
-      return;
-    }
-
-    // Nový autocomplete
-    let ws = pos;
-    while (ws > 0 && text[ws - 1] !== ' ') ws--;
-    const partial = text.substring(ws, pos);
-    if (!partial) return;
-
-    let matches;
-    if (partial.startsWith('@')) {
+    // Opakovaný Tab / Shift+Tab cykluje (první Tab po seznamu otevřeném psaním jen potvrdí výběr), jinak nový dotaz.
+    const next = window.UC_CORE.acTabStep(this._ac, input.value, input.selectionStart, dir, (partial) => (partial.startsWith('@')
       // @username autocomplete (@ samotné = všichni uživatelé)
-      matches = this._acUserMatches(partial.substring(1).toLowerCase());
-    } else {
+      ? { matches: this._acUserMatches(partial.substring(1).toLowerCase()), kind: 'user' }
       // Emote autocomplete — honors the per-session "Fulltext" toggle
-      matches = this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true });
-    }
-    if (!matches.length) { this._acHide(); return; }
-
-    this._ac = { start: ws, end: pos, index: 0, matches, prefix: partial, kind: partial.startsWith('@') ? 'user' : 'emote' };
+      : { matches: this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true }), kind: 'emote' }));
+    if (next === undefined) return;
+    if (!next) { this._acHide(); return; }
+    this._ac = next;
     this._acApply();
   }
 
@@ -2422,15 +2381,7 @@ class UnityChat {
   _acApply() {
     const ac = this._ac;
     if (!ac) return;
-    const match = ac.matches[ac.index];
-    const input = this.msgInput;
-    const text = input.value;
-    const before = text.substring(0, ac.start);
-    const after = text.substring(ac.end);
-    input.value = before + match + ' ' + after;
-    ac.end = ac.start + match.length + 1;
-    ac.applied = true;
-    input.setSelectionRange(ac.end, ac.end);
+    window.UC_CORE.acApplyMatch(this.msgInput, ac);
     this._acRender();
   }
 
@@ -2477,14 +2428,7 @@ class UnityChat {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
     }
-    if (this.emotes.channel7tv.has(name)) return '7TV';
-    if (this.emotes.global7tv.has(name)) return '7TV';
-    if (this.emotes.bttvEmotes.has(name)) return 'BTTV';
-    if (this.emotes.ffzEmotes.has(name)) return 'FFZ';
-    if (this.emotes.twitchNative.has(name)) return 'Twitch';
-    if (this.emotes.kickNative.has(name)) return 'Kick';
-    if (this.emotes.ucEmotes.has(name)) return 'UChat';
-    return '';
+    return window.UC_CORE.emoteSourceLabel(this.emotes, name);
   }
 
   _acRender() {
@@ -2498,18 +2442,12 @@ class UnityChat {
       document.getElementById('input-area').appendChild(el);
     }
 
-    const VISIBLE = 4;
+    const core = window.UC_CORE;
     const total = ac.matches.length;
     const idx = ac.index;
 
-    // Okno kolem vybraného (posun aby vybraný byl vidět)
-    let winStart = ac._winStart || 0;
-    if (idx < winStart) winStart = idx;
-    if (idx >= winStart + VISIBLE) winStart = idx - VISIBLE + 1;
-    winStart = Math.max(0, Math.min(winStart, total - VISIBLE));
-    ac._winStart = winStart;
-
-    const winEnd = Math.min(winStart + VISIBLE, total);
+    // Okno kolem vybraného (posun aby vybraný byl vidět) — sdílené s polem výročí (core/emote-autocomplete.js)
+    const [winStart, winEnd] = core.acWindowRange(ac);
 
     let html = '';
     // Fulltext-search toggle row (only for emote completion, not @user) —
@@ -2517,17 +2455,17 @@ class UnityChat {
     // rather than `startsWith`, so middle-of-name matches show up too.
     const isUserSearch = ac.kind === 'userSearch';
     if (ac.kind === 'emote' || isUserSearch) {
-      const checked = (isUserSearch ? this.config.acUserFulltext : this.config.acFulltext) === true ? ' checked' : '';
-      html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
+      html += core.fulltextToggleHtml((isUserSearch ? this.config.acUserFulltext : this.config.acFulltext) === true);
     }
     for (let i = winStart; i < winEnd; i++) {
       const name = ac.matches[i];
       const sel = i === idx ? ' selected' : '';
-      html += `<div class="es-item${isUserSearch ? ' es-user' : ''}${sel}" data-idx="${i}">`;
+      let icon = '';
 
       if (isUserSearch) {
         // `/user`: tečka v barvě jména, logo platformy, přezdívka + šedě login (core userSearchItemHtml)
-        html += window.UC_CORE.userSearchItemHtml(ac.users[i], {
+        html += `<div class="es-item es-user${sel}" data-idx="${i}">`;
+        html += core.userSearchItemHtml(ac.users[i], {
           esc: (t) => this.emotes._eh(t),
           escAttr: (t) => this.emotes._ea(t),
           platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
@@ -2536,41 +2474,35 @@ class UnityChat {
         html += '</div>';
         continue;
       } else if (name === '/user') {
-        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+        icon = `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('!')) {
         // Chat command: loga všech zdrojů, kde spouštěč je (Židolišta první, pak StreamElements)
-        html += '<span class="es-logos">' + this._bangSources(name).map((src) => {
+        icon = '<span class="es-logos">' + this._bangSources(name).map((src) => {
           const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
           return `<img class="es-logo${src === 'Židolišta' ? ' es-logo-zidolista' : ''}" src="${logo}" alt="${this.emotes._ea(src)}">`;
         }).join('') + '</span>';
       } else if (name.startsWith('/uc ')) {
         // UC command: oranžová tečka
-        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+        icon = `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
         const u = this._acUserEntry(name);
         const col = this.emotes._sc(
           this.nicknames?.getColor(u?.platform, u?.name) || u?.color
         ) || '#ccc';
-        html += `<span class="es-dot" style="background:${col}"></span>`;
+        icon = `<span class="es-dot" style="background:${col}"></span>`;
       } else {
         // Emote: obrázek
-        const url = this.emotes.getAnyUrl(name);
-        if (url) html += `<img src="${this.emotes._ea(url)}" alt="${this.emotes._ea(name)}">`;
+        icon = core.emoteIconHtml(this.emotes, name);
       }
 
-      const src = this._acSource(name);
-      html += `<span class="es-name"><span class="es-name-inner">${this.emotes._eh(name)}</span></span>`;
-      if (src) html += `<span class="es-src">${src}</span>`;
-      html += '</div>';
+      html += core.suggestRowHtml({ i, selected: i === idx, iconHtml: icon, name, src: this._acSource(name), esc: (t) => this.emotes._eh(t) });
     }
 
     if (isUserSearch && !total) {
       html += `<div class="es-status">${ac.loading ? 'Hledám…' : ac.error ? 'Hledání se nepovedlo.' : 'Nikdo takový v tomhle kanálu nepsal.'}</div>`;
     }
-    if (total > VISIBLE) {
-      html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
-    }
+    html += core.suggestCounterHtml(idx, total);
 
     const logosBefore = this._acAnimateLogos ? this._acSnapshotLogos(el) : null;
     el.innerHTML = html;
@@ -2579,40 +2511,22 @@ class UnityChat {
 
     // Wire fulltext checkbox — toggles persistent flag and re-runs the
     // current search, so the panel refilters live without retyping.
-    const ftBox = el.querySelector('#es-fulltext');
-    if (ftBox) {
-      ftBox.addEventListener('change', (e) => {
-        e.stopPropagation();
-        if (isUserSearch) this.config.acUserFulltext = ftBox.checked;
-        else this.config.acFulltext = ftBox.checked;
-        this._saveConfig();
-        if (isUserSearch) this._userSearchRequery();
-        else this._acRefilter();
-        this.msgInput.focus();
-      });
-      // Don't let mousedown on the label steal focus from the textarea.
-      const lbl = el.querySelector('.es-toggle');
-      if (lbl) lbl.addEventListener('mousedown', (e) => e.preventDefault());
-    }
+    // (Mousedown na labelu nebere fokus textarea.)
+    core.wireFulltextToggle(el, (checked) => {
+      if (isUserSearch) this.config.acUserFulltext = checked;
+      else this.config.acFulltext = checked;
+      this._saveConfig();
+      if (isUserSearch) this._userSearchRequery();
+      else this._acRefilter();
+      this.msgInput.focus();
+    });
 
-    // Detekce overflow + nastavení CSS variable pro scroll animaci
-    el.querySelectorAll('.es-item').forEach((item) => {
-      const outer = item.querySelector('.es-name');
-      const inner = item.querySelector('.es-name-inner');
-      if (outer && inner) {
-        const overflow = inner.scrollWidth - outer.clientWidth;
-        if (overflow > 0) {
-          item.classList.add('overflowing');
-          item.style.setProperty('--scroll-dist', `-${overflow + 8}px`);
-        }
-      }
-      item.addEventListener('click', () => {
-        const i = parseInt(item.dataset.idx, 10);
-        if (this._ac?.kind === 'userSearch') { this._acPickUser(i); return; }
-        this._ac.index = i;
-        this._acApply();
-        this.msgInput.focus();
-      });
+    // Detekce overflow (CSS --scroll-dist pro animaci vybrané položky) + klik = výběr
+    core.wireSuggestRows(el, (i) => {
+      if (this._ac?.kind === 'userSearch') { this._acPickUser(i); return; }
+      this._ac.index = i;
+      this._acApply();
+      this.msgInput.focus();
     });
   }
 
@@ -6602,6 +6516,15 @@ class UnityChat {
         onShare: (item, opts) => this._annivShare(item, opts),
         onDismiss: (item) => this._annivDismiss(item),
         onHide: () => this._annivShowNext(),
+        // Našeptávač emotů v poli zprávy: stejné zdroje, řazení, vzhled i nastavení („:jméno", Fulltext) jako hlavní
+        // pole. Enter při otevřeném seznamu jen potvrdí výběr — sdílení výročí je jednorázové, nesmí odejít omylem.
+        attachInput: (input, { onApply }) => window.UC_CORE.attachEmoteAutocomplete(input, {
+          emotes: this.emotes,
+          options: () => ({ colon: this.config.acColon === true, fulltext: this.config.acFulltext === true }),
+          setFulltext: (on) => { this.config.acFulltext = on; this._saveConfig(); },
+          onApply,
+          enterConfirms: true,
+        }),
         log: (tag, text) => this._ucLog(tag, text),
       });
     }

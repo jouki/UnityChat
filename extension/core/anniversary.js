@@ -182,12 +182,16 @@ const reducedMotion = (win) => { try { return !!win?.matchMedia?.('(prefers-redu
  * (limit, počítadlo, u resubu volba série) s Odeslat / Zrušit.
  *   onShare(item, { text, includeStreak }) → Promise<{ ok, error? }>  (error = česká hláška)
  *   onDismiss(item)                         → volá se po × (host si zavření pamatuje / volá Twitch)
+ *   attachInput(input, { onApply })         → volitelné: host napojí na pole zprávy našeptávač emotů
+ *                                             (core/emote-autocomplete.js attachEmoteAutocomplete) a vrátí
+ *                                             { close, destroy }; volá se před vlastními listenery banneru,
+ *                                             klávesu obslouženou našeptávačem (defaultPrevented) banner ignoruje
  * Po úspěchu krátce „Sdíleno v chatu!“ a banner zmizí. `prefers-reduced-motion` → bez animací.
  */
 export class AnniversaryBanner {
-  constructor({ doc, host, onShare, onDismiss, onHide = null, log = () => {} }) {
-    this.doc = doc; this.host = host; this.onShare = onShare; this.onDismiss = onDismiss; this.onHide = onHide; this.log = log;
-    this.item = null; this.el = null; this._busy = false; this._t = null;
+  constructor({ doc, host, onShare, onDismiss, onHide = null, attachInput = null, log = () => {} }) {
+    this.doc = doc; this.host = host; this.onShare = onShare; this.onDismiss = onDismiss; this.onHide = onHide; this.attachInput = attachInput; this.log = log;
+    this.item = null; this.el = null; this._busy = false; this._t = null; this._ac = null;
   }
 
   get current() { return this.item; }
@@ -216,7 +220,12 @@ export class AnniversaryBanner {
     a.finished.catch(() => {}).then(done);
   }
 
-  _clear() { if (this._t) { clearTimeout(this._t); this._t = null; } this._busy = false; }
+  _clear() {
+    if (this._t) { clearTimeout(this._t); this._t = null; }
+    this._busy = false;
+    try { this._ac?.destroy(); } catch { /* ignore */ }
+    this._ac = null;
+  }
 
   _build(item) {
     const d = this.doc;
@@ -285,6 +294,7 @@ export class AnniversaryBanner {
     const setOpen = (open) => {
       root.classList.toggle('uc-anniv--open', open);
       share.hidden = open;
+      if (!open) this._ac?.close();
       note.textContent = '';
       if (open) { sync(); try { input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); } catch { /* ignore */ } }
     };
@@ -319,11 +329,14 @@ export class AnniversaryBanner {
       note.textContent = res?.error || annivErrorText();
     };
 
+    // Našeptávač emotů hostitele — před vlastním keydown, ať Enter / Esc při otevřeném seznamu nejdřív obslouží on.
+    if (this.attachInput) { try { this._ac = this.attachInput(input, { onApply: sync }) || null; } catch { this._ac = null; } }
     share.addEventListener('click', () => setOpen(true));
     cancel.addEventListener('click', () => { if (!this._busy) setOpen(false); });
     send.addEventListener('click', submit);
     input.addEventListener('input', sync);
     input.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return; // obslouženo našeptávačem emotů
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!this._busy) setOpen(false); }
     });

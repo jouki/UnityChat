@@ -2734,7 +2734,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 
 /* ---- Emote Suggest List ---- */
 
-#emote-suggest {
+#emote-suggest, .emote-suggest {
   position: absolute;
   bottom: 100%;
   left: 0;
@@ -2748,7 +2748,17 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   overflow: hidden;
 }
 
-#emote-suggest.hidden { display: none; }
+#emote-suggest.hidden, .emote-suggest.hidden { display: none; }
+/* Plovoucí seznam u jiných polí (zpráva výročí, core/emote-autocomplete.js): position fixed nad polem (pod ním,
+   když nahoře není místo), aby ho neuřízl kontejner s overflow: hidden. left / width / top|bottom nastaví JS. */
+.emote-suggest--float {
+  position: fixed;
+  right: auto;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+  z-index: 1000;
+}
+.emote-suggest--float.emote-suggest--below { bottom: auto; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
 
 /* Fulltext toggle row at the top of the suggest panel — opt-in switch
    from "starts with" matching to "contains" matching. */
