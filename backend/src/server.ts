@@ -58,7 +58,7 @@ import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { createPhashWorker, dbGifLibraryStore, startPhashWorker } from './lib/gifLibrary.js';
-import { computePhash } from './lib/gifPhash.js';
+import { computePhash, probeMedia } from './lib/gifPhash.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
 import { publishRestored } from './lib/linkRestore.js';
@@ -117,7 +117,8 @@ const gifUnlocker = createUnlocker({
 const gifUnlockEstimator = createUnlockEstimator();
 const gifFlow = createGifFlow({
   store: dbGifStore,
-  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress }),
+  // probe: rozměr a počet snímků bez dekódování (sharp / ffprobe) → nad 2048 px / 600 snímků too_large (audit SEC-7).
+  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k) }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   claim: (workspace) => claimGifSlot(workspace),

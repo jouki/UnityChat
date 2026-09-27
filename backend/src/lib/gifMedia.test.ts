@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import {
   classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia,
-  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll,
+  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll,
 } from './gifMedia.js';
 
 // ---- vzorky médií ----
@@ -165,6 +165,25 @@ test('resolveGif: přímý Tenor GIF, který bez Accept vrací HTML → s Accept
   assert.deepEqual([r.kind, r.width, r.height], ['gif', 220, 124]);
   const html = fakeTransport({ [url]: { headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>') } });
   await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: html, lookupAll: publicDns }), (e: GifError) => e.code === 'bad_type');
+});
+
+test('SEC-7: limit rozměrů a snímků — nad 2048 px (hlavička i sonda) nebo nad 600 snímků = too_large, před uložením', async () => {
+  const url = 'https://media1.tenor.com/m/b/cat.gif';
+  const tr = (body: Buffer) => fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body } });
+  // Hlavička stačí: obří logická obrazovka se odmítne i bez sondy (sharp / ffprobe).
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif(4096, 100)), lookupAll: publicDns }), (e: GifError) => e.code === 'too_large');
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif(20_000, 100)), lookupAll: publicDns }), (e: GifError) => e.code === 'too_large', 'i nad 16384 (dřív null = bez kontroly)');
+  const probed: string[] = [];
+  const probe = (p: { width: number | null; height: number | null; frames: number | null }) => async (_b: Buffer, kind: string) => { probed.push(kind); return p; };
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: 240, frames: GIF_MAX_FRAMES + 1 }) }), (e: GifError) => e.code === 'too_large');
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: GIF_MAX_DIM + 1, frames: 2 }) }), (e: GifError) => e.code === 'too_large');
+  const ok = await resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: 240, frames: GIF_MAX_FRAMES }) });
+  assert.deepEqual([ok.width, ok.height], [320, 240]);
+  assert.deepEqual(probed, ['gif', 'gif', 'gif']);
+  // Sonda nemá nástroj (null) → jen hlavička.
+  assert.equal((await resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: async () => null })).width, 320);
+  assert.equal(GIF_MAX_DIM, 2048);
+  assert.equal(GIF_MAX_FRAMES, 600);
 });
 
 test('resolveGif: limit velikosti (Content-Length i streamem), magic bytes, špatný typ', async () => {

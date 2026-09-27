@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { GifKind } from './gifMedia.js';
+import { GifError, type GifKind, type MediaProbe } from './gifMedia.js';
 
 export const PHASH_FRAMES = 8;
 export const PHASH_MAX_HAMMING = 10;
@@ -22,8 +22,13 @@ export const PHASH_MIN_SCORE = 0.6;
 export const FLAT_HASH = '0000000000000000';
 /** Časový limit výpočtu (ffmpeg / ffprobe se po něm zabije SIGKILL, sharp se přestane čekat). */
 export const PHASH_TOOL_TIMEOUT_MS = 20_000;
-/** Strop pixelů vstupu pro sharp (u animace šířka × výška × snímky) — proti dekompresní bombě. */
-export const PHASH_MAX_INPUT_PIXELS = 100_000_000;
+/**
+ * Strop pixelů vstupu pro sharp (u animace šířka × výška × snímky) — proti dekompresní bombě. 25 M px = ~100 MB RGBA
+ * (audit SEC-7; nová média navíc projdou limitem GIF_MAX_DIM / GIF_MAX_FRAMES už při stažení).
+ */
+export const PHASH_MAX_INPUT_PIXELS = 25_000_000;
+/** Časový limit sondy média při stažení (probeMedia). */
+export const PROBE_TIMEOUT_MS = 10_000;
 
 const HASH_RE = /^[0-9a-f]{16}$/;
 
@@ -145,27 +150,74 @@ const run = (cmd: string, args: string[], timeoutMs: number, binary: boolean) =>
   });
 });
 
+/** Vstup ffmpeg / ffprobe: vždy MP4 demuxer a jen lokální soubor. */
+const MP4_INPUT = ['-f', 'mp4', '-protocol_whitelist', 'file'];
+
+/** Dočasný soubor s médiem (MP4: moov může být na konci → nástroje potřebují seek). */
+async function withTempFile<T>(bytes: Buffer, fn: (file: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), 'uc-gif-'));
+  try {
+    const file = join(dir, 'm.mp4');
+    await writeFile(file, bytes);
+    return await fn(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Sonda média při stažení (audit SEC-7) — rozměr snímku a počet snímků BEZ dekódování pixelů:
+ * GIF / WebP přes `sharp().metadata()` (animated), MP4 přes `ffprobe -count_packets` (pakety, ne dekódování).
+ * Nástroj chybí → null (volající se spolehne na hlavičku); poškozené médium / timeout → GifError('bad_media').
+ */
+export async function probeMedia(bytes: Buffer, kind: GifKind, deps: PhashDeps = {}): Promise<MediaProbe | null> {
+  const timeout = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
+  if (kind === 'mp4') {
+    return withTempFile(bytes, async (file) => {
+      let out: { stdout: Buffer | string };
+      try {
+        out = await run(deps.ffprobe ?? 'ffprobe', ['-v', 'error', ...MP4_INPUT, '-select_streams', 'v:0', '-count_packets',
+          '-show_entries', 'stream=width,height,nb_read_packets', '-of', 'json', file], timeout, false);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw new GifError('bad_media');
+      }
+      let st: Record<string, unknown> | undefined;
+      try { st = (JSON.parse(String(out.stdout)) as { streams?: Array<Record<string, unknown>> }).streams?.[0]; } catch { st = undefined; }
+      if (!st) throw new GifError('bad_media');
+      const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+      return { width: num(st.width), height: num(st.height), frames: num(st.nb_read_packets) };
+    });
+  }
+  let sharp: SharpFn;
+  try { sharp = await (deps.loadSharp ?? defaultLoadSharp)(); } catch { return null; }
+  try {
+    // metadata() čte hlavičky snímků, pixely nedekóduje → strop pixelů tu není potřeba (počet snímků teprve zjišťujeme).
+    const md = await withTimeout(sharp(bytes, { animated: true, limitInputPixels: false }).metadata(), timeout);
+    const w = md.width ?? null, h = md.pageHeight ?? md.height ?? null;
+    return { width: w, height: h, frames: md.pages ?? 1 };
+  } catch {
+    throw new GifError('bad_media');
+  }
+}
+
 /** MP4: dočasný soubor (moov může být na konci → potřeba seek), ffprobe délka, ffmpeg `fps=N/délka` → 9×8 šedé. */
 async function framesViaFfmpeg(bytes: Buffer, deps: PhashDeps): Promise<string[]> {
   const timeout = deps.timeoutMs ?? PHASH_TOOL_TIMEOUT_MS;
-  const dir = await mkdtemp(join(tmpdir(), 'uc-phash-'));
-  const file = join(dir, 'm.mp4');
-  try {
-    await writeFile(file, bytes);
-    const probe = await run(deps.ffprobe ?? 'ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], timeout, false);
+  return withTempFile(bytes, async (file) => {
+    // -f mp4 + jen protokol file: demuxer podle obsahu (HLS, concat…) by mohl sahat jinam (audit SEC-7).
+    const probe = await run(deps.ffprobe ?? 'ffprobe', ['-v', 'error', ...MP4_INPUT, '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file], timeout, false);
     const duration = Number(String(probe.stdout).trim());
     const known = Number.isFinite(duration) && duration > 0;
     // Středy N dílů (jako u GIFu): začít o půl intervalu později, pak N snímků za celou délku.
     const seek = known ? ['-ss', (duration / PHASH_FRAMES / 2).toFixed(6)] : [];
     const fps = known ? `fps=${(PHASH_FRAMES / duration).toFixed(6)},` : '';
     // -threads 1 (dekodér) + -filter_threads 1: jedno vlákno, hash nesmí brát CPU VPS.
-    const out = await run(deps.ffmpeg ?? 'ffmpeg', ['-v', 'error', '-nostdin', '-threads', '1', ...seek, '-i', file, '-filter_threads', '1', '-threads', '1', '-frames:v', '2000', '-vf', `${fps}scale=9:8:flags=area,format=gray`, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'], timeout, true);
+    const out = await run(deps.ffmpeg ?? 'ffmpeg', ['-v', 'error', '-nostdin', '-threads', '1', ...seek, ...MP4_INPUT, '-i', file, '-filter_threads', '1', '-threads', '1', '-frames:v', '2000', '-vf', `${fps}scale=9:8:flags=area,format=gray`, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'], timeout, true);
     const raw = out.stdout as Buffer;
     const count = Math.floor(raw.length / 72);
     return pickEven(count, PHASH_FRAMES).map((i) => dhashFromGray(raw, i * 72));
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 }
 
 /** Pole hashů média, nebo null (nástroj chybí / selhal / bez snímků) — varování do logu, nikdy výjimka. */

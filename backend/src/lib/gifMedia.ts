@@ -266,7 +266,19 @@ export interface FetchDeps {
   estimator?: UnlockEstimator | null;
   /** Průběh stahování média (fáze download = bajty; unlock = odhad doby Bright Data). */
   onProgress?: (e: GifFetchProgress) => void;
+  /** Sonda rozměrů a počtu snímků bez dekódování (lib/gifPhash.ts probeMedia); chybí = jen rozměry z hlavičky. */
+  probe?: MediaProber;
 }
+
+/**
+ * Strop rozměru (px na stranu) a počtu snímků média (audit SEC-7): GIF 16384×16384 nebo tisíce snímků má pár set kB,
+ * ale dekódování v prohlížeči modů / v OBS / ve worker hashi = stovky MB až GB RAM. Nad limit → GifError('too_large').
+ */
+export const GIF_MAX_DIM = 2048;
+export const GIF_MAX_FRAMES = 600;
+export interface MediaProbe { width: number | null; height: number | null; frames: number | null }
+/** Sonda média: null = nástroj chybí (jen hlavička); výjimka = poškozené médium (odmítnout). */
+export type MediaProber = (bytes: Buffer, kind: GifKind) => Promise<MediaProbe | null>;
 
 export type GifFetchProgress =
   | { phase: 'download'; loaded: number; total: number | null }
@@ -393,7 +405,8 @@ export function contentTypeOk(ct: string | undefined, kind: GifKind): boolean {
   return kind === 'mp4' ? t.startsWith('video/') : t.startsWith('image/');
 }
 
-const okDim = (n: number): number | null => (Number.isFinite(n) && n > 0 && n <= 16384 ? n : null);
+// Bez horního stropu: rozměr nad GIF_MAX_DIM médium odmítne (withinLimits), ne že by se tvářilo jako neznámý.
+const okDim = (n: number): number | null => (Number.isFinite(n) && n > 0 ? n : null);
 
 /** Rozměry z hlavičky (GIF, WebP VP8/VP8L/VP8X, MP4 tkhd); neznámé → null. */
 export function mediaSize(b: Buffer, kind: GifKind): { width: number | null; height: number | null } {
@@ -580,9 +593,25 @@ export async function resolveGif(src: GifSource, deps: FetchDeps & { timeoutMs?:
   }
 }
 
+/**
+ * Limity média (audit SEC-7) ještě před uložením: rozměr z hlavičky, pak sonda (sharp metadata / ffprobe — snímky
+ * se nedekódují). Sonda bez nástroje → jen hlavička; poškozené médium → bad_media.
+ */
+export async function withinLimits(r: ResolvedGif, deps: Pick<FetchDeps, 'probe'>): Promise<ResolvedGif> {
+  const over = (n: number | null | undefined) => n != null && n > GIF_MAX_DIM;
+  if (over(r.width) || over(r.height)) throw new GifError('too_large');
+  if (!deps.probe) return r;
+  let p: MediaProbe | null;
+  try { p = await deps.probe(r.bytes, r.kind); }
+  catch (e) { throw e instanceof GifError ? e : new GifError('bad_media'); }
+  if (!p) return r;
+  if (over(p.width) || over(p.height) || (p.frames ?? 0) > GIF_MAX_FRAMES) throw new GifError('too_large');
+  return { ...r, width: r.width ?? p.width, height: r.height ?? p.height };
+}
+
 async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
   const signal = ctx.signal;
-  if (src.mode === 'direct') return fetchMedia(src.url, ctx, deps);
+  if (src.mode === 'direct') return withinLimits(await fetchMedia(src.url, ctx, deps), deps);
   const { res, url } = await safeGet(src.url, 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', ctx, deps);
   const ct = String(res.headers['content-type'] || (ctx.unlocked.length ? 'application/octet-stream' : ''));
   if (!/html/i.test(ct)) {
@@ -590,12 +619,12 @@ async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<R
     const bytes = await readLimited(res, GIF_MAX_BYTES, signal);
     const kind = sniffKind(bytes);
     if (!kind || !contentTypeOk(ct, kind)) throw new GifError('no_media');
-    return { bytes, kind, contentType: CONTENT_TYPES[kind], ...mediaSize(bytes, kind), sourceUrl: url.toString() };
+    return withinLimits({ bytes, kind, contentType: CONTENT_TYPES[kind], ...mediaSize(bytes, kind), sourceUrl: url.toString() }, deps);
   }
   const html = (await readLimited(res, PAGE_MAX_BYTES, signal, true)).toString('utf8');
   const media = pickOgMedia(html, url);
   if (!media) throw new GifError('no_media');
   const tags = pageTags(html);
-  const r = await fetchMedia(media, ctx, deps);
+  const r = await withinLimits(await fetchMedia(media, ctx, deps), deps);
   return tags.length ? { ...r, tags } : r;
 }

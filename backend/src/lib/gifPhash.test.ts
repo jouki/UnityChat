@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import sharp from 'sharp';
 import {
   PHASH_FRAMES, PHASH_MAX_HAMMING, PHASH_MIN_SCORE, dhashFromGray, hamming, pickFramesByTime, sequenceSimilarity,
-  isSimilarSequence, computePhash, FLAT_HASH, PHASH_MAX_INPUT_PIXELS, PHASH_TOOL_TIMEOUT_MS,
+  isSimilarSequence, computePhash, probeMedia, FLAT_HASH, PHASH_MAX_INPUT_PIXELS, PHASH_TOOL_TIMEOUT_MS,
 } from './gifPhash.js';
 
 // Syntetické animace: pruhy, které se posouvají (A), a šachovnice s rostoucím kruhem (B) — obsahově jiné.
@@ -123,6 +123,15 @@ test('computePhash: výpočet přes limit (zaseknutý sharp) → null + varován
   assert.equal(PHASH_TOOL_TIMEOUT_MS, 20_000);
 });
 
+test('SEC-7 probeMedia: GIF / WebP přes sharp (rozměr snímku, počet snímků) bez dekódování; chybí sharp → null; poškozené → bad_media', async () => {
+  const gif = await encode(framesA(), W, H, 'gif');
+  assert.deepEqual(await probeMedia(gif, 'gif'), { width: W, height: H, frames: N });
+  assert.deepEqual(await probeMedia(await encode(framesA(48, 32), 48, 32, 'webp'), 'webp'), { width: 48, height: 32, frames: N });
+  assert.equal(await probeMedia(gif, 'gif', { loadSharp: async () => { throw new Error('sharp chybí'); } }), null);
+  await assert.rejects(probeMedia(Buffer.from('GIF89a nesmysl'), 'gif'), (e: { code?: string }) => e.code === 'bad_media');
+  assert.equal(PHASH_MAX_INPUT_PIXELS, 25_000_000, 'strop pixelů pro hash snížen (audit SEC-7)');
+});
+
 const hasFfmpeg =(() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 test('computePhash: MP4 přes ffmpeg — stejný obsah jako GIF = podobný', { skip: hasFfmpeg ? false : 'ffmpeg není v PATH' }, async () => {
@@ -141,5 +150,22 @@ test('computePhash: MP4 přes ffmpeg — stejný obsah jako GIF = podobný', { s
     assert.ok(hm && hm.length >= 6, `mp4 snímků: ${hm?.length}`);
     assert.ok(isSimilarSequence(hg!, hm!), `gif~mp4: ${sequenceSimilarity(hg!, hm!)}`);
     assert.ok(!isSimilarSequence(ho!, hm!), `jiný~mp4: ${sequenceSimilarity(ho!, hm!)}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('SEC-7 probeMedia: MP4 přes ffprobe (rozměry, počet snímků); chybí ffprobe → null; nesmysl → bad_media', { skip: hasFfmpeg ? false : 'ffmpeg není v PATH' }, async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'probe-test-'));
+  try {
+    writeFileSync(join(dir, 'a.gif'), await encode(framesA(), W, H, 'gif'));
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', join(dir, 'a.gif'), '-pix_fmt', 'yuv420p', '-vf', 'scale=48:32', join(dir, 'a.mp4')]);
+    const mp4 = readFileSync(join(dir, 'a.mp4'));
+    const p = await probeMedia(mp4, 'mp4');
+    assert.deepEqual([p?.width, p?.height], [48, 32]);
+    assert.ok(p!.frames! >= N - 2 && p!.frames! <= N + 2, `snímků ${p?.frames}`);
+    assert.equal(await probeMedia(mp4, 'mp4', { ffprobe: 'neexistujici-ffprobe-xyz' }), null);
+    await assert.rejects(probeMedia(Buffer.from('xxxxftypisom nesmysl'), 'mp4'), (e: { code?: string }) => e.code === 'bad_media');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
