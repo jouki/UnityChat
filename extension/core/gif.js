@@ -348,8 +348,23 @@ export const GIF_UNAVAILABLE_TEXT = '[GIF nedostupný]';
  */
 export const GIF_GONE_CLASS = 'uc-gif-gone';
 
-/** Obsah prvku `.uc-gif` → štítek místo média (video zastavit a odpojit od IO). */
-function gifFallback(doc, wrap, text, extraClass = '') {
+/** Za jak dlouho zkusit médium po přechodné chybě (síť, 5xx) načíst znovu — jednou. */
+export const GIF_RETRY_MS = 5000;
+
+/**
+ * HTTP stav média po chybě načtení (HEAD, bez cache); 0 = síť / CORS / bez fetch. Jen 404 / 410 je definitivní
+ * (odebráno / zahozeno) — review kola 4 M4: přechodná chyba nesmí zprávu v OBS schovat natrvalo.
+ */
+async function gifMediaStatus(win, src) {
+  try { return (await win.fetch(src, { method: 'HEAD', cache: 'no-store' })).status || 0; } catch { return 0; }
+}
+const isDefinitiveGone = (status) => status === 404 || status === 410;
+
+/**
+ * Obsah prvku `.uc-gif` → štítek místo média (video zastavit a odpojit od IO). `gone` = definitivní stav
+ * (unavailable / removed / 404) → zpráva dostane GIF_GONE_CLASS (OBS ji skryje); přechodná chyba ne.
+ */
+function gifFallback(doc, wrap, text, extraClass = '', { gone = true } = {}) {
   const v = wrap.querySelector('video');
   if (v) {
     try { gifVideoObserver(doc.defaultView)?.unobserve(v); } catch { /* ignore */ }
@@ -363,7 +378,8 @@ function gifFallback(doc, wrap, text, extraClass = '') {
   if (extraClass) wrap.classList.add(extraClass);
   wrap.classList.remove('uc-gif--nosize');
   // Už ve zprávě (chyba načtení, SSE unavailable) → označit zprávu; nové médium značí hostitel (appendGifMedia).
-  wrap.closest?.('.msg')?.classList.add(GIF_GONE_CLASS);
+  wrap.classList.toggle('uc-gif--gone', !!gone);
+  if (gone) wrap.closest?.('.msg')?.classList.add(GIF_GONE_CLASS);
 }
 
 /** Max klíčů zpráv v `gif-media` / GET /chat/messages (stejně jako server). */
@@ -438,12 +454,25 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     m.style.maxWidth = `min(100%, ${maxW}px)`;
     m.style.maxHeight = `${maxH}px`;
   }
-  const fail = () => {
+  let retried = false;
+  const fail = async () => {
     if (!wrap.contains(m)) return;
     log?.('Gif', `médium se nenačetlo ${g.url}${token ? ' (s tokenem)' : ''}`);
     // Hostitel si může říct o nový token a médium vykreslit znovu (zamítnuté GIFy moda) → true = vyřízeno.
     if (onError && onError({ wrap, url: g.url, token }) === true) return;
-    gifFallback(doc, wrap, GIF_REMOVED_TEXT, 'uc-gif--removed');
+    // 404 / 410 = odebráno / zahozeno → štítek (OBS zprávu skryje). Přechodná chyba (síť, 5xx) → jednou znovu,
+    // pak jen štítek bez skrytí zprávy (review kola 4 M4).
+    const win = doc.defaultView;
+    const status = win?.fetch ? await gifMediaStatus(win, src) : 404;
+    if (!wrap.contains(m)) return;
+    if (isDefinitiveGone(status)) { gifFallback(doc, wrap, GIF_REMOVED_TEXT, 'uc-gif--removed'); return; }
+    if (!retried && win?.setTimeout) {
+      retried = true;
+      log?.('Gif', `médium ${g.url}: přechodná chyba (${status || 'síť'}) → znovu za ${GIF_RETRY_MS / 1000} s`);
+      win.setTimeout(() => { if (!wrap.contains(m)) return; m.src = src; if (video) { m.load?.(); playSafe(m); } }, GIF_RETRY_MS);
+      return;
+    }
+    gifFallback(doc, wrap, GIF_REMOVED_TEXT, 'uc-gif--removed', { gone: false });
   };
   m.addEventListener('error', fail);
   if (video) {

@@ -7,6 +7,13 @@ import('../extension/core/moderation.js').then((m) => {
   check('DELETED_STYLES obsahuje všechny 4 styly', JSON.stringify(m.DELETED_STYLES) === JSON.stringify(['label', 'dim', 'strike', 'hide']));
   check('DEFAULT_DELETED_STYLE = label', m.DEFAULT_DELETED_STYLE === 'label');
   check('DEFAULT_MOD_DELETED_STYLE = dim (Zašedlé, kolo 4 bod 5)', m.DEFAULT_MOD_DELETED_STYLE === 'dim');
+  // Review kola 4 (I1): migrace uložené konfigurace — starý výchozí 'label' bez příznaku ruční volby → 'dim'.
+  const MG = m.migrateDeletedStyle;
+  check('migrateDeletedStyle: uložené label bez příznaku → dim', MG({ deletedStyle: 'label', layout: 'medium' }).deletedStyle === 'dim' && MG({ deletedStyle: 'label', layout: 'medium' }).layout === 'medium');
+  check('migrateDeletedStyle: chybějící → dim', MG({}).deletedStyle === 'dim');
+  check('migrateDeletedStyle: uložené strike → strike', MG({ deletedStyle: 'strike' }).deletedStyle === 'strike');
+  check('migrateDeletedStyle: ruční volba label (deletedStyleChosen) → label', MG({ deletedStyle: 'label', deletedStyleChosen: true }).deletedStyle === 'label');
+  check('migrateDeletedStyle: ruční dim zůstane, null beze změny', MG({ deletedStyle: 'dim', deletedStyleChosen: true }).deletedStyle === 'dim' && MG(null) === null);
 
   check('MOD_DELETED_STYLES = 3 volby pro moda (bez „Skryté")', JSON.stringify(m.MOD_DELETED_STYLES.map((o) => o.id + ':' + o.label)) === JSON.stringify(['label:Zpráva smazána', 'dim:Zašedlé', 'strike:Přeškrtnuté']));
 

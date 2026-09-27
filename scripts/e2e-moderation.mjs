@@ -154,12 +154,19 @@ await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textConten
 check('A POST /moderation/delete s kanálem, platformou a id', posts.length === 1 && posts[0]?.platform === 'twitch' && posts[0]?.messageId === 'e2e-m1' && posts[0]?.channel === 'robdiesalot', JSON.stringify(posts));
 const sysBot = await lastSys();
 check('A výsledek „bot" + chybějící scopes → hláška + „Obnovit přihlášení (moderace)" (Twitch, stejné jako akce z nabídky)', sysBot?.text.startsWith('Na Twitchi akci provedl bot — tvůj účet nemá oprávnění moderovat.') && sysBot.action === 'Obnovit přihlášení (moderace)', JSON.stringify(sysBot));
-// Kolo 4 bod 5: uložená volba se výchozím „Zašedlé“ nepřepíše.
-await ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config || {}; await chrome.storage.sync.set({ uc_config: { ...c, deletedStyle: 'strike' } }); return true; })()`);
+// Kolo 4 bod 5 + review I1: migrace uložené konfigurace (celá se ukládá, takže 'label' mají i ti, kdo nevybírali).
+const setCfg = (o) => ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config || {}; const n = { ...c, ...${JSON.stringify(o)} }; for (const k of Object.keys(n)) if (n[k] === null) delete n[k]; await chrome.storage.sync.set({ uc_config: n }); return true; })()`);
+const cfgStyle = () => ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config; return c.deletedStyle + '|' + (c.deletedStyleChosen === true); })()`);
+await setCfg({ deletedStyle: 'label', deletedStyleChosen: null });
 await boot();
-check('A uložená volba (Přeškrtnuté) zůstane po načtení beze změny', await until(`document.getElementById('input-deleted-style').value === 'strike'`, 4000)
-  && await ev(`(async () => (await chrome.storage.sync.get('uc_config')).uc_config.deletedStyle)()`) === 'strike');
-await ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config || {}; await chrome.storage.sync.set({ uc_config: { ...c, deletedStyle: 'label' } }); return true; })()`);
+check('A uložené „label“ bez ruční volby (starý výchozí) → Zašedlé', await until(`document.getElementById('input-deleted-style').value === 'dim'`, 4000), await ev(`document.getElementById('input-deleted-style').value`));
+await setCfg({ deletedStyle: 'strike', deletedStyleChosen: null });
+await boot();
+check('A uložené „Přeškrtnuté“ zůstane (mohl ho nastavit jen člověk)', await until(`document.getElementById('input-deleted-style').value === 'strike'`, 4000) && (await cfgStyle()).startsWith('strike|'));
+await setStyle('label');
+check('A ruční volba „Zpráva smazána“ uloží příznak deletedStyleChosen', await cfgStyle() === 'label|true', await cfgStyle());
+await boot();
+check('A ruční „Zpráva smazána“ zůstane i po reloadu', await until(`document.getElementById('input-deleted-style').value === 'label'`, 4000) && await cfgStyle() === 'label|true', await cfgStyle());
 
 // ---- fáze B: divák (ne mod) ----
 mock.mod = false;

@@ -288,13 +288,13 @@ Promise.all([
   {
     // Minimální DOM: createGifMedia s removed / unavailable nic nenačítá a vrací štítek (třída podle stavu).
     const mk = (tag) => { const cls = new Set(); const kids = []; return { tagName: tag.toUpperCase(), className: '', textContent: '', style: {}, kids,
-      classList: { add: (...a) => a.forEach((c) => cls.add(c)), remove: (...a) => a.forEach((c) => cls.delete(c)), contains: (c) => cls.has(c), toString: () => [...cls].join(' ') },
+      classList: { add: (...a) => a.forEach((c) => cls.add(c)), remove: (...a) => a.forEach((c) => cls.delete(c)), contains: (c) => cls.has(c), toggle: (c, on) => { if (on ?? !cls.has(c)) cls.add(c); else cls.delete(c); }, toString: () => [...cls].join(' ') },
       setAttribute() {}, addEventListener() {}, querySelector: () => null, replaceChildren(...n) { kids.splice(0, kids.length, ...n); }, appendChild(n) { kids.push(n); } }; };
     const doc = { createElement: mk, defaultView: {} };
     const r = g.createGifMedia(doc, { url: URL_OK, kind: 'gif', removed: true });
     const u = g.createGifMedia(doc, { url: URL_OK, kind: 'gif', unavailable: true });
     check('createGifMedia: removed → štítek „GIF odebrán“ (uc-gif--removed), bez média', r.kids.length === 1 && r.kids[0].className === 'uc-gif-fallback' && r.kids[0].textContent === 'GIF odebrán'
-      && r.classList.contains('uc-gif--removed') && r.classList.contains('uc-gif--failed') && !r.classList.contains('uc-gif--unavailable'));
+      && r.classList.contains('uc-gif--removed') && r.classList.contains('uc-gif--failed') && r.classList.contains('uc-gif--gone') && !r.classList.contains('uc-gif--unavailable'));
     check('createGifMedia: unavailable → „[GIF nedostupný]“ (uc-gif--unavailable)', u.kids[0]?.textContent === '[GIF nedostupný]' && u.classList.contains('uc-gif--unavailable') && !u.classList.contains('uc-gif--removed'));
   }
   const ev = g.normalizeGifMediaEvent({ channel: 'RobDiesALot', mediaId: ID, state: 'visible', messageIds: ['twitch:gif-1', 'twitch:gif-1', 'evil:x', 'kick:gif-2', null] }, 'robdiesalot');

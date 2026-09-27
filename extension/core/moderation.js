@@ -24,6 +24,20 @@ export const DEFAULT_DELETED_STYLE = 'label';
  * Uložená volba se nepřepisuje; uložené 'hide' / neznámé dál = 'label'.
  */
 export const DEFAULT_MOD_DELETED_STYLE = 'dim';
+
+/**
+ * Jednorázová migrace uložené konfigurace (addon uc_config, web uc_web_settings) při načtení: obě ukládají celou
+ * konfiguraci, takže skoro všichni mají uložené 'label', i když si ho nevybrali. Bez příznaku ruční volby
+ * (`deletedStyleChosen`, nastavuje ho jen změna selectu uživatelem) se 'label' / chybějící bere jako starý výchozí
+ * → 'dim' („Zašedlé“). 'strike' (mohl nastavit jen člověk) a ruční volba zůstávají. Vrací novou konfiguraci
+ * (nebo tutéž, když není co měnit).
+ */
+export function migrateDeletedStyle(cfg) {
+  if (!cfg || typeof cfg !== 'object' || cfg.deletedStyleChosen === true) return cfg;
+  const s = cfg.deletedStyle;
+  if (s == null || s === '' || s === 'label') return { ...cfg, deletedStyle: DEFAULT_MOD_DELETED_STYLE };
+  return cfg;
+}
 /** Volby nastavení „Smazané zprávy" (jen mod; 'hide' je jen pro OBS a lidem se nenabízí). */
 export const MOD_DELETED_STYLES = [
   { id: 'label', label: 'Zpráva smazána' },
@@ -134,6 +148,17 @@ export function applyDeleted(el, opts = {}) {
   } else {
     // Přepnutí stylu ze „strike“ na „dim“: obal emotů už není potřeba.
     unwrapStrikeEmotes(q('.tx'));
+  }
+
+  // Vlastní GIF v konečném stavu (core gif-library paintGifStatus → uc-gif-own-final): odkaz v textu není živý ani
+  // pro klávesnici — <a> nahradit prostým textem (review kola 4 M2). Po překreslení `.tx` z dat znovu tady.
+  if (el.classList.contains('uc-gif-own-final') && typeof el.querySelectorAll === 'function' && doc) {
+    for (const a of el.querySelectorAll('.tx a[href]')) {
+      const span = doc.createElement('span');
+      span.className = 'uc-link-off';
+      span.textContent = a.textContent;
+      a.replaceWith(span);
+    }
   }
 
   let tagEl = q('.uc-deleted-tag');

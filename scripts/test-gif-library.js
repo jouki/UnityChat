@@ -108,6 +108,24 @@ Promise.all([
   check('isGifOwnFinal / gifOwnFinalReason: rejected, expired, not_allowed ano; progress, pending, approved ne',
     ['rejected', 'expired', 'not_allowed'].every((k) => L.isGifOwnFinal({ kind: k })) && !['progress', 'pending', 'approved'].some((k) => L.isGifOwnFinal({ kind: k })) && !L.isGifOwnFinal(null)
     && L.gifOwnFinalReason({ kind: 'rejected' }) === 'gif_rejected' && L.gifOwnFinalReason({ kind: 'expired' }) === 'gif_rejected' && L.gifOwnFinalReason({ kind: 'not_allowed' }) === 'gif_not_allowed' && L.gifOwnFinalReason({ kind: 'pending' }) === null);
+  // Review kola 4 M2: konečný stav i v datech zprávy (store) — kopírování / citace / překreslení ji berou jako smazanou.
+  {
+    const m = { id: 'x', message: 'hele https://tenor.com/view/a-1' };
+    check('syncGifOwnFinal: rejected → _deleted + _gifOwnFinal + gif_rejected', H.syncGifOwnFinal(m, { kind: 'rejected' }) === true && m._deleted === true && m._gifOwnFinal === true && m.deletedReason === 'gif_rejected');
+    const held = { id: 'y', _deleted: true, deletedReason: 'gif_request' };
+    H.syncGifOwnFinal(held, { kind: 'not_allowed' });
+    check('syncGifOwnFinal: schovaná gif_request → gif_not_allowed', held.deletedReason === 'gif_not_allowed' && held._deleted === true);
+    const soft = { id: 'z' };
+    H.syncGifOwnFinal(soft, { kind: 'expired' });
+    H.syncGifOwnFinal(soft, { kind: 'pending' });
+    check('syncGifOwnFinal: soft „Vypršelo“ → znovu čeká = zpět nesmazaná', soft._deleted === false && !('deletedReason' in soft) && !soft._gifOwnFinal, JSON.stringify(soft));
+    const srv = { id: 'w' };
+    H.syncGifOwnFinal(srv, { kind: 'expired' });
+    srv._srvDeleted = true;
+    H.syncGifOwnFinal(srv, { kind: 'pending' });
+    check('syncGifOwnFinal: smazání potvrzené serverem mezitím zůstane', srv._deleted === true, JSON.stringify(srv));
+    check('syncGifOwnFinal: průběh / bez zprávy nic', H.syncGifOwnFinal({ id: 'p' }, { kind: 'progress' }) === false && H.syncGifOwnFinal(null, { kind: 'rejected' }) === false);
+  }
   // optimistická zpráva: kolečko hned, spárování přes alias
   box.noteOptimistic('sent-1', 'twitch', { show: true });
   check('Outbox: optimistická → kolečko 0 % hned', box.view('twitch', 'sent-1')?.kind === 'progress');

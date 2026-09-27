@@ -37,7 +37,7 @@ export function appendGifMedia(doc, el, gif, { log, onSized } = {}) {
   const tx = el.querySelector(':scope > .tx');
   if (tx) tx.after(media); else el.appendChild(media);
   // GIF pryč (removed / unavailable) → OBS zprávu skryje; obnovený viditelný GIF značku sundá.
-  el.classList.toggle(GIF_GONE_CLASS, media.classList.contains('uc-gif--failed'));
+  el.classList.toggle(GIF_GONE_CLASS, media.classList.contains('uc-gif--gone'));
   return media;
 }
 
@@ -216,6 +216,36 @@ export function gifOwnView(outbox, el, msg, identity = null) {
 }
 
 /**
+ * Konečný stav vlastního GIFu (zamítnuto / vypršelo / nové GIFy nejdou) i v datech zprávy (review kola 4 M2):
+ * `_gifOwnFinal` + `_deleted` + důvod, takže překreslení `.tx`, kopírování i citace (hostitel `_isModerated`,
+ * `textSuppressed`) berou zprávu jako smazanou. Když se štítek později vrátí z konečného stavu (soft „Vypršelo“ →
+ * resync → čeká), předchozí stav smazání se obnoví. Vrací true, když je zpráva v konečném stavu.
+ */
+export function syncGifOwnFinal(msg, view) {
+  if (!msg || typeof msg !== 'object') return false;
+  if (isGifOwnFinal(view)) {
+    if (!msg._gifOwnFinal) {
+      msg._gifOwnFinalPrev = { deleted: !!msg._deleted, reason: msg.deletedReason ?? null };
+      msg._gifOwnFinal = true;
+    }
+    msg._deleted = true;
+    if (!msg.deletedReason || isGifHeldReason(msg.deletedReason) || msg.deletedReason === msg._gifOwnFinalReason) {
+      msg.deletedReason = gifOwnFinalReason(view);
+      msg._gifOwnFinalReason = msg.deletedReason;
+    }
+    return true;
+  }
+  if (msg._gifOwnFinal) {
+    const prev = msg._gifOwnFinalPrev || { deleted: false, reason: null };
+    // Smazání potvrzené serverem mezitím (_srvDeleted, message-deleted) zůstává.
+    msg._deleted = prev.deleted || msg.deleted === true || !!msg._srvDeleted;
+    if (msg.deletedReason === msg._gifOwnFinalReason) { if (prev.reason) msg.deletedReason = prev.reason; else delete msg.deletedReason; }
+    delete msg._gifOwnFinal; delete msg._gifOwnFinalPrev; delete msg._gifOwnFinalReason;
+  }
+  return false;
+}
+
+/**
  * GIF větve vzhledu smazané / skryté zprávy (sdílené addonem i webem). Vrací true = vyřízeno (hostitel dál
  * nemaluje), false = běžná smazaná zpráva (hostitel pokračuje; médium smazaného GIFu už je pryč).
  *
@@ -243,6 +273,7 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
     el.classList.remove('uc-gif-held');
     if (isGifOwnFinal(own)) {
       // Rozhodnuto (zamítnuto / vypršelo / nové GIFy nejdou): hostitel dál maluje běžně smazanou zprávu, štítek zůstává.
+      syncGifOwnFinal(msg, own);
       release(pl, id);
       paintGifStatus(doc, el, own);
       return false;
@@ -306,11 +337,12 @@ export function applyGifOwn(doc, el, msg, { view, outbox = null, isModerated, pa
     outbox?.drop(platform, el.dataset.msgId);
     return 'dropped';
   }
+  // Konečný červený stav i bez message-deleted ze serveru (optimistická zpráva, gif-notice approved_only) →
+  // odesílatel ji vidí jako smazanou hned (kolo 4 bod 4a), i v datech zprávy (M2, syncGifOwnFinal).
+  syncGifOwnFinal(msg, view);
   if (msg && isModerated(msg)) { paintDeleted(el, msg); return 'deleted'; }
-  // Konečný červený stav, ale smazání ze serveru (message-deleted) ještě nedorazilo / nedorazí (optimistická zpráva,
-  // gif-notice approved_only) → odesílatel ji vidí jako smazanou hned (kolo 4 bod 4a). Data zprávy se nemění.
   if (isGifOwnFinal(view)) {
-    const base = msg || { platform, id: el.dataset?.msgId, message: el.querySelector?.('.tx')?.textContent || '' };
+    const base = { platform, id: el.dataset?.msgId, message: el.querySelector?.('.tx')?.textContent || '' };
     paintDeleted(el, { ...base, _deleted: true, deletedReason: gifOwnFinalReason(view) });
     return 'deleted';
   }

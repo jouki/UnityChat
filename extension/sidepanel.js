@@ -36,7 +36,8 @@ const DEFAULTS = {
   acUserFulltext: false, // Fulltext v našeptávači `/user` (mod; vlastní stav — hledání lidí ≠ hledání emotů)
   acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
   mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
-  deletedStyle: 'dim', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js DEFAULT_MOD_DELETED_STYLE; divák nemá volbu). Výchozí „Zašedlé“ (kolo 4 bod 5), uložená volba má přednost
+  deletedStyle: 'dim', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js DEFAULT_MOD_DELETED_STYLE; divák nemá volbu). Výchozí „Zašedlé“ (kolo 4 bod 5)
+  deletedStyleChosen: false, // true = styl smazaných vybral uživatel v selectu (jen tehdy; migrace core migrateDeletedStyle ho respektuje)
 };
 
 // =============================================================
@@ -1162,7 +1163,7 @@ class UnityChat {
     try { window.ucGifHold = () => this._gifHold(); } catch {}
     // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m) }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))) }; } catch {}
 
     this._init();
   }
@@ -1724,6 +1725,9 @@ class UnityChat {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
     } catch {}
+    // Uložené 'label' bez ruční volby = starý výchozí → „Zašedlé“ (review kola 4 I1).
+    const mig = window.UC_CORE?.migrateDeletedStyle?.(this.config);
+    if (mig && mig !== this.config) { this._ucLog?.('Mod', `styl smazaných ${this.config.deletedStyle ?? '—'} → ${mig.deletedStyle} (migrace, bez ruční volby)`); this.config = mig; }
   }
 
   async _saveConfig() {
@@ -1789,6 +1793,7 @@ class UnityChat {
       delSel.value = styles.includes(this.config.deletedStyle) ? this.config.deletedStyle : 'label';
       delSel.addEventListener('change', () => {
         this.config.deletedStyle = delSel.value;
+        this.config.deletedStyleChosen = true;   // jen ruční změna selectu (migrace ji pak respektuje)
         this._saveConfig();
         this._reapplyDeleted();
         this._ucLog('Mod', `styl smazaných → ${delSel.value}`);

@@ -713,6 +713,11 @@ pushAcc(PR('e2e-own4', 'download', 40), ['gif-notice', { requestKey: 'twitch:e2e
 check('B gif-notice approved_only → hláška „Nové GIFy teď nejdou, vyber z GIFů v panelu“', await until(`[...document.querySelectorAll('#chat .sys')].some(m => m.textContent === 'Nové GIFy teď nejdou, vyber z GIFů v panelu')`, 12000));
 check('B … a štítek u zprávy', (await own('e2e-own4'))?.label === 'Nové GIFy teď nejdou', JSON.stringify(await own('e2e-own4')));
 check('B nové GIFy nejdou (gif_not_allowed) → odesílatel zprávu vidí smazanou: „Zpráva smazána“, bez odkazu, červený štítek (kolo 4 bod 4a)', ownFinal(await own('e2e-own4'), 'not_allowed', 'Nové GIFy teď nejdou'), JSON.stringify(await own('e2e-own4')));
+check('B M2: konečný stav i ve store (_gifOwnFinal, smazaná) → kopírování / citace potlačené', await ev(`(() => { const m = window.ucGif.msg('e2e-own4'); return !!m && m._gifOwnFinal === true && m._deleted === true && m.deletedReason === 'gif_not_allowed' && window.ucGif.textSuppressed('e2e-own4') === true; })()`) === true,
+  JSON.stringify(await ev(`(() => { const m = window.ucGif.msg('e2e-own4'); return m && { f: m._gifOwnFinal, d: m._deleted, r: m.deletedReason }; })()`)));
+check('B M2: odkaz ve smazané vlastní GIF zprávě (mod „Zašedlé“ s textem) není živý ani pro klávesnici', await ev(`(() => { const el = document.createElement('div'); el.className = 'msg uc-gif-own-final';
+  el.innerHTML = '<span class="tx">hele <a href="https://tenor.com/view/x-1" target="_blank">https://tenor.com/view/x-1</a></span>'; document.body.appendChild(el);
+  window.UC_CORE.applyDeleted(el, { mode: 'dim', dimmed: true, tag: true }); const r = !el.querySelector('a') && el.querySelector('.tx .uc-link-off')?.textContent === 'https://tenor.com/view/x-1'; el.remove(); return r; })()`) === true);
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-own4', by: 'filter', reason: 'gif_not_allowed' }]);
 await sleep(800);
 check('B … po message-deleted gif_not_allowed pořád stejně', ownFinal(await own('e2e-own4'), 'not_allowed', 'Nové GIFy teď nejdou'), JSON.stringify(await own('e2e-own4')));
