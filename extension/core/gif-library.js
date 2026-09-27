@@ -14,7 +14,9 @@
 import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
-import { formatRemaining } from './soundboard.js';
+import { formatRemaining, LOCK_ICON_SVG, shakeLock } from './soundboard.js';
+import { createSlideIndicator } from './slide-indicator.js';
+import { canAutoFocus } from './panel-morph.js';
 import { gifCooldownText } from './gif-cooldown.js';
 
 // Všechny atributy v šablonách jsou v uvozovkách → escapeAttr stačí i na text.
@@ -829,6 +831,8 @@ export class GifAccessToken {
  * { mode: unknown|login|locked|active|cooldown, canSend, cooldownMs, remainingMs|null, progress|null, text, approvedOnly }.
  * `progress` (0–1, ubývá) jen když server pošle konec odměny (`rewardUntil`); bez něj pásek není.
  */
+export const GIF_REWARD_LOCKED_TEXT = 'Odměna není aktivována';
+
 export function gifRewardView(st, now, { loggedIn = true } = {}) {
   if (!loggedIn) return { mode: 'login', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly: false, text: 'Přihlas se k UnityChatu, ať můžeš GIFy posílat.' };
   if (!st) return { mode: 'unknown', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly: false, text: '' };
@@ -836,7 +840,8 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
   // Mod / broadcaster bez výjimky: zámek, pásek i cooldown jako ostatní (spec 2026-09-27-gif-review-upravy §5).
   const rem = Number.isFinite(st.rewardUntil) ? st.rewardUntil - now : null;
   if (!st.allowed || (rem !== null && rem <= 0)) {
-    return { mode: 'locked', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly, text: 'Odměna „Posílání GIFů“ není aktivní. Knihovnu vidíš, poslat GIF jde s odemčenou odměnou.' };
+    // Stejná hláška jako soundboard (spec 2026-09-27 §2): jen první věta, v panelu se zámkem.
+    return { mode: 'locked', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly, text: GIF_REWARD_LOCKED_TEXT };
   }
   const cd = Number.isFinite(st.until) && st.until > now ? st.until - now : 0;
   const total = Number.isFinite(st.rewardTotalMs) && st.rewardTotalMs > 0 ? st.rewardTotalMs : null;
@@ -855,7 +860,7 @@ export function gifRewardTip(v) {
   if (!v || v.mode === 'unknown') return null;
   const lines = v.approvedOnly && v.mode !== 'locked' && v.mode !== 'login' ? ['Teď jdou jen GIFy z knihovny.'] : [];
   if (v.mode === 'login') return { mode: 'locked', title: 'GIFy', lines: [v.text] };
-  if (v.mode === 'locked') return { mode: 'locked', title: 'GIF odměna není aktivní', lines: ['Knihovnu vidíš, poslat GIF jde s odemčenou odměnou.', ...lines] };
+  if (v.mode === 'locked') return { mode: 'locked', title: 'GIF odměna není aktivní', lines };
   const rows = [{ name: 'Posílání GIFů', remainingMs: v.remainingMs ?? null, progress: v.progress ?? null }];
   if (v.mode === 'cooldown') return { mode: 'cooldown', title: 'GIF odměna — cooldown', lines, rows, cooldownMs: v.cooldownMs };
   return { mode: 'active', title: 'GIF odměna aktivní', lines, rows, cooldownMs: 0 };
@@ -1108,6 +1113,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     <div class="uc-gl-preview" role="dialog" aria-modal="true" aria-label="Náhled GIFu" hidden></div>
     <div class="uc-gl-confirm" role="alertdialog" hidden></div>`;
   const tabsEl = pane.querySelector('.uc-gl-tabs');
+  // Posuvný výběr tabů GIFy | Zamítnuté GIFy (sdílený helper jako boční záložky a ikony v poli, spec 2026-09-27 §1).
+  const tabSlide = createSlideIndicator({ container: tabsEl, getActive: () => tabsEl.querySelector('.uc-gl-tab.on') });
   const rewardEl = pane.querySelector('.uc-gl-reward');
   const search = pane.querySelector('.uc-gl-search input');
   const searchWrap = pane.querySelector('.uc-gl-search');
@@ -1130,7 +1137,16 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     const v = rv();
     rewardEl.className = `uc-gl-reward uc-gl-reward--${v.mode}${st.flash ? ' uc-gl-reward--flash' : ''}`;
     const txt = st.tab === 'rej' ? 'Zamítnuté GIFy se po 14 dnech mažou (kromě vaultu).' : [v.text, v.approvedOnly && v.mode !== 'locked' ? 'Teď jdou jen GIFy z knihovny.' : ''].filter(Boolean).join(' ');
-    rewardEl.innerHTML = `<span class="uc-gl-reward-t"></span>${v.progress !== null && st.tab === 'lib' ? `<i class="uc-gl-reward-bar" style="--p:${v.progress.toFixed(4)}"></i>` : ''}`;
+    // Zamčeno: ikona zámku jako soundboard (klik na GIF ji zatřese — shakeLock). Kostra se přestaví jen při změně,
+    // jinak by tik (1 s) zámek během zatřesení nahradil novým prvkem.
+    const lock = st.tab !== 'rej' && v.mode === 'locked';
+    const bar = v.progress !== null && st.tab === 'lib';
+    const sig = `${lock}|${bar}`;
+    if (rewardEl._ucSig !== sig) {
+      rewardEl._ucSig = sig;
+      rewardEl.innerHTML = `${lock ? `<span class="uc-lock">${LOCK_ICON_SVG}</span>` : ''}<span class="uc-gl-reward-t"></span>${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
+    }
+    rewardEl.querySelector('.uc-gl-reward-bar')?.style.setProperty('--p', v.progress?.toFixed(4) ?? '1');
     rewardEl.querySelector('.uc-gl-reward-t').textContent = txt;
     rewardEl.hidden = !txt;
     pane.classList.toggle('uc-gl--locked', !v.canSend);
@@ -1496,6 +1512,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (!mod && st.tab !== 'lib') st.tab = 'lib';
     for (const b of tabsEl.querySelectorAll('.uc-gl-tab')) b.classList.toggle('on', b.dataset.glTab === st.tab);
     searchWrap.hidden = st.tab !== 'lib';
+    tabSlide.update();
   }
 
   function paintBody() {
@@ -1761,6 +1778,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     const v = rv();
     if (!v.canSend) {
       L(`výběr ${item.mediaId} zamčený (${v.mode})`);
+      // Bez odměny: zámek se zatřese a zčervená, pak zešedne (stejně jako zamčený zvuk v soundboardu, spec §2).
+      if (v.mode === 'locked') { paintReward(); shakeLock(rewardEl.querySelector('.uc-lock')); return; }
       st.flash = true;
       paintReward();
       win.setTimeout(() => { st.flash = false; paintReward(); }, 1200);
@@ -1883,7 +1902,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       if (st.tab === 'rej' && !st.discLoaded) loadDiscarded();
       refreshReward?.();
       arm();
-      if (!(typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) && st.tab === 'lib') search.focus();
+      // Na dotyku bez fokusu (klávesnice by zakryla knihovnu) — spec 2026-09-27 §4.
+      if (canAutoFocus(doc) && st.tab === 'lib') search.focus();
     },
     hide() { st.visible = false; st.menu = null; armMenuResize(); st.confirm = null; st.preview = null; paintConfirm(); paintPreview(); arm(); },
     /** Stav odměny / role se změnil → hlavička, pásek, taby. */

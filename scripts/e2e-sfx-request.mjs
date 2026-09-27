@@ -171,10 +171,13 @@ await click('#btn-sfx');
 check('0 panel se otevře i bez odměny', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`));
 check('0 zvuky zamčené', await until(`document.querySelectorAll('.uc-sb-s').length > 0 && [...document.querySelectorAll('.uc-sb-s')].every(s => s.classList.contains('locked'))`));
 const lockTxt = await txt('.uc-sb-status');
-check('0 řádek vysvětluje zamčení (texty stavu odměny)', /Odměna není aktivována/.test(lockTxt || '') && /milestony Židolišty/.test(lockTxt || ''), lockTxt);
+check('0 řádek: zámek + jen „Odměna není aktivována“ (bez druhé věty, spec 2026-09-27 §2)', (lockTxt || '').trim() === 'Odměna není aktivována' && await ev(`!!document.querySelector('.uc-sb-status .uc-lock svg')`) === true, lockTxt);
+check('0 hlavička tieru: jen ikona zámku, bez slova „zamčeno“', await ev(`(() => { const l = document.querySelector('.uc-sb-h .uc-sb-lock'); return !!l && !!l.querySelector('svg') && !/zamčeno/i.test(l.textContent); })()`) === true);
 await click('.uc-sb-s .uc-sb-play');
 await sleep(300);
 check('0 klik na zamčený zvuk nic neodešle', await ev(`document.getElementById('msg-input')?.value ?? ''`) === '');
+check('0 klik na zamčený zvuk: zámek se zatřese a zčervená', await ev(`!!document.querySelector('.uc-sb-status .uc-lock.uc-lock-shake') && getComputedStyle(document.querySelector('.uc-sb-status .uc-lock')).animationName === 'uc-lock-shake'`) === true);
+check('0 zámek po ~1 s zase šedý (animace doběhla)', await until(`!document.querySelector('.uc-sb .uc-lock-shake')`, 2500));
 await click('.uc-sb-reqbtn');
 check('0 „Navrhnout zvuk“ jde otevřít i bez odměny', await until(`document.querySelector('.uc-sb').classList.contains('uc-sb-req-on') && !document.querySelector('.uc-sr').classList.contains('hidden')`));
 await click('.uc-sr-back');
@@ -187,6 +190,8 @@ mock.sse.push(['soundboard-change', { channel: 'robdiesalot', reason: 'sfx-unloc
 check('A nota soundboardu aktivní (přihlášený, tier odemčený)', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && !b.classList.contains('hidden') && !b.classList.contains('uc-sb-off'); })()`, 12000));
 await click('#btn-sfx');
 check('A panel soundboardu otevřený', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`));
+// Panel z nuly vyroste z noty (~200 ms, spec 2026-09-27 §1) — tahy značek měří až hotový panel.
+await until(`document.querySelector('.uc-sb').getAnimations().length === 0`, 2000);
 const reqBtn = await ev(`(() => { const b = document.querySelector('.uc-sb-top .uc-sb-reqbtn'); return b ? { title: b.title, afterSearch: b.previousElementSibling?.type === 'search', svg: !!b.querySelector('svg') } : null; })()`);
 check('A tlačítko „Navrhnout zvuk“ vedle hledání', reqBtn?.title === 'Navrhnout zvuk' && reqBtn.afterSearch && reqBtn.svg, JSON.stringify(reqBtn));
 await click('.uc-sb-reqbtn');

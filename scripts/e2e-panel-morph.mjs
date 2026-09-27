@@ -3,7 +3,8 @@
 //    právě jeden panel (odcházející se jen rozplývá jako „duch“ nad novým), nikdy žádný (problik);
 //  - rámeček nového panelu jede z rozměru starého na svůj (mezisnímek s šířkou mezi oběma);
 //  - na konci správný obsah, rozepsané hledání v emotech zůstalo, Esc a klik mimo zavírají;
-//  - prefers-reduced-motion → okamžitá výměna bez ducha; otevření z nuly a zavření bez animace.
+//  - prefers-reduced-motion → okamžitá výměna bez ducha.
+//  (Animace otevření z nuly / zavření do tlačítka: scripts/e2e-composer-anim.mjs.)
 //
 // Backend mockovaný přes Fetch.requestPaused (api.jouki.cz). Spuštění: node scripts/e2e-panel-morph.mjs
 import { spawn } from 'node:child_process';
@@ -118,7 +119,7 @@ await startRec();
 await realClick('#btn-emotes');
 await sleep(120);
 const f0 = await stopRec();
-check('otevření z nuly: panel emotů hned, bez ducha', (await shown()) === 'uc-ep' && f0.length > 0 && f0.every((f) => f.g === 0), JSON.stringify(f0.slice(0, 5)));
+check('otevření z nuly: panel emotů hned vidět (roste z tlačítka), bez ducha', (await shown()) === 'uc-ep' && f0.length > 0 && f0.every((f) => f.g === 0), JSON.stringify(f0.slice(0, 5)));
 await ev(`(() => { const i = document.querySelector('.uc-ep-search input'); i.value = 'abc'; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 
 /** Přepnutí klikem na tlačítko druhého panelu: po celou dobu právě jeden panel (+ nejvýš jeden duch), nikdy žádný. */
@@ -148,7 +149,8 @@ check('po přetvoření žádné zbylé inline styly (rozměry z CSS)', await ev
 
 // Esc zavře, klik mimo zavře (beze změny chování).
 await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
-check('Esc zavře panel', (await shown()) === '');
+check('Esc zavře panel (hned duch = zavřený, po animaci skrytý)', await ev(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].every((e) => e.classList.contains('hidden') || e.classList.contains('uc-morph-ghost'))`) === true
+  && await until(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].every((e) => e.classList.contains('hidden'))`, 1500), await shown());
 await realClick('#btn-sfx');
 check('nota znovu otevře soundboard (z nuly)', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`, 2000));
 // Klik do chatu nad panely (horní okraj seznamu zpráv).

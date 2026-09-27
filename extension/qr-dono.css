@@ -184,39 +184,32 @@
 .uc-es .uc-es-btn:hover:not(:disabled) { color: #fff; box-shadow: 0 0 8px rgba(255, 140, 0, 0.35); }
 .uc-es-err { margin: 0; color: #ff8a8a; font-size: 12px; }
 
-/* Tlačítka u pole pro psaní podle šířky chatu (core/tool-dock.js), addon i web: QR dono,
-   nota a smajlík se pod svým prahem přesouvají do řádku nad polem (vyjede zespodu). */
+/* Ikony v poli pro psaní (core/tool-dock.js), addon i web: QR dono, nota a smajlík jsou vždy v poli, dock jim
+   dopočítá `right` a poli rezervu (--uc-tools-w). QR ustoupí psaní (sbalí se: šířka + průhlednost), ostatní
+   dojedou plynule. Aktivní ikonu zvýrazňuje posuvný indikátor (.uc-slide-ind--tool, core/slide-indicator.js). */
 .uc-qd-anchor { position: relative; height: 0; }
 .uc-tool-btn[hidden] { display: none !important; }
 .uc-tool-btn.uc-dock-inline {
-  position: absolute; right: 32px; bottom: 3px; margin: 0;
+  position: absolute; right: 60px; bottom: 3px; margin: 0;
   width: 26px; height: 26px; padding: 0; box-sizing: border-box;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid transparent; border-radius: 5px; background: transparent;
   color: var(--text-secondary, #9a9aa6); cursor: pointer;
 }
-.uc-tool-btn.uc-dock-inline svg { width: 16px; height: 16px; }
-/* Hover stejný jako nota a smajlík (pravidlo výše by ho jinak přebilo). */
+.uc-tool-btn.uc-dock-inline svg { width: 16px; height: 16px; flex: none; }
+/* Hover stejný jako nota a smajlík. */
 .uc-tool-btn.uc-dock-inline:hover, .uc-tool-btn.uc-dock-inline.active {
   color: var(--accent-light); border-color: transparent;
   background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
 }
-.msg-input-wrap:has(.uc-sb-btn:not(.hidden)) .uc-tool-btn.uc-dock-inline { right: 60px; }
-.msg-input-wrap:has(.uc-dock-inline:not([hidden])) #msg-input { padding-right: 62px; }
-.msg-input-wrap:has(.uc-dock-inline:not([hidden])):has(.uc-sb-btn:not(.hidden)) #msg-input { padding-right: 90px; }
-/* Nota a smajlík v řádku: ne absolutně v poli, vzhled jako QR tlačítko v řádku. */
-.uc-dock-row .emote-btn.uc-dock-in-row {
-  position: static; flex: 0 0 auto; width: 26px; height: 24px;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary);
+.msg-input-wrap.uc-tools > .emote-btn, .msg-input-wrap.uc-tools > .uc-tool-btn {
+  overflow: hidden;
+  transition: right 0.22s ease, width 0.22s ease, opacity 0.18s ease, transform 0.22s ease, color 0.15s ease;
 }
-.uc-dock-row .emote-btn.uc-dock-in-row.hidden { display: none; }
-/* Smajlík už v poli není → pole bez rezervy vpravo. */
-.msg-input-wrap:not(:has(#btn-emotes)) #msg-input { padding-right: 8px; }
-.uc-dock-fade { animation: uc-dock-fade 0.25s ease both; }
-@keyframes uc-dock-fade { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
-.uc-dock-row { max-height: 48px; transition: max-height 0.25s ease, opacity 0.2s ease, transform 0.25s ease, padding 0.25s ease, border-top-width 0.25s ease; }
-.uc-dock-row.uc-dock-noanim { transition: none; }
-.uc-dock-row.uc-dock-shut {
-  max-height: 0; opacity: 0; transform: translateY(100%); overflow: hidden; pointer-events: none;
-  padding-top: 0 !important; padding-bottom: 0 !important; border-top-width: 0 !important;
+/* Ikona ustoupila psaní: sbalí se na místě (šířka → 0, průhlednost), není klikatelná. */
+.msg-input-wrap.uc-tools > .uc-tool-collapsed { width: 0; opacity: 0; transform: scale(0.6); pointer-events: none; border-width: 0; }
+#input-area .msg-input-wrap.uc-tools #msg-input { padding-right: var(--uc-tools-w, 34px); transition: padding-right 0.22s ease; }
+.msg-input-wrap.uc-tools.uc-tools-noanim > *, .msg-input-wrap.uc-tools.uc-tools-noanim #msg-input { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .msg-input-wrap.uc-tools > .emote-btn, .msg-input-wrap.uc-tools > .uc-tool-btn, #input-area .msg-input-wrap.uc-tools #msg-input { transition: none; }
 }

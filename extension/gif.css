@@ -275,6 +275,9 @@ div.uc-gif-more { cursor: default; }
 }
 .uc-ep-tab:hover { background: var(--bg-hover, #26262c); color: var(--text-primary, #efeff1); }
 .uc-ep-tab.on { color: var(--accent-light, #ffc800); background: var(--bg-tertiary, #1f1f23); border-color: rgba(255, 140, 0, 0.45); }
+/* Posuvný výběr (core/slide-indicator.js): zvýraznění kreslí indikátor, který mezi záložkami přejede. */
+.uc-ep-side.uc-slide-host > .uc-ep-tab { z-index: 1; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab.on, .uc-ep-side.uc-slide-host > .uc-ep-tab.on:hover { background: transparent; border-color: transparent; }
 /* Časový pásek odměny (jako soundboard .uc-sb-bar) na záložce i pod tlačítkem emotů. */
 .uc-ep-tab-bar { position: absolute; left: 5px; right: 5px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
 .uc-ep-tab-bar[hidden], .uc-ep-btn-bar[hidden] { display: none; }
@@ -293,10 +296,16 @@ div.uc-gif-more { cursor: default; }
   color: var(--text-secondary, #9a9aa6); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
 }
 .uc-gl-tab.on { color: var(--accent-light, #ffc800); border-color: rgba(255, 140, 0, 0.55); }
+.uc-gl-tabs.uc-slide-host > .uc-gl-tab { position: relative; z-index: 1; }
+.uc-gl-tabs.uc-slide-host > .uc-gl-tab.on { background: transparent; border-color: transparent; }
+.uc-gl-tabs > .uc-slide-ind { border-radius: 5px; border-color: rgba(255, 140, 0, 0.55); background: var(--bg-secondary, #18181b); }
 .uc-gl-reward { position: relative; padding: 6px 10px 7px; font-size: 11px; color: var(--text-secondary, #9a9aa6); border-bottom: 1px solid var(--border, #2f2f35); }
 .uc-gl-reward[hidden] { display: none; }
 .uc-gl-reward--active { color: var(--accent-light, #ffc800); }
-.uc-gl-reward--locked, .uc-gl-reward--login { color: #ffbe98; }
+.uc-gl-reward--login { color: #ffbe98; }
+/* Bez odměny: zámek + „Odměna není aktivována“ červeně, stejně jako soundboard (.uc-sb-locktxt). */
+.uc-gl-reward--locked { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.uc-gl-reward--locked .uc-gl-reward-t { color: #ff8a8a; font-weight: 700; }
 .uc-gl-reward--flash { animation: uc-gl-flash 0.4s ease-in-out 3; }
 @keyframes uc-gl-flash { 50% { background: rgba(229, 72, 77, 0.25); } }
 .uc-gl-reward-bar { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }

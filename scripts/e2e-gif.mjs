@@ -274,6 +274,7 @@ const zScroll = await ev(`(() => { const b = document.getElementById('btn-scroll
 check('A „↓ Nové zprávy“ nad kartou', zScroll?.overlap && zScroll.onTop, JSON.stringify(zScroll));
 await ev(`document.getElementById('btn-emotes').click()`);
 await until(`!!document.querySelector('.uc-ep') && getComputedStyle(document.querySelector('.uc-ep')).display !== 'none'`, 3000);
+await sleep(350);   // panel z nuly vyroste z tlačítka (animace otevření, spec 2026-09-27 §1)
 const zEp = await ev(`(() => { const p = document.querySelector('.uc-ep'); if (!p) return null; const r = p.getBoundingClientRect(); const s = document.querySelector('.uc-gif-stack').getBoundingClientRect();
   const y = Math.max(r.top, s.top) + 5; const overlap = r.top < s.bottom && r.bottom > s.top; const hit = document.elementFromPoint(r.left + r.width / 2, y); return { overlap, onTop: p.contains(hit) }; })()`);
 check('A panel emotů nad kartou', zEp?.overlap && zEp.onTop, JSON.stringify(zEp));
@@ -808,6 +809,8 @@ await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetc
 const gl = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="gif"]'); const vis = (e) => !!e && !e.hidden && getComputedStyle(e).display !== 'none';
   return { shown: vis(p), items: p ? [...p.querySelectorAll('.uc-gl-grid:not(.uc-gl-grid--rej) .uc-gl-i')].map(i => i.dataset.id.slice(-2)).join(',') : null,
     reward: p?.querySelector('.uc-gl-reward-t')?.textContent || '', flash: !!p?.querySelector('.uc-gl-reward--flash'), tabs: vis(p?.querySelector('.uc-gl-tabs')),
+    lock: vis(p?.querySelector('.uc-gl-reward .uc-lock')), shake: !!p?.querySelector('.uc-gl-reward .uc-lock.uc-lock-shake'),
+    lock: vis(p?.querySelector('.uc-gl-reward .uc-lock')), shake: !!p?.querySelector('.uc-gl-reward .uc-lock.uc-lock-shake'),
     locked: !!p?.classList.contains('uc-gl--locked'), dups: vis(p?.querySelector('.uc-gl-dups')) ? p.querySelector('.uc-gl-dups .uc-gl-h').textContent : null,
     rej: p ? [...p.querySelectorAll('.uc-gl-grid--rej .uc-gl-i')].map(i => i.dataset.id.slice(-2)).join(',') : null,
     msg: vis(p?.querySelector('.uc-gl-msg')) ? p.querySelector('.uc-gl-msg').textContent : null,
@@ -819,11 +822,12 @@ await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
 check('G záložka GIFy → knihovna (GET /gifs/library s kanálem), pořadí podle použití', await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 3`, 5000)
   && posts.library.some((u) => /channel=robdiesalot/.test(u)) && (await gl())?.items === '0b,0c,0d', JSON.stringify(await gl()));
 const g0 = await gl();
-check('G divák bez odměny: knihovnu vidí, zamčeno + hláška, bez modích tabů', g0?.locked && /není aktivní/.test(g0.reward) && !g0.tabs && g0.dups === null, JSON.stringify(g0));
+check('G divák bez odměny: knihovnu vidí, zámek + „Odměna není aktivována“ (jako soundboard), bez modích tabů', g0?.locked && g0.reward === 'Odměna není aktivována' && g0.lock && !g0.tabs && g0.dups === null, JSON.stringify(g0));
 const sendG0 = posts.send.length;
 await glClick('.uc-gl-i[data-id$="0b"] .uc-gl-pick');
 await sleep(300);
-check('G zamčený výběr → nic neodejde, hlavička blikne', posts.send.length === sendG0 && (await gl())?.flash === true);
+check('G zamčený výběr → nic neodejde, zámek se zatřese (spec 2026-09-27 §2)', posts.send.length === sendG0 && (await gl())?.shake === true, JSON.stringify(await gl()));
+check('G zatřesení po ~1 s doběhne (zámek zase šedý, bez třídy)', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-lock-shake')`, 2500));
 // Náhled (2026-09-27): nabídka ⋯ i pro diváka (jen „Náhled“), překryv nad panelem, zavření Esc / klik mimo / ×.
 const pv = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-preview'); const vis = (e) => !!e && !e.hidden && getComputedStyle(e).display !== 'none';
   if (!vis(p)) return { open: false, picker: !document.querySelector('.uc-ep').classList.contains('hidden') };
@@ -925,7 +929,7 @@ await ev(`(window.ucGif.out().clear(), true)`);
 const sendG1 = posts.send.length;
 await glClick('.uc-gl-i[data-id$="0c"] .uc-gl-pick');
 check('G výběr → POST /chat/send s odkazem api.jouki.cz/media/gif/<id>, panel zavřený', await waitFor(() => posts.send.length > sendG1, 4000)
-  && posts.send.at(-1).text.startsWith(murl(hex(12))) && await ev(`document.querySelector('.uc-ep').classList.contains('hidden')`) === true, JSON.stringify(posts.send.at(-1)));
+  && posts.send.at(-1).text.startsWith(murl(hex(12))) && await until(`document.querySelector('.uc-ep').classList.contains('hidden')`, 1500), JSON.stringify(posts.send.at(-1)));
 check('G … zpráva s naším odkazem: štítek „Odesílám…“ bez procent (test2 bod 4)', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('/media/gif/') && m.querySelector('.uc-gif-st--sending .uc-gif-st-txt')?.textContent === 'Odesílám…' && !m.querySelector('.uc-gif-st-pct'))`, 3000));
 await ev(`document.getElementById('btn-emotes').click()`);
 check('G po odeslání cooldown v hlavičce („Další GIF můžeš poslat za …“), výběr zamčený', await until(`/^Další GIF můžeš poslat za /.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
@@ -974,7 +978,7 @@ mock.gifState = () => ({ ok: true, allowed: false, cooldownUntil: null, cooldown
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
 const tip3 = await tipOf(TIPSEL);
-check('T2 tooltip zamčeno: „GIF odměna není aktivní“ + popis, bez řádku', tip3?.title === 'GIF odměna není aktivní' && /Knihovnu vidíš/.test(tip3.lines[0] || '') && !tip3.rows.length, JSON.stringify(tip3));
+check('T2 tooltip zamčeno: „GIF odměna není aktivní“ bez druhé věty, bez řádku', tip3?.title === 'GIF odměna není aktivní' && !tip3.lines.length && !tip3.rows.length, JSON.stringify(tip3));
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: Date.now() + 42_000, cooldownSec: 60, serverNow: Date.now(), rewardUntil: Date.now() + 300_000 });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);

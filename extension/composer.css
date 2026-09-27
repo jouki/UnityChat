@@ -136,3 +136,22 @@
 /* ---- odpojení platformy v menu ---- */
 #platform-menu .pm-unlink { margin-left: 4px; padding: 0 6px; border-radius: 4px; opacity: 0.55; font-size: 14px; line-height: 1; }
 #platform-menu .pm-unlink:hover { opacity: 1; color: #ff5252; background: rgba(255, 82, 82, 0.12); }
+
+/* ---- posuvný indikátor výběru (core/slide-indicator.js) — záložky panelu emotů, taby GIF panelu, ikony v poli ---- */
+.uc-slide-host { position: relative; }
+.uc-slide-ind {
+  position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; box-sizing: border-box;
+  border: 1px solid rgba(255, 140, 0, 0.45); border-radius: 6px; background: var(--bg-tertiary, #1f1f23);
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.15s ease;
+}
+.uc-slide-ind.uc-slide-noanim { transition: opacity 0.15s ease; }
+.uc-slide-ind.uc-slide-off { opacity: 0; }
+/* Ikony v poli pro psaní: stejný vzhled jako hover ikony (tmavé pozadí + UnityChat gradient v rámečku). */
+.uc-slide-ind.uc-slide-ind--tool {
+  border-radius: 5px; border-color: transparent;
+  background: linear-gradient(var(--bg-secondary, #18181b), var(--bg-secondary, #18181b)) padding-box, var(--accent-gradient) border-box;
+}
+/* Aktivní ikona vlastní pozadí nekreslí — kreslí ho indikátor, který k ní přijede. */
+.msg-input-wrap.uc-slide-host > .emote-btn.active, .msg-input-wrap.uc-slide-host > .uc-tool-btn.active { background: transparent; }
+@media (prefers-reduced-motion: reduce) { .uc-slide-ind, .uc-slide-ind.uc-slide-noanim { transition: none; } }

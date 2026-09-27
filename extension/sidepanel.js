@@ -1391,23 +1391,19 @@ class UnityChat {
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
     }
-    // Tlačítka podle šířky pole pro psaní: pod 330 px QR, pod 310 px i nota, pod 290 px i smajlík
-    // do řádku nad polem (pokyn usera 2026-09-25).
-    const row = document.getElementById('tw-credits');
-    if (row && core.createToolDock) {
+    // Ikony v poli pro psaní (spec 2026-09-27 §3): QR, nota i smajlík vždy v poli (řádek s ikonami navíc zmizel,
+    // řádek bodů/bitů Twitche zůstává). QR ustoupí psaní — pod 330 px šířky pole, když je v něm text (dotyk: při fokusu).
+    const wrap = document.querySelector('#input-area .msg-input-wrap');
+    if (wrap && core.createToolDock) {
       this._qdDock = core.createToolDock({
-        row,
-        inlineParent: document.querySelector('#input-area .msg-input-wrap'),
+        inlineParent: wrap,
+        input: document.getElementById('msg-input'),
         items: [
           { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
-          { button: document.getElementById('btn-sfx'), minWidth: 310 },
-          { button: document.getElementById('btn-emotes'), minWidth: 290 },
+          { button: document.getElementById('btn-sfx') },
+          { button: document.getElementById('btn-emotes') },
         ],
-        rowHasOther: () => !document.body.classList.contains('uc-no-twitch-login')
-          && [...row.querySelectorAll('.tc-pill')].some((p) => !p.classList.contains('hidden')),
       });
-      // Pill bodů/bitů se objeví nebo zmizí → řádek otevřít/zavřít.
-      new MutationObserver(() => this._qdDock.update()).observe(row, { subtree: true, attributes: true, attributeFilter: ['class'] });
       this._updateQrAvailability();
     }
     this._ucLog('QrDono', 'zapnuto');
@@ -2774,6 +2770,8 @@ class UnityChat {
     const h = Math.min(this.msgInput.scrollHeight, max);
     this.msgInput.style.height = h + 'px';
     this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+    // Text se změnil z kódu → QR ikona ustoupí / vrátí se (core/tool-dock.js).
+    this._qdDock?.update();
   }
 
   _isCursorOnLastLine() {

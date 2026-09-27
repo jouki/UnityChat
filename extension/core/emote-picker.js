@@ -3,7 +3,8 @@
 // úložiště „naposledy použitých" je injektované (addon i web: localStorage).
 import { escapeAttr } from './html.js';
 import { createIconTip } from './soundboard.js';
-import { registerPanel } from './panel-morph.js';
+import { registerPanel, canAutoFocus, panelShown } from './panel-morph.js';
+import { createSlideIndicator } from './slide-indicator.js';
 
 const RECENT_MAX = 24;
 
@@ -87,6 +88,9 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
       ${tabs.map((t) => `<div class="uc-ep-pane" data-pane="${esc(t.key)}" hidden></div>`).join('')}`
     : main;
   host.appendChild(panel);
+  // Posuvný výběr bočních záložek (Emoty | GIFy): zvýraznění přejede z jedné na druhou (spec 2026-09-27 §1).
+  const side = panel.querySelector('.uc-ep-side');
+  const slide = side ? createSlideIndicator({ container: side, getActive: () => side.querySelector('.uc-ep-tab.on') }) : null;
   const search = panel.querySelector('input');
   const body = panel.querySelector('.uc-ep-body');
   const hoverEl = panel.querySelector('.uc-ep-hover');
@@ -137,37 +141,41 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
       b.setAttribute('aria-selected', String(on));
     }
     for (const p of panel.querySelectorAll('.uc-ep-pane')) p.hidden = p.dataset.pane !== next;
+    slide?.update();
     if (prev !== next && mounted.has(prev)) mounted.get(prev).hide?.();
     if (def && isOpen()) mounted.get(key)?.show?.();
     if (prev !== next) log?.('EmotePicker', `záložka ${next}`);
   }
 
   function open(tab) {
+    // Rozběhnuté zavírání (duch) dokončit, ať ho doběhnutí neschová po otevření.
+    morph.settle();
     if (tab) selectTab(tab);
     if (active === 'emotes') render();
     panel.classList.remove('hidden');
+    slide?.update({ animate: false });
     btnTip?.hide();
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
-    // Jiný otevřený panel u pole (soundboard, QR dono) se do tohohle plynule přetvoří (test2 bod 5).
+    // Z nuly vyroste z tlačítka; jiný otevřený panel u pole (soundboard, QR dono) se do tohohle přetvoří (test2 bod 5).
     morph.opened();
     if (active !== 'emotes') { mounted.get(active)?.show?.(); return; }
-    // Na dotykovém zařízení hledání neaktivovat: vyskočila by klávesnice a zakryla emoty.
-    const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-    if (!touch) { search.focus(); search.select(); }
+    // Na dotyku hledání neaktivovat: vyskočila by klávesnice a zakryla emoty (spec 2026-09-27 §4).
+    if (canAutoFocus(doc)) { search.focus(); search.select(); }
   }
-  function close() {
-    if (panel.classList.contains('hidden')) return;
-    panel.classList.add('hidden');
+  /** `instant` = bez animace (přetvoření do jiného panelu ho volá po doběhnutí). */
+  function close({ instant = false } = {}) {
+    if (!isOpen()) return;
     tabTip?.hide();
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     mounted.get(active)?.hide?.();
+    morph.hide(() => panel.classList.add('hidden'), { instant });
   }
-  const isOpen = () => !panel.classList.contains('hidden');
-  // Duch přetvoření (panel právě odchází do jiného) není otevřený → klik ho znovu otevře (review I1).
+  // Duch (zavírání / přetvoření do jiného panelu) není otevřený → klik ho znovu otevře (review I1).
+  const isOpen = () => panelShown(panel);
   const toggle = () => { morph.settle(); return isOpen() ? close() : open(); };
-  const morph = registerPanel({ panel, button, isOpen, close, log: (t) => log?.('EmotePicker', t) });
+  const morph = registerPanel({ panel, button, isOpen, close: () => close({ instant: true }), log: (t) => log?.('EmotePicker', t) });
 
   /**
    * Časový pásek (jako u soundboardu): pod tlačítkem emotů a na boční záložce. `progress` 0–1 (ubývá s časem),
@@ -226,7 +234,9 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
 
   panel.querySelector('.uc-ep-side')?.addEventListener('click', (e) => {
     const b = e.target.closest('.uc-ep-tab');
-    if (b) { selectTab(b.dataset.tab); if (b.dataset.tab === 'emotes') { render(); search.focus(); } }
+    // Fokus do hledání jen bez dotyku — tenhle klik ho dřív dával vždy a na mobilu vyskočila klávesnice (regrese
+    // z v3.41.39, spec 2026-09-27 §4).
+    if (b) { selectTab(b.dataset.tab); if (b.dataset.tab === 'emotes') { render(); if (canAutoFocus(doc)) search.focus(); } }
   });
   panel.querySelector('.uc-ep-side')?.addEventListener('mousedown', (e) => e.preventDefault());
 

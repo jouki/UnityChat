@@ -3,17 +3,27 @@
 // Dřív: klik na tlačítko druhého panelu = mousedown mimo první panel ho zavřel, klik druhý otevřel → problikne.
 // Teď: otevřený panel se plynule přetvoří do druhého — rámeček nového panelu jede z rozměru a pozice starého na
 // svoje (šířka, výška, levý i horní okraj; ~220 ms), starý panel jede stejně a přitom se rozplyne (leží nad novým,
-// takže je vidět vždy aspoň jeden, žádná díra). Otevření z nuly a zavření zůstávají okamžité.
-// `prefers-reduced-motion` / bez Web Animations API → okamžitá výměna.
+// takže je vidět vždy aspoň jeden, žádná díra).
+// Otevření z nuly (spec 2026-09-27-composer-animace-ikony §1): panel vyroste ze svého tlačítka (transform-origin
+// = pravý spodní roh / tlačítko, scale 0 → 1 + fade, ~200 ms); zavření obráceně (zmenší se do tlačítka a zmizí).
+// Během zavírání je panel „duch“ (uc-morph-ghost): už zavřený (isOpen false), neklikatelný, jen doznívá.
+// `prefers-reduced-motion` / bez Web Animations API → vše okamžitě.
 //
 // Každý panel se zaregistruje (registerPanel) a:
 //   - v handleru „klik mimo“ nejdřív `if (entry.isSwitch(target)) return;` (klik na tlačítko jiného panelu starý
 //     panel nezavírá — převezme ho nový),
-//   - v open() po zobrazení `entry.opened()` (zavře / přetvoří jiný otevřený panel).
+//   - na začátku open() `entry.settle()` (dokončit rozběhnuté zavírání), po zobrazení `entry.opened()` (animace
+//     otevření, nebo zavře / přetvoří jiný otevřený panel),
+//   - v close() po úklidu `entry.hide(() => panel.classList.add('hidden'), { instant })` (animace zavření);
+//     registerPanel dostává `close` bez animace (volá ho přetvoření po doběhnutí).
 // Bez chrome.*; DOM jen přes předané prvky.
 
 export const MORPH_MS = 220;
 export const MORPH_EASING = 'cubic-bezier(.2, .8, .2, 1)';
+export const OPEN_MS = 200;
+export const CLOSE_MS = 160;
+const OPEN_EASING = 'cubic-bezier(.2, .9, .3, 1.05)';
+const CLOSE_EASING = 'cubic-bezier(.4, 0, .9, .6)';
 
 const registries = new WeakMap();   // document → Set<entry>
 /** Běžící přetvoření podle prvku (odcházející i příchozí panel) → dokončení. Nové přetvoření / klik ho nejdřív dokončí. */
@@ -93,35 +103,135 @@ export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASI
   return Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => { finish(); return true; });
 }
 
+/** Bod, ze kterého panel vyrůstá / do kterého se zavře: tlačítko (jeho pravý spodní roh) v souřadnicích panelu. */
+function growOrigin(panel, button) {
+  const p = panel.getBoundingClientRect();
+  const b = button?.getBoundingClientRect?.();
+  if (!b?.width || !p.width) return 'right bottom';
+  const x = Math.min(p.width, Math.max(0, b.right - p.left));
+  const y = Math.min(p.height, Math.max(0, b.bottom - p.top));
+  return `${Math.round(x)}px ${Math.round(y)}px`;
+}
+
+/**
+ * Otevření z nuly: panel (už zobrazený) vyroste z tlačítka — scale 0 → 1 + fade. Inline styl se po doběhnutí vrátí.
+ * Vrací Promise<boolean> (false = bez animace).
+ */
+export function animatePanelIn(panel, { button, duration = OPEN_MS, easing = OPEN_EASING } = {}) {
+  settleMorph(panel);
+  const win = panel.ownerDocument?.defaultView;
+  if (reducedMotion(win) || typeof panel.animate !== 'function' || !panel.getBoundingClientRect?.().width) return Promise.resolve(false);
+  const saved = panel.style.transformOrigin;
+  panel.style.transformOrigin = growOrigin(panel, button);
+  const a = panel.animate([{ transform: 'scale(0)', opacity: 0 }, { transform: 'scale(1)', opacity: 1 }], { duration, easing });
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (running.get(panel) === finish) running.delete(panel);
+    win.clearTimeout(t);
+    try { a.cancel(); } catch { /* ignore */ }
+    panel.style.transformOrigin = saved;
+  };
+  const t = win.setTimeout(finish, duration + 150);
+  running.set(panel, finish);
+  return a.finished.catch(() => {}).then(() => { finish(); return true; });
+}
+
+/**
+ * Zavření: panel se zmenší do tlačítka a zmizí, pak `done()` (skrýt). Během animace je „duch“ (zavřený, neklikatelný).
+ * `instant` / reduced motion / skrytý panel → `done()` hned.
+ */
+export function animatePanelOut(panel, { button, done = () => {}, instant = false, duration = CLOSE_MS, easing = CLOSE_EASING } = {}) {
+  settleMorph(panel);
+  const win = panel.ownerDocument?.defaultView;
+  if (instant || reducedMotion(win) || typeof panel.animate !== 'function' || !panel.getBoundingClientRect?.().width) { done(); return Promise.resolve(false); }
+  const saved = panel.style.cssText;
+  Object.assign(panel.style, { transformOrigin: growOrigin(panel, button), pointerEvents: 'none' });
+  // Fokus nesmí zůstat v zavírajícím se panelu (psaní by během animace šlo do jeho hledání) — jako okamžité skrytí.
+  const active = panel.ownerDocument.activeElement;
+  if (active && active !== panel.ownerDocument.body && panel.contains(active)) active.blur?.();
+  panel.classList.add('uc-morph-ghost');
+  panel.setAttribute('aria-hidden', 'true');
+  const a = panel.animate([{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(0)', opacity: 0 }], { duration, easing, fill: 'forwards' });
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (running.get(panel) === finish) running.delete(panel);
+    win.clearTimeout(t);
+    // Nejdřív skrýt (pořád průhledný díky fill), pak zrušit animaci — jinak by panel na snímek problikl.
+    panel.classList.remove('uc-morph-ghost');
+    panel.removeAttribute('aria-hidden');
+    done();
+    try { a.cancel(); } catch { /* ignore */ }
+    panel.style.cssText = saved;
+  };
+  const t = win.setTimeout(finish, duration + 150);
+  running.set(panel, finish);
+  return a.finished.catch(() => {}).then(() => { finish(); return true; });
+}
+
+// ---- fokus hledání jen bez dotyku (spec §4) ----
+const lastPointer = new WeakMap();   // document → pointerType posledního stisku ('mouse' | 'touch' | 'pen')
+function trackPointer(doc) {
+  if (!doc || lastPointer.has(doc)) return;
+  lastPointer.set(doc, '');
+  doc.addEventListener('pointerdown', (e) => { lastPointer.set(doc, e.pointerType || ''); }, { capture: true, passive: true });
+}
+
+/**
+ * Smí panel po otevření dát fokus do hledání? Na dotyku ne — vyskočila by klávesnice a zakryla panel (regrese proti
+ * v3.40.1–4). Rozhoduje skutečný poslední stisk (dotyk / pero = ne, myš = ano — i na notebooku s dotykovou
+ * obrazovkou), bez stisku (klávesnice) primární ukazatel zařízení (`pointer: coarse` = ne).
+ */
+export function canAutoFocus(doc) {
+  trackPointer(doc);
+  const t = lastPointer.get(doc);
+  if (t === 'touch' || t === 'pen') return false;
+  if (t === 'mouse') return true;
+  const win = doc?.defaultView;
+  try { return !win?.matchMedia?.('(pointer: coarse)').matches; } catch { return true; }
+}
+
+/** Panel je otevřený: zobrazený (bez `hidden`) a ne odcházející duch (zavírání / přetvoření). */
+export const panelShown = (panel) => !!panel && !panel.classList.contains('hidden') && !isMorphGhost(panel);
+
 /**
  * Zaregistrovat panel. `panel` = kontejner panelu, `button` = jeho tlačítko, `isOpen()`, `close()` (okamžité zavření).
- * Vrací { isSwitch(target), opened(), unregister(), morphing }.
+ * Vrací { isSwitch(target), settle(), opened(), hide(done, { instant }), unregister() }.
  */
 export function registerPanel({ panel, button, isOpen, close, log }) {
   const doc = panel.ownerDocument;
+  trackPointer(doc);
   let reg = registries.get(doc);
   if (!reg) { reg = new Set(); registries.set(doc, reg); }
   const entry = {
     panel, button, close,
     /** Otevřený = viditelný a ne odcházející duch přetvoření (review I1: klik na A během A → B ho má otevřít). */
     isOpen: () => !isMorphGhost(panel) && isOpen(),
-    /** Před přepnutím (klik na vlastní tlačítko): dokončit přetvoření, kterého se panel účastní. */
+    /** Před přepnutím / otevřením: dokončit přetvoření nebo zavírání, kterého se panel účastní. */
     settle() { settleMorph(panel); },
     /** Klik (mousedown) na tlačítko jiného panelu → nezavírat, nový panel tenhle přetvoří. */
     isSwitch(target) {
       for (const o of reg) if (o !== entry && o.button && target && o.button.contains?.(target)) return true;
       return false;
     },
-    /** Právě jsem se zobrazil → jiné otevřené panely přetvořit do mě (první) / zavřít (ostatní). */
+    /** Právě jsem se zobrazil → jiné otevřené panely přetvořit do mě (první) / zavřít (ostatní); jinak vyrůst z tlačítka. */
     opened() {
-      // Rozběhnutá přetvoření dokončit dřív, než se změří (duchové se zavřou, styly vrátí).
-      for (const o of reg) settleMorph(o.panel);
+      // Rozběhnutá přetvoření / zavírání dokončit dřív, než se změří (duchové se zavřou, styly vrátí).
+      for (const o of reg) if (o !== entry) settleMorph(o.panel);
       const others = [...reg].filter((o) => o !== entry && o.panel.isConnected && safeOpen(o));
-      if (!others.length) return null;
+      if (!others.length) return animatePanelIn(panel, { button });
       const [first, ...rest] = others;
       for (const o of rest) safeClose(o);
+      // Aktivní tlačítko (a posuvný indikátor u ikon) přejde na nový panel hned, ne až po doběhnutí přetvoření.
+      first.button?.classList?.remove('active');
+      first.button?.setAttribute?.('aria-expanded', 'false');
       return morphPanels(first.panel, panel, { done: () => safeClose(first), log });
     },
+    /** Zavřít s animací do tlačítka; `done` = skutečné skrytí (třída hidden). */
+    hide(done, { instant = false } = {}) { return animatePanelOut(panel, { button, done, instant }); },
     unregister() { reg.delete(entry); },
   };
   reg.add(entry);

@@ -485,18 +485,9 @@ body.layout-large #settings details summary { font-size: 15px; }
   padding-bottom: 10px;
 }
 
-/* Řádek s body a bity z Twitche jen s přihlášeným Twitch účtem (pokyn usera 2026-09-24). */
-body.uc-no-twitch-login #tw-credits .tc-pill { display: none !important; }
-body.uc-no-twitch-login:not(.uc-dev):not(.uc-dono) #tw-credits { display: none !important; }
-/* QR dono tlačítko (kanál s dary = body.uc-dono, Dev mode vždy): úzký chat → v řádku s body
-   z Twitche (bez pill je řádek jen s ním), široký → v poli pro psaní (core/tool-dock.js). */
-body.uc-dev #tw-credits.hidden, body.uc-dono #tw-credits.hidden { display: flex; }
-#tw-credits .uc-tool-btn {
-  display: inline-flex; align-items: center; justify-content: center; margin-left: auto;
-  width: 26px; height: 24px; padding: 0; border-radius: 6px; cursor: pointer;
-  background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
-}
-#tw-credits .uc-tool-btn svg { width: 16px; height: 16px; }
+/* Řádek s body a bity z Twitche jen s přihlášeným Twitch účtem (pokyn usera 2026-09-24). QR dono už v něm
+   není — všechny ikony jsou v poli pro psaní (core/tool-dock.js, spec 2026-09-27 §3). */
+body.uc-no-twitch-login #tw-credits { display: none !important; }
 .dev-only { display: none; }
 body.uc-signed-out #email-settings { display: none; }
 body.uc-dev .dev-only { display: block; }
@@ -2957,13 +2948,12 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 }
 /* Jednotný hover ikonových tlačítek (emoty, soundboard, QR dono): tmavé pozadí, UnityChat gradient
    v rámečku, zlatá ikona — stejně jako „Změnit email". */
-.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active,
-#tw-credits .uc-tool-btn:hover, #tw-credits .uc-tool-btn.active {
+.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active {
   color: var(--accent-light);
   border-color: transparent;
   background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
 }
-#msg-input:disabled + .emote-btn { opacity: 0.4; pointer-events: none; }
+#msg-input:disabled ~ .uc-sb-btn { opacity: 0.4; pointer-events: none; }
 
 .uc-ep {
   position: absolute; bottom: 100%; right: 10px; z-index: 30;

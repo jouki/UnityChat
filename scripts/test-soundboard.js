@@ -42,6 +42,9 @@ const assert = require('node:assert/strict');
   assert.equal(act.remainingMs, 360_000);
   assert.ok(Math.abs(act.progress - 0.6) < 1e-9, 'progress = zbývá / celkem');
   assert.equal(sb.soundboardIconState(st, T0 + 360_000).mode, 'locked', 'po vypršení zamčeno');
+  // Spec 2026-09-27 §2: jen „Odměna není aktivována“, bez věty o milestonech Židolišty.
+  assert.equal(sb.soundboardIconState(st, T0 + 360_000).title, 'Odměna není aktivována');
+  assert.deepEqual(sb.soundboardIconState(st, T0 + 360_000).lines, [], 'zamčeno bez druhé věty');
 
   // neomezený tier → remaining null
   const un = sb.normalizeSoundboard(raw(meWith([{ tier: 2, startedAt: iso(T0), expiresAt: null }, { tier: 1, startedAt: iso(T0), expiresAt: iso(T0 + 60_000) }])), T0);

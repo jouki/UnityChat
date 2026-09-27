@@ -4,6 +4,7 @@
 // pojmenuje ho a odešle. Síť dělá hostitel přes `api` (backend /soundboard/requests*),
 // DOM dostává zvenku (host), žádné chrome.*. Cizí text jde do DOM jen přes esc / textContent.
 
+import { canAutoFocus } from './panel-morph.js';
 export const MAX_CLIP_MS = 30_000;
 export const MIN_CLIP_MS = 200;
 export const NAME_MAX = 40;
@@ -696,7 +697,7 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
     button?.classList.add('active');
     renderLimits();
     refresh();
-    if (step === 'link' && !(typeof win.matchMedia === 'function' && win.matchMedia('(pointer: coarse)').matches)) urlInput.focus({ preventScroll: true });
+    if (step === 'link' && canAutoFocus(doc)) urlInput.focus({ preventScroll: true });
     L('otevřeno');
   }
   function close() {

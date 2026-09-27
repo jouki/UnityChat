@@ -244,7 +244,7 @@ Promise.all([
   check('gifRewardView: mod bez výjimky — bez odměny zamčeno, v cooldownu čeká, bez textu „bez odměny“', RV({ allowed: false, mod: true }, 0).mode === 'locked' && !RV({ allowed: false, mod: true }, 0).canSend
     && RV({ allowed: true, mod: true, until: 5_000 }, 0).mode === 'cooldown' && !/bez odměny/.test(RV({ allowed: true, mod: true }, 0).text));
   const locked = RV({ allowed: false, mod: false, until: null }, 0);
-  check('gifRewardView: bez odměny zamčeno + hláška', locked.mode === 'locked' && !locked.canSend && /není aktivní/.test(locked.text));
+  check('gifRewardView: bez odměny zamčeno + hláška jako soundboard (jen „Odměna není aktivována“)', locked.mode === 'locked' && !locked.canSend && locked.text === 'Odměna není aktivována' && locked.text === L.GIF_REWARD_LOCKED_TEXT);
   const act = RV({ allowed: true, mod: false, until: null, rewardUntil: 250_000, rewardTotalMs: 1_000_000 }, 0);
   check('gifRewardView: aktivní s koncem odměny → pásek 25 % + odpočet', act.mode === 'active' && act.progress === 0.25 && act.text === 'Odměna ještě 4:10', JSON.stringify(act));
   check('gifRewardView: bez konce odměny → bez pásku', RV({ allowed: true, until: null }, 0).progress === null && RV({ allowed: true, until: null }, 0).canSend);
@@ -615,7 +615,7 @@ Promise.all([
     const cd = T(RV({ allowed: true, until: 42_000, rewardUntil: 268_000, rewardTotalMs: 400_000 }, 0));
     check('gifRewardTip: cooldown → nadpis „GIF odměna — cooldown“ + cooldown 42 s', cd.mode === 'cooldown' && cd.title === 'GIF odměna — cooldown' && cd.cooldownMs === 42_000 && cd.rows.length === 1, JSON.stringify(cd));
     const lk = T(RV({ allowed: false }, 0));
-    check('gifRewardTip: zamčeno → „GIF odměna není aktivní“ + popis', lk.mode === 'locked' && lk.title === 'GIF odměna není aktivní' && /Knihovnu vidíš/.test(lk.lines[0]) && !lk.rows?.length);
+    check('gifRewardTip: zamčeno → „GIF odměna není aktivní“ bez druhé věty (spec 2026-09-27 §2)', lk.mode === 'locked' && lk.title === 'GIF odměna není aktivní' && !lk.lines.length && !lk.rows?.length);
     const un = T(RV({ allowed: true, until: null }, 0));
     check('gifRewardTip: bez konce odměny → „bez omezení“ (remainingMs null)', un.rows[0].remainingMs === null && un.rows[0].progress === null);
     check('gifRewardTip: nepřihlášený → výzva', T(RV(null, 0, { loggedIn: false })).lines[0].startsWith('Přihlas se'));

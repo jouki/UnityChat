@@ -194,7 +194,7 @@
 
   <!-- Twitch credit summary mirrored from open Twitch tab — bits +
        channel-point balance. Hidden until first snapshot arrives. -->
-  <!-- Kotva panelu QR dona (nad řádkem i nad polem, ať se tlačítko může přesouvat). -->
+  <!-- Kotva panelu QR dona (nad řádkem bodů z Twitche i nad polem pro psaní). -->
   <div id="qd-anchor" class="uc-qd-anchor"></div>
   <div id="tw-credits" class="hidden">
     <span class="tc-pill tc-bits hidden">
@@ -209,8 +209,6 @@
       <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M20 8h-3V6a3 3 0 0 0-6 0v2H8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2zM13 6a1 1 0 0 1 2 0v2h-2V6zm5 14H10v-2h8v2zm0-4H10v-2h8v2z"/></svg>
       <span class="tc-claim-label">Vyzvednout bonus</span>
     </span>
-    <!-- QR dono (core/qr-dono.js) — jen u kanálu s dary (body.uc-dono); bez credits pill je v řádku samo. -->
-    <button id="btn-qrdono" type="button" class="uc-tool-btn" title="QR dono" aria-label="QR dono"></button>
   </div>
 
   <!-- Input pro odesílání zpráv -->
@@ -223,6 +221,8 @@
     </button>
     <div class="msg-input-wrap">
       <textarea id="msg-input" rows="1" placeholder="Otevři stream pro odesílání..." autocomplete="off" spellcheck="false" disabled></textarea>
+      <!-- Ikony v poli (core/tool-dock.js): QR dono (jen u kanálu s dary), soundboard, emoty. -->
+      <button id="btn-qrdono" type="button" class="uc-tool-btn" title="QR dono" aria-label="QR dono" hidden></button>
       <button id="btn-sfx" type="button" class="emote-btn hidden" aria-label="Soundboard"></button>
       <button id="btn-emotes" type="button" class="emote-btn" title="Emoty"></button>
     </div>

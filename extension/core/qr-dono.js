@@ -5,7 +5,7 @@
 // Přezdívka je vidět vždy (předvyplněná: UC přezdívka → poslední z dona → jméno z platformy).
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
-import { registerPanel } from './panel-morph.js';
+import { registerPanel, panelShown } from './panel-morph.js';
 
 export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
@@ -520,10 +520,11 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   // ---- otevření / zavření ----
   function open() {
+    morph.settle();   // rozběhnuté zavírání dokončit, ať panel po otevření neschová
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
-    // Jiný otevřený panel u pole (emoty, soundboard) se do tohohle plynule přetvoří (test2 bod 5).
+    // Z nuly vyroste z tlačítka; jiný otevřený panel u pole (emoty, soundboard) se do tohohle přetvoří (test2 bod 5).
     morph.opened();
     clearConfigNotice();
     renderCurrency();
@@ -537,9 +538,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     panel.focus();
     if (!$('.uc-qd-res').hidden && publicId) poll();
   }
-  function close() {
-    if (panel.classList.contains('hidden')) return;
-    panel.classList.add('hidden');
+  /** `instant` = bez animace (přetvoření do jiného panelu ho volá po doběhnutí). */
+  function close({ instant = false } = {}) {
+    if (!isOpen()) return;
+    morph.hide(() => panel.classList.add('hidden'), { instant });
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     win.clearInterval(versionTimer);
@@ -548,8 +550,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     stopSample();
     if (verifier) closeVerify();
   }
-  const isOpen = () => !panel.classList.contains('hidden');
-  const morph = registerPanel({ panel, button, isOpen, close, log: L });
+  const isOpen = () => panelShown(panel);
+  const morph = registerPanel({ panel, button, isOpen, close: () => close({ instant: true }), log: L });
 
   // ---- události ----
   button.addEventListener('click', (e) => { e.stopPropagation(); morph.settle(); isOpen() ? close() : open(); });
@@ -605,13 +607,13 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   return {
     open, close, isOpen,
-    toggle: () => (isOpen() ? close() : open()),
+    toggle: () => { morph.settle(); return isOpen() ? close() : open(); },
     /** SSE donate-config-change (webhook Židolišty) → config hned, ne až za 10 s. Zavřený panel nic nedělá. */
     reloadConfig: () => { if (isOpen() && !form.hidden) loadConfig(); },
     /** Změna přihlášení / platformy u hostitele → překreslit „Tipuješ jako…“ a načíst profil. */
     refreshIdentity: () => { renderWho(); if (isOpen()) loadProfile(); },
     destroy() {
-      close();
+      close({ instant: true });
       morph.unregister();
       doc.removeEventListener('mousedown', onDocDown);
       panel.remove();
