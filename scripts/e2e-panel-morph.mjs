@@ -163,6 +163,30 @@ await sleep(450);
 check('přepnutí bez myši (click z klávesnice): zůstane jen soundboard', (await shown()) === 'uc-sb', await shown());
 await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
 
+// Review C1: rychlé A → B → C (odstup 60 ms, druhé přetvoření během prvního) → žádný zamrzlý inline stav.
+const leftovers = () => ev(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].filter((e) => e.style.cssText || e.classList.contains('uc-morph-ghost') || e.hasAttribute('aria-hidden')).map((e) => e.className.split(' ')[0] + ' "' + e.style.cssText + '"')`);
+await realClick('#btn-emotes'); await sleep(400);
+await realClick('#btn-sfx'); await sleep(60);
+await realClick('#btn-qrdono'); await sleep(700);
+check('C1 rychle emoty → nota → QR: jen QR, žádné zbylé inline styly ani duch', (await shown()) === 'uc-qd' && (await leftovers()).length === 0, JSON.stringify({ shown: await shown(), left: await leftovers() }));
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(200);
+for (const [btn, cls] of [['#btn-emotes', 'uc-ep'], ['#btn-sfx', 'uc-sb'], ['#btn-qrdono', 'uc-qd']]) {
+  await realClick(btn); await sleep(350);
+  const ok = (await shown()) === cls && (await leftovers()).length === 0
+    && await ev(`(() => { const p = document.querySelector('.${cls}'); const r = p.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 30); return !!hit && p.contains(hit) && getComputedStyle(p).pointerEvents !== 'none'; })()`) === true;
+  check(`C1 potom ${cls} jde otevřít z nuly a klikat (bez zbytkových stylů, pointer-events)`, ok, JSON.stringify({ shown: await shown(), left: await leftovers() }));
+  await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(200);
+}
+// Review I1: A → B a hned zpět A (do 220 ms) → A otevřený (klik na ducha ho nezavře).
+await realClick('#btn-emotes'); await sleep(400);
+await realClick('#btn-sfx'); await sleep(60);
+await realClick('#btn-emotes'); await sleep(700);
+check('I1 emoty → nota → hned zpět emoty: otevřené emoty, bez zbytků', (await shown()) === 'uc-ep' && (await leftovers()).length === 0 && await ev(`document.getElementById('btn-emotes').classList.contains('active') && !document.getElementById('btn-sfx').classList.contains('active')`) === true,
+  JSON.stringify({ shown: await shown(), left: await leftovers() }));
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(200);
+// Review M3/M4: bez nativního title u záložek a u tlačítek panelu.
+check('M3 záložky panelu emotů bez nativního title', await ev(`[...document.querySelectorAll('.uc-ep-tab')].every((t) => !t.hasAttribute('title'))`) === true);
+
 // prefers-reduced-motion → okamžitá výměna bez ducha.
 await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, sessionId);
 await realClick('#btn-emotes');

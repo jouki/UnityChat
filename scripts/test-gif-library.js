@@ -590,6 +590,7 @@ Promise.all([
     check('test2 4.1: pozdní průběh po hlášce cooldown kolečko nevrátí', ob2.view('twitch', 'c1') === null);
     check('gifCooldownNoticeText: 3 tvary + odkaz zůstal', L.gifCooldownNoticeText(42_000) === 'GIF můžeš poslat až za 42 s — odkaz zůstal jako běžná zpráva.'
       && L.gifCooldownNoticeText(90_000) === 'GIF můžeš poslat až za 1:30 — odkaz zůstal jako běžná zpráva.', L.gifCooldownNoticeText(42_000));
+    check('gifCooldownNoticeText: filtr odkazů zprávu smazal (removed) → nelže, že odkaz zůstal (review M2)', L.gifCooldownNoticeText(42_000, { removed: true }) === 'GIF můžeš poslat až za 42 s — zprávu s odkazem smazal filtr odkazů.');
   }
   {
     // test2 4.1: gifAccountHandlers → cooldown ze serveru (done approved s cooldownUntil, gif-notice cooldown)

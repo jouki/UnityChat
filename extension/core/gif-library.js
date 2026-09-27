@@ -72,9 +72,12 @@ export const GIF_SENDING_TEXT = 'Odesílám…';
 /** Fáze, od které se u zprávy ukazuje kolečko s procenty. */
 const DOWNLOAD_PHASES = new Set(['download', 'unlock']);
 
-/** Hláška po `gif-notice` cooldown: GIF odkaz během cooldownu zůstal běžnou zprávou (test2 bod 4.1). */
-export function gifCooldownNoticeText(ms) {
-  return `GIF můžeš poslat až za ${formatRemaining(ms)} — odkaz zůstal jako běžná zpráva.`;
+/**
+ * Hláška po `gif-notice` cooldown (test2 bod 4.1): GIF odkaz během cooldownu zůstal běžnou zprávou, nebo ho (removed)
+ * hned smazal běžný filtr odkazů (review M2).
+ */
+export function gifCooldownNoticeText(ms, { removed = false } = {}) {
+  return `GIF můžeš poslat až za ${formatRemaining(ms)} — ${removed ? 'zprávu s odkazem smazal filtr odkazů.' : 'odkaz zůstal jako běžná zpráva.'}`;
 }
 
 const PHASES = new Set(['detect', 'access', 'download', 'unlock', 'verify', 'done']);
@@ -1364,8 +1367,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   function paintEye(eye, sharp) {
     eye.innerHTML = sharp ? EYE_OFF_SVG : EYE_SVG;
     eye.setAttribute('aria-pressed', String(sharp));
+    // Bez nativního title (review M3) — popis jen v aria-label.
     eye.setAttribute('aria-label', sharp ? 'Rozmazat GIF' : 'Zobrazit GIF');
-    eye.title = sharp ? 'Rozmazat' : 'Zobrazit';
   }
   function toggleEye(tile) {
     const key = `${tile.dataset.sec}:${tile.dataset.id}`;

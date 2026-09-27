@@ -518,7 +518,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     showList();
   }
   const isOpen = () => !panel.classList.contains('hidden');
-  const toggle = () => (isOpen() ? close() : open());
+  const toggle = () => { morph.settle(); return isOpen() ? close() : open(); };
   const morph = registerPanel({ panel, button, isOpen, close, log: (t) => log?.('Soundboard', t) });
 
   function preview(sound) {

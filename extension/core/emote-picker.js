@@ -80,7 +80,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   // Záložky: svislý sloupec vlevo (Emoty | GIFy | …), každá záložka má vlastní panel (pane).
   panel.innerHTML = tabs.length
     ? `<div class="uc-ep-side" role="tablist" aria-orientation="vertical">
-        <button type="button" class="uc-ep-tab on" role="tab" data-tab="emotes" aria-selected="true" title="Emoty">${EMOTE_TAB_SVG}<span>Emoty</span></button>
+        <button type="button" class="uc-ep-tab on" role="tab" data-tab="emotes" aria-selected="true" aria-label="Emoty">${EMOTE_TAB_SVG}<span>Emoty</span></button>
         ${tabs.map((t) => `<button type="button" class="uc-ep-tab" role="tab" data-tab="${esc(t.key)}" aria-selected="false" aria-label="${esc(t.label)}">${t.icon || ''}<span>${esc(t.label)}</span><i class="uc-ep-tab-bar" hidden></i></button>`).join('')}
       </div>
       <div class="uc-ep-pane uc-ep-main" data-pane="emotes">${main}</div>
@@ -165,7 +165,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     mounted.get(active)?.hide?.();
   }
   const isOpen = () => !panel.classList.contains('hidden');
-  const toggle = () => (isOpen() ? close() : open());
+  // Duch přetvoření (panel právě odchází do jiného) není otevřený → klik ho znovu otevře (review I1).
+  const toggle = () => { morph.settle(); return isOpen() ? close() : open(); };
   const morph = registerPanel({ panel, button, isOpen, close, log: (t) => log?.('EmotePicker', t) });
 
   /**
@@ -181,10 +182,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     const bar = tab?.querySelector('.uc-ep-tab-bar');
     const cur = indicators.get(key);
     if (bar) { bar.hidden = !cur; if (cur) bar.style.setProperty('--p', cur.progress.toFixed(4)); }
-    // Nativní title se každou sekundu neprepisuje (blikal, test2 bod 3) — text jde do vlastního tooltipu a aria-label.
-    const label = tabs.find((t) => t.key === key)?.label || key;
-    const aria = cur?.title ? `${label} — ${cur.title}` : label;
-    if (tab && tab.getAttribute('aria-label') !== aria) tab.setAttribute('aria-label', aria);
+    // Nativní title ani aria-label se každou sekundu nepřepisují (blikal, test2 bod 3; review M4) — odpočet je jen
+    // ve vlastním tooltipu, aria-label záložky zůstává její název.
     const best = [...indicators.values()].reduce((a, x) => (!a || x.progress > a.progress ? x : a), null);
     let bb = button.querySelector(':scope > .uc-ep-btn-bar');
     if (best && !bb) { bb = doc.createElement('span'); bb.className = 'uc-ep-btn-bar'; button.appendChild(bb); }
@@ -200,7 +199,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   const plainTip = (title) => ({ mode: 'plain', title });
   /** Ikona emotů: stav první záložky, která ho hlásí (GIFy), jinak jen „Emoty“. */
   const buttonTip = () => [...tipStates.values()][0] || plainTip('Emoty');
-  const tabTipState = (key) => tipStates.get(key) || plainTip(tabs.find((t) => t.key === key)?.label || key);
+  const tabTipState = (key) => tipStates.get(key) || plainTip(key === 'emotes' ? 'Emoty' : (tabs.find((t) => t.key === key)?.label || key));
   const btnTip = tabs.length ? createIconTip({ host }) : null;
   const tabTip = tabs.length ? createIconTip({ host: panel, placement: 'side' }) : null;
   let tabTipKey = null;
@@ -214,7 +213,6 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     button.addEventListener('blur', () => btnTip.hide());
     for (const b of panel.querySelectorAll('.uc-ep-tab')) {
       const key = b.dataset.tab;
-      if (key === 'emotes') continue;
       b.addEventListener('mouseenter', () => { tabTipKey = key; tabTip.show(b, tabTipState(key)); });
       b.addEventListener('mouseleave', () => { tabTipKey = null; tabTip.hide(); });
     }

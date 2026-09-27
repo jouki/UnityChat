@@ -283,7 +283,7 @@ export interface GifHook {
   /** Synchronně z cache: konec cooldownu, kvůli kterému je přístup 'denied' (gifCooldownUntilSync); null = jiný důvod. */
   cooldownUntil?: (q: GifAccessQuery) => number | null;
   /** GIF odkaz během cooldownu zůstal běžným odkazem → log + hláška odesílateli (createGifFlow().cooldownDenied). */
-  onCooldown?: (p: { m: IngestMessage; ucChannel: string; until: number }) => void;
+  onCooldown?: (p: { m: IngestMessage; ucChannel: string; until: number; removed: boolean }) => void;
   /** Rezervace (jedna žádost na uživatele současně); false = GIF cesta se nepoužije. */
   tryReserve: (channel: string, platform: string, userId: string) => boolean;
   /** Převod + žádost na pozadí (lib/gifRequests.ts createGifFlow().intercept). */
@@ -365,7 +365,8 @@ export function createLinkFilter(deps: LinkFilterDeps) {
       // Cooldown (i mod): odkaz zůstane odkazem, odesílatel se to dozví (jinak mu u zprávy visí kolečko, test2 bod 4.1).
       let until: number | null = null;
       try { until = gif.cooldownUntil?.(query) ?? null; } catch { until = null; }
-      if (until !== null) { try { gif.onCooldown?.({ m, ucChannel, until }); } catch { /* nic */ } }
+      // `removed`: filtr odkazů zprávu hned potom smaže (host) → hláška to řekne, ne „odkaz zůstal“ (review M2).
+      if (until !== null) { try { gif.onCooldown?.({ m, ucChannel, until, removed: !!host }); } catch { /* nic */ } }
       return null;
     }
     if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;

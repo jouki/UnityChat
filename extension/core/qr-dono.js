@@ -552,7 +552,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   const morph = registerPanel({ panel, button, isOpen, close, log: L });
 
   // ---- události ----
-  button.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
+  button.addEventListener('click', (e) => { e.stopPropagation(); morph.settle(); isOpen() ? close() : open(); });
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   f.amount.addEventListener('input', () => { f.amount.classList.remove('invalid'); updateCzk(); });
   for (const k of ['nickname', 'email']) f[k].addEventListener('input', () => f[k].classList.remove('invalid'));

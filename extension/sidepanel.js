@@ -1270,7 +1270,7 @@ class UnityChat {
         onNotice: (kind, _e, d) => {
           if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT);
           // GIF odkaz během cooldownu zůstal běžnou zprávou (test2 bod 4.1); čas ze serveru (until − serverNow).
-          else if (kind === 'cooldown') this._sys(core.gifCooldownNoticeText(Math.max(1000, Number(d?.until) - Number(d?.serverNow)) || 1000));
+          else if (kind === 'cooldown') this._sys(core.gifCooldownNoticeText(Math.max(1000, Number(d?.until) - Number(d?.serverNow)) || 1000, { removed: d?.removed === true }));
         },
       });
     }

@@ -1075,8 +1075,24 @@ test('test2 bod 4.1: GIF odkaz v cooldownu (přístup z intercept) → běžný 
   assert.equal(await s.flow.intercept({ ...from('42', 'm1'), needAccess: true }), 'denied');
   assert.ok(logs.includes('gif: cooldown → běžný odkaz'), logs.join(' | '));
   const notice = told.find(([e]) => e === 'gif-notice')![1];
-  assert.deepEqual([notice.kind, notice.until, notice.serverNow, notice.requestKey], ['cooldown', 1_030_000, 1_000_000, 'twitch:m1']);
+  assert.deepEqual([notice.kind, notice.until, notice.serverNow, notice.requestKey, notice.removed], ['cooldown', 1_030_000, 1_000_000, 'twitch:m1', false]);
   assert.equal(told.at(-1)![1].outcome, 'denied');
+  // Review M2: filtr odkazů zprávu smaže (filterAct) → hláška to říká (removed: true), ne „odkaz zůstal“.
+  const toldF: Array<[string, Record<string, unknown>]> = [];
+  const f = setup({
+    access: async () => ({ allowed: true, until: null, cooldownUntil: 1_030_000, cooldownSec: 60, requestTtlSec: 120 }),
+    toSender: async () => (e: string, d: object) => { toldF.push([e, d as Record<string, unknown>]); },
+  });
+  assert.equal(await f.flow.intercept({ ...from('42', 'm1'), needAccess: true, filterAct: async () => {} }), 'denied');
+  assert.equal(toldF.find(([e]) => e === 'gif-notice')![1].removed, true);
+  // Review M1: odměně vypršel čas (until) → není to cooldown, žádná hláška.
+  const toldE: Array<[string, Record<string, unknown>]> = [];
+  const ex = setup({
+    access: async () => ({ allowed: true, until: 999_000, cooldownUntil: 1_030_000, cooldownSec: 60, requestTtlSec: 120 }),
+    toSender: async () => (e: string, d: object) => { toldE.push([e, d as Record<string, unknown>]); },
+  });
+  assert.equal(await ex.flow.intercept({ ...from('42', 'm1'), needAccess: true }), 'denied');
+  assert.equal(toldE.some(([e]) => e === 'gif-notice'), false, 'vypršelá odměna = bez hlášky cooldownu');
   // Neodemčeno (ne cooldown) → bez hlášky.
   const told2: Array<[string, Record<string, unknown>]> = [];
   const n = setup({
@@ -1096,7 +1112,10 @@ test('test2 bod 4.1: cooldownDenied (filtr odkazů zná cooldown z cache) → lo
   });
   await s.flow.cooldownDenied({ m: msg({ platformMessageId: 'm7' }), ucChannel: 'robdiesalot', until: 1_020_000 });
   assert.ok(logs.includes('gif: cooldown → běžný odkaz'));
-  assert.deepEqual(told, [['gif-notice', { requestKey: 'twitch:m7', channel: 'robdiesalot', platform: 'twitch', messageId: 'm7', kind: 'cooldown', until: 1_020_000, serverNow: 1_000_000 }]]);
+  assert.deepEqual(told, [['gif-notice', { requestKey: 'twitch:m7', channel: 'robdiesalot', platform: 'twitch', messageId: 'm7', kind: 'cooldown', until: 1_020_000, serverNow: 1_000_000, removed: false }]]);
+  // Review M2: zprávu pak smaže běžný filtr odkazů → removed: true (klient neřekne „odkaz zůstal“).
+  await s.flow.cooldownDenied({ m: msg({ platformMessageId: 'm8' }), ucChannel: 'robdiesalot', until: 1_020_000, removed: true });
+  assert.equal(told.at(-1)![1].removed, true);
 });
 
 test('fronta FIFO: listPending podle vzniku; gif-queue { pendingCount, headId } modům po každé změně', async () => {

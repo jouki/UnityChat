@@ -316,7 +316,8 @@ test('L13: odkaz na naše médium s tokenem moda (?t=) → token se zneplatní (
 
 test('test2 bod 4.1: GIF odkaz během cooldownu (cache) → běžný odkaz + onCooldown { until } (hláška odesílateli); neodemčeno bez hlášky', () => {
   const seen: Array<{ id: string; until: number; ch: string }> = [];
-  const hookWith = (until: number | null) => ({ ...gifHook('denied').hook, cooldownUntil: () => until, onCooldown: (p: { m: { platformMessageId: string }; ucChannel: string; until: number }) => { seen.push({ id: p.m.platformMessageId, until: p.until, ch: p.ucChannel }); } });
+  const seenRemoved: boolean[] = [];
+  const hookWith = (until: number | null) => ({ ...gifHook('denied').hook, cooldownUntil: () => until, onCooldown: (p: { m: { platformMessageId: string }; ucChannel: string; until: number; removed?: boolean }) => { seen.push({ id: p.m.platformMessageId, until: p.until, ch: p.ucChannel }); seenRemoved.push(!!p.removed); } });
   const a = harness(LINK_FILTER_OFF, { gif: hookWith(1_050_000) });
   const m = msg({ content: GIF_TEXT, platformMessageId: 'cd1' });
   assert.equal(a.f.check(m), null, 'běžný odkaz (filtr vypnutý)');
@@ -325,6 +326,12 @@ test('test2 bod 4.1: GIF odkaz během cooldownu (cache) → běžný odkaz + onC
   const b = harness(LINK_FILTER_OFF, { gif: hookWith(null) });
   b.f.check(msg({ content: GIF_TEXT, platformMessageId: 'cd2' }));
   assert.equal(seen.length, 1, 'neodemčeno (ne cooldown) → nic');
+  assert.deepEqual(seenRemoved, [false]);
+  // Review M2: filtr odkazů zprávu smaže → onCooldown s removed: true.
+  const c = harness(undefined, { gif: hookWith(1_050_000) });
+  const m3 = msg({ content: GIF_TEXT, platformMessageId: 'cd3' });
+  assert.deepEqual(c.f.check(m3), { host: 'tenor.com', channel: 'robdiesalot' });
+  assert.deepEqual(seenRemoved, [false, true]);
 });
 
 test('GIF: odemčeno (cache) → schovat hned jako gif_request, převod na pozadí; i s vypnutým filtrem', () => {

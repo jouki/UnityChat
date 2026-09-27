@@ -16,6 +16,16 @@ export const MORPH_MS = 220;
 export const MORPH_EASING = 'cubic-bezier(.2, .8, .2, 1)';
 
 const registries = new WeakMap();   // document → Set<entry>
+/** Běžící přetvoření podle prvku (odcházející i příchozí panel) → dokončení. Nové přetvoření / klik ho nejdřív dokončí. */
+const running = new WeakMap();
+
+/** Dokončit běžící přetvoření, kterého se prvek účastní (obnoví původní inline styl, zavře odcházející panel). */
+export function settleMorph(el) {
+  const f = el && running.get(el);
+  if (f) f();
+}
+/** Prvek je právě odcházející „duch“ přetvoření (vizuálně ještě vidět, ale už zavřený). */
+export const isMorphGhost = (el) => !!el?.classList?.contains('uc-morph-ghost');
 
 function reducedMotion(win) {
   try { return !!win?.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
@@ -37,6 +47,10 @@ const PIN = { right: 'auto', bottom: 'auto', margin: '0', boxSizing: 'border-box
  * Bez animace (reduced motion, chybí rozměry / API) zavolá `done()` hned.
  */
 export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASING, done = () => {}, log } = {}) {
+  // Rychlé přepínání (A → B → C do 220 ms): předchozí přetvoření nejdřív dokončit — jinak by se jako „původní“ uložil
+  // inline stav rozběhnuté animace (pevná geometrie, z-index, pointer-events) a panel by v něm zůstal (review C1).
+  settleMorph(from);
+  settleMorph(to);
   const win = to.ownerDocument?.defaultView;
   const ra = from.getBoundingClientRect?.();
   const rb = to.getBoundingClientRect?.();
@@ -62,6 +76,9 @@ export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASI
   const finish = () => {
     if (finished) return;
     finished = true;
+    if (running.get(from) === finish) running.delete(from);
+    if (running.get(to) === finish) running.delete(to);
+    win.clearTimeout(t);
     for (const a of anims) { try { a.cancel(); } catch { /* ignore */ } }
     from.style.cssText = saved[0];
     to.style.cssText = saved[1];
@@ -71,7 +88,9 @@ export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASI
   };
   // Pojistka: kdyby `finished` nepřišel (skrytý dokument), dokončit po duration + rezerva.
   const t = win.setTimeout(finish, duration + 150);
-  return Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => { win.clearTimeout(t); finish(); return true; });
+  running.set(from, finish);
+  running.set(to, finish);
+  return Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => { finish(); return true; });
 }
 
 /**
@@ -83,7 +102,11 @@ export function registerPanel({ panel, button, isOpen, close, log }) {
   let reg = registries.get(doc);
   if (!reg) { reg = new Set(); registries.set(doc, reg); }
   const entry = {
-    panel, button, isOpen, close,
+    panel, button, close,
+    /** Otevřený = viditelný a ne odcházející duch přetvoření (review I1: klik na A během A → B ho má otevřít). */
+    isOpen: () => !isMorphGhost(panel) && isOpen(),
+    /** Před přepnutím (klik na vlastní tlačítko): dokončit přetvoření, kterého se panel účastní. */
+    settle() { settleMorph(panel); },
     /** Klik (mousedown) na tlačítko jiného panelu → nezavírat, nový panel tenhle přetvoří. */
     isSwitch(target) {
       for (const o of reg) if (o !== entry && o.button && target && o.button.contains?.(target)) return true;
@@ -91,6 +114,8 @@ export function registerPanel({ panel, button, isOpen, close, log }) {
     },
     /** Právě jsem se zobrazil → jiné otevřené panely přetvořit do mě (první) / zavřít (ostatní). */
     opened() {
+      // Rozběhnutá přetvoření dokončit dřív, než se změří (duchové se zavřou, styly vrátí).
+      for (const o of reg) settleMorph(o.panel);
       const others = [...reg].filter((o) => o !== entry && o.panel.isConnected && safeOpen(o));
       if (!others.length) return null;
       const [first, ...rest] = others;

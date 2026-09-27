@@ -1217,9 +1217,12 @@ export function createGifFlow(deps: GifFlowDeps) {
         return { cooldownUntil: cd !== null && cd > nowMs ? cd : null, serverNow: nowMs };
       };
       /** GIF odkaz během cooldownu → běžný odkaz; odesílatel dostane hlášku (optimistická zpráva bez kolečka). */
+      // `removed`: zprávu pak smaže běžný filtr odkazů (smazal ji už / smaže ji settleHeld) — hláška nesmí tvrdit,
+      // že odkaz zůstal (review M2).
       const cooldownDenied = (until: number) => {
-        deps.log.info({ channel: p.ucChannel, platform: m.platform, until }, 'gif: cooldown → běžný odkaz');
-        notice('cooldown', { until, serverNow: deps.now() });
+        const removed = p.preDeleted === 'link_filter' || !!p.filterAct;
+        deps.log.info({ channel: p.ucChannel, platform: m.platform, until, removed }, 'gif: cooldown → běžný odkaz');
+        notice('cooldown', { until, serverNow: deps.now(), removed });
       };
       // Čekání na zápis dávky ingestu (FLUSH_WAIT_MS): náš odkaz na schválené médium na něj nečeká (test2 bod 4) —
       // přeznačení / obnovení původní zprávy v DB, které ho potřebují, si ho počkají samy (flushed()).
@@ -1239,7 +1242,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         const access = await deps.access(p.query).catch(() => null);
         if (p.needAccess && !gifUsable(access, deps.now())) {
           // Odemčeno, ale běží cooldown → hláška odesílateli (jinak mu zůstane kolečko u odkazu).
-          if (access?.allowed && access.cooldownUntil !== null && access.cooldownUntil > deps.now()) cooldownDenied(access.cooldownUntil);
+          // Jen cooldown odemčené odměny; vypršelá odměna (until) = zamčeno, ne cooldown (review M1, jako gifCooldownUntilSync).
+          const nowMs = deps.now();
+          if (access?.allowed && (access.until === null || access.until > nowMs) && access.cooldownUntil !== null && access.cooldownUntil > nowMs) cooldownDenied(access.cooldownUntil);
           // Zpráva schovaná předem (neznámý přístup, audit A12) → rozhodnout: filtr by ji smazal = smazat, jinak obnovit.
           if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p, 'denied'); }
           return finish('denied');
@@ -1474,13 +1479,14 @@ export function createGifFlow(deps: GifFlowDeps) {
      * vložený odkaz): zpráva zůstává běžným odkazem, odesílatel dostane `gif-notice` `{ kind: 'cooldown', until }`
      * (klient ukáže hlášku a u optimistické zprávy nenechá kolečko). Nikdy nevyhodí.
      */
-    async cooldownDenied(p: { m: IngestMessage; ucChannel: string; until: number }): Promise<void> {
+    async cooldownDenied(p: { m: IngestMessage; ucChannel: string; until: number; removed?: boolean }): Promise<void> {
       const { m } = p;
-      deps.log.info({ channel: p.ucChannel, platform: m.platform, until: p.until }, 'gif: cooldown → běžný odkaz');
+      const removed = !!p.removed;
+      deps.log.info({ channel: p.ucChannel, platform: m.platform, until: p.until, removed }, 'gif: cooldown → běžný odkaz');
       if (!deps.toSender) return;
       await safe('gif-notice cooldown', async () => {
         const tell = await deps.toSender!(m.platform as Platform, m.platformUserId);
-        tell?.('gif-notice', { requestKey: `${m.platform}:${m.platformMessageId}`, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, kind: 'cooldown', until: p.until, serverNow: deps.now() });
+        tell?.('gif-notice', { requestKey: `${m.platform}:${m.platformMessageId}`, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, kind: 'cooldown', until: p.until, serverNow: deps.now(), removed });
       });
     },
 
