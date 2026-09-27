@@ -23,7 +23,8 @@
 //   Trvale zahodit (spec 2026-09-27-gif-nahled-zahozeni-design.md, mediaAction purge/restore/remove-file):
 //     withdrawn (zprávy nechat) / purging (i se zprávami, smazání po 7 dnech, obnova) / unavailable (soubor pryč);
 //     zahozené médium dedup pozná → nový odkaz automaticky zamítnut; změna viditelnosti zpráv → SSE `gif-media`.
-//   Mod / broadcaster (badge) → `auto`: schváleno hned, bez cooldownu a bez karet; Dev mód v UC = jako divák.
+//   Mod / broadcaster (badge) s odemčenou odměnou → `auto`: schváleno hned, bez karet; přístup i cooldown ze Židolišty
+//   jako u diváka (spec 2026-09-27-gif-review-upravy §5); Dev mód v UC = jako divák.
 //   Převod selže → zpráva se bere jako běžný odkaz (filtr ji smaže, nebo se v UC obnoví, když by ji filtr pustil).
 // Nic tady nesmí shodit ingest. NIKDY nelogovat tokeny.
 import { randomBytes, createHash } from 'node:crypto';
@@ -711,8 +712,8 @@ export interface GifInterceptParams {
   /** Filtr odkazů by host zablokoval → token se vyřadí i z textu nad GIFem. Chybí = ponechat ostatní odkazy. */
   linkBlocked?: (host: string) => boolean;
   /**
-   * Mod / broadcaster (badge zprávy): GIF se schválí rovnou (`by` = on sám), bez cooldownu (gif-used se
-   * nevolá) a bez karty ke schválení. Režim odměny `approved` platí i pro něj.
+   * Mod / broadcaster (badge zprávy) s odemčenou odměnou: GIF se schválí rovnou (`by` = on sám), bez karty ke
+   * schválení. Přístup (needAccess), cooldown (gif-used) i režim odměny `approved` platí stejně jako pro diváka.
    */
   auto?: boolean;
   /**
@@ -904,7 +905,7 @@ export function createGifFlow(deps: GifFlowDeps) {
   /**
    * Rozhodnutí (mod přes routu, auto-schválení modova GIFu, okamžité schválení z knihovny). První vyhrává:
    * podmíněný UPDATE; pozdější → 409 { status, decidedBy }.
-   * `auto`: bez gif-used (mod nemá cooldown). `quiet`: bez gif-decided / gif.decided (žádost nikdo neviděl).
+   * `auto`: schválení modem samým (bez karty). `quiet`: bez gif-decided / gif.decided (žádost nikdo neviděl).
    * `cascade`: schválení z jiné žádosti na stejné médium (sama už dál nekaskáduje).
    */
   const decideCore = async (p: { requestId: number; approve: boolean; by: string; accountId: number | null; auto?: boolean; quiet?: boolean; cascade?: boolean; instant?: boolean }): Promise<{ status: number; body: Record<string, unknown> }> => {
@@ -927,8 +928,8 @@ export function createGifFlow(deps: GifFlowDeps) {
     }
     if (p.approve) {
       // Cooldown hned (gifUsed ho nastaví lokálně synchronně, před voláním Židolišty), ne až po rozeslání.
-      // Auto (mod / broadcaster): cooldown se neuplatňuje → gif-used se nevolá.
-      const usedP = p.auto ? Promise.resolve() : Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
+      // Platí i pro auto (mod / broadcaster se schvaluje sám, ale cooldown má jako ostatní — spec 2026-09-27 §5).
+      const usedP = Promise.resolve().then(() => deps.used({ workspace: r.workspace, platform: r.platform as Platform, userId: r.userId }))
         .catch((e) => deps.log.warn({ err: (e as Error).message }, 'gif: gif-used selhalo'));
       // Počítadlo použití; souběh dedupu (stejný obsah schválený jako jiné médium) → sloučit.
       if (r.mediaId && effective) {
@@ -1018,9 +1019,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         if (p.preDeleted === 'gif_request') await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
         if (deps.toSender) tell = await deps.toSender(m.platform, m.platformUserId).catch(() => null);
         progress('detect', 0);
-        // Přístup (cache 60 s): odemčení (divák), requestTtlSec a režim odměny (i mod — approved platí i pro něj).
+        // Přístup (cache 60 s): odemčení a cooldown (i mod — spec 2026-09-27-gif-review-upravy §5), requestTtlSec a režim odměny.
         const access = await deps.access(p.query).catch(() => null);
-        if (!auto && p.needAccess && !gifUsable(access, deps.now())) return finish('denied');
+        if (p.needAccess && !gifUsable(access, deps.now())) return finish('denied');
         const mode = access?.mode ?? 'all';
         progress('access', 10);
 

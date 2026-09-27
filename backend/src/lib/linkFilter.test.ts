@@ -360,16 +360,16 @@ test('GIF: neodemčeno → běžný filtr; neznámé → filtr + ověření na p
   assert.equal(busy.intercepts.length, 0);
 });
 
-test('GIF od moda / broadcastera → auto (schválení bez Židolišty), schovat hned; Dev mód (gifReview) → jako divák', () => {
+test('GIF od moda / broadcastera: přístup ze Židolišty jako divák (role v dotazu); odemčeno → auto (schválí se sám), schovat hned', () => {
   for (const badges of ['moderator/1', 'broadcaster/1']) {
-    const g = gifHook('denied');
+    const g = gifHook('allowed');
     let asked = 0;
     const { f, calls } = harness(undefined, { gif: { ...g.hook, reviewRequested: () => { asked++; return false; }, lateReview: () => false } });
     const m = msg({ content: GIF_TEXT, contentRaw: { badges } });
     assert.deepEqual(f.check(m), { host: 'tenor.com', channel: 'robdiesalot', gif: true });
     assert.deepEqual(m.deleted, { by: 'filter', reason: 'gif_request' });
     assert.equal(asked, 1);
-    assert.equal(g.queries.length, 0, 'přístup ze Židolišty se neřeší (mod má vždy povoleno)');
+    assert.equal((g.queries[0] as { role: string }).role, badges.startsWith('moderator') ? 'moderator' : 'broadcaster', 'přístup se ptá Židolišty s rolí');
     const p = g.intercepts[0];
     assert.equal(p.auto, true);
     assert.equal(p.preDeleted, 'gif_request');
@@ -377,12 +377,33 @@ test('GIF od moda / broadcastera → auto (schválení bez Židolišty), schovat
     assert.equal(typeof p.lateReview, 'function');
     assert.equal(calls.published.length, 0);
   }
+  // Mod bez odemčené odměny → jako divák bez odměny: GIF cesta se nepoužije (mod filtr odkazů nemá → zpráva zůstane).
+  const denied = gifHook('denied');
+  const dn = harness(undefined, { gif: { ...denied.hook, reviewRequested: () => false } });
+  const md = msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } });
+  assert.equal(dn.f.check(md), null);
+  assert.equal(md.deleted, undefined);
+  assert.equal(denied.intercepts.length, 0);
+  // Neznámý přístup → zpráva zůstane, GIF se ověří zpětně (needAccess) a při odemčení schválí sám.
+  const unknown = gifHook('unknown');
+  const un = harness(undefined, { gif: { ...unknown.hook, reviewRequested: () => false, lateReview: () => false } });
+  const mu = msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } });
+  assert.equal(un.f.check(mu), null);
+  assert.equal(mu.deleted, undefined);
+  assert.equal(unknown.intercepts[0].needAccess, true);
+  assert.equal(unknown.intercepts[0].preDeleted, null);
+  assert.equal(unknown.intercepts[0].auto, true);
   // Dev mód (hlášení před zprávou) + neodemčeno → běžný odkaz, žádné auto.
   const d = gifHook('denied');
   const h = harness(undefined, { gif: { ...d.hook, reviewRequested: () => true } });
   const m = msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } });
   assert.equal(h.f.check(m), null);
   assert.equal(d.intercepts.length, 0);
+  // Dev mód + odemčeno → žádost jako divák (bez auto).
+  const da = gifHook('allowed');
+  const ha = harness(undefined, { gif: { ...da.hook, reviewRequested: () => true } });
+  ha.f.check(msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } }));
+  assert.equal(da.intercepts[0].auto, undefined);
   // Mod s čekající žádostí (rezervace neprojde) → běžná zpráva.
   const busy = gifHook('allowed', false);
   const b = harness(undefined, { gif: busy.hook });

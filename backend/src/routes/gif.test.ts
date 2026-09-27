@@ -297,19 +297,18 @@ test('gifStateFor: cooldown vlastní identity na platformě, kam píše (role z 
   assert.equal(past.cooldownUntil, null);
 });
 
-test('gifStateFor: mod bez Dev módu = povoleno bez cooldownu (Židolišta jen kvůli režimu); s review jako divák', async () => {
+test('gifStateFor: mod / broadcaster bez výjimky — stav odměny, cooldown i pásek ze Židolišty jako u diváka (role v dotazu)', async () => {
   const log: unknown[] = [];
   const mod = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator' }, log));
-  assert.deepEqual(mod, { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 2_000_000, mode: 'all', cooldownGlobalSec: 0, mod: true });
-  // Režim „jen schválené" platí i pro mody → i jim se vrací.
-  const modApproved = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator', access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300, mode: 'approved' }) }));
-  assert.equal(modApproved.mode, 'approved');
-  assert.equal(modApproved.allowed, true);
-  assert.equal((await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator', access: async () => null }))).mode, 'all');
-  log.length = 0;
-  const rev = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch', review: true }, stateDeps({ role: async () => 'moderator' }, log));
-  assert.equal(rev.cooldownUntil, 2_030_000);
+  assert.deepEqual(mod, { ok: true, allowed: true, cooldownUntil: 2_030_000, cooldownSec: 120, serverNow: 2_000_000, rewardUntil: null, mode: 'all', cooldownGlobalSec: 0 });
   assert.equal((log[0] as { role: string }).role, 'moderator');
+  // Mod bez odemčené odměny → zamčeno.
+  const locked = await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'broadcaster', access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300, mode: 'approved' }) }));
+  assert.equal(locked.allowed, false);
+  assert.equal(locked.mode, 'approved');
+  assert.equal((locked as { mod?: true }).mod, undefined);
+  // Židolišta nedostupná → neodemčeno i pro moda.
+  assert.equal((await gifStateFor(7, { channel: 'robdiesalot', platform: 'twitch' }, stateDeps({ role: async () => 'moderator', access: async () => null }))).allowed, false);
 });
 
 test('gifStateFor: režim a globální cooldown ze Židolišty (klient je zobrazí)', async () => {

@@ -344,25 +344,22 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const candidate = (gif.candidate ?? gifCandidate)(m.content);
     if (!candidate) return null;
     const query: GifAccessQuery = { workspace: ws.slug, platform: m.platform, userId: m.platformUserId, login: m.username.toLowerCase(), role: highestRole(roles) };
-    // Mod / broadcaster (badge zprávy, stejný zdroj jako ostatní moderace): schváleno rovnou, bez Židolišty a cooldownu.
-    // Výjimka: zpráva z UnityChatu v Dev módu (gifReview) jde jako od diváka — hlášení před zprávou tady, po ní v interceptu.
-    if ((roles.isMod || roles.isBroadcaster) && !gif.reviewRequested?.(m)) {
-      if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
-      m.deleted = { by: 'filter', reason: 'gif_request' };
-      const lateReview = gif.lateReview ? () => gif.lateReview!(m) : undefined;
-      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct: host ? () => act(m, ucChannel, host) : null, linkBlocked, auto: true, lateReview }).catch(() => {});
-      return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
-    }
+    // Přístup (odemčení + cooldown) řídí Židolišta pro všechny včetně modů / broadcastera (spec 2026-09-27-gif-review-upravy
+    // §5; role jde v dotazu, Židolišta je může odemknout sama). Mod / broadcaster (badge) s odemčenou odměnou se jen
+    // schvaluje sám (`auto`, bez karty) — kromě zprávy z UnityChatu v Dev módu (gifReview): ta jde jako od diváka
+    // (hlášení před zprávou tady, po ní v interceptu). Mod bez odměny = jako divák bez odměny (běžný odkaz).
+    const modAuto = (roles.isMod || roles.isBroadcaster) && !gif.reviewRequested?.(m);
+    const auto = modAuto ? { auto: true, ...(gif.lateReview ? { lateReview: () => gif.lateReview!(m) } : {}) } : {};
     const access = gif.accessSync(query);
     if (access === 'denied' || !gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
     const filterAct = host ? () => act(m, ucChannel, host) : null;
     if (access === 'allowed') {
       m.deleted = { by: 'filter', reason: 'gif_request' };
-      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct, linkBlocked }).catch(() => {});
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct, linkBlocked, ...auto }).catch(() => {});
       return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
     }
     // unknown: filtr rozhodne jako vždy; GIF se ověří a případně zachytí zpětně.
-    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null, linkBlocked }).catch(() => {});
+    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null, linkBlocked, ...auto }).catch(() => {});
     return null;
   };
 

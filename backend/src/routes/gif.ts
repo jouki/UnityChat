@@ -235,8 +235,6 @@ export interface GifStateView {
   mode: GifMode;
   /** Cooldown celého chatu (s) ze Židolišty — jen k zobrazení (`cooldownUntil` už je pozdější z obou). */
   cooldownGlobalSec: number;
-  /** Mod / broadcaster bez Dev módu: GIF se schválí rovnou, cooldown se neuplatňuje. */
-  mod?: true;
   /** Konec odemčené odměny v čase SERVERU (ms), null = bez konce / neodemčeno — časový pásek u ikony emotů. */
   rewardUntil?: number | null;
 }
@@ -244,7 +242,7 @@ export interface GifStateView {
 /**
  * Stav odměny pro identitu účtu na platformě, kam uživatel píše (`platform`, jinak první propojená).
  * Stejný zdroj jako zachycení v ingestu: role z badge v archivu (chatRole), přístup gifAccess (cache 60 s
- * + lokální cooldown po schválení). `review` = Dev mód moda → počítá se jako divák.
+ * + lokální cooldown po schválení). Mod bez výjimky (od 2026-09-27); `review` (Dev mód) stav nemění.
  */
 export async function gifStateFor(accountId: number, q: { channel: string; platform?: Platform | null; review?: boolean }, deps: GifStateDeps): Promise<GifStateView> {
   const now = deps.now();
@@ -258,8 +256,8 @@ export async function gifStateFor(accountId: number, q: { channel: string; platf
   const role = pc ? await deps.role(ident.platform, ident.login, pc) : 'viewer';
   const a = await deps.access({ workspace: slug, platform: ident.platform, userId: ident.platformUserId, login: ident.login.toLowerCase(), role });
   const extra = { mode: a?.mode ?? 'all', cooldownGlobalSec: a?.cooldownGlobalSec ?? 0 } as const;
-  // Mod: povoleno a bez cooldownu; ze Židolišty jen režim (approved platí i pro mody).
-  if ((role === 'moderator' || role === 'broadcaster') && !q.review) return { ...none, ...extra, allowed: true, mod: true };
+  // Mod / broadcaster bez výjimky: odemčení, cooldown i pásek ze Židolišty stejně jako divák (spec 2026-09-27-gif-review-upravy
+  // §5; Židolišta dostává roli). S `review` (Dev mód) je proto stav stejný; parametr zůstává kvůli kompatibilitě klientů.
   if (!a) return none;
   return {
     ok: true,

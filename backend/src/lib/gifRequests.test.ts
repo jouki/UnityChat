@@ -442,14 +442,14 @@ test('intercept: smazáno filtrem, přeznačení uspěje, pak selže uložení m
   }
 });
 
-test('intercept auto (mod): schváleno hned, bez gif-used, bez karet; GIF na konci chatu', async () => {
+test('intercept auto (mod s odemčenou odměnou): schváleno hned, bez karet, cooldown (gif-used) jako u diváka; GIF na konci chatu', async () => {
   let accessCalls = 0;
-  const s = setup({ access: async () => { accessCalls++; return null; } });
+  const s = setup({ access: async () => { accessCalls++; return { allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120 }; } });
   assert.equal(await s.flow.intercept(params({ auto: true, query: { workspace: 'rob', platform: 'twitch', userId: '42', login: 'moda', role: 'moderator' } })), 'approved');
-  assert.equal(accessCalls, 1, 'Židolišta jen kvůli režimu odměny; null = mod má povoleno (režim all)');
+  assert.equal(accessCalls, 1);
   const n = names(s.calls);
   assert.deepEqual(n.filter((x) => x.startsWith('notify:') || x.startsWith('integration:')), [], 'nikdo nic neschvaluje');
-  assert.equal(n.includes('used'), false, 'mod bez cooldownu');
+  assert.equal(n.includes('used'), true, 'mod má cooldown jako ostatní');
   assert.ok(n.indexOf('deletePlatform') > n.indexOf('broadcast:gif-message'), 'původní zpráva pryč i z platformy (až po schválení)');
   const pub = s.calls.find((c) => c[0] === 'broadcast:gif-message')![1] as { message: Record<string, unknown> };
   assert.equal(pub.message.gifOrigin, 'twitch:m1');
@@ -460,6 +460,17 @@ test('intercept auto (mod): schváleno hned, bez gif-used, bez karet; GIF na kon
   assert.equal(r.decidedBy, 'twitch:divak', 'by = on sám');
   assert.equal(s.flow._pendingSize(), 0);
   assert.equal(s.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
+});
+
+test('intercept auto (mod) s neznámým přístupem: ověří se u Židolišty; neodemčeno / cooldown → denied jako u diváka', async () => {
+  for (const a of [null, { allowed: false, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120 }, { allowed: true, until: null, cooldownUntil: 2_000_000, cooldownSec: 60, requestTtlSec: 120 }]) {
+    const s = setup({ access: async () => a });
+    assert.equal(await s.flow.intercept(params({ auto: true, needAccess: true, preDeleted: null })), 'denied');
+    assert.equal(s.mem.reqs.size, 0);
+    assert.equal(names(s.calls).includes('publishDeleted'), false, 'zpráva zůstane');
+  }
+  const ok = setup();
+  assert.equal(await ok.flow.intercept(params({ auto: true, needAccess: true, preDeleted: null })), 'approved');
 });
 
 test('intercept auto + pozdní hlášení Dev módu (gifReview po echu) → běžná žádost ke schválení (jako divák)', async () => {
