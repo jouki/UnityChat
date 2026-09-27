@@ -739,9 +739,10 @@ export interface GifFlowDeps {
   sleep: (ms: number) => Promise<void>;
   /**
    * Okamžité schválení (auto modem / GIF z knihovny) si synchronně vezme slot globálního cooldownu chatu
-   * (gifAccess.ts claimGifSlot, audit SEC-8); false = cooldown běží, GIF teď neprojde. Chybí = bez kontroly.
+   * (gifAccess.ts claimGifSlot, audit SEC-8); null = cooldown běží, GIF teď neprojde; jinak uvolnění, které flow
+   * zavolá, když se GIF nakonec nezobrazí. Chybí = bez kontroly.
    */
-  claim?: (workspace: string) => boolean;
+  claim?: (workspace: string) => (() => void) | null;
   /** Médium smazané z DB (propadnutí, trvalé zahození, retence) → pryč i z paměťové cache /media/gif (tombstone). */
   mediaDeleted?: (id: string) => void;
   /** Stav média se změnil (zamítnuto, vault, schváleno ze zamítnutých) → cache /media/gif zahodit (bez tombstone). */
@@ -1177,6 +1178,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         let instant = false;
         // Globální cooldown chatu běží (okamžité schválení by GIF pustilo hned, audit SEC-8) → jako neodemčeno.
         let blocked = false;
+        // Slot globálního cooldownu vzatý okamžitým schválením; uvolní se, když se GIF nezobrazí (review SEC-8).
+        let releaseSlot: (() => void) | null = null;
+        const freeSlot = () => { const r = releaseSlot; releaseSlot = null; try { r?.(); } catch { /* nic */ } };
         if (res.ok) {
           const known = res.known;
           const approvedKnown = known?.status === 'approved';
@@ -1219,7 +1223,9 @@ export function createGifFlow(deps: GifFlowDeps) {
           instant = auto || approvedKnown;
           let mediaId: string | null = known?.id ?? null;
           let savedFresh = false;
-          if (instant && deps.claim && !deps.claim(p.workspace)) {
+          const slot = instant && deps.claim ? deps.claim(p.workspace) : undefined;
+          if (slot) releaseSlot = slot;
+          if (slot === null) {
             blocked = true;
             deps.log.info({ channel: p.ucChannel, platform: m.platform, auto }, 'gif: globální cooldown chatu běží → okamžité schválení neprojde');
           } else try {
@@ -1247,6 +1253,7 @@ export function createGifFlow(deps: GifFlowDeps) {
             // nikdo nerozhodl (rozhodnutí by zámek už nesundalo a visel by do restartu).
             if (!closed.has(created.id)) pending.set(k, created.id);
           } catch (e) {
+            freeSlot();
             deps.log.warn({ err: (e as Error).message }, 'gif: uložení žádosti selhalo');
             if (savedFresh && mediaId) await safe('úklid média', () => deps.store.deleteMedia(mediaId!));
           }
@@ -1281,6 +1288,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         if (instant) {
           const by = auto ? `${m.platform}:${m.username.toLowerCase()}` : 'library';
           instantOut = await decideCore({ requestId: created.id, approve: true, by, accountId: null, auto, quiet: true, instant: true });
+          // GIF se nezobrazil (odebráno z knihovny / zahozeno / zpráva se nezapsala) → slot globálního cooldownu vrátit.
+          if (instantOut.status !== 200 || instantOut.body.status !== 'approved' || instantOut.body.published === false) freeSlot();
           // Médium zahozené během stahování / FLUSH_WAIT (souběh s „Trvale zahodit“) → jako zahozený dedup.
           if (instantOut.body.reason === 'purged' || instantOut.body.reason === 'unapproved') {
             await dropOriginal(p, GIF_REJECTED_REASON);

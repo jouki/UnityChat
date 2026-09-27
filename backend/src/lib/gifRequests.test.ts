@@ -768,10 +768,37 @@ test('A1: zápis zprávy selhává trvale → po RECONCILE_MAX_ATTEMPTS pokusech
   assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'));
 });
 
+test('SEC-8 review: slot globálního cooldownu se uvolní, když se GIF nakonec nezobrazí (odebráno z knihovny, chyba zápisu)', async () => {
+  let taken = 0, released = 0;
+  const s = setup({ claim: () => { taken++; return () => { released++; }; } });
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  // Zobrazeno → slot zůstává.
+  assert.equal(await s.flow.intercept(from('43', 'm2')), 'approved');
+  assert.deepEqual([taken, released], [1, 0]);
+  // Zápis zprávy selže → nezobrazeno → uvolnit.
+  const insert = s.mem.store.insertApprovedMessage.bind(s.mem.store);
+  s.mem.store.insertApprovedMessage = async () => { throw new Error('db'); };
+  await s.flow.intercept(from('44', 'm3'));
+  assert.deepEqual([taken, released], [2, 1]);
+  s.mem.store.insertApprovedMessage = insert;
+  // Odebráno z knihovny mezi dedupem a schválením → uvolnit.
+  const orig = s.mem.store.insertRequest.bind(s.mem.store);
+  s.mem.store.insertRequest = async (v) => { await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:modb', accountId: 2 }); return orig(v); };
+  assert.equal(await s.flow.intercept(from('45', 'm4')), 'rejected');
+  assert.deepEqual([taken, released], [3, 2]);
+  // Uložení žádosti selže → uvolnit.
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'approve', by: 'twitch:moda', accountId: 1 });
+  s.mem.store.insertRequest = async () => { throw new Error('db'); };
+  await s.flow.intercept(from('46', 'm5'));
+  assert.deepEqual([taken, released], [4, 3]);
+  await s.flow._idle();
+});
+
 test('SEC-8: okamžité schválení (knihovna / mod) při běžícím globálním cooldownu chatu → neprojde, zpráva se vrátí (bez žádosti)', async () => {
   const claims: string[] = [];
   let free = true;
-  const s = setup({ claim: (ws) => { claims.push(ws); return free; } });
+  const s = setup({ claim: (ws) => { claims.push(ws); return free ? () => {} : null; } });
   await s.flow.intercept(from('42', 'm1'));
   await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
   assert.deepEqual(claims, [], 'ruční schválení modem si slot nebere (cooldown nastaví gif-used)');

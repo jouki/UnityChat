@@ -102,14 +102,14 @@ function localUntil(q: GifAccessQuery, now: number): number | null {
  * s „allowed“ v cache (60 s i déle) prošli, než Židolišta cache zneplatní. Mody bez výjimky.
  */
 const globalCooldown = new Map<string, number>();
-const wsPrefix = (workspace: string) => `${workspace.toLowerCase()}|`;
+/**
+ * Poslední známý `cooldownGlobalSec` workspace (z každé úspěšné odpovědi Židolišty). Drží se mimo cache přístupu:
+ * webhook `gif-access` cache zahodí, a globální cooldown se tím nesmí obejít (review SEC-8).
+ */
+const lastGlobalSec = new Map<string, number>();
 
-/** Nejdelší `cooldownGlobalSec` workspace z cache (všechny odpovědi Židolišty ho nesou stejný); 0 = neznámý / bez něj. */
 function globalSecFor(workspace: string): number {
-  const prefix = wsPrefix(workspace);
-  let sec = 0;
-  for (const [k, e] of cache) if (k.startsWith(prefix) && e.value?.cooldownGlobalSec) sec = Math.max(sec, e.value.cooldownGlobalSec);
-  return sec;
+  return lastGlobalSec.get(workspace.toLowerCase()) ?? 0;
 }
 
 function globalUntil(workspace: string, now: number): number | null {
@@ -129,13 +129,22 @@ function noteGlobal(workspace: string, now: number): void {
 }
 
 /**
- * Okamžité zobrazení GIFu (auto / z knihovny) si globální cooldown zarezervuje synchronně: běží → false (GIF teď
- * neprojde), jinak ho hned nastaví (souběh dvou GIFů naráz, audit SEC-8). Bez známého cooldownGlobalSec → true.
+ * Okamžité zobrazení GIFu (auto / z knihovny) si globální cooldown zarezervuje synchronně: běží → null (GIF teď
+ * neprojde), jinak ho hned nastaví (souběh dvou GIFů naráz, audit SEC-8) a vrátí uvolnění — volající ho zavolá,
+ * když se GIF nakonec nezobrazí (odebráno z knihovny, zahozeno, chyba zápisu). Bez známého cooldownGlobalSec →
+ * uvolnění, které nic nedělá.
  */
-export function claimGifSlot(workspace: string, now: number = Date.now()): boolean {
-  if (globalUntil(workspace, now) !== null) return false;
+export function claimGifSlot(workspace: string, now: number = Date.now()): (() => void) | null {
+  if (globalUntil(workspace, now) !== null) return null;
+  const k = workspace.toLowerCase();
+  const prev = globalCooldown.get(k);
   noteGlobal(workspace, now);
-  return true;
+  const mine = globalCooldown.get(k);
+  return () => {
+    // Jen když ho mezitím nic nepřepsalo (gif-used jiného GIFu = skutečně zobrazený).
+    if (mine === undefined || globalCooldown.get(k) !== mine) return;
+    if (prev === undefined) globalCooldown.delete(k); else globalCooldown.set(k, prev);
+  };
 }
 
 function applyLocal(q: GifAccessQuery, a: GifAccess | null, now: number): GifAccess | null {
@@ -169,6 +178,8 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
       const j = (await r.json()) as { ok?: boolean };
       if (!j || j.ok === false) throw new Error('not ok');
       entry.value = normalizeGifAccess(j, now());
+      lastGlobalSec.set(q.workspace.toLowerCase(), entry.value.cooldownGlobalSec ?? 0);
+      if (lastGlobalSec.size > 1000) lastGlobalSec.clear();
     } catch (e) {
       deps.log?.warn({ workspace: q.workspace, platform: q.platform, err: (e as Error).message }, 'gif: gif-access selhalo (bere se jako neodemčené)');
       entry.value = null;
@@ -253,4 +264,4 @@ export function invalidateGifAccess(workspace: string): number {
 }
 
 /** Jen pro testy. */
-export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); globalCooldown.clear(); }
+export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); globalCooldown.clear(); lastGlobalSec.clear(); }

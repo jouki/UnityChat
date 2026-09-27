@@ -126,9 +126,28 @@ test('SEC-8: claimGifSlot — okamžité schválení si globální cooldown zare
   const now = 1_000;
   const fetch = (async () => new Response(JSON.stringify({ ok: true, serverNow: now, allowed: true, until: null, cooldownUntil: null, cooldownSec: 10, requestTtlSec: 300, cooldownGlobalSec: 30 }), { status: 200 })) as unknown as typeof globalThis.fetch;
   const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
-  assert.equal(claimGifSlot('rob', now), true, 'bez známého cooldownGlobalSec nic neblokuje');
+  assert.equal(typeof claimGifSlot('rob', now), 'function', 'bez známého cooldownGlobalSec nic neblokuje');
   await gifAccess(Q, deps);
-  assert.equal(claimGifSlot('rob', now), true);
-  assert.equal(claimGifSlot('ROB', now + 1), false, 'druhý GIF ve stejném okně ne');
-  assert.equal(claimGifSlot('rob', now + 30_001), true);
+  const release = claimGifSlot('rob', now);
+  assert.equal(typeof release, 'function');
+  assert.equal(claimGifSlot('ROB', now + 1), null, 'druhý GIF ve stejném okně ne');
+  // Zobrazení selhalo → slot uvolnit, další GIF projde.
+  release!();
+  assert.equal(typeof claimGifSlot('rob', now + 2), 'function');
+  assert.equal(claimGifSlot('rob', now + 3), null);
+  assert.equal(typeof claimGifSlot('rob', now + 30_003), 'function');
+});
+
+test('SEC-8 review: zahození cache webhookem (invalidateGifAccess) globální cooldown neobejde — cooldownGlobalSec se pamatuje per workspace', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response(JSON.stringify({ ok: true, cooldownUntil: null, serverNow: now }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, serverNow: now, allowed: true, until: null, cooldownUntil: null, cooldownSec: 10, requestTtlSec: 300, cooldownGlobalSec: 30 }), { status: 200 });
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
+  await gifAccess(Q, deps);
+  invalidateGifAccess('rob');
+  await gifUsed({ workspace: 'rob', platform: 'twitch', userId: '42' }, deps);
+  assert.equal(claimGifSlot('rob', now + 1), null, 'globální cooldown platí i po zahození cache');
 });
