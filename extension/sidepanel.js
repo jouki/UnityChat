@@ -1214,7 +1214,7 @@ class UnityChat {
       canModerate: () => !!this._canModerate,
       reward: () => this._gifRewardView(),
       // Otevření záložky / zamčený výběr: zeptat se jen když stav není čerstvý (GET /gif/state má rate limit).
-      refreshReward: () => { if (this._account) this._gifCd().refreshIfStale(); },
+      refreshReward: () => (this._account ? this._gifCd().refreshIfStale() : null),
       // Vlastní GIF ještě čeká na moda → výběr z knihovny blokovat (server pustí jednu žádost na uživatele).
       ownPending: () => !!this._gifOutInst?.busy(),
       onPick: (url) => {
@@ -5134,6 +5134,8 @@ class UnityChat {
         origins: UC_GIF_ORIGINS,
         // Posun hodin klienta vůči serveru (GET /gif/state) pro expiresAt karet (audit F1).
         serverOffset: () => this._gifCdInst?.serverOffset() || 0,
+        // Dříve zamítnuté médium (media.tokenRequired) server vydá jen s tokenem moda.
+        tokens: this._gifTokens(),
         platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
         log: (tag, text) => this._ucLog(tag, text),
       });

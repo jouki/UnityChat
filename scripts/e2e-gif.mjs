@@ -1069,6 +1069,14 @@ const rejN = posts.rejected.length, discN = posts.disc.length;
 mock.sse.push(['gif-media', { channel: 'robdiesalot', mediaId: hex(16), state: 'library' }]);
 check('G2 gif-media library → Zamítnuté i zahozené se načtou znovu (rozprostřeně do 2 s)', await waitFor(() => posts.rejected.length > rejN && posts.disc.length > discN, 5000), JSON.stringify({ rej: posts.rejected.length - rejN, disc: posts.disc.length - discN }));await ev(`document.getElementById('btn-emotes').click()`);
 
+// Karta moda: žádost na dříve zamítnuté médium (media.tokenRequired) → náhled s tokenem moda (backend audit 2026-09-27).
+pushAcc(['gif-pending', pend0(95, { createdAt: 1, media: { url: murl(hex(14)), kind: 'gif', width: 20, height: 20, tokenRequired: true } })]);
+check('G2 karta: dříve zamítnuté médium (tokenRequired) → náhled s tokenem, načtený', await until(`(() => { const i = document.querySelector('.uc-gif-card[data-request-id="95"] img.uc-gif-media'); return !!i && /[?&]t=tk-/.test(i.src) && i.complete && i.naturalWidth > 0; })()`, 8000),
+  await ev(`document.querySelector('.uc-gif-card[data-request-id="95"] img.uc-gif-media')?.src.replace(/t=[^&]+/, 't=…') || null`));
+check('G2 karta: token jen v src (ne v jiném atributu)', await ev(`(() => { const c = document.querySelector('.uc-gif-card[data-request-id="95"]'); return !!c && ![...c.querySelectorAll('*')].some(e => [...e.attributes].some(a => a.name !== 'src' && /tk-/.test(a.value))); })()`) === true);
+pushAcc(['gif-decided', { requestId: 95, channel: 'robdiesalot', approved: false, status: 'rejected', by: 'twitch:jiny' }]);
+await until(`!document.querySelector('.uc-gif-card[data-request-id="95"]')`, 6000);
+
 // ---- fáze E (mod + Dev mód): schvalování jako divák ----
 mock.mod = true;
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: SN });

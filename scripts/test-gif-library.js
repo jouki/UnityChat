@@ -439,6 +439,23 @@ Promise.all([
     check('A10 historie: vlastní schovaná gif_request → „Schvalování moderátorem“', vh?.kind === 'pending');
   }
 
+  // --- backend auditu 2026-09-27 (kontrakt pro klienta) ---
+  {
+    check('normalizeGifPending: media.tokenRequired (dříve zamítnuté médium jen s tokenem)', g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif', tokenRequired: true }, expiresAt: 9 }).tokenRequired === true
+      && g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif' }, expiresAt: 9 }).tokenRequired === false);
+    let tn = 1_000_000, n = 0;
+    const tk = new L.GifAccessToken({ api: async () => { n++; return { ok: true, token: `t${n}`, serverNow: 5_000, expiresAt: 5_000 + 30 * 86_400_000 }; }, now: () => tn });
+    const a = await tk.get();
+    tn += 28 * 86_400_000;
+    const b = await tk.get();
+    tn += 1.5 * 86_400_000;
+    const c = await tk.get();
+    check('GifAccessToken: expiresAt (čas serveru → lokální) → obnova před vypršením', a === 't1' && b === 't1' && c === 't2' && n === 2, `${a} ${b} ${c} ${n}`);
+    const ob = new L.GifOutbox({ channel: () => 'rob', now: () => 0, setInterval: () => 1, clearInterval: () => {} });
+    ob.onNotice({ requestKey: 'twitch:u1', channel: 'rob', platform: 'twitch', messageId: 'u1', kind: 'auto_rejected', reason: 'unapproved' });
+    check('gif-notice auto_rejected reason unapproved → „Zamítnuto moderátorem“', ob.view('twitch', 'u1')?.text === 'Zamítnuto moderátorem');
+  }
+
   // --- gif-host.js (D1: sdílená logika hostitele addon / web) ---
   {
     // F3: YouTube kontrola se řídí stavem chatu (optimistická zpráva), ne frontou párování; GIF se štítkem nikdy neodesláno.

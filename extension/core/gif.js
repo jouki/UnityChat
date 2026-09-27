@@ -212,6 +212,8 @@ export function normalizeGifPending(d, opts = {}) {
     messageId: d.messageId != null ? String(d.messageId) : null,
     text: String(d.text || ''),
     media,
+    // Dříve zamítnuté médium: server ho servíruje jen s tokenem moda (`?t=`), karta ho tak načte.
+    tokenRequired: d.media?.tokenRequired === true,
     createdAt: Number(d.createdAt) || null,
     expiresAt,
     own: d.own === true,
@@ -593,10 +595,12 @@ export class GifRequests {
    * @param {string[]} [o.origins]  povolené originy médií
    * @param {number} [o.lockOtherMs] / [o.lockOwnMs] / [o.noticeMs]  (testy)
    */
-  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, serverOffset, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
+  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, serverOffset, tokens = null, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
     this.doc = doc;
     /** Posun hodin (lokální − serverový) z GET /gif/state, když událost nenese `serverNow` (audit F1). */
     this.serverOffset = serverOffset || (() => 0);
+    /** Token moda (core/gif-library.js GifAccessToken) pro náhled dříve zamítnutého média v kartě. */
+    this.tokens = tokens;
     this.container = container || doc.body;
     this.api = api;
     this.channel = channel || (() => '');
@@ -1157,9 +1161,32 @@ export class GifRequests {
     el.querySelector('.uc-gif-card-who').textContent = req.login || 'neznámý';
     el.querySelector('.uc-gif-card-text').textContent = req.text;
     el.querySelector('.uc-gif-card-text').hidden = !req.text;
-    el.querySelector('.uc-gif-card-media').appendChild(createGifMedia(doc, req.media, { lazy: false, log: this.log, maxW: GIF_MAX_W, maxH: GIF_CARD_MAX_H }));
+    this._cardMedia(el.querySelector('.uc-gif-card-media'), req);
     el.querySelector('.uc-gif-timer').textContent = formatCountdown(req.expiresAt - this.now());
     return el;
+  }
+
+  /**
+   * Náhled GIFu v kartě. S tokenem moda, když ho máme (dříve zamítnuté médium — `tokenRequired` — server bez tokenu
+   * nevydá: počkat na vydání tokenu). Chyba načtení s tokenem → jednou nový token a znovu. Token jen v `src`.
+   */
+  _cardMedia(box, req, { waited = false, retried = false } = {}) {
+    if (!box) return;
+    const tok = this.tokens?.current?.() || null;
+    if (req.tokenRequired && !tok && this.tokens && !waited) {
+      this._L(`karta ${req.requestId}: médium jen s tokenem → čekám na token`);
+      void Promise.resolve(this.tokens.get()).catch(() => null).then(() => this._cardMedia(box, req, { waited: true, retried }));
+      return;
+    }
+    removeGifMedia(box);
+    box.replaceChildren(createGifMedia(this.doc, req.media, {
+      lazy: false, log: this.log, maxW: GIF_MAX_W, maxH: GIF_CARD_MAX_H, token: tok,
+      onError: this.tokens && (tok || req.tokenRequired) && !retried ? () => {
+        this._L(`karta ${req.requestId}: médium s tokenem se nenačetlo → nový token`);
+        void Promise.resolve(this.tokens.refresh()).catch(() => null).then(() => this._cardMedia(box, req, { waited: true, retried: true }));
+        return true;
+      } : null,
+    }));
   }
 
   /** Stav karty (zámek, busy, chyba, dříve zamítnuto) + hláška + „+N čeká“. */

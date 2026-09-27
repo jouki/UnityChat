@@ -11,10 +11,11 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
+import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining } from './soundboard.js';
+import { gifCooldownText } from './gif-cooldown.js';
 
 // Všechny atributy v šablonách jsou v uvozovkách → escapeAttr stačí i na text.
 const esc = (s) => escapeAttr(s ?? '');
@@ -52,6 +53,8 @@ export const GIF_OWN_MAX_CHECKS = 6;
  */
 export const GIF_HELD_BACKOFF_MAX_MS = 300_000;
 export const GIF_HELD_MAX_FAILS = 12;
+/** Token moda platí 30 dní (backend) — nový se vydá den před koncem. */
+export const GIF_TOKEN_RENEW_MS = 86_400_000;
 /** Výběr z knihovny, když vlastní GIF ještě čeká (server pustí jen jednu žádost na uživatele, audit X1). */
 export const GIF_WAIT_OWN_TEXT = 'Počkej, až mod rozhodne o tvém GIFu.';
 const HELD_BATCH = GIF_HOLD_BATCH;
@@ -672,10 +675,23 @@ export class GifAccessToken {
 
   _L(t) { this.log('Gif', `token: ${t}`); }
 
-  /** Token v paměti (bez síťového dotazu), nebo null. Panel si ho nedrží — po odhlášení je hned pryč. */
-  current() { return this._token; }
+  /** Token v paměti (bez síťového dotazu), nebo null (i propadlý). Panel si ho nedrží — po odhlášení je hned pryč. */
+  current() { return this._token && !(Number.isFinite(this._exp) && this.now() >= this._exp) ? this._token : null; }
 
   async get() {
+    // Token platí 30 dní (server posílá expiresAt + serverNow) → den před koncem vydat nový.
+    if (this._token && Number.isFinite(this._exp) && this.now() >= this._exp - GIF_TOKEN_RENEW_MS) {
+      this._L('token brzy vyprší → nový');
+      this._token = null;
+      this._exp = null;
+      try { await this.store?.clear?.(); } catch { /* ignore */ }
+      if (!this._inflight) {
+        const ep = this._epoch;
+        const p = this._issue(ep).finally(() => { if (this._inflight === p) this._inflight = null; });
+        this._inflight = p;
+      }
+      return this._inflight;
+    }
     if (this._token) return this._token;
     if (this._inflight) return this._inflight;
     const ep = this._epoch;
@@ -700,6 +716,8 @@ export class GifAccessToken {
       const t = typeof j?.token === 'string' && j.token ? j.token : null;
       if (!t) { this._L('odpověď bez tokenu'); return null; }
       this._token = t;
+      const exp = j?.expiresAt != null ? gifLocalTime(j.expiresAt, { serverNow: j.serverNow ?? null, now: this.now() }) : NaN;
+      this._exp = Number.isFinite(exp) ? exp : null;
       try { await this.store?.save?.(t); } catch { /* ignore */ }
       this._L('nový token vydán');
       return t;
@@ -726,7 +744,7 @@ export class GifAccessToken {
     return p;
   }
 
-  clear() { this._epoch++; this._token = null; this._inflight = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
+  clear() { this._epoch++; this._token = null; this._exp = null; this._inflight = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
 }
 
 // ---------------------------------------------------------------------------
@@ -1600,13 +1618,24 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     }
   }
 
-  function pick(item) {
+  let picking = false;
+  async function pick(item) {
+    if (picking) return;
+    picking = true;
+    try {
+      // Stav odměny ne starší než 60 s: cooldown může být i globální (jiný GIF v chatu) — server by jinak nechal
+      // v chatu holý odkaz. Čerstvý stav = bez dotazu.
+      const r = refreshReward?.();
+      if (r && typeof r.then === 'function') await r.catch(() => null);
+    } finally { picking = false; }
     const v = rv();
     if (!v.canSend) {
       L(`výběr ${item.mediaId} zamčený (${v.mode})`);
       st.flash = true;
       paintReward();
       win.setTimeout(() => { st.flash = false; paintReward(); }, 1200);
+      // Cooldown (i globální cooldown chatu) → stejná hláška jako při odeslání z pole.
+      if (v.mode === 'cooldown') showMsg(`${gifCooldownText(true)} ${formatRemaining(v.cooldownMs)}`);
       if (v.mode === 'unknown') refreshReward?.();
       return;
     }
