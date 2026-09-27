@@ -492,6 +492,11 @@ retence 14 dní, vault), propadlé se maže jen když na něj nečeká jiná ž�
 - Po schválení `POST …/integrations/:slug/gif-used { platform, userId }` → `{ ok, cooldownUntil }`. Uživatel je v cooldownu
   **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access`, výchozí 60 s); selhání `gif-used` = jeden
   opakovaný pokus po 2 s, bez potvrzení platí lokální cooldown do vypršení. Potvrzení ho nahradí cooldownem Židolišty.
+  **Globální cooldown chatu drží server i sám (audit 2026-09-27, SEC-8):** po každém GIFu zobrazeném v chatu (schválení
+  modem, auto, okamžité schválení z knihovny) nastaví lokálně cooldown celého workspace na `cooldownGlobalSec` (z cache
+  `gif-access`). Platí pro zachycení (`gifAccessSync` → neodemčeno), `/gif/state` (`cooldownUntil`) i pro okamžité
+  schválení, které si slot bere synchronně (dva GIFy z knihovny naráz neprojdou oba; ten druhý = běžný odkaz, průběh
+  `done` s `outcome: denied`). Mody bez výjimky. Dřív uživatelé s „allowed“ v 60s cache cooldown obešli.
 - Webhook `POST /commands/invalidate { workspace, reason: "gif-access", data: { etag } }` → cache workspace pryč;
   odpověď `{ ok, workspace }`, neznámý workspace `404 unknown_workspace`.
 
@@ -504,14 +509,21 @@ retence 14 dní, vault), propadlé se maže jen když na něj nečeká jiná ž�
 - Stav přístupu v cache:
   - **odemčeno** → zpráva se hned označí `deleted_reason: 'gif_request'` (archiv i `/chat/stream` bez obsahu),
     SSE `message-deleted { …, reason: "gif_request" }` hned, převod na pozadí;
-  - **neznámý** → filtr rozhodne jako vždy (smaže / pustí), přístup se ověří na pozadí; odemčeno + převod OK →
-    zobrazená zpráva se smaže zpětně (`message-deleted`, reason `gif_request`), smazaná filtrem se jen přeznačí;
+  - **neznámý** a filtr by zprávu smazal → filtr ji smaže hned (`link_filter`), přístup se ověří na pozadí; odemčeno +
+    převod OK → smazaná filtrem se jen přeznačí na `gif_request`;
+  - **neznámý** a filtr ji pouští (nebo je vypnutý) → **od 2026-09-27 (audit A12) se schová hned** jako `gif_request`
+    (jako u odemčeného — ostatní diváci čekající GIF nevidí ani během stahování), přístup se ověří; neodemčeno /
+    převod selže / nejde o GIF → zpráva se obnoví (`message-restored`, jako u permitu);
   - **neodemčeno** → běžný filtr odkazů.
 - Převod: stránka → `og:video` (MP4), jinak `og:image`; médium s `Accept: image/*,video/*`. Ochrana SSRF: jen http(s)
   a porty 80/443, bez údajů v URL, všechny DNS adresy veřejné (privátní, loopback, link-local, CGNAT, multicast,
   IPv4-mapped/NAT64 zakázané; ověřující lookup i při samotném připojení), max 3 přesměrování (každé znovu ověřené),
   10 MB, 10 s celkem, Content-Type (`image/*`, `video/*`, octet-stream) + magic bytes (GIF87a/89a, RIFF…WEBP, MP4 `ftyp`),
   rozměry z hlavičky (GIF, WebP; MP4 z `tkhd`, jinak null).
+  **Limit rozměrů a snímků (audit 2026-09-27, SEC-7):** nad **2048 px** na stranu nebo nad **600 snímků** → převod
+  selže s `too_large` (zpráva je běžný odkaz). Kontroluje se rozměr z hlavičky a sonda bez dekódování pixelů (GIF /
+  WebP `sharp().metadata()`, MP4 `ffprobe -count_packets`); chybí-li nástroj, jen hlavička. Poškozené médium →
+  `bad_media`. ffmpeg / ffprobe běží s `-f mp4 -protocol_whitelist file`.
 - **Fallback přes Bright Data Web Unlocker** (`lib/gifUnlocker.ts`, 2026-09-26): když přímý pokus skončí Cloudflare
   challenge (403/503 + `cf-mitigated: challenge`, nebo 403 s HTML „Just a moment“ a `cf-` hlavičkami / `Server: cloudflare`),
   pošle se **stejná, už ověřená** URL (`assertPublicUrl` proběhne vždy předem) na `POST https://api.brightdata.com/request`
@@ -519,7 +531,9 @@ retence 14 dní, vault), propadlé se maže jen když na něj nečeká jiná ž�
   `unlocker_<x-brd-error-code|status>`. Na odpověď stejné kontroly (10 MB streamem, MIME + magic bytes, přesměrování
   i případná cílová adresa z odpovědi znovu ověřené → neveřejná = `blocked`); bez Content-Type rozhodnou magic bytes.
   Celkový limit převodu se s fallbackem prodlouží na 25 s. Denní strop `BRIGHTDATA_DAILY_CAP` (výchozí 100, reset
-  o půlnoci UTC; po dosažení původní chyba `http_403`), negativní cache 10 min per URL po selhání. Env
+  o půlnoci UTC; po dosažení původní chyba `http_403`), negativní cache 10 min per URL po selhání, **nejvýš 3 pokusy
+  na uživatele (kanál + platforma + id) za den** (audit 2026-09-27, L4 — vlastní server s „challenge“ nevyčerpá strop
+  ostatním; další pokusy jdou bez fallbacku). Env
   `BRIGHTDATA_API_KEY` + `BRIGHTDATA_ZONE`, bez nich vypnuto. Log jen `gif: unlocker ok|err|skip { host, code }`, klíč
   nikdy. Bright Data je zpracovatel: dostane jen URL veřejného odkazu na GIF z chatu (žádné údaje o uživateli).
 - **Převod selže** → běžný odkaz: filtr by ho smazal → přeznačení na `link_filter` + akce filtru (platforma botem);
@@ -558,20 +572,31 @@ kdo o jeho GIFu rozhodl — závěrečná review 2026-09-26, M4); mody ho dostá
   `409 { ok:false, error:'already_decided', status, decidedBy }` (první rozhodnutí vyhrává, podmíněný UPDATE;
   `decidedBy` = `"<platform>:<login>"` moda, `"library"` = schváleno z knihovny, `null` = propadlo); `400 body`.
   Schválení, jehož syntetickou zprávu se nepodaří zapsat do archivu ani napodruhé, se nerozešle (`gif-message` ani
-  `/chat/stream`) a odpověď nese `published: false` (log `gif: schválený GIF se nezapsal do archivu`). Původní zpráva
-  se pak přeznačí na `gif_rejected` + SSE `message-deleted` (jinak by zůstala navždy schovaná jako `gif_request`).
+  `/chat/stream`) a odpověď nese `published: false` (log `gif: schválený GIF se nezapsal do archivu`). **Od 2026-09-27
+  (audit A1)** žádost zůstává schválená a původní zpráva schovaná; zprávu dopíše **dorovnání** (níže). Dřív se původní
+  zpráva přeznačila na `gif_rejected`.
+- **Dorovnání schválených žádostí (audit A1):** 30 s po startu a pak 1×/min backend najde žádosti `approved`
+  rozhodnuté před víc než 60 s (nejvýš 7 dní zpět), kterým chybí syntetická zpráva `gif-<id>` nebo jejich médium
+  zůstalo `pending` (restart / chyba DB mezi rozhodnutím a zápisem). Čekající médium schválí (souběh dedupu → sloučí),
+  chybějící zprávu zapíše s časem schválení a rozešle (`gif-message`, `/chat/stream`). Médium zamítnuté / zahozené /
+  smazané a zpráva chybí → žádost `rejected`, původní zpráva `gif_rejected` + `message-deleted`. Po 10 neúspěšných
+  pokusech totéž.
 - `GET /moderation/gif/pending?channel=` — mod; `{ ok, requests: [<tvar gif-pending bez own>] }`, **FIFO**
   (nejstarší první, `created_at`, `id`).
 
 ### Médium
 `GET /media/gif/:id[?t=<token>]` (id 32 hex neuhodnutelné) — podle stavu **média** (`gif_media.status`): schválené
-a čekající bez auth; **zamítnuté jen s tokenem** (viz GIF knihovna), jinak `404` (i neexistující). Zamítnuté médium,
-na které čeká nová žádost, se chová jako čekající. Hlavičky: `Content-Type` podle ověřeného druhu, `Cache-Control`
+a čekající bez auth; **zamítnuté jen s tokenem** (viz GIF knihovna), jinak `404` (i neexistující). **Od 2026-09-27
+(audit SEC-1)** zůstává zamítnuté médium jen s tokenem, i když na něj čeká nová žádost (dřív se chovalo jako čekající =
+veřejné, takže šlo zamítnutý GIF znovu zveřejnit vlastním odkazem). `gif-pending` / `GET /moderation/gif/pending` /
+`gif.pending` pak nesou `media.tokenRequired: true` a karta moda médium načítá s tokenem. Token se ověřuje nad
+metadaty (stav, kanál) **dřív**, než se z DB načtou bajty (audit SEC-2). 404 i 401 GIF rout mají `Cache-Control:
+no-store` (audit L12). Hlavičky: `Content-Type` podle ověřeného druhu, `Cache-Control`
 čekající i zamítnuté `private, no-store`, schválené
 `public, max-age=300` (bez `immutable`; od 2026-09-26 5 minut místo hodiny, ať se odebrání z knihovny projeví
 brzy), `Content-Security-Policy: default-src 'none'; sandbox`,
 `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: cross-origin`. Rate limit per IP (60, 10/s).
-Paměťová LRU cache 64 MB se stavem; souběžná čtení téhož média sdílí jedno načtení z DB; schválené médium se do cache
+Paměťová LRU cache 64 MB se stavem (položka nejvýš 10 min, audit L7); souběžná čtení téhož média sdílí jedno načtení z DB; schválené médium se do cache
 načte **před** rozesláním `gif-message`. Smazané médium (propadlé, trvale zahozené, retence) dostane tombstone a už
 se nevrátí (ani z načtení, které běželo souběžně se smazáním); změna stavu (zamítnuto, schváleno ze zamítnutých)
 jen zahodí záznam z cache.
@@ -598,15 +623,19 @@ data: { "channel": "robdiesalot", "requestId": 12,
 
 ### Původní zpráva v klientech (UX 2026-09-25)
 - Smazaná s `deleted_reason: 'gif_request'` (čeká na schválení / schválená) se v UnityChatu **nevykresluje vůbec**
-  (divák ani mod, v chatu ani v Profilu; addon třída `uc-gif-held`, core `isGifHeldReason`). Odesílatel má kartu
-  „GIF čeká na schválení“. Ozvěna smazání z platformy (`reason: 'platform'`, bot ji smazal) ji neodkryje
+  (divák ani mod, v chatu ani v Profilu; addon třída `uc-gif-held`, core `isGifHeldReason`). **Odesílatel** (od GIF
+  knihovny 2026-09-26) vidí svou zprávu dál jako optimistickou se **štítkem** (core `GifOutbox`): kolečko průběhu
+  (`gif-progress`), pak „Schvalování moderátorem ( )“. Ozvěna smazání z platformy (`reason: 'platform'`, bot ji smazal) ji neodkryje
   (core `gifHeldAfter`). SSE `message-deleted gif_request`, které předběhne zprávu z vlastního spojení (IRC), se
   pamatuje a zpráva se rovnou vykreslí schovaná.
 - **Schváleno** → `gif-message` na konci chatu (viz výš); původní řádek zůstává `gif_request` (schovaný navždy).
 - **Zamítnuto / propadlo** → důvod se v archivu přeznačí `gif_request → gif_rejected` a jde SSE
-  `message-deleted { channel, platform, messageId, by: <mod>|"filter", reason: "gif_rejected", at }` → klienti ji
-  ukážou jako **běžně smazanou**. Zvolen vlastní důvod (ne `mod`): audit ukáže, že šlo o GIF, a mod ji v UnityChatu
-  neodkryje (`POST /moderation/restore` → `409 not_restorable`, v klientu bez oka). Historie dává stejný výsledek.
+  `message-deleted { channel, platform, messageId, by: null, reason: "gif_rejected", at }` → ostatní ji ukážou jako
+  **běžně smazanou**, **odesílatel** vidí svou zprávu dál s červeným štítkem „Zamítnuto moderátorem“ / „Vypršelo“.
+  Zvolen vlastní důvod (ne `mod`): audit ukáže, že šlo o GIF, a mod ji v UnityChatu neodkryje
+  (`POST /moderation/restore` → `409 not_restorable`, v klientu bez oka). Historie dává stejný výsledek.
+  **`by` je u všech GIF důvodů (`gif_*`) na veřejném `/nicknames/stream` `null`** (audit 2026-09-27, SEC-4: odesílatel
+  nesmí vidět, kdo rozhodl); mod je v `gif-decided` modům a v `moderation_actions`.
 
 ### Mod / broadcaster (UX 2026-09-25, **změna 2026-09-27**)
 - **Od 2026-09-27 (spec `2026-09-27-gif-review-upravy-design.md` §5) mod / broadcaster NEMÁ GIF odměnu automaticky:**
@@ -617,7 +646,8 @@ data: { "channel": "robdiesalot", "requestId": 12,
 - GIF od moda / broadcastera s odemčenou odměnou (role z badge zprávy, stejný zdroj jako ostatní moderace) se
   **schválí rovnou** při zachycení: zpráva se hned schová (`gif_request`), médium se stáhne, žádost vznikne a projde
   stejnou cestou jako `decide` approve s `by = "<platform>:<login>"` (on sám), audit `gif_approve` s `params.auto: true`.
-  Přístup z cache `unknown` → zpráva zůstane a ověří se u Židolišty zpětně (`needAccess`), jako u diváka. Opakované zamítnutí ani zákaz 12 h se na mody
+  Přístup z cache `unknown` → zpráva se schová hned a ověří se u Židolišty (`needAccess`), jako u diváka (od
+  2026-09-27, audit A12; neodemčeno → obnoví se). Opakované zamítnutí ani zákaz 12 h se na mody
   nevztahují (jejich GIF = jejich rozhodnutí, schválí i dříve zamítnuté médium). Nikdo nic neschvaluje → `gif-pending`, `gif.pending`, `gif-decided` ani `gif.decided` se neposílají.
   Převod selže → zpráva se v UC obnoví (`message-restored`, mod filtr nemá).
   Schválení proběhne **hned po insertu žádosti, před mazáním na platformě**; auto žádost (`meta.auto`) se nevrací
@@ -687,7 +717,9 @@ sha256 obsahu. Známé médium se znovu neukládá (přednost `approved` > `reje
 - **Zamítnuté** (divák; mody výjimka): aktivní zákaz 12 h nebo tentýž uživatel už má ≥ 2 zamítnutí tohoto média
   → **automaticky zamítnuto**: zpráva smazaná (`message-deleted reason gif_rejected`, na platformě botem), počítadlo
   +1, `gif-notice { kind: "auto_rejected", reason: "repeat"|"ban" }` odesílateli, audit `gif_auto_reject`; jinak
-  žádost s `previouslyRejected: { at, by }` (poslední zamítnutí média).
+  žádost s `previouslyRejected: { at, by }` (poslední zamítnutí média) a `media.tokenRequired: true`. **Propadlá
+  žádost na zamítnuté médium se počítá jako zamítnutí** (`gif_rejections.count + 1`, audit 2026-09-27, SEC-1) — jinak
+  by šel zamítnutý GIF posílat ke schválení donekonečna, když mody kartu ignorují.
 - Zamítnutí modem: médium `rejected` (`rejected_at/by`), `gif_rejections.count + 1` pro uživatele žádosti. Médium se
   **nemaže** (retence 14 dní). Propadnutí maže médium jen když je `pending` a neodkazuje na něj žádná jiná žádost kromě
   propadlých (čekající, schválená / smazaná = zpráva v archivu, např. čekající alias z backfillu).
@@ -695,8 +727,12 @@ sha256 obsahu. Známé médium se znovu neukládá (přednost `approved` > `reje
   `(channel, sha256)` pozná, že stejný obsah už je schválený → žádosti se přesměrují na schválené médium, duplikát
   se smaže (gif-message nese URL schváleného média). Přesměrují se i syntetické zprávy (`content_raw.gif.mediaId`) a
   schválené médium převezme URL zdroje duplikátu, když žádnou nemá — stejná cesta jako sloučení duplikátu modem.
-- Cache `/media/gif`: v paměti jen **schválená** média; čekající a zamítnutá se čtou pokaždé z DB (stav se mění
-  rozhodnutím, propadnutím, novou žádostí).
+- Cache `/media/gif`: v paměti jen **schválená** (a stažená) média, nejvýš 10 min; čekající a zamítnutá se čtou pokaždé
+  z DB (stav se mění rozhodnutím, propadnutím, obnovou).
+- **GIF z knihovny souběžně s „Odebrat z knihovny“ (audit A2):** okamžité schválení schvaluje podmíněně jen dosud
+  schválené médium. Když ho mod mezitím odebral, žádost se zamítne (bez strike), původní zpráva `gif_rejected`,
+  odesílatel `gif-notice { kind: "auto_rejected", reason: "unapproved" }`; akce moda platí. Mod (auto) smí zamítnutý GIF
+  dál schválit sám.
 
 **Režim `approved`** (`gif-access.mode`, platí i pro mody): projde jen známé **schválené** médium (URL, sha256, náš
 odkaz). Cokoli jiného → zpráva smazaná (`reason: "gif_not_allowed"`, SSE `message-deleted`, na platformě botem;
@@ -723,7 +759,7 @@ odhadem) → `verify` 95 (staženo / známé médium bez stahování) → `done`
 event: gif-notice          # jen odesílateli
 data: { "requestKey": "twitch:abc", "channel": "robdiesalot", "platform": "twitch", "messageId": "abc",
         "kind": "approved_only" }            # „Nové GIFy teď nejdou, vyber z GIFů v panelu"
-data: { …, "kind": "auto_rejected", "reason": "repeat" | "ban" }   # label „Zamítnuto moderátorem" natrvalo
+data: { …, "kind": "auto_rejected", "reason": "repeat" | "ban" | "purged" | "unapproved" }   # label „Zamítnuto moderátorem" natrvalo
 
 event: gif-queue           # jen modům kanálu, po každé změně fronty (nová žádost, rozhodnutí, propadnutí)
 data: { "channel": "robdiesalot", "pendingCount": 2, "headId": 12 }   # headId = nejstarší čekající (null = prázdná)
@@ -736,6 +772,10 @@ status? }` — `state`: `held` | `visible` | `deleted` | `replaced` | `unknown`;
 existuje žádost) = stav žádosti `pending` | `approved` | `rejected` | `expired` | `deleted`. Klient: `approved` /
 `deleted` → štítek pryč (GIF je na konci chatu), `rejected` → „Zamítnuto moderátorem“, `expired` → „Vypršelo“,
 `pending` → čeká dál, `visible` → běžná zpráva (převod selhal).
+**Od 2026-09-27 (audit SEC-3, C1):** klíče syntetických zpráv `gif-<n>` vrací vždy `unknown` bez obsahu (sekvenční id
+šla projít a vydat text GIFu, který mod schoval). `visible` nese zprávu ve veřejném tvaru jako `/chat/history`: GIF,
+jehož médium už není veřejné → `deleted` s `reason: "gif_removed"` bez textu, skrytá zpráva bez obsahu. Dávkově jedním
+dotazem na řádky a jedním na stavy žádostí, index `gif_requests_message_idx` (`backend/sql/2026-09-27-gif-audit.sql`).
 
 Po připojení `/account/stream` přijdou čekající `gif-pending` a pro každý kanál, kde je účet mod a něco čeká,
 `gif-queue`. `gif-pending` nese navíc `previouslyRejected: { at, by }` (mod) / `{ at }` (odesílatel, bez „kým";
@@ -744,11 +784,14 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
 
 **Zamítnuté GIFy (mod kanálu):**
 - `POST /moderation/gif/access-token { channel? }` (Bearer, mod kanálu, rate limit 5 + 1/10 s, `no-store`) →
-  `{ ok, token }` — nový náhodný token, **vrací se jen tady**; v DB jen SHA-256. Klient (zařízení / session) si ho
+  `{ ok, token, expiresAt, serverNow }` — nový náhodný token, **vrací se jen tady**; v DB jen SHA-256. **Od 2026-09-27
+  (audit L1) token moda platí 30 dní od vydání** (`expiresAt` v čase serveru) a **odhlášení účtu** („Odhlásit se“ =
+  `signOutAccount`) zneplatní všechny jeho tokeny. Token vložený do chatu v odkazu `…/media/gif/<id>?t=` server
+  zneplatní (audit L13). Klient (zařízení / session) si ho
   drží a přidává do odkazů na zamítnutá média `…/media/gif/<id>?t=<token>`. Účet má **nejvýš 5 aktivních tokenů**
   (jeden na zařízení); šestý zneplatní nejstarší, ostatní platí dál. **Když klient s tokenem dostane `404`, vyžádá si
   jednou nový token a načte znovu** (token mohl vypadnout jako nejstarší, nebo účet přestal být modem — pak 403).
-  URL požadavků se loguje bez hodnot `t`, `token`, `access_token`, `key` (`***`).
+  URL požadavků se loguje bez hodnot `t`, `token`, `access_token`, `key`, `ticket` (`***`).
 - Ověření v `/media/gif/:id?t=`: aktivní token + účet je **stále mod kanálu média** (`accountModIdentities`), nebo
   integrační token Židolišty (`integration_slug` = workspace kanálu; vydání `POST /integrations/:slug/gifs/access-token`,
   viz „GIF knihovna — Task 2"). Výsledek
@@ -766,12 +809,14 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
     retence se na něj nevztahuje; `purge` — **nejdřív zamítne čekající žádosti na médium** (`requests: N`), pak
     **od 2026-09-27 nemaže hned**: viz „Trvale zahodit — dvě varianty" níž (`keepMessages`, bez něj 7 dní na obnovu);
     `ban12h` — „Automaticky zahazovat 12 h" (od všech), médium se označí `rejected` a
-    **čekající žádosti na médium se hned zamítnou** (`by` = mod); nad zahozeným `409 { error: "already_purged" }`.
+    **čekající žádosti na médium se hned zamítnou** (`by` = mod, stejně jako zamítnutí modem → každému čekajícímu
+    odesílateli strike `gif_rejections.count + 1`); nad zahozeným `409 { error: "already_purged" }`.
   - Položka zamítnutých nese od 2026-09-27 i `tags` (náhled).
   - **Odebrat z knihovny** (Task 2): `unapprove` — schválený GIF → zamítnutý (`rejected_at/by`, bez `approved_at`
     a vaultu → retence 14 dní, od té chvíle jen s tokenem; staré zprávy s ním ho bez tokenu nenačtou); `purge` nad
-    **schváleným** = trvale smazat z knihovny (tombstone, staré zprávy ho už nenačtou). **Záměrně:** `unapprove`
-    i `purge` schváleného média GIF skryje (bez tokenu 404) nebo rozbije i ve **starých zprávách v historii** — mod
+    **schváleným** = od 2026-09-27 dvě varianty (`withdrawn` / `purging` se smazáním po 7 dnech), viz „Trvale zahodit“
+    níž. **Záměrně:** `unapprove` i `purge` schváleného média (bez `keepMessages`) GIF skryje i ve **starých zprávách
+    v historii** — mod
     GIF odebírá proto, že se nemá zobrazovat (rozhodnutí 2026-09-26). **Od závěrečné review (I2):** `/chat/history`
     (a do 2026-09-27 i Profil — od té doby viz „Úpravy po testu“ §3) pošle zprávu, jejíž médium není veřejné (zamítnuté = odebrané,
     neexistuje = trvale zahozené / sloučené), jako **smazanou** `{ …, message: '', deleted: true,
@@ -779,8 +824,9 @@ jiného moda, 0,3 s po vlastním kliku; `409 { status, decidedBy }` = „Už roz
     Stav médií se zjišťuje jedním dotazem na stránku. Čekající médium (alias z backfillu) zůstává vidět. Klienti
     místo odkazu „otevřít“ po chybě načtení média ukážou štítek „GIF odebrán“.
   - Audit `moderation_actions` `gif_media_<akce>` (`platform: "uc"`).
-- Retence: 1×/h se mažou zamítnutá média s `rejected_at` starším 14 dní bez vaultu (a bez čekající žádosti);
-  propadlé zákazy se uklidí.
+- Retence: **2 min po startu a pak 1×/h** (audit 2026-09-27, B2 — dřív až hodinu po startu, takže se při častých
+  deployích z dev nespustila) se mažou zamítnutá média s `rejected_at` starším 14 dní bez vaultu (a bez čekající žádosti),
+  zahozená `purging` po `purge_at`; propadlé zákazy se uklidí.
 
 ### GIF knihovna — Task 2 (knihovna, tagy, perceptuální hash, API pro Židolištu)
 **SQL `backend/sql/2026-09-26-gif-phash.sql` spustit PŘED nasazením** (idempotentní, navazuje na `2026-09-26-gif-library.sql`):
@@ -804,7 +850,7 @@ bez obecných slov (`gif`, `animated gif`, `sticker`, `tenor`, `giphy` …) a du
 délek snímků, MP4 přes `ffprobe` + `ffmpeg -vf fps=8/délka` od půlky prvního intervalu); podobnost = podíl snímků
 s Hammingovou vzdáleností **≤ 10** přes posunuté zarovnání sekvencí (vůči kratší sekvenci), **≥ 0,6** = návrh. Plochý
 snímek se za shodu nepočítá. Výpočet je omezený: ffmpeg `-threads 1` a zabití po 20 s, sharp jedno vlákno,
-`limitInputPixels` 100 M a nejvýš 20 s (jinak hash `NULL` + varování). Na pozadí **1 médium za 2 s** (bez práce / chyba 30 s): nejdřív hash rozhodnutých médií
+`limitInputPixels` 25 M (od 2026-09-27, dřív 100 M) a nejvýš 20 s (jinak hash `NULL` + varování). Na pozadí **1 médium za 2 s** (bez práce / chyba 30 s): nejdřív hash rozhodnutých médií
 (`approved` přednostně, pak `rejected`; čekající až po rozhodnutí), pak porovnání jednoho média s médii **téhož
 kanálu** → `gif_duplicates` jen pro dvojici, která ještě nemá záznam (`a` = starší = „první"). Chybí `ffmpeg`/`sharp`
 nebo selže → `phash` zůstane `NULL`, varování `gif phash: výpočet selhal`, médium funguje dál (znovu se nezkouší).
@@ -939,13 +985,16 @@ rozměry, tagy, u zamítnutých kdo/kdy; zavření ×, klik mimo, Esc). „Trval
 (Odstranit ze serveru s potvrzením) a „Ke smazání" (odpočet „smaže se za 6 dní", Obnovit).
 
 ### Úpravy po testu (2026-09-27, spec `docs/superpowers/specs/2026-09-27-gif-review-upravy-design.md`)
-Bez nového SQL.
+Bez nového SQL. (Opravy ze závěrečného auditu 2026-09-27 mají `backend/sql/2026-09-27-gif-audit.sql` — jen index pro
+`/gif/held`, backend běží i bez něj; změny jsou popsané přímo v sekcích výš.)
 
 **§1 Schválení ruší tresty.** Jakékoli schválení média — `decide` approve (i auto modem, instantní z knihovny,
 kaskáda), `POST …/:mediaId/approve` ze Zamítnutých, `restore` do schváleného, sloučení do schváleného (souběh dedupu,
 obnova sloučená do schváleného, `keep-first|keep-second` s výsledkem schváleným) — v **téže transakci** smaže
-`gif_rejections` (všech uživatelů) i `gif_bans` pro to médium. `unapprove` ani `purge` / `ban12h` strike nepřidávají
-(zamítnutí modem ano, jako dosud). Karta ⚠ „už dříve zamítnut“ (`previouslyRejected`) se u zamítnutého média ukáže
+`gif_rejections` (všech uživatelů) i `gif_bans` pro to médium. `unapprove` ani `purge` strike nepřidávají
+(zamítnutí modem ano, jako dosud). **`ban12h` zamítá čekající žádosti na médium stejnou cestou jako zamítnutí modem,
+takže každému čekajícímu odesílateli strike přidá** (oprava textu kontraktu podle kódu, audit 2026-09-27 K2); médium
+samo strike nedostane. Propadlá žádost na zamítnuté médium strike přidá (audit SEC-1). Karta ⚠ „už dříve zamítnut“ (`previouslyRejected`) se u zamítnutého média ukáže
 jen tehdy, když ho někdo opravdu zamítl (existuje strike) — GIF odebraný z knihovny je při dalším poslání **běžná
 žádost bez ⚠**, 3.+ pokus se počítá znovu od nuly.
 

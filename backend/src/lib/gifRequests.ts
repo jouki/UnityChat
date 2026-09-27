@@ -131,8 +131,8 @@ export function pendingView(r: GifRequest): GifPendingView {
 
 /**
  * Důvod smazání původní zprávy po zamítnutí / propadnutí žádosti (UX 2026-09-25): `gif_request` klienti
- * nevykreslují vůbec (odesílatel má kartu „čeká na schválení", po schválení se GIF ukáže na konci chatu), po
- * zamítnutí se z ní stane běžně smazaná zpráva. Vlastní důvod (ne `mod`), ať audit ukáže, že šlo o GIF,
+ * nevykreslují vůbec (odesílatel vidí svou zprávu se štítkem „Schvalování moderátorem“, po schválení se GIF ukáže
+ * na konci chatu), po zamítnutí se z ní ostatním stane běžně smazaná zpráva (odesílatel: „Zamítnuto moderátorem“). Vlastní důvod (ne `mod`), ať audit ukáže, že šlo o GIF,
  * a mod ji v UnityChatu neodkryje (POST /moderation/restore → 409 not_restorable).
  */
 export const GIF_REJECTED_REASON = 'gif_rejected' as const;
