@@ -490,12 +490,14 @@ retence 14 dní, vault), propadlé se maže jen když na něj nečeká jiná ž�
   (čas ISO nebo ms; přepočet přes `serverNow`). `mode: 'all' | 'approved'` (režim odměny, chybí / neznámé = `all`;
   neodemčený uživatel dostane `all` a rozhoduje `allowed: false`), `cooldownGlobalSec` = cooldown celého chatu
   (`cooldownUntil` je už pozdější z globálního a osobního). Cache 60 s per (workspace, platforma, uživatel, role).
-  Chyba / bez klíče = neodemčeno (a režim `all`). **`allowed: false` → `cooldownSec` / `cooldownUntil` se ignorují**
+  Chyba / bez klíče = neodemčeno (a režim `all`); chyba (429, 5xx, timeout) se v cache drží jen 5 s. **`allowed: false` → `cooldownSec` / `cooldownUntil` se ignorují**
   (u role bez oprávnění je to jen výchozí hodnota Židolišty) a jeho `cooldownGlobalSec` si server nepamatuje (2026-09-27).
 - Po schválení `POST …/integrations/:slug/gif-used { platform, userId, role }` (role stejná jako v `gif-access`, uložená
   v `meta.role` žádosti; staré žádosti bez ní) → `{ ok, cooldownUntil | null, cooldownSec, cooldownGlobalSec }`;
   **`cooldownUntil: null` = bez cooldownu** (ne neznámo), `cooldownGlobalSec` 0 = globální cooldown pryč. Uživatel je
-  v cooldownu **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access` odemčeného uživatele);
+  v cooldownu **hned při schválení** (lokálně, podle `cooldownSec` z posledního `gif-access` odemčeného uživatele;
+  když cache záznam nemá — zahodil ji webhook — podle posledního skutečně nastaveného `cooldownSec` jeho role
+  per workspace, drženého mimo cache jen z odpovědí s `allowed: true`);
   **výchozí hodnota neexistuje** (2026-09-27, bod 5): `cooldownSec` 0 ani neznámý (prázdná cache) lokální cooldown
   nezakládá — platí jen to, co nastaví Židolišta. Selhání `gif-used` = jeden opakovaný pokus po 2 s, bez potvrzení
   platí lokální cooldown do vypršení. Potvrzení ho nahradí cooldownem Židolišty. Klient (`core/gif-cooldown.js`)

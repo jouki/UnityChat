@@ -270,6 +270,43 @@ test('bod 5: odpověď gif-used s cooldownGlobalSec 0 → globální cooldown pr
   assert.equal(typeof claimGifSlot('rob', now + 1), 'function', 'Židolišta hlásí globální cooldown 0 → nic neblokuje');
 });
 
+test('review 1: cache zahozená webhookem → lokální cooldown podle posledního známého cooldownSec role; bez známé hodnoty žádný', async () => {
+  _resetGifAccessCache();
+  const now = 1_000;
+  const fetch = (async (url: string) => {
+    if (url.endsWith('/gif-used')) return new Response('x', { status: 503 });
+    return accessRes({ cooldownSec: 25 }, now);
+  }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet, sleep: async () => {} };
+  await gifAccess(Q, deps);                 // role viewer, cooldownSec 25 (odemčený)
+  invalidateGifAccess('rob');               // webhook
+  const B = { workspace: 'rob', platform: 'twitch' as const, userId: '99' };
+  await gifUsed({ ...B, role: 'viewer' }, deps);
+  assert.equal(gifCooldownUntilSync({ ...Q, userId: '99', login: 'jiny' }, deps), now + 25_000, 'poslední známé cooldownSec role viewer');
+  await gifUsed({ ...B, userId: '98', role: 'vip' }, deps);
+  assert.equal(gifCooldownUntilSync({ ...Q, userId: '98', login: 'vip', role: 'vip' }, deps), null, 'role bez známé hodnoty → žádný cooldown');
+});
+
+test('review 2: chyba Židolišty (5xx) se v cache drží jen krátce, úspěch 60 s', async () => {
+  _resetGifAccessCache();
+  let now = 1_000;
+  let fail = true;
+  let calls = 0;
+  const fetch = (async () => { calls++; return fail ? new Response('x', { status: 503 }) : accessRes({}, now); }) as unknown as typeof globalThis.fetch;
+  const deps = { fetch, apiKey: 'k', base: 'https://z.test', now: () => now, log: quiet };
+  assert.equal(await gifAccess(Q, deps), null);
+  now += 1_000;
+  assert.equal(await gifAccess(Q, deps), null, 'hned potom z krátké cache chyby');
+  assert.equal(calls, 1);
+  fail = false;
+  now += 5_000;
+  assert.equal((await gifAccess(Q, deps))?.allowed, true, 'po ~5 s znovu dotaz');
+  assert.equal(calls, 2);
+  now += 30_000;
+  await gifAccess(Q, deps);
+  assert.equal(calls, 2, 'úspěch dál 60 s');
+});
+
 test('bod 3: gifAccessChanged — webhook gif-access zahodí cache a pošle veřejné gif-access-change { channel } bez osobních dat', async () => {
   _resetGifAccessCache();
   const fetch = (async () => accessRes({}, 1_000)) as unknown as typeof globalThis.fetch;

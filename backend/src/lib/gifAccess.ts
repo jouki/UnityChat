@@ -44,6 +44,8 @@ export type GifMode = 'all' | 'approved';
 
 export const DEFAULT_REQUEST_TTL_SEC = 300;
 const CACHE_MS = 60_000;
+/** Chyba Židolišty (429, 5xx, timeout) se drží jen krátce — čerstvě aktivovaná odměna nesmí minutu vypadat jako neodemčená. */
+export const ERROR_CACHE_MS = 5_000;
 
 const toMs = (v: unknown): number | null => {
   if (v === null || v === undefined || v === '') return null;
@@ -77,7 +79,14 @@ export function gifUsable(a: GifAccess | null | undefined, now: number): boolean
   return !!a && a.allowed && (a.until === null || a.until > now) && !(a.cooldownUntil !== null && a.cooldownUntil > now);
 }
 
-interface Entry { at: number; value: GifAccess | null; inflight: Promise<GifAccess | null> | null }
+interface Entry { at: number; value: GifAccess | null; inflight: Promise<GifAccess | null> | null; err?: boolean }
+const ttlOf = (e: Entry): number => (e.err ? ERROR_CACHE_MS : CACHE_MS);
+/**
+ * Poslední skutečně nastavené cooldownSec per (workspace, role) — jen z úspěšných odpovědí s `allowed: true`, mimo cache
+ * přístupu (webhook ji zahodí). gifUsed ho použije, když cache záznam uživatele nemá. Není to výchozí hodnota:
+ * neznámá role = žádný cooldown, 0 = žádný.
+ */
+const lastCooldownSec = new Map<string, number>();
 const cache = new Map<string, Entry>();
 const keyOf = (q: GifAccessQuery): string => `${q.workspace.toLowerCase()}|${q.platform}|${q.userId || `login:${q.login.toLowerCase()}`}|${q.role}`;
 
@@ -166,7 +175,7 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
   const k = keyOf(q);
   const hit = cache.get(k);
   if (hit?.inflight) return hit.inflight;
-  if (hit && now() - hit.at < CACHE_MS) return hit.value;
+  if (hit && now() - hit.at < ttlOf(hit)) return hit.value;
   const apiKey = deps.apiKey ?? config.ZIDOLISTA_API_KEY;
   if (!apiKey) return null;
   const entry: Entry = hit ?? { at: 0, value: null, inflight: null };
@@ -181,12 +190,15 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
       const j = (await r.json()) as { ok?: boolean };
       if (!j || j.ok === false) throw new Error('not ok');
       entry.value = normalizeGifAccess(j, now());
+      entry.err = false;
+      if (entry.value.allowed) { lastCooldownSec.set(`${q.workspace.toLowerCase()}|${q.role}`, entry.value.cooldownSec); if (lastCooldownSec.size > 1000) lastCooldownSec.clear(); }
       // Globální cooldown jen z odpovědi odemčeného (u neodemčeného je to výchozí hodnota Židolišty, bod 5).
       if (entry.value.allowed) lastGlobalSec.set(q.workspace.toLowerCase(), entry.value.cooldownGlobalSec ?? 0);
       if (lastGlobalSec.size > 1000) lastGlobalSec.clear();
     } catch (e) {
       deps.log?.warn({ workspace: q.workspace, platform: q.platform, err: (e as Error).message }, 'gif: gif-access selhalo (bere se jako neodemčené)');
       entry.value = null;
+      entry.err = true;
     } finally {
       entry.at = now();
       entry.inflight = null;
@@ -203,7 +215,7 @@ async function fetchAccess(q: GifAccessQuery, deps: GifAccessDeps): Promise<GifA
 export function gifAccessSync(q: GifAccessQuery, deps: GifAccessDeps = {}): 'allowed' | 'denied' | 'unknown' {
   const now = (deps.now ?? Date.now)();
   const hit = cache.get(keyOf(q));
-  if (!hit || (!hit.inflight && now - hit.at >= CACHE_MS)) void gifAccess(q, deps).catch(() => {});
+  if (!hit || (!hit.inflight && now - hit.at >= ttlOf(hit))) void gifAccess(q, deps).catch(() => {});
   if (localUntil(q, now) !== null) return 'denied';
   if (!hit || (hit.inflight && hit.at === 0)) return 'unknown';
   if (globalUntil(q.workspace, now) !== null) return 'denied';
@@ -228,9 +240,11 @@ export function gifCooldownUntilSync(q: GifAccessQuery, deps: Pick<GifAccessDeps
 export const GIF_USED_RETRY_MS = 2000;
 
 /**
- * Po schválení GIFu: Židolišta zapne cooldown. Hned (synchronně) lokální cooldown podle cooldownSec z cache
- * (výchozí 60 s), pak `gif-used`; selhání = jeden opakovaný pokus po 2 s. Potvrzení Židolišty lokální
- * cooldown nahradí jejím; bez potvrzení platí lokální do vypršení. Vrací potvrzený konec cooldownu nebo null.
+ * Po schválení GIFu: Židolišta zapne cooldown. Hned (synchronně) lokální cooldown podle cooldownSec odemčeného
+ * uživatele z cache, jinak podle posledního skutečně nastaveného cooldownSec jeho role (lastCooldownSec); neznámé
+ * nebo 0 = žádný lokální cooldown (výchozí hodnota neexistuje). Pak `gif-used` s rolí; selhání = jeden opakovaný
+ * pokus po 2 s. Potvrzení Židolišty lokální cooldown nahradí jejím (`cooldownUntil: null` = bez cooldownu); bez
+ * potvrzení platí lokální do vypršení. Vrací potvrzený konec cooldownu nebo null.
  */
 export async function gifUsed(p: { workspace: string; platform: Platform; userId: string; role?: GifRole }, deps: GifAccessDeps = {}): Promise<number | null> {
   const now = deps.now ?? Date.now;
@@ -240,7 +254,10 @@ export async function gifUsed(p: { workspace: string; platform: Platform; userId
   // žádná výchozí hodnota — neznámé (prázdná cache) ani 0 cooldown nezakládá. Známá role má přednost.
   const own = p.role ? cache.get(`${prefix}${p.role}`)?.value : null;
   let cdSec = own?.allowed ? own.cooldownSec : 0;
-  if (!own?.allowed) for (const [k, e] of cache) if (k.startsWith(prefix) && e.value?.allowed) cdSec = Math.max(cdSec, e.value.cooldownSec);
+  let known = !!own?.allowed;
+  if (!known) for (const [k, e] of cache) if (k.startsWith(prefix) && e.value?.allowed) { known = true; cdSec = Math.max(cdSec, e.value.cooldownSec); }
+  // Cache bez záznamu (zahodil ji webhook) → poslední skutečně nastavené cooldownSec role; neznámé = žádný cooldown.
+  if (!known && p.role) cdSec = lastCooldownSec.get(`${p.workspace.toLowerCase()}|${p.role}`) ?? 0;
   if (cdSec > 0) localCooldown.set(prefix, now() + cdSec * 1000);
   // GIF je v chatu → globální cooldown chatu hned i lokálně (audit SEC-8).
   noteGlobal(p.workspace, now());
@@ -307,4 +324,4 @@ export function gifAccessChanged(workspace: string, channels: string[], emit: (e
 }
 
 /** Jen pro testy. */
-export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); globalCooldown.clear(); lastGlobalSec.clear(); }
+export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); globalCooldown.clear(); lastGlobalSec.clear(); lastCooldownSec.clear(); }
