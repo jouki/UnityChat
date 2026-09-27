@@ -11,12 +11,14 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate } from './gif.js';
+import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
+import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining } from './soundboard.js';
+import { gifCooldownText } from './gif-cooldown.js';
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const sameChannel = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
+// Všechny atributy v šablonách jsou v uvozovkách → escapeAttr stačí i na text.
+const esc = (s) => escapeAttr(s ?? '');
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // ---------------------------------------------------------------------------
@@ -44,8 +46,18 @@ export const GIF_PENDING_DEFAULT_TTL_MS = 300_000;
 export const GIF_HELD_RECHECK_MS = 30_000;
 /** Kolikrát nejvýš se na jednu zprávu ptát, pak „Vypršelo“. */
 export const GIF_OWN_MAX_CHECKS = 6;
-/** Max klíčů v jednom GET /gif/held (stejně jako server). */
-const HELD_BATCH = 50;
+/**
+ * Dotaz /gif/held selhal (síť, 5xx, rate limit) → zeptat se znovu s odstupem (30 s, 60 s, … nejvýš 5 min), štítek
+ * zůstává (audit E1: „Vypršelo“ jen z odpovědi serveru). Po GIF_HELD_MAX_FAILS neúspěších se přestane ptát, štítek
+ * zůstane a doptá se ho resync po znovupřipojení /account/stream.
+ */
+export const GIF_HELD_BACKOFF_MAX_MS = 300_000;
+export const GIF_HELD_MAX_FAILS = 12;
+/** Token moda platí 30 dní (backend) — nový se vydá den před koncem. */
+export const GIF_TOKEN_RENEW_MS = 86_400_000;
+/** Výběr z knihovny, když vlastní GIF ještě čeká (server pustí jen jednu žádost na uživatele, audit X1). */
+export const GIF_WAIT_OWN_TEXT = 'Počkej, až mod rozhodne o tvém GIFu.';
+const HELD_BATCH = GIF_HOLD_BATCH;
 
 export const GIF_STATUS_TEXT = {
   pending: 'Schvalování moderátorem',
@@ -161,8 +173,10 @@ export function gifEchoPatch(msg) {
  * GIF_OWN_MAX_CHECKS×); bez `api` / chyba dotazu → „Vypršelo“.
  */
 export class GifOutbox {
-  constructor({ channel, now, log, onChange, onNotice, hasMessage, api, setInterval: si, clearInterval: ci } = {}) {
+  constructor({ channel, now, log, onChange, onNotice, hasMessage, api, serverOffset, setInterval: si, clearInterval: ci } = {}) {
     this.api = typeof api === 'function' ? api : null;
+    /** Posun hodin (lokální − serverový) z GET /gif/state pro `expiresAt` bez `serverNow` (audit F1). */
+    this.serverOffset = serverOffset || (() => 0);
     this.channel = channel || (() => '');
     this.now = now || (() => Date.now());
     this.log = log || (() => {});
@@ -250,10 +264,60 @@ export class GifOutbox {
     this.onChange([key]);
   }
 
+  /**
+   * Vlastní rozpracovaný nebo čekající GIF (kolečko / „Schvalování moderátorem“)? Server pustí jen jednu žádost na
+   * uživatele → výběr z knihovny se zatím nepošle (audit X1).
+   */
+  busy(now = this.now()) {
+    for (const e of this._e.values()) {
+      const v = this.view(e.platform, e.messageId, now);
+      if (v && (v.kind === 'progress' || v.kind === 'pending')) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Vlastní zpráva z historie (po reloadu panelu), kterou server smazal kvůli GIFu → štítek jako živě (audit A10):
+   * gif_rejected = „Zamítnuto moderátorem“ (dotaz /gif/held ho upřesní na „Vypršelo“), gif_not_allowed = „Nové GIFy
+   * teď nejdou“, gif_request = „Schvalování moderátorem“ (stav se hned doptá). Známý záznam se nemění.
+   */
+  adoptHistory(platform, messageId, reason) {
+    const id = String(messageId ?? '');
+    if (!platform || !id || /^sent-/.test(id)) return null;
+    const key = `${platform}:${id}`;
+    if (this._e.has(key)) return this._e.get(key);
+    const state = reason === GIF_REJECTED_REASON ? 'rejected' : reason === 'gif_not_allowed' ? 'not_allowed' : isGifHeldReason(reason) ? 'pending' : null;
+    if (!state) return null;
+    const e = this._entry(key, platform, id);
+    e.state = state;
+    e.history = true;
+    if (state === 'pending') { e.pendingAt = this.now(); e.nextCheck = this.now(); }
+    else e.final = state !== 'rejected';   // rejected se ještě upřesní (vypršelo × zamítnuto)
+    this._L(`${key} z historie (${reason}) → ${state}`);
+    if (state === 'rejected' && this.api) this._queueRefine(e);
+    else this._arm();
+    return e;
+  }
+
+  /**
+   * Upřesnění zamítnutých zpráv z historie sbírat a poslat jedním GET /gif/held (po dávkách HELD_BATCH klíčů, _check)
+   * — historie jich vykreslí víc najednou, dotaz na každou zvlášť by narazil na rate limit.
+   */
+  _queueRefine(e) {
+    (this._refineQ ||= []).push(e);
+    if (this._refineQ.length > 1) return;
+    Promise.resolve().then(() => {
+      const list = this._refineQ || [];
+      this._refineQ = [];
+      const live = list.filter((x) => this._e.get(x.key) === x);
+      if (live.length) void this._check(live, { refine: true });
+    });
+  }
+
   _entry(key, platform, messageId) {
     let e = this._e.get(key);
     if (!e) {
-      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null, checks: 0, checking: false, nextCheck: null, expiresAt: null, pendingAt: null };
+      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null, checks: 0, checking: false, nextCheck: null, expiresAt: null, pendingAt: null, final: false, fails: 0 };
       this._e.set(key, e);
       if (this._e.size > 200) this._e.delete(this._e.keys().next().value);
     }
@@ -280,7 +344,11 @@ export class GifOutbox {
     if (p.channel && !sameChannel(p.channel, this.channel())) return null;
     if (!this._e.has(p.key)) this._pairOrphan(p.platform, p.messageId);
     const e = this._entry(p.key, p.platform, p.messageId);
-    // Pozdní průběh po rozhodnutí (pending → progress by štítek vrátil zpět) ignorovat.
+    // Rozhodnuto serverem (gif-decided, gif-message, /gif/held, gif-notice) → pozdní průběh ani `done` štítek
+    // nevrátí (audit F8). Tiché optimistické kolečko (state none) skutečný průběh zase oživí.
+    if (e.final) { this._L(`${p.key} ${p.phase} po rozhodnutí (${e.state}) → ignorováno`); return e; }
+    if (e.state === 'none' && p.phase !== 'done') e.state = 'progress';
+    // Pozdní průběh po čekání (pending → progress by štítek vrátil zpět) ignorovat.
     if (e.state !== 'progress' && p.phase !== 'done') return e;
     e.floor = gifProgressPct(e, this.now(), e.floor);
     e.optimistic = false;
@@ -288,6 +356,7 @@ export class GifOutbox {
     if (p.phase === 'done') {
       e.state = gifOutcomeState(p.outcome);
       e.outcome = p.outcome;
+      e.final = ['approved', 'rejected', 'not_allowed'].includes(e.state);
       if (e.state === 'pending') e.pendingAt = e.pendingAt ?? this.now();
       this._L(`${p.key} hotovo → ${p.outcome}`);
     } else if (p.phase === 'unlock') {
@@ -313,6 +382,7 @@ export class GifOutbox {
     if (d.kind === 'approved_only') e.state = 'not_allowed';
     else if (d.kind === 'auto_rejected') e.state = 'rejected';
     else { this._L(`gif-notice ${d.kind} neznámý`); return e; }
+    e.final = true;
     this._L(`${key} gif-notice ${d.kind}${d.reason ? ` (${d.reason})` : ''}`);
     this._arm();
     this.onChange([key]);
@@ -322,14 +392,16 @@ export class GifOutbox {
 
   /** Vlastní `gif-pending` (own: true) → čeká na moda (+ ⚠ u dříve zamítnutého), requestId → klíč. */
   onOwnPending(d) {
-    const req = d && d.requestId != null && d.media ? normalizeGifPending(d) : null;
+    const req = d && d.requestId != null && d.media ? normalizeGifPending(d, { now: this.now(), offset: this.serverOffset() }) : null;
     if (!req || !req.own || !req.platform || !req.messageId) return null;
     if (!sameChannel(req.channel, this.channel())) return null;
     const key = `${req.platform}:${req.messageId}`;
     if (!this._e.has(key)) this._pairOrphan(req.platform, req.messageId);
     const e = this._entry(key, req.platform, req.messageId);
+    if (e.final) { this._L(`${key} gif-pending po rozhodnutí (${e.state}) → ignorováno`); return e; }
     e.requestId = req.requestId;
     this._req.set(req.requestId, key);
+    if (this._req.size > 200) this._req.delete(this._req.keys().next().value);
     if (e.state === 'progress' || e.state === 'none') e.state = 'pending';
     e.pendingAt = e.pendingAt ?? this.now();
     // Konec čekání (čas serveru) → po něm + rezerva se štítek usadí dotazem, když gif-decided nepřijde.
@@ -349,6 +421,7 @@ export class GifOutbox {
     const e = key ? this._e.get(key) : null;
     if (!e) return null;
     e.state = x.status;
+    e.final = true;
     this._L(`${key} rozhodnuto ${x.status}`);
     this.onChange([key]);
     return e;
@@ -360,6 +433,7 @@ export class GifOutbox {
     const e = key ? this._e.get(key) : null;
     if (!e) return null;
     e.state = 'approved';
+    e.final = true;
     this._L(`${key} schválený GIF dorazil (${msg.id})`);
     this.onChange([key]);
     return e;
@@ -381,14 +455,17 @@ export class GifOutbox {
 
   /** Přepnutí kanálu / odhlášení. */
   clear() {
-    this._e.clear(); this._alias.clear(); this._opt = []; this._req.clear();
+    this._e.clear(); this._alias.clear(); this._opt = []; this._req.clear(); this._refineQ = [];
     if (this._timer) { this._ci(this._timer); this._timer = null; }
   }
 
   /** Po znovupřipojení SSE (`/account/stream`): stav rozpracovaných a čekajících štítků hned dotazem (události mohly propadnout). */
   resync() {
-    const list = [...this._e.values()].filter((e) => !e.checking && !e.optimistic && (e.state === 'progress' || e.state === 'pending'));
+    // Rozpracované, čekající a „Vypršelo“ bez odpovědi serveru (soft — strop bez dotazu / vyčerpané pokusy).
+    const list = [...this._e.values()].filter((e) => !e.checking && !e.optimistic && !/^sent-/.test(e.messageId)
+      && (e.state === 'progress' || e.state === 'pending' || (e.state === 'expired' && e.soft)));
     if (!list.length || !this.api) return 0;
+    for (const e of list) { e.fails = 0; e.stalled = false; if (e.state === 'expired') { e.state = 'pending'; e.soft = false; } }
     this._L(`znovupřipojení → dotaz na ${list.length} štítků`);
     void this._check(list, { resync: true });
     return list.length;
@@ -401,37 +478,66 @@ export class GifOutbox {
     return (e.pendingAt ?? e.at) + GIF_PENDING_DEFAULT_TTL_MS + GIF_PENDING_GRACE_MS;
   }
 
-  _giveUp(e, why) {
+  /** „Vypršelo“ bez odpovědi serveru (soft): resync po znovupřipojení se na štítek zeptá znovu. */
+  _giveUp(e, why, { soft = false } = {}) {
     e.state = 'expired';
     e.nextCheck = null;
+    e.soft = soft;
     this._L(`${e.key} ${why} → Vypršelo`);
   }
 
+  /** Dotaz selhal (síť, 5xx, 429 …) → zeptat se znovu s rostoucím odstupem; štítek beze změny (audit E1). */
+  _retryLater(e) {
+    const now = this.now();
+    e.fails = (e.fails || 0) + 1;
+    const wait = Math.min(GIF_HELD_BACKOFF_MAX_MS, GIF_HELD_RECHECK_MS * 2 ** Math.min(e.fails - 1, 10));
+    if (e.fails >= GIF_HELD_MAX_FAILS) {
+      // Dál se neptat (štítek zůstane, doptá se resync po znovupřipojení /account/stream).
+      e.stalled = true;
+      this._L(`${e.key} /gif/held selhalo ${e.fails}× → dál se neptám, štítek beze změny`);
+      return;
+    }
+    if (e.state === 'progress') e.at = now - GIF_PROGRESS_MAX_SILENT_MS + wait;
+    else e.nextCheck = now + wait;
+    this._L(`${e.key} /gif/held selhalo (${e.fails}×) → znovu za ${Math.round(wait / 1000)} s`);
+  }
+
   /**
-   * Dotaz GET /gif/held na stav štítků `list` (skutečná id). Bez `api` / optimistická bez id → „Vypršelo“.
-   * `resync`: po znovupřipojení — chyba dotazu ani chybějící položka štítek nemění (usadí ho pak strop).
+   * Dotaz GET /gif/held na stav štítků `list` (skutečná id). Bez `api` / optimistická bez id → „Vypršelo“ (soft).
+   * Chyba dotazu štítek nemění — jen se zeptá znovu později (_retryLater). Chybějící položka v odpovědi serveru
+   * = server zprávu nezná → „Vypršelo“.
+   * `resync`: po znovupřipojení — chybějící položka štítek nemění (usadí ho pak strop).
+   * `refine`: zamítnutá zpráva z historie → server řekne, jestli zamítnuta, nebo propadla (adoptHistory).
    */
-  async _check(list, { resync = false } = {}) {
+  async _check(list, { resync = false, refine = false } = {}) {
     const ask = [];
     const keys = [];
     for (const e of list) {
       if (this.api && !/^sent-/.test(e.messageId)) ask.push(e);
-      else if (!resync) { this._giveUp(e, `${e.state === 'pending' ? 'čekání' : e.phase} bez rozhodnutí (bez dotazu)`); keys.push(e.key); }
+      else if (!resync && !refine) { this._giveUp(e, `${e.state === 'pending' ? 'čekání' : e.phase} bez rozhodnutí (bez dotazu)`, { soft: true }); keys.push(e.key); }
     }
     for (let i = 0; i < ask.length; i += HELD_BATCH) {
       const chunk = ask.slice(i, i + HELD_BATCH);
       for (const e of chunk) e.checking = true;
-      let res = null;
+      let res = null, failed = false;
       const ids = chunk.map((e) => e.key).join(',');
       try { res = await this.api(`/gif/held?channel=${encodeURIComponent(String(this.channel() || '').toLowerCase())}&ids=${encodeURIComponent(ids)}`); }
-      catch (err) { this._L(`/gif/held selhalo (${err?.error || err?.message || err})`); }
+      catch (err) { failed = true; this._L(`/gif/held selhalo (${err?.status || 0} ${err?.error || err?.message || err})`); }
       const got = new Map((Array.isArray(res?.messages) ? res.messages : []).map((r) => [`${r.platform}:${r.messageId}`, r]));
       for (const e of chunk) {
         e.checking = false;
         if (this._e.get(e.key) !== e) continue;                           // mezitím zahozeno
+        if (refine) {
+          const st = failed ? null : gifHeldOwnState(got.get(e.key));
+          if (e.state === 'rejected' && !e.final && st === 'expired') { e.state = 'expired'; keys.push(e.key); }
+          if (!failed) e.final = true;
+          continue;
+        }
         if (e.state !== 'progress' && e.state !== 'pending') continue;    // mezitím rozhodnuto událostí
+        if (failed) { if (!resync) this._retryLater(e); continue; }
+        e.fails = 0;
         const r = got.get(e.key);
-        if (!r) { if (!resync) { this._giveUp(e, 'stav nezjištěn'); keys.push(e.key); } continue; }
+        if (!r) { if (!resync) { this._giveUp(e, 'stav nezjištěn (server zprávu nezná)'); keys.push(e.key); } continue; }
         this._applyHeld(e, r);
         keys.push(e.key);
       }
@@ -455,6 +561,7 @@ export class GifOutbox {
     }
     e.state = next;
     e.nextCheck = null;
+    e.final = next !== 'none';
     this._L(`${e.key} /gif/held → ${r.state}${r.status ? `/${r.status}` : ''} → ${next}`);
   }
 
@@ -463,7 +570,7 @@ export class GifOutbox {
    * (průběh bez události 60 s, čekání na moda po expiresAt) → dotaz na stav.
    */
   _arm() {
-    const watched = (e) => !e.checking && (e.state === 'progress' || e.state === 'pending');
+    const watched = (e) => !e.checking && !e.stalled && (e.state === 'progress' || e.state === 'pending');
     if (![...this._e.values()].some(watched)) { if (this._timer) { this._ci(this._timer); this._timer = null; } return; }
     if (this._timer) return;
     this._timer = this._si(() => {
@@ -471,7 +578,7 @@ export class GifOutbox {
       const keys = [];
       const due = [];
       for (const e of this._e.values()) {
-        if (e.checking) continue;
+        if (e.checking || e.stalled) continue;
         if (e.state === 'progress') {
           if (e.optimistic) {
             if (now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
@@ -492,7 +599,29 @@ export class GifOutbox {
   }
 }
 
-const WARN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 3 2 21h20L12 3Z" fill="#f5a524"/><path d="M12 10v5" stroke="#1a1a1d" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="18" r="1.3" fill="#1a1a1d"/></svg>';
+/** Zpráva patří přihlášenému účtu (identita `{ login }` na platformě zprávy)? Porovnává login bez „@“. */
+export function isOwnGifMsg(msg, identity) {
+  const norm = (s) => String(s ?? '').replace(/^@/, '').trim().toLowerCase();
+  const me = norm(identity?.login);
+  if (!me || !msg) return false;
+  return norm(msg.username) === me || norm(msg.login) === me;
+}
+
+const HISTORY_REASONS = new Set([GIF_REJECTED_REASON, 'gif_not_allowed', 'gif_request']);
+
+/**
+ * Štítek vlastní GIF zprávy, kterou GifOutbox nezná (reload panelu, jiné zařízení): zpráva smazaná serverem kvůli
+ * GIFu (gif_rejected / gif_not_allowed / gif_request) od přihlášeného účtu → záznam v outboxu (adoptHistory) a jeho
+ * štítek; ostatním se dál ukazuje jako smazaná (audit A10). Jinak null.
+ */
+export function gifOwnHistoryView(outbox, msg, identity) {
+  if (!outbox || !msg || !(msg._deleted || msg.deleted) || !HISTORY_REASONS.has(msg.deletedReason)) return null;
+  if (msg.id == null || /^sent-/.test(String(msg.id)) || !isOwnGifMsg(msg, identity)) return null;
+  const e = outbox.adoptHistory(msg.platform, msg.id, msg.deletedReason);
+  return e ? outbox.view(msg.platform, String(msg.id)) : null;
+}
+
+const WARN_SVG ='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 3 2 21h20L12 3Z" fill="#f5a524"/><path d="M12 10v5" stroke="#1a1a1d" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="18" r="1.3" fill="#1a1a1d"/></svg>';
 
 /**
  * Štítek stavu vlastního GIFu ve zprávě (`.uc-gif-st`, za textem). `view` z GifOutbox.view; null / approved = pryč.
@@ -555,31 +684,86 @@ export class GifAccessToken {
     this._token = null;
     this._inflight = null;
     this._lastIssue = 0;
+    // Epocha: clear() (odhlášení, jiný účet) zneplatní rozběhnuté vydání / načtení (audit F9).
+    this._epoch = 0;
   }
 
   _L(t) { this.log('Gif', `token: ${t}`); }
 
-  async get() {
-    if (this._token) return this._token;
-    if (this._inflight) return this._inflight;
-    this._inflight = (async () => {
-      try {
-        const saved = await this.store?.load?.();
-        if (saved && typeof saved === 'string') { this._token = saved; this._L('ze session úložiště'); return saved; }
-      } catch { /* ignore */ }
-      return this._issue();
-    })().finally(() => { this._inflight = null; });
-    return this._inflight;
+  /** Propadlý (známá expirace minula). */
+  _expired() { return Number.isFinite(this._exp) && this.now() >= this._exp; }
+  /** Obnovit: den před koncem platnosti, nebo token ze sessionStorage bez známé expirace („obnovit brzy“). */
+  _renewDue() { return !!this._token && (this._expUnknown || (Number.isFinite(this._exp) && this.now() >= this._exp - GIF_TOKEN_RENEW_MS)); }
+  /** Nový token na pozadí; dosavadní platný zůstává v použití, dokud nový nepřijde. Jeden pokus na okno obnovy. */
+  _renewInBackground() {
+    if (this._inflight || !this._renewDue()) return this._inflight;
+    this._expUnknown = false;
+    this._L('token brzy vyprší / expirace neznámá → nový na pozadí');
+    const p = this._issue(this._epoch).finally(() => { if (this._inflight === p) this._inflight = null; });
+    this._inflight = p;
+    return p;
   }
 
-  async _issue() {
+  /**
+   * Token v paměti (bez čekání na síť), nebo null (i propadlý). V okně obnovy spustí vydání nového na pozadí.
+   * Panel ani karta si ho nedrží — po odhlášení je hned pryč.
+   */
+  current() {
+    if (!this._token) return null;
+    if (this._expired()) { void this._renewInBackground(); return null; }
+    if (this._renewDue()) void this._renewInBackground();
+    return this._token;
+  }
+
+  async get() {
+    // Token platí 30 dní (server posílá expiresAt + serverNow) → den před koncem nový na pozadí, platný se vrací dál.
+    if (this._token && !this._expired()) {
+      if (this._renewDue()) void this._renewInBackground();
+      return this._token;
+    }
+    if (this._token) {
+      // Propadlý → čekat na nový.
+      this._L('token propadl → nový');
+      this._token = null;
+      this._exp = null;
+      try { await this.store?.clear?.(); } catch { /* ignore */ }
+    }
+    if (this._inflight) return this._inflight;
+    const ep = this._epoch;
+    const p = (async () => {
+      try {
+        const saved = await this.store?.load?.();
+        if (ep !== this._epoch) return null;
+        if (saved && typeof saved === 'string') {
+          // Session úložiště drží jen hodnotu → expirace neznámá → po prvním použití obnovit na pozadí.
+          this._token = saved;
+          this._exp = null;
+          this._expUnknown = true;
+          this._L('ze session úložiště (expirace neznámá)');
+          return saved;
+        }
+      } catch { /* ignore */ }
+      return this._issue(ep);
+    })().finally(() => {
+      if (this._inflight === p) this._inflight = null;
+      if (ep === this._epoch && this._expUnknown) void this._renewInBackground();
+    });
+    this._inflight = p;
+    return p;
+  }
+
+  async _issue(ep = this._epoch) {
     const ch = String(this.channel() || '').toLowerCase();
     this._lastIssue = this.now();
     try {
       const j = await this.api('/moderation/gif/access-token', { method: 'POST', body: ch ? { channel: ch } : {} });
+      if (ep !== this._epoch) { this._L('odhlášení během vydání → token zahozen'); return null; }
       const t = typeof j?.token === 'string' && j.token ? j.token : null;
       if (!t) { this._L('odpověď bez tokenu'); return null; }
       this._token = t;
+      const exp = j?.expiresAt != null ? gifLocalTime(j.expiresAt, { serverNow: j.serverNow ?? null, now: this.now() }) : NaN;
+      this._exp = Number.isFinite(exp) ? exp : null;
+      this._expUnknown = false;
       try { await this.store?.save?.(t); } catch { /* ignore */ }
       this._L('nový token vydán');
       return t;
@@ -596,14 +780,17 @@ export class GifAccessToken {
   async refresh() {
     if (this._inflight) return this._inflight;
     this._token = null;
+    const ep = this._epoch;
     try { await this.store?.clear?.(); } catch { /* ignore */ }
+    if (ep !== this._epoch) return null;
     this._L('obnova po chybě média');
     if (this._inflight) return this._inflight;
-    this._inflight = this._issue().finally(() => { this._inflight = null; });
-    return this._inflight;
+    const p = this._issue(ep).finally(() => { if (this._inflight === p) this._inflight = null; });
+    this._inflight = p;
+    return p;
   }
 
-  clear() { this._token = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
+  clear() { this._epoch++; this._token = null; this._exp = null; this._expUnknown = false; this._inflight = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
 }
 
 // ---------------------------------------------------------------------------
@@ -834,8 +1021,9 @@ const LIB_THUMB_H = 96;
  * @param {string[]} [o.origins]
  * @param {(tag: string, text: string) => void} [o.log]
  * @param {() => number} [o.now]
+ * @param {() => boolean} [o.ownPending]          vlastní GIF ještě čeká / převádí se (GifOutbox.busy) → výběr blokovat
  */
-export function createGifPanel({ pane, api, channel, canModerate, reward, refreshReward, onPick, onIndicator, tokens, origins = null, log, now } = {}) {
+export function createGifPanel({ pane, api, channel, canModerate, reward, refreshReward, onPick, onIndicator, tokens, origins = null, log, now, ownPending } = {}) {
   const doc = pane.ownerDocument;
   const win = doc.defaultView || globalThis;
   const L = (t) => log?.('Gif', `knihovna: ${t}`);
@@ -847,12 +1035,16 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     tab: 'lib', q: '', items: [], cursor: null, loaded: false, loading: false, error: '', channel: '',
     rej: [], rejBefore: null, rejLoaded: false, rejLoading: false, rejError: '',
     // Zahozené: wd = Stažené GIFy (withdrawn), pg = Ke smazání (purging).
-    wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, discLoading: false,
-    dups: [], dupsLoaded: false, token: null, tokenRetried: false, visible: false, flash: false,
+    wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, discLoading: false, discError: '',
+    dups: [], dupsLoaded: false, tokenRetried: false, visible: false, flash: false,
     // menu = klíč dlaždice `<sekce>:<mediaId>` (stejné médium může být v knihovně i v duplikátech);
     // confirm = { kind: purge|remove-file, mediaId, from }; preview = { sec, id }.
     menu: null, confirm: null, preview: null, msg: '',
+    // Dlaždice / řádky duplikátů s rozběhnutou akcí (klíč dlaždice) → tlačítka vypnutá, po odpovědi zase zapnutá.
+    busy: new Set(),
   };
+  // Token moda vždy z GifAccessToken (po odhlášení je pryč, panel si ho nedrží — audit F9).
+  const tok = () => tokens?.current?.() ?? null;
 
   pane.classList.add('uc-gl');
   pane.innerHTML = `
@@ -897,6 +1089,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   }
 
   // ---- data ----
+  /** Další stránka bez duplicit (Set id, audit F14). */
+  const mergePage = (list, more) => { const seen = new Set(list.map((x) => x.mediaId)); return [...list, ...more.filter((x) => !seen.has(x.mediaId))]; };
   // Pořadová čísla dotazů: platí jen výsledek posledního (hledání / přepnutí kanálu během načítání se nezahodí).
   let libSeq = 0, rejSeq = 0;
   const libKey = () => `${ch()}|${st.q.trim().toLowerCase()}`;
@@ -918,7 +1112,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       if (seq !== libSeq) { L(`knihovna: zahozen starší výsledek (${key})`); return; }
       if (key !== libKey()) return;   // mezitím jiný kanál / hledání bez nového dotazu → finally načte znovu
       const items = (Array.isArray(j?.items) ? j.items : []).map((x) => normalizeLibraryItem(x, opts)).filter(Boolean);
-      st.items = more ? [...st.items, ...items.filter((x) => !st.items.some((y) => y.mediaId === x.mediaId))] : items;
+      st.items = more ? mergePage(st.items, items) : items;
       st.cursor = j?.nextCursor || null;
       st.loaded = true;
       st.channel = c;
@@ -1003,23 +1197,27 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
           .then((j) => ({ k, j }), (e) => ({ k, e }));
       }));
       if (seq !== discSeq || c !== ch()) return;
+      let failed = 0;
       for (const { k, j, e } of res) {
-        if (e) { L(`${k} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); continue; }
+        if (e) { failed++; L(`${k} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); continue; }
         const items = (Array.isArray(j?.items) ? j.items : []).map((x) => normalizeDiscardedItem(x, opts)).filter(Boolean);
-        st[key(k)] = more ? [...st[key(k)], ...items.filter((x) => !st[key(k)].some((y) => y.mediaId === x.mediaId))] : items;
+        st[key(k)] = more ? mergePage(st[key(k)], items) : items;
         st[`${key(k)}Before`] = j?.nextBefore || null;
         L(`${k === 'withdrawn' ? 'stažené' : 'ke smazání'} ${c}: ${items.length}${more ? ' (další stránka)' : ''}`);
       }
-      if (!which) st.discLoaded = true;
+      // Selhání není neviditelné (audit E2): hláška + „Zkusit znovu“ pod zamítnutými.
+      st.discError = failed ? 'Stažené GIFy a GIFy ke smazání se nepodařilo načíst.' : '';
+      if (!which && !failed) st.discLoaded = true;
+    } catch (e) {
+      if (seq === discSeq) { st.discError = 'Stažené GIFy a GIFy ke smazání se nepodařilo načíst.'; L(`zahozené FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); }
     } finally {
       if (seq === discSeq) { st.discLoading = false; paintBody(); }
     }
   }
 
   async function ensureToken() {
-    if (st.token || !tokens) return st.token;
-    st.token = await tokens.get();
-    return st.token;
+    if (!tokens) return null;
+    return tok() || tokens.get();
   }
 
   /** Náhled zamítnutého média s tokenem vrátil chybu → jednou nový token a znovu vykreslit. */
@@ -1029,18 +1227,45 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     st.tokenRetried = true;
     L('náhled zamítnutého se nenačetl → nový token');
     // Po úspěšné obnově zase povolit další obnovu (token může vypadnout znovu); neúspěch = dál nezkoušet.
-    tokens.refresh().then((t) => { st.token = t; if (t) { st.tokenRetried = false; st.tokenAt = clock(); } paintBody(); });
+    tokens.refresh().then((t) => { if (t) { st.tokenRetried = false; st.tokenAt = clock(); } paintBody(); });
     return true;
   }
 
   // ---- vykreslení ----
+  /**
+   * Dlaždice se při překreslení znovu používají (klíč dlaždice + podpis dat): média se nenačítají znovu, videa
+   * nerestartují a scroll nebliká (audit F2). Dlaždice, které v novém stavu nejsou, se uklidí i ze sdíleného
+   * IntersectionObserveru (audit F11).
+   */
+  const tileCache = new Map();   // klíč → { el, sig }
+  let tileUsed = null;           // klíče použité v právě běžícím paintBody
+  // Generace tokenu: jiný token = dlaždice s tokenem znovu (URL média se liší), hodnota tokenu se nikam neukládá.
+  let tokGen = 0, tokLast = null;
+  const tokSig = () => { const t = tok(); if (t !== tokLast) { tokLast = t; tokGen++; } return tokGen; };
+  function cachedTile(key, sig, build) {
+    tileUsed?.add(key);
+    const hit = tileCache.get(key);
+    if (hit && hit.sig === sig) return hit.el;
+    if (hit) removeGifMedia(hit.el);
+    const el = build();
+    tileCache.set(key, { el, sig });
+    return el;
+  }
+  function sweepTiles() {
+    for (const [k, v] of tileCache) if (!tileUsed?.has(k)) { removeGifMedia(v.el); tileCache.delete(k); }
+    tileUsed = null;
+  }
+
   function thumb(item, { withToken = false } = {}) {
-    const w = createGifMedia(doc, item, { lazy: true, log, maxW: LIB_THUMB_W, maxH: LIB_THUMB_H, token: withToken ? st.token : null, onError: withToken ? onTokenMediaError : null });
+    const w = createGifMedia(doc, item, { lazy: true, log, maxW: LIB_THUMB_W, maxH: LIB_THUMB_H, token: withToken ? tok() : null, onError: withToken ? onTokenMediaError : null });
     w.classList.add('uc-gl-media');
     return w;
   }
 
   function libItem(item) {
+    return cachedTile(`lib:${item.mediaId}`, `${isMod() ? 1 : 0}|${item.tags.join(',')}`, () => buildLibItem(item));
+  }
+  function buildLibItem(item) {
     const el = doc.createElement('div');
     el.className = 'uc-gl-i';
     el.dataset.id = item.mediaId;
@@ -1086,6 +1311,9 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   }
 
   function rejItem(item) {
+    return cachedTile(`rej:${item.mediaId}`, `${tokSig()}|${item.vault ? 1 : 0}|${rejectedMetaText(item, clock())}`, () => buildRejItem(item));
+  }
+  function buildRejItem(item) {
     const el = doc.createElement('div');
     el.className = `uc-gl-i uc-gl-i--rej${item.vault ? ' uc-gl-i--vault' : ''}`;
     el.appendChild(previewBox(item, true));
@@ -1096,7 +1324,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     el.appendChild(meta);
     el.insertAdjacentHTML('beforeend', `<div class="uc-gl-acts">
       <button type="button" class="uc-gif-btn uc-gif-btn--approve" data-act="approve">Schválit</button>
-      <button type="button" class="uc-gif-btn" data-act="vault"${item.vault ? ' disabled' : ''}>${item.vault ? 'Ve vaultu' : 'Vault'}</button>
+      <button type="button" class="uc-gif-btn" data-act="vault"${item.vault ? ' disabled data-off="1"' : ''}>${item.vault ? 'Ve vaultu' : 'Vault'}</button>
       <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="purge-ask">Trvale zahodit</button>
     </div>`);
     return el;
@@ -1104,6 +1332,10 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
 
   /** Stažený GIF (withdrawn): Odstranit ze serveru. Ke smazání (purging): odpočet + Obnovit (náhled s tokenem). */
   function discItem(item) {
+    const wd = item.status === 'withdrawn';
+    return cachedTile(`${wd ? 'wd' : 'pg'}:${item.mediaId}`, `${wd ? 0 : tokSig()}|${item.restoreTo}|${discardedMetaText(item, clock())}`, () => buildDiscItem(item));
+  }
+  function buildDiscItem(item) {
     const wd = item.status === 'withdrawn';
     const el = doc.createElement('div');
     el.className = `uc-gl-i uc-gl-i--${item.status}`;
@@ -1141,32 +1373,37 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     h.textContent = `Možné duplikáty (${st.dups.length})`;
     sec.appendChild(h);
     for (const d of st.dups) {
-      const row = doc.createElement('div');
-      row.className = 'uc-gl-dup';
-      row.dataset.dup = d.id;
-      const pair = doc.createElement('div');
-      pair.className = 'uc-gl-pair';
-      for (const [lbl, m] of [['První', d.first], ['Druhý', d.second]]) {
-        const c = doc.createElement('div');
-        c.className = `uc-gl-pair-i uc-gl-pair-i--${m.status}`;
-        c.appendChild(previewBox(m, m.status === 'rejected'));
-        tileMenu(c, 'dup', m.mediaId, [], d.id);
-        const cap = doc.createElement('div');
-        cap.className = 'uc-gl-pair-cap';
-        cap.textContent = `${lbl} · ${m.status === 'approved' ? 'v knihovně' : m.status === 'rejected' ? 'zamítnutý' : 'čeká'} · použito ${m.useCount}×`;
-        c.appendChild(cap);
-        pair.appendChild(c);
-      }
-      row.appendChild(pair);
-      row.insertAdjacentHTML('beforeend', `<div class="uc-gl-dup-score">Shoda ${Math.round(d.score * 100)} %</div>
-        <div class="uc-gl-acts">
-          <button type="button" class="uc-gif-btn" data-act="keep-first">Nechat první</button>
-          <button type="button" class="uc-gif-btn" data-act="keep-second">Nechat druhý</button>
-          <button type="button" class="uc-gif-btn" data-act="keep-both">Nechat oba</button>
-        </div>`);
-      sec.appendChild(row);
+      const sig = `${[d.first, d.second].some((m) => m.status === 'rejected') ? tokSig() : 0}|${d.score}|${[d.first, d.second].map((m) => `${m.mediaId}:${m.status}:${m.useCount}`).join('|')}`;
+      sec.appendChild(cachedTile(`duprow:${d.id}`, sig, () => dupRow(d)));
     }
     return sec;
+  }
+
+  function dupRow(d) {
+    const row = doc.createElement('div');
+    row.className = 'uc-gl-dup';
+    row.dataset.dup = d.id;
+    const pair = doc.createElement('div');
+    pair.className = 'uc-gl-pair';
+    for (const [lbl, m] of [['První', d.first], ['Druhý', d.second]]) {
+      const c = doc.createElement('div');
+      c.className = `uc-gl-pair-i uc-gl-pair-i--${m.status}`;
+      c.appendChild(previewBox(m, m.status === 'rejected'));
+      tileMenu(c, 'dup', m.mediaId, [], d.id);
+      const cap = doc.createElement('div');
+      cap.className = 'uc-gl-pair-cap';
+      cap.textContent = `${lbl} · ${m.status === 'approved' ? 'v knihovně' : m.status === 'rejected' ? 'zamítnutý' : 'čeká'} · použito ${m.useCount}×`;
+      c.appendChild(cap);
+      pair.appendChild(c);
+    }
+    row.appendChild(pair);
+    row.insertAdjacentHTML('beforeend', `<div class="uc-gl-dup-score">Shoda ${Math.round(d.score * 100)} %</div>
+      <div class="uc-gl-acts">
+        <button type="button" class="uc-gif-btn" data-act="keep-first">Nechat první</button>
+        <button type="button" class="uc-gif-btn" data-act="keep-second">Nechat druhý</button>
+        <button type="button" class="uc-gif-btn" data-act="keep-both">Nechat oba</button>
+      </div>`);
+    return row;
   }
 
   function paintTabs() {
@@ -1181,6 +1418,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     paintTabs();
     paintReward();
     const top = body.scrollTop;
+    tileUsed = new Set();
     body.replaceChildren();
     if (st.tab === 'rej') {
       if (st.rejLoading && !st.rej.length) body.innerHTML = '<div class="uc-gl-empty">Načítám zamítnuté GIFy…</div>';
@@ -1190,6 +1428,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       // Zahozené: jen když nějaké jsou (divák / mod bez nich je nevidí).
       if (st.wd.length) section(`Stažené GIFy (${st.wd.length}${st.wdBefore ? '+' : ''})`, st.wd, discItem, st.wdBefore ? 'more-wd' : null, 'uc-gl-grid--disc uc-gl-grid--wd');
       if (st.pg.length) section(`Ke smazání (${st.pg.length}${st.pgBefore ? '+' : ''})`, st.pg, discItem, st.pgBefore ? 'more-pg' : null, 'uc-gl-grid--disc uc-gl-grid--pg');
+      if (st.discError) body.insertAdjacentHTML('beforeend', `<div class="uc-gl-empty uc-gl-disc-err">${esc(st.discError)} <button type="button" class="uc-gl-retry" data-act="retry-disc">Zkusit znovu</button></div>`);
     } else {
       const dups = dupSection();
       if (dups) body.appendChild(dups);
@@ -1205,10 +1444,30 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
         if (st.cursor) body.insertAdjacentHTML('beforeend', '<button type="button" class="uc-gl-moreload" data-act="more">Načíst další</button>');
       }
     }
+    sweepTiles();
     body.scrollTop = top;
-    placeMenu();
+    paintBusy();
+    paintMenus();
     paintConfirm();
     paintPreview();
+  }
+
+  /** Otevřená nabídka ⋯ = jen přepnout `hidden` u nabídek (bez překreslení mřížky, audit F2). */
+  function paintMenus() {
+    for (const m of body.querySelectorAll('.uc-gl-menu')) {
+      const open = !!st.menu && m.parentElement?.dataset.mkey === st.menu;
+      if (m.hidden === open) m.hidden = !open;
+    }
+    placeMenu();
+  }
+
+  /** Tlačítka dlaždic s rozběhnutou akcí vypnout, ostatní zapnout (po chybě se zase dá kliknout — audit E3). */
+  function paintBusy() {
+    for (const el of body.querySelectorAll('.uc-gl-i, .uc-gl-dup')) {
+      const key = el.classList.contains('uc-gl-dup') ? `duprow:${el.dataset.dup}` : el.dataset.mkey;
+      const busy = st.busy.has(key);
+      for (const b of el.querySelectorAll(':scope > .uc-gl-acts button')) b.disabled = busy || b.dataset.off === '1';
+    }
   }
 
   /** Otevřená nabídka ⋯ uvnitř panelu (neusekne se o okraj — spec 2026-09-27-gif-review-upravy §4). */
@@ -1288,11 +1547,11 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (!st.preview) { if (previewEl.firstChild) { previewEl.replaceChildren(); delete previewEl.dataset.key; previewTok = null; } return; }
     const needTok = previewNeedsToken(p, item);
     const key = `${p.sec}:${p.id}`;
-    const tok = needTok ? st.token || null : null;
+    const t = needTok ? tok() : null;
     // Stejný náhled se stejným tokenem — média znovu nenačítat. Token jen v paměti (ne v DOM atributu).
-    if (previewEl.dataset.key === key && previewTok === tok) return;
+    if (previewEl.dataset.key === key && previewTok === t) return;
     previewEl.dataset.key = key;
-    previewTok = tok;
+    previewTok = t;
     previewEl.innerHTML = `<div class="uc-gl-preview-box">
         <button type="button" class="uc-gl-preview-x" data-act="preview-close" aria-label="Zavřít náhled" title="Zavřít (Esc)">×</button>
         <div class="uc-gl-preview-media"></div>
@@ -1300,7 +1559,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       </div>`;
     const maxW = Math.max(160, (pane.clientWidth || 360) - 44);
     const maxH = Math.max(120, (pane.clientHeight || 360) - 150);
-    const m = createGifMedia(doc, item, { lazy: false, log, maxW, maxH, token: needTok ? st.token : null, onError: needTok ? onTokenMediaError : null });
+    const m = createGifMedia(doc, item, { lazy: false, log, maxW, maxH, token: t, onError: needTok ? onTokenMediaError : null });
     m.classList.add('uc-gl-preview-gif');
     previewEl.querySelector('.uc-gl-preview-media').appendChild(m);
     previewEl.querySelector('.uc-gl-preview-dim').textContent = gifDimText(item);
@@ -1314,7 +1573,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     st.menu = null;
     st.preview = { sec, id };
     L(`náhled ${sec}:${id}`);
-    paintBody();
+    paintMenus();
+    paintPreview();
     previewEl.querySelector('.uc-gl-preview-x')?.focus({ preventScroll: true });
   }
   function closePreview(why) {
@@ -1349,6 +1609,9 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
    */
   async function mediaAction(mediaId, action, from, body = {}) {
     L(`${action} ${mediaId} (${from})${action === 'purge' ? ` keepMessages=${!!body.keepMessages}` : ''}`);
+    const busyKey = `${from}:${mediaId}`;
+    st.busy.add(busyKey);
+    paintBusy();
     try {
       const r = await api(`/moderation/gif/${encodeURIComponent(mediaId)}/${action}`, { method: 'POST', body });
       L(`${action} ${mediaId} → ok${r?.status ? ` (${r.status})` : ''}${r?.requests ? ` (žádostí ${r.requests})` : ''}`);
@@ -1370,40 +1633,62 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
         dropFrom(from, mediaId);
         if (from === 'wd' || from === 'pg') st.discLoaded = false;
       }
+    } finally {
+      st.busy.delete(busyKey);
     }
     paintBody();
   }
 
   async function dupAction(id, action) {
     L(`duplikát ${id} ${action}`);
+    const busyKey = `duprow:${id}`;
+    st.busy.add(busyKey);
+    paintBusy();
     try {
       await api(`/moderation/gif/duplicates/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: {} });
+      st.busy.delete(busyKey);
       st.dups = st.dups.filter((d) => d.id !== id);
       if (action !== 'keep-both') st.loaded = false;
       showMsg(action === 'keep-both' ? 'Oba GIFy zůstávají.' : 'GIFy sloučeny.');
       paintBody();
       if (action !== 'keep-both' && st.tab === 'lib') loadLibrary();
     } catch (e) {
-      L(`duplikát ${id} ${action} FAIL ${e?.status || 0} ${e?.error || e?.message || e}${e?.status === 409 ? ' → obnovit seznam' : ''}`);
-      if (e?.status === 409 || e?.error === 'already_decided' || e?.error === 'gone') {
-        st.dups = st.dups.filter((d) => d.id !== id);
-        showMsg(gifLibraryErrorText(e));
-        paintBody();
-        loadDuplicates();
-        return;
-      }
+      st.busy.delete(busyKey);
+      const reload = e?.status === 409 || e?.error === 'already_decided' || e?.error === 'gone' || Number(e?.status) >= 500;
+      L(`duplikát ${id} ${action} FAIL ${e?.status || 0} ${e?.error || e?.message || e}${reload ? ' → obnovit seznam' : ''}`);
       showMsg(gifLibraryErrorText(e));
+      if (e?.status === 409 || e?.error === 'already_decided' || e?.error === 'gone') st.dups = st.dups.filter((d) => d.id !== id);
+      // Tlačítka zase zapnout (audit E3); 409 / 5xx (souběh modů, deadlock při slučování) → seznam znovu (audit E4).
+      paintBody();
+      if (reload) loadDuplicates();
     }
   }
 
-  function pick(item) {
+  let picking = false;
+  async function pick(item) {
+    if (picking) return;
+    picking = true;
+    try {
+      // Stav odměny ne starší než 60 s: cooldown může být i globální (jiný GIF v chatu) — server by jinak nechal
+      // v chatu holý odkaz. Čerstvý stav = bez dotazu.
+      const r = refreshReward?.();
+      if (r && typeof r.then === 'function') await r.catch(() => null);
+    } finally { picking = false; }
     const v = rv();
     if (!v.canSend) {
       L(`výběr ${item.mediaId} zamčený (${v.mode})`);
       st.flash = true;
       paintReward();
       win.setTimeout(() => { st.flash = false; paintReward(); }, 1200);
+      // Cooldown (i globální cooldown chatu) → stejná hláška jako při odeslání z pole.
+      if (v.mode === 'cooldown') showMsg(`${gifCooldownText(true)} ${formatRemaining(v.cooldownMs)}`);
       if (v.mode === 'unknown') refreshReward?.();
+      return;
+    }
+    // Vlastní GIF ještě čeká na moda / převádí se → server by druhý nepustil (1 žádost na uživatele, audit X1).
+    if (ownPending?.()) {
+      L(`výběr ${item.mediaId} blokován — vlastní GIF ještě čeká`);
+      showMsg(GIF_WAIT_OWN_TEXT);
       return;
     }
     L(`výběr ${item.mediaId} → odkaz do chatu`);
@@ -1427,13 +1712,14 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       return;
     }
     const b = e.target.closest('[data-act]');
-    if (!b) { if (st.menu) { st.menu = null; paintBody(); } return; }
+    if (!b) { if (st.menu) { st.menu = null; paintMenus(); } return; }
     const tile = b.closest('[data-sec]');
     const id = tile?.dataset.id;
     const sec = tile?.dataset.sec;
     const act = b.dataset.act;
     if (act === 'preview-close') { closePreview('×'); return; }
     if (act === 'retry') { if (st.tab === 'rej') loadRejected(); else loadLibrary(); return; }
+    if (act === 'retry-disc') { st.discError = ''; loadDiscarded(); return; }
     if (act === 'more') { loadLibrary({ more: true }); return; }
     if (act === 'more-rej') { loadRejected({ more: true }); return; }
     if (act === 'more-wd') { loadDiscarded({ which: 'withdrawn', more: true }); return; }
@@ -1449,16 +1735,17 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       return;
     }
     const dup = b.closest('.uc-gl-dup')?.dataset.dup;
-    if (dup && /^keep-(first|second|both)$/.test(act)) { b.disabled = true; dupAction(dup, act); return; }
+    if (dup && /^keep-(first|second|both)$/.test(act)) { if (!st.busy.has(`duprow:${dup}`)) dupAction(dup, act); return; }
     if (!id) return;
     if (act === 'pick') { const it = st.items.find((x) => x.mediaId === id); if (it) pick(it); return; }
-    if (act === 'menu') { const k = tile.dataset.mkey; st.menu = st.menu === k ? null : k; paintBody(); return; }
+    if (act === 'menu') { const k = tile.dataset.mkey; st.menu = st.menu === k ? null : k; paintMenus(); return; }
     if (act === 'preview') { openPreview(sec, id); return; }
     if (act === 'unapprove') { st.menu = null; mediaAction(id, 'unapprove', 'lib'); return; }
-    if (act === 'purge-ask') { st.menu = null; st.confirm = { kind: 'purge', mediaId: id, from: sec }; L(`potvrzení trvale zahodit ${id} (${sec})`); paintBody(); return; }
-    if (act === 'remove-ask') { st.menu = null; st.confirm = { kind: 'remove-file', mediaId: id, from: sec }; L(`potvrzení odstranit ze serveru ${id}`); paintBody(); return; }
-    if (act === 'restore') { b.disabled = true; mediaAction(id, 'restore', sec); return; }
-    if (act === 'approve' || act === 'vault') { b.disabled = true; mediaAction(id, act, 'rej'); }
+    if (act === 'purge-ask') { st.menu = null; st.confirm = { kind: 'purge', mediaId: id, from: sec }; L(`potvrzení trvale zahodit ${id} (${sec})`); paintMenus(); paintConfirm(); return; }
+    if (act === 'remove-ask') { st.menu = null; st.confirm = { kind: 'remove-file', mediaId: id, from: sec }; L(`potvrzení odstranit ze serveru ${id}`); paintMenus(); paintConfirm(); return; }
+    if (st.busy.has(tile.dataset.mkey)) return;
+    if (act === 'restore') { mediaAction(id, 'restore', sec); return; }
+    if (act === 'approve' || act === 'vault') { mediaAction(id, act, 'rej'); }
   });
   // Esc zavře náhled / potvrzení dřív, než zavře celý panel emotů (ten poslouchá keydown na dokumentu).
   const onKey = (e) => {
@@ -1503,7 +1790,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     pane,
     show() {
       st.visible = true;
-      if (st.channel && st.channel !== ch()) { st.loaded = false; st.rejLoaded = false; st.dupsLoaded = false; st.discLoaded = false; st.items = []; st.rej = []; st.wd = []; st.pg = []; st.dups = []; st.token = null; st.preview = null; }
+      if (st.channel && st.channel !== ch()) { st.loaded = false; st.rejLoaded = false; st.dupsLoaded = false; st.discLoaded = false; st.items = []; st.rej = []; st.wd = []; st.pg = []; st.dups = []; st.preview = null; }
       paintBody();
       if (!st.loaded) loadLibrary();
       if (isMod() && !st.dupsLoaded) loadDuplicates();
@@ -1525,7 +1812,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     },
     /** Přepnutí kanálu: data pryč, při dalším zobrazení znovu. */
     reset() {
-      Object.assign(st, { items: [], cursor: null, loaded: false, rej: [], rejBefore: null, rejLoaded: false, wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, dups: [], dupsLoaded: false, token: null, tokenRetried: false, menu: null, confirm: null, preview: null, tab: isMod() ? st.tab : 'lib' });
+      Object.assign(st, { items: [], cursor: null, loaded: false, rej: [], rejBefore: null, rejLoaded: false, wd: [], wdBefore: null, pg: [], pgBefore: null, discLoaded: false, dups: [], dupsLoaded: false, discError: '', tokenRetried: false, menu: null, confirm: null, preview: null, tab: isMod() ? st.tab : 'lib' });
       if (st.visible) this.show(); else paintReward();
     },
     reload() { st.loaded = false; if (st.visible) loadLibrary(); },
@@ -1535,18 +1822,19 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
      * na /gifs/library), víc událostí za sebou = jedno načtení; skrytý panel až při dalším zobrazení.
      */
     mediaChanged({ delayMs = Math.random() * MEDIA_REFETCH_SPREAD_MS } = {}) {
-      st.loaded = false; st.rejLoaded = false; st.discLoaded = false;
+      // Návrhy duplikátů se mohly změnit taky (sloučení, zahození — audit F7).
+      st.loaded = false; st.rejLoaded = false; st.discLoaded = false; st.dupsLoaded = false;
       if (!st.visible || refetchT) return;
       L(`gif-media → načíst znovu za ${Math.round(delayMs)} ms`);
       refetchT = win.setTimeout(() => {
         refetchT = null;
         if (!st.visible) return;
-        if (st.tab === 'lib') { if (!st.loaded) loadLibrary(); }
+        if (st.tab === 'lib') { if (!st.loaded) loadLibrary(); if (isMod() && !st.dupsLoaded) loadDuplicates(); }
         else { if (!st.rejLoaded) loadRejected(); if (!st.discLoaded) loadDiscarded(); }
       }, Math.max(0, delayMs));
     },
     state: () => ({ tab: st.tab, items: st.items.length, rejected: st.rej.length, withdrawn: st.wd.length, purging: st.pg.length, duplicates: st.dups.length, preview: st.preview ? `${st.preview.sec}:${st.preview.id}` : null }),
-    destroy() { st.menu = null; armMenuResize(); if (timer) win.clearInterval(timer); timer = null; if (refetchT) win.clearTimeout(refetchT); refetchT = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
+    destroy() { st.menu = null; armMenuResize(); for (const v of tileCache.values()) removeGifMedia(v.el); tileCache.clear(); if (timer) win.clearInterval(timer); timer = null; if (refetchT) win.clearTimeout(refetchT); refetchT = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
   };
 }
 

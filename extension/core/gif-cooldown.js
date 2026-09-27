@@ -136,6 +136,15 @@ export class GifCooldown {
   get visible() { return !!this.el && !this.el.hidden; }
   get blocked() { return this._blocked && this.visible; }
 
+  /**
+   * Posun hodin klienta vůči serveru (lokální − serverový, ms) z posledního GET /gif/state; 0 = neznámý.
+   * Karty modů a štítky odesílatele jím převádějí `expiresAt` serveru, když událost nenese `serverNow` (audit F1).
+   */
+  serverOffset() { return Number.isFinite(this._shift) ? this._shift : 0; }
+
+  /** Zeptat se na stav jen když není čerstvý (GET /gif/state má rate limit) — pro hostitele místo `_fresh()`. */
+  refreshIfStale() { return this._fresh() ? Promise.resolve(this._state) : this.fetchState(); }
+
   /** GET /gif/state (jeden souběžný dotaz). */
   fetchState() {
     if (this._inflight) return this._inflight;
@@ -148,6 +157,8 @@ export class GifCooldown {
     this._inflight = Promise.resolve()
       .then(() => this.api(`/gif/state?${qs}`))
       .then((j) => {
+        const sn = Number(j?.serverNow);
+        if (Number.isFinite(sn) && sn > 0) this._shift = this.now() - sn;
         const st = normalizeGifState(j, this.now());
         if (!st || key !== this._key()) return null;
         this._state = { ...st, key, total: st.until !== null ? Math.max(st.sec * 1000, st.until - this.now()) : 0 };

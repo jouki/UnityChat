@@ -391,3 +391,6 @@ div.uc-gif-more { cursor: default; }
 /* Dotyk bez hoveru: ⋯ vidět vždy (Náhled je i pro diváka). */
 @media (hover: none) { .uc-gl-more { opacity: .85; } }
 @media (prefers-reduced-motion: reduce) { .uc-gl-reward--flash { animation: none; outline: 1px solid #e5484d; } }
+/* OBS (raw režim webu): štítek „GIF odebrán“ (médium se nenačetlo = odebráno / zahozeno) se na streamu neukazuje,
+   stejně jako zprávy gif_removed (audit F16). „[GIF nedostupný]“ zůstává (spec 2026-09-27-gif-nahled-zahozeni §2). */
+body.uc-raw .uc-gif--failed:not(.uc-gif--unavailable) { display: none; }
