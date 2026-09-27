@@ -1922,7 +1922,7 @@ class UnityChat {
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
           'command', 'redeem', 'highlight', 'annc',
-          'milestone', 'streak',
+          'milestone', 'streak', 'modiversary', 'modiv',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
@@ -4412,6 +4412,14 @@ class UnityChat {
         this._addMessage({ ...base, message: body, isAnnouncement: true, announcementColor: annColor, color: '#9146ff' });
         break;
       }
+      case 'modiversary':
+      case 'modiv': {
+        // /uc modiversary [měsíce] [text] — moderátorské výročí (USERNOTICE modiversary)
+        const argv = text === 'test message' ? [] : text.trim().split(/\s+/);
+        const months = parseInt(argv[0], 10) || 12;
+        this._addMessage({ ...base, message: argv.slice(/^\d+$/.test(argv[0] || '') ? 1 : 0).join(' '), isModiversary: true, modMonths: months, color: '#00AD03' });
+        break;
+      }
       case 'sub':
         this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 1 });
         break;
@@ -4611,7 +4619,7 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], modiversary [měsíce] [text], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
@@ -6198,6 +6206,7 @@ class UnityChat {
       isGiftBundle: !!m.isGiftBundle,
       isSubGift: !!m.isSubGift,
       isMilestone: !!m.isMilestone,
+      isModiversary: !!m.isModiversary,
       isAction: !!m.isAction,
       scraped: !!m.scraped,
       optimistic: !!m._optimistic,
@@ -7264,6 +7273,43 @@ class UnityChat {
     el.appendChild(body);
   }
 
+  /** Moderátorské výročí (USERNOTICE modiversary): meč + „{jméno} je už N … moderátorem!“ + text uživatele (core/anniversary.js). */
+  _renderModiversaryEvent(el, msg) {
+    const core = window.UC_CORE;
+    el.classList.add('modiversary-event');
+    const icon = document.createElement('span');
+    icon.className = 'modiv-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = core.ANNIV_SWORD_SVG;
+    el.appendChild(icon);
+    const body = document.createElement('div');
+    body.className = 'modiv-body';
+    const line = document.createElement('div');
+    line.className = 'modiv-line';
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = this._censorName(msg.username);
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openProfile(msg, un));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    const parts = core.modiversaryParts(msg.modMonths);
+    line.append(un, document.createTextNode(' ' + parts.lead));
+    if (parts.strong) { const st = document.createElement('strong'); st.textContent = parts.strong; line.appendChild(st); }
+    if (parts.tail) line.appendChild(document.createTextNode(parts.tail));
+    body.appendChild(line);
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'modiv-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
   _renderMilestoneEvent(el, msg) {
     el.classList.add('milestone-event');
     if (msg.milestoneCategory) {
@@ -7792,7 +7838,7 @@ class UnityChat {
     const textEmpty = !msgProbe && !hasPlatformContent && !msg?.gif;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
-      || msg?.isMilestone
+      || msg?.isMilestone || msg?.isModiversary
       || msg?.isHighlight || msg?.isAction;
     // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
     if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
@@ -8074,7 +8120,8 @@ class UnityChat {
     const isSubEvent = !!msg.isSubEvent;
     const isRedeem = !!msg.isRedeem;
     const isMilestone = !!msg.isMilestone;
-    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone;
+    const isModiversary = !!msg.isModiversary;
+    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone || isModiversary;
     if (msg.isGiftBundle) el.classList.add('gift-bundle');
     if (msg.isSubGift) el.classList.add('sub-gift');
     if (isSubEvent) el.classList.add('sub-event');
@@ -8092,6 +8139,8 @@ class UnityChat {
       this._renderRedeemEvent(el, msg);
     } else if (isMilestone) {
       this._renderMilestoneEvent(el, msg);
+    } else if (isModiversary) {
+      this._renderModiversaryEvent(el, msg);
     } else {
 
     // Reply context (Twitch reply-parent tagy, Kick reply, odpověď napříč platformami)
@@ -8210,7 +8259,7 @@ class UnityChat {
     // is meaningless and Twitch IRC won't accept a reply to them.
     const isSystemEvent = msg.isRaid || msg.isAnnouncement
       || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem
-      || msg.isMilestone;
+      || msg.isMilestone || msg.isModiversary;
     if (isSystemEvent) {
       // Skip the entire actions cluster but keep the closing brace structure
       // (we still need to fall through to the unread/append/scroll/cache).

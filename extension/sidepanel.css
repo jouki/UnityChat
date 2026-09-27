@@ -1918,6 +1918,50 @@ body.reply-oneline .reply-ctx {
   color: var(--text, #d0d0da);
 }
 
+/* ==== Moderátorské výročí (USERNOTICE modiversary, core/anniversary.js) ====
+   Stejná karta jako sub / milník, zelená Twitche #00AD03 a meč. */
+.msg.modiversary-event {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: linear-gradient(180deg, rgba(0, 173, 3, 0.18), rgba(0, 173, 3, 0.05));
+  border-style: solid;
+  border-color: #00ad03;
+  border-width: 0 5px 0 5px;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 173, 3, 0.24);
+}
+.msg.modiversary-event:hover {
+  background: linear-gradient(180deg, rgba(0, 173, 3, 0.26), rgba(0, 173, 3, 0.08));
+}
+.msg.modiversary-event .modiv-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #3ddc41;
+  filter: drop-shadow(0 0 4px rgba(0, 173, 3, 0.6));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg.modiversary-event .modiv-body { flex: 1; min-width: 0; }
+.msg.modiversary-event .un { font-weight: 700; cursor: pointer; }
+.msg.modiversary-event .modiv-line {
+  color: var(--text, #d0d0da);
+  line-height: 1.4;
+}
+.msg.modiversary-event .modiv-line strong { color: #fff; font-weight: 700; }
+.msg.modiversary-event .modiv-text {
+  margin-top: 4px;
+  color: var(--text, #d0d0da);
+}
+
 /* ==== Channel Points redeem events ==== */
 .msg.redeem {
   display: flex;

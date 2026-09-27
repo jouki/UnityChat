@@ -53,6 +53,33 @@ import('../extension/core/twitch-irc.js').then(({ TwitchProvider }) => {
   MockWS.last.onmessage({ data: '@id=r1;msg-id=raid;msg-param-displayName=Raider;msg-param-viewerCount=5;tmi-sent-ts=1700000001000;user-id=9;display-name=Raider :tmi.twitch.tv USERNOTICE #robdiesalot\r\n' });
   check('USERNOTICE raid → isRaid', got && got.isRaid === true && got.timestamp === 1700000001000);
 
+  // Moderátorské výročí (podklad 2026-09-27-twitch-vyroci-research.md §3): msg-param-months + text uživatele.
+  got = null;
+  MockWS.last.onmessage({ data: '@badge-info=subscriber/30;badges=moderator/1,subscriber/24;color=#00FF7F;display-name=ModPepa;emotes=25:14-18;id=mv1;login=modpepa;mod=1;msg-id=modiversary;msg-param-months=24;room-id=160028137;system-msg=ModPepa\\shas\\sbeen\\sa\\smoderator;tmi-sent-ts=1700000002000;user-id=4242 :tmi.twitch.tv USERNOTICE #robdiesalot :dva roky už! Kappa\r\n' });
+  check('USERNOTICE modiversary → isModiversary + modMonths', got && got.isModiversary === true && got.modMonths === 24 && got.id === 'mv1');
+  check('modiversary: text uživatele, emoty, badge, čas, userId', got && got.message === 'dva roky už! Kappa' && got.twitchEmotes === '25:14-18'
+    && got.badgesRaw === 'moderator/1,subscriber/24' && got.timestamp === 1700000002000 && got.userId === '4242' && got.username === 'ModPepa' && got.color === '#00FF7F');
+  got = null;
+  MockWS.last.onmessage({ data: '@display-name=Tichý;id=mv2;login=tichy;msg-id=modiversary;msg-param-months=3;user-id=5 :tmi.twitch.tv USERNOTICE #robdiesalot\r\n' });
+  check('modiversary bez textu → prázdná zpráva, 3 měsíce', got && got.isModiversary && got.modMonths === 3 && got.message === '');
+
+  // Sdílený resub: text uživatele, měsíce a série (jen se should-share-streak=1).
+  got = null;
+  MockWS.last.onmessage({ data: '@badges=subscriber/6;color=;display-name=Subík;emotes=;id=rs1;login=subik;msg-id=resub;msg-param-cumulative-months=7;msg-param-should-share-streak=1;msg-param-streak-months=3;msg-param-sub-plan=1000;tmi-sent-ts=1700000003000;user-id=77 :tmi.twitch.tv USERNOTICE #robdiesalot :sedm měsíců s Robem\r\n' });
+  check('resub: text uživatele + měsíce + série', got && got.isSubEvent && got.message === 'sedm měsíců s Robem' && got.subMonths === 7 && got.subStreak === 3);
+
+  // Neznámý typ: nevykreslí se, log jen msg-id a názvy tagů (bez hodnot a textu), každý typ jednou.
+  got = null;
+  logs.length = 0;
+  const unk = '@display-name=Tajný;id=u1;login=tajny;msg-id=useranniversary;msg-param-years=3;user-id=1 :tmi.twitch.tv USERNOTICE #robdiesalot :tajný text\r\n';
+  MockWS.last.onmessage({ data: unk });
+  MockWS.last.onmessage({ data: unk.replace('id=u1', 'id=u2') });
+  const un = logs.filter((l) => l.startsWith('UserNotice '));
+  check('neznámý USERNOTICE → žádná zpráva', got === null);
+  check('neznámý USERNOTICE → log UserNotice jednou, jen msg-id a názvy tagů', un.length === 1
+    && un[0] === 'UserNotice neznámý msg-id=useranniversary tagy=display-name,id,login,msg-id,msg-param-years,user-id'
+    && !un[0].includes('Tajný') && !un[0].includes('tajný text'));
+
   tw.disconnect();
   check('disconnect zavře WS', MockWS.last.readyState === 3 && tw.connected === false);
 
