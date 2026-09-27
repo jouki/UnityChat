@@ -754,7 +754,9 @@ z knihovny) → médium podle id, jen z téhož kanálu (jinak běžný odkaz); 
 sha256 obsahu. Známé médium se znovu neukládá (přednost `approved` > `rejected` > `pending`).
 - **Schválené** → rovnou `gif-message` (bez žádosti ke schválení, i od diváka; žádost vznikne interně jako okamžitě
   schválená `decided_by: "library"`, `meta.instant`, v `pending` se neukáže), `use_count++`, cooldown diváka platí
-  (`gif-used`), původní zpráva smazaná na platformě botem.
+  (`gif-used`), původní zpráva smazaná na platformě botem. **Náš odkaz** (id) se nikdy nestahuje a od 2026-09-27
+  (test2 bod 4) ani nečeká na zápis dávky ingestu (`FLUSH_WAIT_MS`) — přeznačení / obnovení původního řádku si ho
+  počkají samy, jen když na ně dojde. Průběh u něj nemá fázi `download` (klient ukáže jen „Odesílám…“).
 - **Čekající** (jiná žádost na totéž médium) → další žádost na stejné médium. **Schválení jedné žádosti schválí
   i ostatní čekající žádosti na stejné médium** (`gif-decided approved` jejich odesílatelům, audit `params.cascade`).
 - **Zamítnuté** (divák; mody výjimka): aktivní zákaz 12 h nebo tentýž uživatel už má ≥ 2 zamítnutí tohoto média
@@ -798,11 +800,20 @@ odhadem) → `verify` 95 (staženo / známé médium bez stahování) → `done`
 `pending` (čeká na moda → následuje vlastní `gif-pending`), `approved` (→ `gif-message` s `gifOrigin` = `requestKey`),
 `rejected` (automaticky zamítnuto), `not_allowed` (režim approved), `failed` (převod selhal = běžný odkaz),
 `denied` (neodemčeno), `cancelled` (zprávu mezitím obnovil permit). Bez účtu UnityChatu se nic neposílá.
+**Od 2026-09-27 (test2 bod 4.1):** `done` s `outcome: "approved"` nese navíc `cooldownUntil` (čas serveru, ms; null =
+bez cooldownu) a `serverNow` — tiché / okamžité schválení (mod, GIF z knihovny) `gif-decided` odesílateli neposílá,
+takže jinak by klient nevěděl, že cooldown běží (mod mívá `cooldownSec` 0, globální cooldown chatu klient nezná).
+Klient (`GifCooldown.onServerCooldown`) podle něj zablokuje další GIF (bublina „Můžeš až za:“, i výběr z knihovny).
 ```
 event: gif-notice          # jen odesílateli
 data: { "requestKey": "twitch:abc", "channel": "robdiesalot", "platform": "twitch", "messageId": "abc",
         "kind": "approved_only" }            # „Nové GIFy teď nejdou, vyber z GIFů v panelu"
 data: { …, "kind": "auto_rejected", "reason": "repeat" | "ban" | "purged" | "unapproved" }   # label „Zamítnuto moderátorem" natrvalo
+data: { …, "kind": "cooldown", "until": 1790497500000, "serverNow": 1790497460000 }   # GIF odkaz během cooldownu
+        # zůstal běžným odkazem (od 2026-09-27, test2 bod 4.1): klient u zprávy nenechá kolečko ani štítek, ukáže hlášku
+        # „GIF můžeš poslat až za … — odkaz zůstal jako běžná zpráva.“ a nastaví cooldown; server loguje
+        # „gif: cooldown → běžný odkaz“. Posílá filtr odkazů (přístup z cache `denied` kvůli cooldownu — gifCooldownUntilSync)
+        # i zachycení (neznámý přístup / globální slot chatu obsazený).
 
 event: gif-queue           # jen modům kanálu, po každé změně fronty (nová žádost, rozhodnutí, propadnutí)
 data: { "channel": "robdiesalot", "pendingCount": 2, "headId": 12 }   # headId = nejstarší čekající (null = prázdná)
