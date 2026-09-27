@@ -798,6 +798,21 @@ audit `gif_not_allowed`. Neznámá URL se kvůli sha256 přesto stáhne (průbě
 v tomto režimu nevolá**; skončí-li přímé stažení `bot_protection` (Cloudflare), bere se odkaz jako nový GIF (smazat
 + `approved_only`). Jiná chyba převodu = běžný odkaz.
 
+**`gif_not_allowed` — zobrazení a odpověď bota (od 2026-09-27, user):**
+- **UnityChat (odesílatel i všichni ostatní, divák i mod, živě i z historie):** jakmile je zpráva vyhodnocená, je to
+  smazaná zpráva (divák „Zpráva smazána“, mod podle svého stylu) s červeným štítkem **„Nové GIFy teď nejsou
+  povolené“** místo štítku „Smazáno“; odkaz není živý (core `paintGifDeleted` → třída `uc-gif-na`, `applyDeleted`
+  bez „Smazáno“). `message-deleted` s `platform` / bez důvodu (ozvěna z platformy) důvod nepřepíše (core
+  `gifHeldAfter`), smazání, které předběhne zprávu z IRC, si klient pamatuje (`gifEarlyReason`).
+- **OBS:** zpráva se neukáže vůbec.
+- **Platforma:** zpráva se smaže (botem, případně tokenem moda — viz níže).
+- **Odesílatel bez účtu UnityChatu** (`senderAccount` = null, tj. bez `gif-notice`): bot (vlastní bot workspace,
+  jinak sdílený `_shared` JoukiBOT, `lib/botSend.ts sendAsBot`) **odpoví (reply) na jeho zprávu** textem
+  „Nové GIFy teď nejsou povolené“ a **teprve potom** se zpráva smaže (reply potřebuje rodičovskou zprávu). Nejvýš
+  1× za 60 s na kanál + uživatele (`GIF_NOT_ALLOWED_REPLY_MS`), smaže se vždy. Bot nedostupný (`bot_unavailable`
+  a jiné chyby) → jen log, smazání proběhne. Uživatel UnityChatu odpověď bota nedostane (vidí štítek). Zpráva
+  smazaná už filtrem odkazů (`link_filter`) odpověď nedostane.
+
 **Kanál bez bota (od 2026-09-27, kolo 4 bod 4b):** když mazání zprávy odesílatele na platformě
 (`deletePlatformMessage` s `accountId: null`) vrátí `error:no_actor` a odesílatel je mod / broadcaster kanálu s účtem
 UnityChatu a moderátorskými scopy, smaže se jeho **vlastní** zpráva jeho tokenem (`modActions.ts
@@ -805,9 +820,11 @@ deleteOwnMessageAsSender`: účet podle identity odesílatele → `accountModIde
 `deletePlatformMessage` s jeho `accountId`). Divák → zpráva na platformě zůstane, jen log. Cizím modem nikdy. Platí
 pro všechna mazání toku GIFů (`gif_request`, `gif_rejected`, `gif_not_allowed`).
 
-**Odesílatel a konečný stav (od 2026-09-27, kolo 4 bod 4a):** vlastní zprávu v konečném stavu (zamítnuto, vypršelo,
-nové GIFy nejdou) vidí jako **smazanou** (ztlumené „Zpráva smazána", mod podle svého stylu, odkaz není živý)
-s červeným štítkem, i když `message-deleted` ještě nedorazilo (core `applyGifOwn` / `paintGifDeleted`).
+**Odesílatel a konečný stav (od 2026-09-27, user — nahrazuje kolo 4 bod 4a):** vlastní zprávu „Zamítnuto moderátorem“
+/ „Vypršelo“ vidí odesílatel (divák i mod) **s textem mírně ztlumeným, odkaz není živý, s červeným štítkem — bez
+„Zpráva smazána“, bez „Smazáno“ a bez vzhledu smazané zprávy**, i když `message-deleted` ještě nedorazilo (core
+`applyGifOwn` / `paintGifDeleted`). Ostatní (divák, mod) ji vidí jako smazanou, OBS ji skryje. `gif_not_allowed`
+je výjimka (viz výše: smazaná se štítkem pro všechny).
 
 **Soukromé SSE `/account/stream` (nové):**
 ```
@@ -830,7 +847,7 @@ Klient (`GifCooldown.onServerCooldown`) podle něj zablokuje další GIF (bublin
 ```
 event: gif-notice          # jen odesílateli
 data: { "requestKey": "twitch:abc", "channel": "robdiesalot", "platform": "twitch", "messageId": "abc",
-        "kind": "approved_only" }            # „Nové GIFy teď nejdou, vyber z GIFů v panelu"
+        "kind": "approved_only" }            # „Nové GIFy teď nejsou povolené, vyber z GIFů v panelu."
 data: { …, "kind": "auto_rejected", "reason": "repeat" | "ban" | "purged" | "unapproved" }   # label „Zamítnuto moderátorem" natrvalo
 data: { …, "kind": "cooldown", "until": 1790497500000, "serverNow": 1790497460000, "removed": false }   # GIF odkaz během cooldownu
         # `removed: true` = zprávu hned smazal běžný filtr odkazů (hláška „… zprávu s odkazem smazal filtr odkazů.“);

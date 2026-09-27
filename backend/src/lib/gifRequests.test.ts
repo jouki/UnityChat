@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, GIF_UNLOCK_PER_USER_DAY, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
+import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forSender, RECONCILE_MAX_ATTEMPTS, startGifMaintenance, GIF_UNLOCK_PER_USER_DAY, GIF_NOT_ALLOWED_TEXT, GIF_NOT_ALLOWED_REPLY_MS, type GifFlowDeps, type GifStore, type NewGifRequest, type GifMediaInfo } from './gifRequests.js';
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
@@ -974,6 +974,46 @@ test('režim approved: nový GIF → zpráva smazána (gif_not_allowed) + gif-no
   const unknown = `https://api.jouki.cz/media/gif/${'c'.repeat(32)}`;
   assert.equal(await b.flow.intercept({ ...from('45', 'm4', unknown), candidate: { url: unknown, mode: 'own' as const, mediaId: 'c'.repeat(32), token: unknown } }), 'not_allowed');
   await b.flow._idle();
+});
+
+test('režim approved, odesílatel bez účtu UnityChatu: bot odpoví na zprávu („Nové GIFy teď nejsou povolené“) PŘED smazáním; UC uživatel bez odpovědi; limit 60 s; bot nedostupný → jen smazání', async () => {
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const order: string[] = [];
+  const replies: Array<Record<string, unknown>> = [];
+  let botResult = 'ok';
+  const ucUsers = new Set(['77']);
+  const s = setup({
+    access,
+    toSender: async (_pl, userId) => (ucUsers.has(userId) ? () => {} : null),
+    botReply: async (p) => { order.push(`reply:${p.messageId}`); replies.push(p); return botResult; },
+    deletePlatform: async (p) => { order.push(`delete:${p.messageId}`); return 'bot'; },
+  });
+  // Non-UC: reply na zprávu, pak smazání (reply potřebuje rodiče).
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  assert.deepEqual(order, ['reply:m1', 'delete:m1']);
+  assert.deepEqual(replies[0], { workspace: 'rob', platform: 'twitch', messageId: 'm1', text: GIF_NOT_ALLOWED_TEXT });
+  assert.equal(GIF_NOT_ALLOWED_TEXT, 'Nové GIFy teď nejsou povolené');
+  // Týž uživatel do 60 s: bez odpovědi, smaže se vždy.
+  s.advance(30_000);
+  assert.equal(await s.flow.intercept(from('42', 'm2')), 'not_allowed');
+  assert.deepEqual(order.slice(2), ['delete:m2']);
+  // Po 60 s znovu odpověď.
+  s.advance(GIF_NOT_ALLOWED_REPLY_MS);
+  assert.equal(await s.flow.intercept(from('42', 'm3')), 'not_allowed');
+  assert.deepEqual(order.slice(3), ['reply:m3', 'delete:m3']);
+  // UC uživatel: štítek (gif-notice), bez odpovědi bota.
+  assert.equal(await s.flow.intercept(from('77', 'm4')), 'not_allowed');
+  assert.deepEqual(order.slice(5), ['delete:m4']);
+  // Bot nedostupný → jen smazání (bez výjimky).
+  botResult = 'error:bot_unavailable';
+  assert.equal(await s.flow.intercept(from('43', 'm5')), 'not_allowed');
+  assert.deepEqual(order.slice(6), ['reply:m5', 'delete:m5']);
+  await s.flow._idle();
+  // Režim all / běžná žádost: bot neodpovídá.
+  const a = setup({ botReply: async () => { order.push('reply:x'); return 'ok'; } });
+  assert.equal(await a.flow.intercept(from('44', 'm6')), 'requested');
+  assert.ok(!order.includes('reply:x'));
+  await a.flow._idle();
 });
 
 test('kolo 4 bod 4b: kanál bez bota (no_actor) → vlastní zprávu moda smaže jeho token; divák bez bota zůstane (log)', async () => {

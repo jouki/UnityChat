@@ -53,6 +53,7 @@ import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
 import integrationGifRoutes from './routes/integrationGif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta, startGifMaintenance } from './lib/gifRequests.js';
+import { sendAsBot, BotSendError } from './lib/botSend.js';
 import { claimGifSlot, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
@@ -125,6 +126,11 @@ const gifFlow = createGifFlow({
   claim: (workspace) => claimGifSlot(workspace),
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
+  // Nepovolený GIF od odesílatele bez účtu UnityChatu → odpověď bota (reply) na jeho zprávu před smazáním.
+  botReply: async (p) => {
+    try { await sendAsBot({ workspace: p.workspace, platform: p.platform, text: p.text, replyTo: p.messageId }, { ingest, log: app.log }); return 'ok'; }
+    catch (e) { return e instanceof BotSendError ? `error:${e.code}` : 'error:exception'; }
+  },
   // Kanál bez bota → vlastní zprávu moda smazat jeho tokenem (kolo 4 bod 4b; jen mod s účtem UnityChatu a scopy).
   deleteAsSender: (p) => deleteOwnMessageAsSender(p, {
     account: (platform, userId) => senderAccount(platform, userId),
