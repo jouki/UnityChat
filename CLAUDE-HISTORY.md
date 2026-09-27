@@ -141,7 +141,7 @@
 
 ## Changelog dokumentace
 ### 2026-09-27 (výročí na Twitchi)
-- CLAUDE.md: milestone v3.41.63–64 (výročí), ingest ukládá USERNOTICE výročí, UC_LOG tagy `Anniversary` + `UserNotice`.
+- CLAUDE.md: milestone v3.41.63–65 (výročí; review: bez DOM zálohy, výročí se nepočítají jako zprávy), ingest ukládá USERNOTICE výročí, UC_LOG tagy `Anniversary` + `UserNotice`.
 
 ### 2026-09-27 (session unitychat-8f)
 

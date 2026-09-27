@@ -13,6 +13,7 @@ import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, nicknames } from '../db/schema.js';
 import { likePattern } from '../routes/chatLog.js';
+import { notNoticeSql } from './messageNotice.js';
 import type { Platform } from './zidolista.js';
 
 export const USER_SEARCH_LIMIT_DEFAULT = 20;
@@ -132,7 +133,7 @@ async function dbCandidates(scope: UserSearchScope[], q: { pattern: string; exac
   for (const e of q.extra) nameCond.push(and(eq(messages.platform, e.platform), sql`lower(${messages.platformUsername}) = ${e.login}`)!);
   const rows = await db.select({ platform: messages.platform, userId: messages.platformUserId })
     .from(messages)
-    .where(and(scopeCond(scope), nameCond.length === 1 ? nameCond[0] : or(...nameCond)!))
+    .where(and(scopeCond(scope), notNoticeSql, nameCond.length === 1 ? nameCond[0] : or(...nameCond)!))
     .groupBy(messages.platform, messages.platformUserId)
     // Přesná shoda jména první (jinak by ji u krátkého textu vytlačily aktivnější prefixy), pak aktivita.
     .orderBy(sql`bool_or(uc_fold(${messages.platformUsername}) = uc_fold(${q.exact})) DESC`, sql`max(${messages.sentAt}) DESC`)
@@ -147,7 +148,7 @@ async function dbStats(scope: UserSearchScope[], ids: Array<{ platform: Platform
     count: sql<number>`count(*)::int`, lastSeen: sql<Date>`max(${messages.sentAt})`,
     name: sql<string>`(array_agg(${messages.platformUsername} ORDER BY ${messages.sentAt} DESC))[1]`,
     color: sql<string | null>`(array_agg(${messages.contentRaw}->>'color' ORDER BY ${messages.sentAt} DESC))[1]`,
-  }).from(messages).where(and(scopeCond(scope), who)).groupBy(messages.platform, messages.platformUserId);
+  }).from(messages).where(and(scopeCond(scope), notNoticeSql, who)).groupBy(messages.platform, messages.platformUserId);
   return rows.map((r) => ({ platform: r.platform as Platform, userId: r.userId, count: Number(r.count), lastSeen: new Date(r.lastSeen), name: r.name, color: r.color || null }));
 }
 

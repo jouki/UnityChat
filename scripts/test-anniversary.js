@@ -45,12 +45,12 @@ assert.equal(A.ANNIV_MAX_LEN, 500);
 
 // ---- výběr výzvy: resub má přednost, zavření resubu platí jen pro jeho id ----
 const status = {
-  ok: true, loggedIn: true, channelId: '160028137',
+  ok: true, loggedIn: true, userId: '4242', channelId: '160028137',
   resub: { id: 'rn-7', months: 7, streak: 3, isGift: false, gifter: null },
   modiversary: { months: 24 },
 };
 assert.deepEqual(A.pickAnniversary(status, {}), { kind: 'resub', key: 'resub:rn-7', id: 'rn-7', months: 7, streak: 3, isGift: false, gifter: null });
-assert.deepEqual(A.pickAnniversary(status, { 'resub:rn-7': { at: 1, type: 'dismissed' } }), { kind: 'mod', key: 'mod:160028137:24', months: 24 },
+assert.deepEqual(A.pickAnniversary(status, { 'resub:rn-7': { at: 1, type: 'dismissed' } }), { kind: 'mod', key: 'mod:4242:160028137:24', months: 24 },
   'zavřený resub → další výzva (mod)');
 const nextMonth = { ...status, resub: { id: 'rn-8', months: 8, streak: 4, isGift: false, gifter: null }, modiversary: null };
 assert.equal(A.pickAnniversary(nextMonth, { 'resub:rn-7': { at: 1, type: 'dismissed' } })?.key, 'resub:rn-8', 'nové výročí (jiné id) se ukáže, i když předchozí bylo zavřené');
@@ -58,7 +58,7 @@ assert.equal(A.pickAnniversary({ ...status, resub: null, modiversary: null }, {}
 assert.equal(A.pickAnniversary({ ...status, resub: null, modiversary: { months: 0 } }, {}), null, 'mod bez měsíců nic');
 assert.equal(A.pickAnniversary({ ok: true, loggedIn: false }, {}), null);
 assert.equal(A.pickAnniversary({ ok: false }, {}), null);
-assert.equal(A.pickAnniversary(status, { 'resub:rn-7': {}, 'mod:160028137:24': {} }), null);
+assert.equal(A.pickAnniversary(status, { 'resub:rn-7': {}, 'mod:4242:160028137:24': {} }), null);
 // Úklid: záznamy starší než 400 dní pryč, ostatní zůstávají.
 const now = Date.UTC(2026, 8, 27);
 const pruned = A.annivPruneDismissed({ 'resub:old': { at: now - 401 * 864e5 }, 'resub:new': { at: now - 10 * 864e5 }, broken: null }, now);
@@ -79,5 +79,29 @@ assert.ok(html.includes('<span class="un">Pepa</span> je už <strong>2 roky</str
 assert.ok(html.includes('<div class="modiv-text tx">dva roky <img class="emote"></div>'), 'text uživatele pod tím');
 assert.ok(!A.modiversaryEventHtml({ modMonths: 1 }, { nameHtml: 'X', bodyHtml: '' }).includes('modiv-text'), 'bez textu bez řádku');
 assert.ok(A.modiversaryEventHtml({ modMonths: '<b>' }, { nameHtml: 'X', bodyHtml: '' }).includes('slaví'), 'nečíselné měsíce → obecný text, nic se neinterpoluje');
+
+// ---- mod výzva: jiný Twitch účet = jiný klíč (zavření jednoho účtu neplatí pro druhý) ----
+assert.equal(A.pickAnniversary({ ...status, userId: '999', resub: null }, { 'mod:4242:160028137:24': {} })?.key, 'mod:999:160028137:24');
+
+// ---- karta sub / resub česky, tři tvary ----
+assert.equal(A.subLineHtml({ subPlan: '1000', subMonths: 7, subStreak: 3 }),
+  '<strong>Předplatné</strong> <strong class="sub-tier">Tier 1</strong>. Celkem <strong>7 měsíců</strong>, <strong>3 měsíce v řadě</strong>.');
+assert.equal(A.subLineHtml({ subPlan: 'Prime', subMonths: 22, subStreak: 2 }),
+  '<strong>Předplatné</strong> <strong class="sub-tier-prime">Prime</strong>. Celkem <strong>22 měsíců</strong>, <strong>2 měsíce v řadě</strong>.');
+assert.equal(A.subLineHtml({ subPlan: '3000', subMonths: 1 }), '<strong>Předplatné</strong> <strong class="sub-tier">Tier 3</strong>.', 'první měsíc bez počtu');
+assert.equal(A.subLineHtml({ subPlan: '2000', subMonths: 5, subStreak: 1 }), '<strong>Předplatné</strong> <strong class="sub-tier">Tier 2</strong>. Celkem <strong>5 měsíců</strong>.', 'série 1 se nevypisuje');
+
+// ---- řádek výročí v Profilu ----
+assert.equal(A.annivProfileLabel({ isSubEvent: true, subMonths: 7, subStreak: 3 }), 'Výročí předplatného: 7 měsíců (série 3)');
+assert.equal(A.annivProfileLabel({ isSubEvent: true, subMonths: 2 }), 'Výročí předplatného: 2 měsíce');
+assert.equal(A.annivProfileLabel({ isSubEvent: true, subMonths: 1 }), 'Nové předplatné');
+assert.equal(A.annivProfileLabel({ isModiversary: true, modMonths: 24 }), 'Moderátorské výročí: 2 roky');
+assert.equal(A.annivProfileLabel({ isModiversary: true, modMonths: 5 }), 'Moderátorské výročí: 5 měsíců');
+assert.equal(A.annivProfileLabel({ message: 'ahoj' }), null);
+
+// ---- czPlural z malého modulu, user-history ho re-exportuje (jeden zdroj) ----
+const P = require('../extension/core/plural.js');
+assert.equal(P.czPlural(3, 'a', 'b', 'c'), 'b');
+assert.equal(require('../extension/core/user-history.js').czPlural, P.czPlural);
 
 console.log('test-anniversary: OK');

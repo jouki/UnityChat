@@ -17,6 +17,8 @@ import { escapeHtml } from './html.js';
 import { modErrorText, openModDialog, PLATFORM_LOC } from './mod-menu.js';
 import { CURRENCIES } from './qr-dono.js';
 import { createGifMedia, normalizeGifMedia } from './gif.js';
+import { czPlural } from './plural.js';
+import { annivProfileLabel } from './anniversary.js';
 
 /** GIF ve zprávě v Profilu: menší než v chatu (seznam zpráv je hustý). */
 export const PROFILE_GIF_W = 240;
@@ -31,13 +33,8 @@ const enc = encodeURIComponent;
 const COLOR_RE = /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\))$/i;
 const NBSP = ' ';
 
-/** Český plurál: 1 → one, 2–4 → few, jinak many (0, 5+, zlomky). */
-export function czPlural(n, one, few, many) {
-  const a = Math.abs(Number(n) || 0);
-  if (a === 1) return one;
-  if (Number.isInteger(a) && a >= 2 && a <= 4) return few;
-  return many;
-}
+// Český plurál žije v core/plural.js (sdílí ho i core/anniversary.js); re-export kvůli stávajícím konzumentům.
+export { czPlural };
 
 /** Celé číslo / částka s mezerou po tisících (nezlomitelnou) a desetinnou čárkou: 1 250 · 12,5. */
 export function fmtNumber(n) {
@@ -817,10 +814,21 @@ export class UserHistoryPanel {
     tx.className = 'uc-uh-tx tx';
     const { msg, uc } = stripUcMarker(m);
     const gone = !!(m.deleted || m.hidden);
+    // Výročí z Twitch USERNOTICE (sub / resub / modiversary) = událost, ne prázdný řádek: štítek + text uživatele.
+    const anniv = annivProfileLabel(m);
+    if (anniv) row.classList.add('uc-uh-msg--event');
     if (!gone) {
-      let html;
-      try { html = this.renderMessage(msg); } catch { html = escapeHtml(msg.message || ''); }
+      let html = '';
+      if (!anniv || msg.message) {
+        try { html = this.renderMessage(anniv ? { ...msg, isSubEvent: false, isModiversary: false } : msg); } catch { html = escapeHtml(msg.message || ''); }
+      }
       tx.innerHTML = html;
+      if (anniv) {
+        const lab = doc.createElement('span');
+        lab.className = 'uc-uh-anniv';
+        lab.textContent = anniv;
+        tx.prepend(lab, ...(html ? [doc.createTextNode(' ')] : []));
+      }
     }
     if (!gone && m.replyTo && (m.replyTo.username || m.replyTo.message)) row.appendChild(this._replyEl(msg));
     row.append(this._time(Number(m.timestamp)), this._platformMark(m.platform, uc), tx);
@@ -970,7 +978,9 @@ export class UserHistoryPanel {
     const box = this.doc.createElement('div');
     box.className = 'uc-uh-acts';
     // Smazaná / skrytá zpráva: místo koše oko (Odkrýt zprávu jen v UnityChatu).
-    for (const kind of [gone ? 'restore' : 'delete', 'timeout', 'ban', 'permit']) box.appendChild(this._actBtn(kind, m));
+    // Výročí (USERNOTICE) na platformě smazat nejde (Helix delete zná jen chatové zprávy) → bez koše.
+    const kinds = [gone ? 'restore' : (annivProfileLabel(m) ? null : 'delete'), 'timeout', 'ban', 'permit'].filter(Boolean);
+    for (const kind of kinds) box.appendChild(this._actBtn(kind, m));
     return box;
   }
 

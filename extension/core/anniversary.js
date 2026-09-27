@@ -2,14 +2,14 @@
 //
 //  - Zobrazení cizích výročí: USERNOTICE `modiversary` (moderátorské výročí) jako zelená událost s mečem,
 //    „{jméno} je už {N} {měsíc/měsíce/měsíců | rok/roky/let} moderátorem!“ + text uživatele. Převod na roky jako
-//    Twitch (ModiversaryLine): months % 12 == 0 → roky, jinak měsíce. Sdílený resub (`resub` USERNOTICE) má vlastní
-//    render (sub karta) — tady nic.
+//    Twitch (ModiversaryLine): months % 12 == 0 → roky, jinak měsíce. Sdílený resub (`resub` USERNOTICE) = sub karta,
+//    tady jen její česká věta (subLineParts); řádek výročí v Profilu (annivProfileLabel).
 //  - Sdílení vlastního výročí (jen addon — potřebuje first-party cookie Twitche, GQL v background.js): texty výzvy,
 //    výběr výzvy (resub má přednost), pamatované zavření výročí předplatného (jen dané id, jako Twitch
 //    `shareResubNotificationIDs`), chybové hlášky a banner nad polem pro psaní (AnniversaryBanner).
 // Bez chrome.*; DOM jen přes předaný dokument. Cizí text (jméno dárce) jen přes textContent.
 
-import { czPlural } from './user-history.js';
+import { czPlural } from './plural.js';
 import { escapeHtml } from './html.js';
 
 /** Limit textu sdílení — podklad: odhad, běžný limit chatové zprávy Twitche. */
@@ -60,6 +60,46 @@ export function modiversaryEventHtml(msg, { nameHtml = '', bodyHtml = '' } = {})
     + `${bodyHtml ? `<div class="modiv-text tx">${bodyHtml}</div>` : ''}</div>`;
 }
 
+// ---- karta sub / resub v chatu (česky, tři tvary) ----
+
+const SUB_TIERS = { 1000: 'Tier 1', 2000: 'Tier 2', 3000: 'Tier 3' };
+
+/**
+ * Řádek karty sub / resub po částech: „Předplatné Tier 1. Celkem 7 měsíců, 3 měsíce v řadě.“ — `{ text, strong?, cls? }`
+ * (addon staví DOM, web HTML přes subLineHtml). Měsíce a série jen nad 1 (jako dosud).
+ */
+export function subLineParts(msg) {
+  const isPrime = String(msg?.subPlan || '').toLowerCase() === 'prime';
+  const out = [{ text: 'Předplatné', strong: true }, { text: ' ' }, { text: isPrime ? 'Prime' : (SUB_TIERS[msg?.subPlan] || 'Tier 1'), strong: true, cls: isPrime ? 'sub-tier-prime' : 'sub-tier' }, { text: '.' }];
+  const months = int(msg?.subMonths);
+  if (months > 1) {
+    out.push({ text: ' Celkem ' }, { text: annivMonths(months), strong: true });
+    const streak = int(msg?.subStreak);
+    if (streak > 1) out.push({ text: ', ' }, { text: `${annivMonths(streak)} v řadě`, strong: true });
+    out.push({ text: '.' });
+  }
+  return out;
+}
+
+export function subLineHtml(msg) {
+  return subLineParts(msg).map((p) => (p.strong ? `<strong${p.cls ? ` class="${p.cls}"` : ''}>${escapeHtml(p.text)}</strong>` : escapeHtml(p.text))).join('');
+}
+
+/**
+ * Výročí v seznamu zpráv Profilu (jako událost, ne prázdný řádek): „Výročí předplatného: 7 měsíců (série 3)“ /
+ * „Moderátorské výročí: 2 roky“ / „Nové předplatné“. Běžná zpráva → null.
+ */
+export function annivProfileLabel(m) {
+  if (m?.isModiversary) return int(m.modMonths) ? `Moderátorské výročí: ${modiversaryDuration(m.modMonths)}` : 'Moderátorské výročí';
+  if (m?.isSubEvent) {
+    const months = int(m.subMonths);
+    if (months <= 1) return 'Nové předplatné';
+    const streak = int(m.subStreak);
+    return `Výročí předplatného: ${annivMonths(months)}${streak > 1 ? ` (série ${streak})` : ''}`;
+  }
+  return null;
+}
+
 // ---- výzva nad polem pro psaní ----
 
 /** „Blahopřejeme k 1letému moderátorskému výročí!“; zbytek po roce → „… výročí: 1 rok a 2 měsíce!“. */
@@ -100,7 +140,7 @@ export const annivErrorText = (code) => ERRORS[code] || 'Sdílení se nepovedlo,
 /**
  * Stav z background ANNIV_STATUS → výzva k zobrazení, nebo null. Resub (měsíční výročí předplatného) má přednost;
  * zavření se pamatuje podle klíče (`resub:<id notifikace>` — nové výročí má nové id a ukáže se znovu;
- * `mod:<kanál>:<měsíce>`). `dismissed` = mapa klíč → { at, type }.
+ * `mod:<Twitch účet>:<kanál>:<měsíce>` — jiný přihlášený účet má vlastní výzvu). `dismissed` = mapa klíč → { at, type }.
  */
 export function pickAnniversary(status, dismissed = {}) {
   if (!status?.ok || !status.loggedIn) return null;
@@ -112,7 +152,7 @@ export function pickAnniversary(status, dismissed = {}) {
   }
   const mm = int(status.modiversary?.months);
   if (mm) {
-    const key = `mod:${status.channelId || ''}:${mm}`;
+    const key = `mod:${status.userId || ''}:${status.channelId || ''}:${mm}`;
     if (!gone(key)) return { kind: 'mod', key, months: mm };
   }
   return null;

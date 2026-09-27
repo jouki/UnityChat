@@ -83,6 +83,8 @@ const DONS = [
   { id: 'd2', amount: 250, currency: 'CZK', amountCzk: 250, paidAt: now - 2 * DAY, via: 'qr', matchedBy: 'nickname', nickname: 'tester', message: null },
 ];
 // Twitch dává login autora citace (reply-parent-user-login) → Profil se otevírá podle něj, ne podle display name.
+// Sdílené výročí předplatného (USERNOTICE resub uložený ingestem) — v Profilu událost, bez koše (Helix delete nejde).
+const HANNIV = { ...H('h-anniv', 'Tester', 'u1', 'díky za 7 měsíců', 5), isSubEvent: true, subPlan: '1000', subMonths: 7, subStreak: 3 };
 const HREP = { ...H('h-rep', 'Tester', 'u1', 'souhlas', 4), replyTo: { username: 'OtherDisplay', login: 'other', message: 'původní zpráva jiného uživatele, která je dost dlouhá na to, aby se v Profilu nevešla na jeden řádek ani omylem', id: 'e2e-b1' } };
 const summaryMod = (who) => who === 'other'
   ? { ok: true, view: 'mod', user: { platform: 'twitch', userId: 'u2', login: 'other', displayName: 'Other', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'other', userId: 'u2', displayName: 'Other' }], firstSeen: now - 60000, lastSeen: now, total: 1 },
@@ -170,7 +172,7 @@ s.onevent = async (d) => {
     // Dvě stránky: první nezaplní panel → klient sám dotáhne starší (before=c1).
     if (inCh === 'robdiesalot') return json(u.includes('before=c1')
       ? { ok: true, messages: [H('h-old', 'Tester', 'u1', 'nejstarší zpráva', -50)], nextBefore: null }
-      : { ok: true, messages: [H1[0], H1[2], HREP], nextBefore: 'c1' });
+      : { ok: true, messages: [H1[0], H1[2], HREP, HANNIV], nextBefore: 'c1' });
     return json({ ok: true, messages: [], nextBefore: null });
   }
   // GIFy ke schválení (část 4, mod dotáhne čekající po /moderation/me) — tady žádné; nesmí odejít na produkci.
@@ -357,12 +359,15 @@ check('H moderace: timeout 10 min + důvod + kdo', /Timeout 10 min/.test(modTxt 
 check('H tlačítko na původní kartu platformy', await ev(`document.querySelector('.uc-uh-card')?.textContent`) === 'Karta na Twitchi');
 const tabsTxt = await ev(`[...document.querySelectorAll('.uc-uh-tab')].map(b => b.dataset.channel + ':' + b.querySelector('.uc-uh-tab-count').textContent).join(',')`);
 check('H záložky = kanály ze summary s počty, aktuální první', tabsTxt === 'robdiesalot:2,arcadebulls:3,tensterakdary:1', tabsTxt);
-check('H výchozí záložka = aktuální kanál, zprávy načtené + dona', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 4 && document.querySelectorAll('.uc-uh-list .uc-uh-don').length === 2`, 4000)
+check('H výchozí záložka = aktuální kanál, zprávy načtené + dona', await until(`document.querySelectorAll('.uc-uh-list .uc-uh-msg').length === 5 && document.querySelectorAll('.uc-uh-list .uc-uh-don').length === 2`, 4000)
   && posts.hist.some((x) => /inChannel=robdiesalot&limit=50$/.test(x)) && posts.hist.some((x) => /donations\?channel=robdiesalot&platform=twitch&userId=u1/.test(x)), posts.hist.join(' | '));
 const rowsOrder = await ev(`[...document.querySelectorAll('.uc-uh-list > .uc-uh-msg, .uc-uh-list > .uc-uh-don')].map(r => r.dataset.id).join(',')`);
 const c1 = posts.hist.filter((x) => /before=c1/.test(x)).length;
 check('H 429 u starší stránky → jedno opakování za 1 s', c1 === 2, String(c1));
-check('H 7 dona zařazená mezi zprávy podle času (staré až po konci historie)', rowsOrder === 'd2,h-old,e2e-a1,d1,e2e-a2,h-rep', rowsOrder);
+check('H 7 dona zařazená mezi zprávy podle času (staré až po konci historie)', rowsOrder === 'd2,h-old,e2e-a1,d1,e2e-a2,h-rep,h-anniv', rowsOrder);
+const annivRow = await ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="h-anniv"]'); return { event: r.classList.contains('uc-uh-msg--event'), label: r.querySelector('.uc-uh-anniv')?.textContent, text: r.querySelector('.uc-uh-tx').textContent, acts: [...r.querySelectorAll('.uc-uh-act')].map(b => b.dataset.act).join(',') }; })()`);
+check('H výročí v Profilu jako událost „Výročí předplatného: 7 měsíců (série 3)“ + text, bez koše', annivRow.event && annivRow.label === 'Výročí předplatného: 7 měsíců (série 3)'
+  && annivRow.text === 'Výročí předplatného: 7 měsíců (série 3) díky za 7 měsíců' && annivRow.acts === 'timeout,ban,permit', JSON.stringify(annivRow));
 check('H konec historie nahoře', await ev(`document.querySelector('.uc-uh-list').firstElementChild.classList.contains('uc-uh-edge')`) === true);
 const days = await ev(`[...document.querySelectorAll('.uc-uh-list > .uc-uh-day')].map(d => d.textContent + '>' + d.nextElementSibling.dataset.id).join('|')`);
 check('H 3 oddělovače dnů („čtvrtek 25. 9. 2026") před prvním řádkem každého dne', /^(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>d2\|(pondělí|úterý|středa|čtvrtek|pátek|sobota|neděle) \d{1,2}\. \d{1,2}\. \d{4}>h-old$/.test(days || ''), days);

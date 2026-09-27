@@ -5586,10 +5586,13 @@ class UnityChat {
     if (this._signedIn) this._gifCd().fetchState();
     this._gifPanel?.update();
     // Výročí na Twitchi po přihlášení / změně účtu (stav bere cookie Twitche, ne účet UnityChatu).
-    // Znovu hned jen při změně přihlášeného Twitch účtu (otevření nastavení účet také obnovuje).
-    const annivAcct = acc?.platforms?.twitch?.login || '';
-    this._checkAnniversary('account', { force: annivAcct !== this._annivAcct });
+    // Odhlášení z UnityChatu / jiný Twitch účet → banner pryč hned; znovu se ptát jen při změně účtu
+    // (otevření nastavení účet také obnovuje).
+    const annivAcct = this._signedIn ? (acc?.platforms?.twitch?.login || '') : null;
+    const annivChanged = annivAcct !== this._annivAcct;
+    if (annivChanged && this._annivAcct !== undefined) this._annivReset('account');
     this._annivAcct = annivAcct;
+    if (this._signedIn) this._checkAnniversary('account', { force: annivChanged });
     // Vlastní GIF zprávy z historie (zamítnuté / čekající) podle identity účtu → štítek, po odhlášení zase pryč.
     this._reapplyDeleted();
   }
@@ -6627,11 +6630,20 @@ class UnityChat {
     try { await chrome.storage.local.set({ uc_anniv_dismissed: map }); } catch { /* ignore */ }
   }
 
+  /** Zapomenout stav a skrýt banner (odhlášení, jiný účet, chyba stavu). */
+  _annivReset(reason, { keepThrottle = false } = {}) {
+    this._annivStatus = null;
+    if (!keepThrottle) this._annivLast = null;
+    if (this._anniv?.current) { this._ucLog('Anniversary', `banner pryč (${reason})`); this._anniv.hide({ instant: true }); }
+  }
+
   /** Stav výročí pro aktuální kanál. `force` obejde 5min pojistku (onRoomId chodí i při každém reconnectu). */
   async _checkAnniversary(reason, { force = false } = {}) {
     const channel = (this.config.channel || '').toLowerCase();
     const banner = this._annivBanner();
     if (!banner) return;
+    // Jen s přihlášením do UnityChatu (po odhlášení banner nevisí).
+    if (this._signedIn === false) { this._annivReset('odhlášen'); return; }
     if (!channel || !this.config.twitch) { this._annivStatus = null; if (!banner.expanded) banner.hide({ instant: true }); return; }
     if (this._annivStatus && this._annivStatus.channel !== channel) { this._annivStatus = null; banner.hide({ instant: true }); }
     const now = Date.now();
@@ -6643,7 +6655,10 @@ class UnityChat {
       try { st = await chrome.runtime.sendMessage({ type: 'ANNIV_STATUS', channel }); } catch (e) { st = { ok: false, error: e.message }; }
       if ((this.config.channel || '').toLowerCase() !== channel) return; // mezitím přepnuto
       this._ucLog('Anniversary', `check ${reason} ${channel}: ok=${!!st?.ok} loggedIn=${!!st?.loggedIn} resub=${st?.resub ? st.resub.months + 'm' : '-'} mod=${st?.modiversary ? st.modiversary.months + 'm' : '-'}${st?.error ? ' error=' + st.error : ''}`);
-      if (!st?.ok) return; // chyba: nechat, co je vidět
+      // Chyba stavu (GQL, síť): starý banner nenechat viset.
+      if (!st?.ok) { this._annivReset(`chyba ${st?.error || ''}`, { keepThrottle: true }); return; }
+      // Jiný účet v cookie Twitche než minule → starou výzvu pryč (klíče výzev nesou id účtu).
+      if (this._annivStatus && st.userId && this._annivStatus.userId !== st.userId) this._annivReset('jiný Twitch účet');
       this._annivStatus = { ...st, channel };
       await this._annivShowNext();
     })().finally(() => { if (this._annivInflight?.p === p) this._annivInflight = null; });
@@ -6675,29 +6690,15 @@ class UnityChat {
       res = await chrome.runtime.sendMessage({ type: 'ANNIV_SHARE', kind: item.kind, channelLogin: item.channelLogin, channelId: item.channelId, tokenId: item.id, text, includeStreak });
     } catch (e) { res = { ok: false, code: 'UNKNOWN', error: e.message }; }
     this._ucLog('Anniversary', `share ${item.kind}: ok=${!!res?.ok} code=${res?.code || '-'} integrity=${!!res?.integrity} len=${text.length} streak=${!!includeStreak}`);
-    if (res?.integrity) {
-      // Client-Integrity challenge: GQL z rozšíření neprojde → záloha přes výzvu v otevřeném chatu Twitche.
-      const dom = await this._annivDomShare(text);
-      this._ucLog('Anniversary', `záloha přes stránku Twitche: ${dom?.ok ? 'OK' : 'selhala ' + (dom?.error || '')}`);
-      if (!dom?.ok) return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
-      res = { ok: true };
-    }
+    // Client-Integrity challenge (nebo jiná chyba): jen hláška, banner zůstává. Zálohu přes stránku Twitche
+    // controller zamítl (klikala by na libovolnou výzvu / jiný kanál); co Twitch chce, ukáže log Anniversary
+    // z background (errors + extensions).
+    if (res?.integrity) return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
     if (!res?.ok) return { ok: false, error: core.annivErrorText(res?.code) };
     await this._annivRemember(item.key, 'shared');
     // Za chvíli se Twitch zeptat znovu (výzva by měla zmizet); banner zatím ukazuje potvrzení.
     setTimeout(() => this._checkAnniversary('shared', { force: true }), 8000);
     return { ok: true };
-  }
-
-  async _annivDomShare(text) {
-    try {
-      const tab = await this._findStreamTab('twitch');
-      if (!tab?.id || !/twitch\.tv/.test(tab.url || '')) return { ok: false, error: 'no_tab' };
-      let ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
-      if (!ping) { await this._injectContentScript(tab); ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null); }
-      if (!ping) return { ok: false, error: 'no_content_script' };
-      return await chrome.tabs.sendMessage(tab.id, { type: 'ANNIV_DOM_SHARE', text });
-    } catch (e) { return { ok: false, error: e.message }; }
   }
 
   async _annivDismiss(item) {
@@ -7381,31 +7382,15 @@ class UnityChat {
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     body.appendChild(un);
 
-    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
-    const tierLabel = isPrime ? 'Prime' : `Tier ${tier}`;
+    // Česky se třemi tvary („Předplatné Tier 1. Celkem 7 měsíců, 3 měsíce v řadě.“) — sdílené s webem (core/anniversary.js).
     const line = document.createElement('div');
     line.className = 'sub-line';
-    const prefix = document.createElement('strong');
-    prefix.textContent = 'Subscribed';
-    line.appendChild(prefix);
-    line.appendChild(document.createTextNode(` with `));
-    const tierSpan = document.createElement('strong');
-    tierSpan.className = isPrime ? 'sub-tier-prime' : 'sub-tier';
-    tierSpan.textContent = tierLabel;
-    line.appendChild(tierSpan);
-    line.appendChild(document.createTextNode('.'));
-    if (msg.subMonths && msg.subMonths > 1) {
-      line.appendChild(document.createTextNode(` They've subscribed for `));
-      const m = document.createElement('strong');
-      m.textContent = `${msg.subMonths} month${msg.subMonths === 1 ? '' : 's'}`;
-      line.appendChild(m);
-      if (msg.subStreak && msg.subStreak > 1) {
-        line.appendChild(document.createTextNode(`, `));
-        const s = document.createElement('strong');
-        s.textContent = `${msg.subStreak} month${msg.subStreak === 1 ? '' : 's'} in a row`;
-        line.appendChild(s);
-      }
-      line.appendChild(document.createTextNode('.'));
+    for (const p of window.UC_CORE.subLineParts(msg)) {
+      if (!p.strong) { line.appendChild(document.createTextNode(p.text)); continue; }
+      const st = document.createElement('strong');
+      if (p.cls) st.className = p.cls;
+      st.textContent = p.text;
+      line.appendChild(st);
     }
     body.appendChild(line);
 

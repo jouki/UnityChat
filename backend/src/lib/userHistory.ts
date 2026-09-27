@@ -12,6 +12,7 @@
 // timeout/ban) — mod kanálu A si tak nevyhledá libovolné userId z celého archivu.
 import { and, desc, eq, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import { unionAll } from 'drizzle-orm/pg-core';
+import { messageCountSql } from './messageNotice.js';
 import { db } from '../db/index.js';
 import { messages, moderationActions, nicknames, type Message } from '../db/schema.js';
 import { encodeCursor, type decodeCursor } from './cursor.js';
@@ -390,7 +391,8 @@ async function dbChannelGroups(ids: UserTarget[]): Promise<ChannelGroup[]> {
   if (!ids.length) return [];
   const rows = await db.select({
     platform: messages.platform, channel: messages.channel,
-    count: sql<number>`count(*)::int`, firstAt: sql<Date>`min(${messages.sentAt})`, lastAt: sql<Date>`max(${messages.sentAt})`,
+    // Výročí (USERNOTICE) se nepočítají; kanál s nimi ale zůstává jako záložka (v seznamu jsou jako událost).
+    count: messageCountSql, firstAt: sql<Date>`min(${messages.sentAt})`, lastAt: sql<Date>`max(${messages.sentAt})`,
   }).from(messages).where(identityCond(ids)).groupBy(messages.platform, messages.channel);
   return rows.map((r) => ({ platform: r.platform as Platform, channel: r.channel, count: Number(r.count), firstAt: new Date(r.firstAt), lastAt: new Date(r.lastAt) }));
 }

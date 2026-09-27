@@ -30,8 +30,8 @@ interface Opts {
 
 /**
  * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
- * (sidepanel.js), bez UI: PRIVMSG → onMessage. Z USERNOTICE jen výročí s textem
- * uživatele (sub / resub / modiversary, normalizeTwitchUsernotice); raid a dary
+ * (sidepanel.js), bez UI: PRIVMSG → onMessage. Z USERNOTICE jen výročí (text
+ * uživatele volitelný; sub / resub / modiversary, normalizeTwitchUsernotice); raid a dary
  * klient renderuje živě z vlastního IRC.
  */
 export class TwitchListener implements IngestListener {
@@ -122,7 +122,7 @@ export class TwitchListener implements IngestListener {
           }
           continue;
         }
-        // USERNOTICE: výročí (sub / resub / modiversary) s textem uživatele → log + /chat/stream jako zpráva;
+        // USERNOTICE: výročí (sub / resub / modiversary, text uživatele volitelný) → log + /chat/stream jako zpráva;
         // raid a dary jen živě u klienta. Neznámý typ → info log (msg-id + názvy tagů), každý typ jednou.
         if (clearmsg?.command === 'USERNOTICE') {
           const n = normalizeTwitchUsernotice(clearmsg, this.channel);

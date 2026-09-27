@@ -13,6 +13,7 @@ import { and, desc, eq, gt, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
+import { notNoticeSql } from '../lib/messageNotice.js';
 import { decodeCursor, encodeCursor } from '../lib/cursor.js';
 import { workspaceBySlug, type Platform } from '../lib/zidolista.js';
 import { rolesFromBadges } from '../sse/integrationStream.js';
@@ -128,7 +129,7 @@ export default async function chatLogRoutes(app: FastifyInstance) {
     const rows = await db.select({
       platform: messages.platform, user: messages.platformUsername, userId: messages.platformUserId,
       count: sql<number>`count(*)::int`, lastAt: sql<Date>`max(${messages.sentAt})`,
-    }).from(messages).where(and(scope, folded(messages.platformUsername, likePattern(q, { prefix: true }))))
+    }).from(messages).where(and(scope, notNoticeSql, folded(messages.platformUsername, likePattern(q, { prefix: true }))))
       .groupBy(messages.platform, messages.platformUsername, messages.platformUserId)
       .orderBy(sql`count(*) desc`).limit(20);
     return { ok: true, users: rows.map((r) => ({ ...r, lastAt: new Date(r.lastAt).toISOString() })) };

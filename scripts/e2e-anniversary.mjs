@@ -59,7 +59,7 @@ function gqlAnswer(body) {
   // Persisted hashe „nezná“ (ověří zálohu na plný dotaz), kromě mutace resubu (ověří, že hash projde bez zálohy).
   if (via === 'hash' && op !== 'Chat_ShareResub_UseResubToken') return { errors: [{ message: 'PersistedQueryNotFound' }] };
   switch (op) {
-    case 'UcAnnivContext': return { data: { currentUser: { id: '4242', login: 'tester' }, user: { id: '160028137' } } };
+    case 'UcAnnivContext': if (gql.contextError) return { errors: [{ message: 'service error' }] }; return { data: { currentUser: { id: '4242', login: 'tester' }, user: { id: '160028137' } } };
     case 'UcAnnivResub': return { data: { user: { id: '160028137', self: { resubNotification: gql.resub } } } };
     case 'ModiversaryStatusQuery': return { data: { userModiversary: gql.mod } };
     case 'Chat_ShareResub_UseResubToken': return { data: { useChatNotificationToken: { isSuccess: gql.resubOk } } };
@@ -143,7 +143,7 @@ check('modiversary: „ModPepa je už 2 roky moderátorem!“', await txt('.msg.
 check('modiversary: text uživatele pod tím', (await txt('.msg.modiversary-event .modiv-text')).startsWith('dva roky už!'));
 check('modiversary: bez hover akcí (systémová událost)', await ev(`!document.querySelector('.msg.modiversary-event .msg-actions')`) === true);
 const subLine = await txt('.msg.sub-event .sub-line');
-check('sdílený resub: měsíce + série + text uživatele', /7 months/.test(subLine) && /3 months in a row/.test(subLine) && await txt('.msg.sub-event .sub-text') === 'sedm měsíců s Robem', subLine);
+check('sdílený resub česky: „Předplatné Tier 1. Celkem 7 měsíců, 3 měsíce v řadě.“ + text uživatele', subLine === 'Předplatné Tier 1. Celkem 7 měsíců, 3 měsíce v řadě.' && await txt('.msg.sub-event .sub-text') === 'sedm měsíců s Robem', subLine);
 
 // ---- banner výročí předplatného ----
 check('banner resubu po přihlášení', await until(`!!document.querySelector('#anniv-banner .uc-anniv--resub') && !document.getElementById('anniv-banner').classList.contains('hidden')`, 10000));
@@ -191,11 +191,14 @@ await click('.uc-anniv-send');
 check('integrity challenge → bez stránky Twitche hláška „Sdílet se teď nepovedlo, zkus to přímo na Twitchi.“',
   await until(`(document.querySelector('.uc-anniv-msg')?.textContent || '') === 'Sdílet se teď nepovedlo, zkus to přímo na Twitchi.'`, 8000), await txt('.uc-anniv-msg'));
 const logs = await ev(`chrome.runtime.sendMessage({ type: 'GET_LOGS' }).then((r) => r.text)`);
-check('UC_LOG Anniversary: challenge v extensions + pokus o zálohu přes stránku', /\[Anniversary\] SendUserModiversaryNotice .*"challenge":\{"type":"integrity"\}/.test(logs) && /záloha přes stránku Twitche: selhala/.test(logs));
+check('UC_LOG Anniversary: errors + extensions s challenge, žádná záloha přes stránku Twitche', /\[Anniversary\] SendUserModiversaryNotice .*errors=.*integrity.*"challenge":\{"type":"integrity"\}/.test(logs) && !/záloha|ANNIV_DOM/.test(logs));
+check('integrity: banner zůstává otevřený s textem', await ev(`!!document.querySelector('.uc-anniv--mod.uc-anniv--open') && document.querySelector('.uc-anniv-input').value === 'Dva roky s vámi!'`) === true);
 check('log neobsahuje cookie ani text zprávy', !logs.includes(COOKIE) && !logs.includes('Dva roky s vámi'));
 await click('.uc-anniv-close');
 check('× u mod výročí → banner pryč + DismissUserModiversaryCallout {channelID}', await until(`document.getElementById('anniv-banner').classList.contains('hidden')`, 2000)
   && await until(`true`, 300) && gqlLog.some((g) => g.op === 'DismissUserModiversaryCallout' && g.variables.input.channelID === '160028137'));
+
+check('mod zavření zapamatované s id Twitch účtu (mod:<účet>:<kanál>:<měsíce>)', await ev(`chrome.storage.local.get('uc_anniv_dismissed').then((r) => r.uc_anniv_dismissed?.['mod:4242:160028137:24']?.type)`) === 'dismissed');
 
 // ---- zavření resubu platí jen pro dané id ----
 gql.mod = { hasMilestoneAlert: false, canSendUserNotice: false, months: 24 };
@@ -228,6 +231,24 @@ check('dar: předvyplněno „Děkuji za dárek, @Dárce!“, bez volby série',
 gql.resubOk = false;
 await click('.uc-anniv-send');
 check('resub isSuccess=false → česká hláška', await until(`(document.querySelector('.uc-anniv-msg')?.textContent || '') === 'Twitch výročí předplatného nepřijal (možná už je sdílené).'`, 5000), await txt('.uc-anniv-msg'));
+
+// ---- chyba stavu (GQL) a odhlášení z UnityChatu → žádný banner ----
+await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+gql.resub = { id: 'rn-10', cumulativeTenureMonths: 10, months: 10, streakTenureMonths: 0, isGiftSubscription: false, gifter: null };
+gql.contextError = true;
+await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+await attachSw();
+await until(`!!document.querySelector('.msg.modiversary-event')`, 15000);
+await sleep(2500);
+check('chyba GQL stavu → banner se neukáže', await ev(`document.getElementById('anniv-banner').classList.contains('hidden')`) === true);
+gql.contextError = false;
+const n0 = gqlLog.filter((g) => g.op === 'UcAnnivContext').length;
+await ev(`chrome.storage.local.remove('uc_session')`);
+await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+await attachSw();
+await sleep(4000);
+check('bez přihlášení do UnityChatu → žádný banner ani dotaz na Twitch', await ev(`document.getElementById('anniv-banner').classList.contains('hidden')`) === true
+  && gqlLog.filter((g) => g.op === 'UcAnnivContext').length === n0, String(gqlLog.filter((g) => g.op === 'UcAnnivContext').length - n0));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

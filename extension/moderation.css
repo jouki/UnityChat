@@ -448,6 +448,9 @@ body.uc-warning-pending .msg-input-wrap { cursor: pointer; }
 .uc-uh-time { flex: none; font-size: 10px; color: var(--text-secondary, #adadb8); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .uc-uh-tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .uc-uh-tx .emote { vertical-align: middle; max-height: 28px; }
+/* Výročí z Twitch USERNOTICE v Profilu (core/anniversary.js annivProfileLabel) — událost, ne zpráva. */
+.uc-uh-anniv { display: inline-block; font-weight: 700; color: #b78cff; margin-right: 2px; }
+.uc-uh-msg--event .uc-uh-anniv::before { content: "★ "; }
 /* GIF ve zprávě Profilu; médium mimo knihovnu rozmazaně, klik zaostří (spec 2026-09-27-gif-review-upravy §3). */
 .uc-uh-gif { position: relative; flex: 1 1 100%; display: flex; margin: 2px 0 2px; }
 .uc-uh-gif .uc-gif { margin: 0; }

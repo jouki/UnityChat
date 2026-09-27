@@ -799,16 +799,6 @@
       return;
     }
 
-    // Záloha sdílení výročí, když GQL mutace vrátí Client-Integrity challenge: klik na výzvu Twitche
-    // (chat-private-callout) → otevře se pole sdílení → vložit text a odeslat stejnou cestou jako SEND_CHAT.
-    // Křehké (výzva zmizí po 30 s, chat musí být otevřený) — proto jen záloha, vše do UC_LOG Anniversary.
-    if (msg.type === 'ANNIV_DOM_SHARE') {
-      annivDomShare(String(msg.text || ''))
-        .then(sendResponse)
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
     if (msg.type === 'SEND_CHAT') {
       sendChat(msg.text)
         .then(() => sendResponse({ ok: true }))
@@ -841,48 +831,6 @@
       if (col) out[name] = col;
     });
     return out;
-  }
-
-  async function annivDomShare(text) {
-    const log = (step, extra) => {
-      try { chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'Anniversary', args: ['dom ' + step, extra ? JSON.stringify(extra) : ''] }); } catch {}
-    };
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const btn = document.querySelector('button[data-a-target="chat-private-callout__primary-button"]')
-      || document.querySelector('[data-test-selector="chat-private-callout__hover-container"] button');
-    if (!btn) { log('bez výzvy'); return { ok: false, error: 'no_callout' }; }
-    // Text výzvy do logu (jen začátek — „Blahopřejeme…“ / „Předplatné…“), ať je vidět, o kterou šlo.
-    const callout = btn.closest('[data-test-selector="chat-private-callout__hover-container"]') || btn.parentElement;
-    log('výzva', { text: (callout?.textContent || '').trim().slice(0, 80) });
-    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-      btn.dispatchEvent(new (type.startsWith('pointer') ? PointerEvent : MouseEvent)(type, { bubbles: true, cancelable: true, composed: true }));
-    }
-    // Pole sdílení = běžné chatové pole v režimu ModiversaryShare / ShareResub — počkat, až se přestaví.
-    await sleep(400);
-    let input = null;
-    for (let t = 0; t < 30 && !input; t++) { input = findInput(); if (!input) await sleep(100); }
-    if (!input) { log('pole sdílení nenalezeno'); return { ok: false, error: 'no_input' }; }
-    // Předvyplněný text Twitche označit, ať ho vložení přepíše (Slate přebírá výběr přes selectionchange ~100 ms).
-    try {
-      input.focus();
-      const range = document.createRange();
-      range.selectNodeContents(input);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch {}
-    await sleep(200);
-    if (!text.trim()) {
-      // Resub jde sdílet i bez textu: jen odeslat.
-      const send = document.querySelector('[data-a-target="chat-send-button"]');
-      if (!send) { log('bez tlačítka odeslat'); return { ok: false, error: 'no_send' }; }
-      send.click();
-      log('odesláno bez textu');
-      return { ok: true };
-    }
-    await sendChat(text);
-    log('odesláno', { len: text.length });
-    return { ok: true };
   }
 
   function findInput() {

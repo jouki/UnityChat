@@ -103,8 +103,9 @@ export function normalizeTwitchPrivmsg(line: string, channel: string): IngestMes
 }
 
 /**
- * USERNOTICE typy, které klienti (core/twitch-irc.js) umí vykreslit. Ukládají se jen ty s textem uživatele
- * (STORED_NOTICES); ostatní známé jdou jen živě přes IRC klienta. Neznámé se logují (msg-id + názvy tagů).
+ * USERNOTICE typy, které klienti (core/twitch-irc.js) umí vykreslit. Ukládají se jen výročí (STORED_NOTICES:
+ * sub / resub / modiversary — s textem uživatele i bez něj); ostatní známé (raid, dary, milník, oznámení) jdou jen
+ * živě přes IRC klienta. Neznámé se logují (msg-id + názvy tagů).
  */
 export const KNOWN_USERNOTICES = new Set(['raid', 'sub', 'resub', 'subgift', 'submysterygift', 'viewermilestone', 'announcement', 'modiversary']);
 const STORED_NOTICES = new Set(['sub', 'resub', 'modiversary']);
@@ -116,7 +117,7 @@ export type TwitchNotice =
 const posInt = (v: string | undefined): number | null => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : null; };
 
 /**
- * USERNOTICE s textem uživatele → zpráva do logu (sub / resub = sdílené výročí předplatného, modiversary =
+ * USERNOTICE výročí (text uživatele volitelný) → zpráva do logu (sub / resub = sdílené výročí předplatného, modiversary =
  * moderátorské výročí, podklad 2026-09-27-twitch-vyroci-research.md §3). `contentRaw.notice` nese typ a čísla,
  * chat.ts z něj skládá stejná pole jako core parser (isSubEvent… / isModiversary…). Jiné typy → null.
  */
