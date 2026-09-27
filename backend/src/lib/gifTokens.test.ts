@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
+import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, revokeAccountTokens, ACCOUNT_TOKEN_TTL_MS, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
 
 function memTokens() {
   const rows: Array<GifTokenRow & { tokenHash: string; revokedAt: Date | null }> = [];
@@ -9,8 +9,8 @@ function memTokens() {
       const mine = rows.filter((r) => !r.revokedAt && (owner.accountId !== undefined ? r.accountId === owner.accountId : r.integrationSlug === owner.integrationSlug));
       for (const r of mine.reverse().slice(keep)) r.revokedAt = at; // nejnovější první
     },
-    async insert(v) { rows.push({ accountId: v.accountId, integrationSlug: v.integrationSlug, tokenHash: v.tokenHash, revokedAt: null }); },
-    async findActive(hash) { const r = rows.find((x) => x.tokenHash === hash && !x.revokedAt); return r ? { accountId: r.accountId, integrationSlug: r.integrationSlug } : null; },
+    async insert(v) { rows.push({ accountId: v.accountId, integrationSlug: v.integrationSlug, tokenHash: v.tokenHash, revokedAt: null, createdAt: v.createdAt }); },
+    async findActive(hash) { const r = rows.find((x) => x.tokenHash === hash && !x.revokedAt); return r ? { accountId: r.accountId, integrationSlug: r.integrationSlug, createdAt: r.createdAt } : null; },
   };
   return { store, rows };
 }
@@ -79,4 +79,31 @@ test('verify: výsledek v cache 60 s (bez dotazu do DB při každém načtení m
   now = 61_000;
   await verify(t, 'robdiesalot');
   assert.equal(finds, 2);
+});
+
+test('L1: token moda platí 30 dní od vydání (klient si pak vydá nový); integrační token bez TTL', async () => {
+  const { store } = memTokens();
+  let now = 1_000;
+  const t = await issueAccountToken(7, store, () => now);
+  const it = await issueIntegrationToken('rob', store, () => now);
+  const verify = () => createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => now });
+  assert.equal(await verify()(t, 'robdiesalot'), true);
+  now += ACCOUNT_TOKEN_TTL_MS - 1;
+  assert.equal(await verify()(t, 'robdiesalot'), true);
+  now += 2;
+  assert.equal(await verify()(t, 'robdiesalot'), false, 'po 30 dnech neplatí');
+  assert.equal(await verify()(it, 'robdiesalot'), true, 'integrace (Židolišta) beze změny');
+  assert.equal(ACCOUNT_TOKEN_TTL_MS, 30 * 86_400_000);
+});
+
+test('L1: odhlášení účtu (signOutAccount) zneplatní všechny jeho tokeny, jiné účty ne', async () => {
+  const { store, rows } = memTokens();
+  const t = await issueAccountToken(7, store, () => 1);
+  await issueAccountToken(7, store, () => 2);
+  await issueAccountToken(8, store, () => 3);
+  await revokeAccountTokens(7, new Date(5), store);
+  assert.ok(rows.filter((r) => r.accountId === 7).every((r) => r.revokedAt));
+  assert.equal(rows.find((r) => r.accountId === 8)!.revokedAt, null);
+  const verify = createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => 10 });
+  assert.equal(await verify(t, 'robdiesalot'), false);
 });

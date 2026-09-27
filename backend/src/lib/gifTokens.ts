@@ -11,7 +11,8 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { gifAccessTokens } from '../db/schema.js';
 
-export interface GifTokenRow { accountId: number | null; integrationSlug: string | null }
+/** `createdAt`: kdy byl token vydán (TTL tokenu moda, audit L1); chybí = bez TTL. */
+export interface GifTokenRow { accountId: number | null; integrationSlug: string | null; createdAt?: Date }
 
 export interface GifTokenStore {
   /** Zneplatní aktivní tokeny vlastníka (účet nebo integrace) kromě `keep` nejnovějších. */
@@ -31,7 +32,7 @@ export const dbGifTokenStore: GifTokenStore = {
   },
   async insert(v) { await db.insert(gifAccessTokens).values(v); },
   async findActive(tokenHash) {
-    const rows = await db.select({ accountId: gifAccessTokens.accountId, integrationSlug: gifAccessTokens.integrationSlug })
+    const rows = await db.select({ accountId: gifAccessTokens.accountId, integrationSlug: gifAccessTokens.integrationSlug, createdAt: gifAccessTokens.createdAt })
       .from(gifAccessTokens).where(and(eq(gifAccessTokens.tokenHash, tokenHash), isNull(gifAccessTokens.revokedAt))).limit(1);
     return rows[0] ?? null;
   },
@@ -43,13 +44,24 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{20,128}$/;
 
 /** Aktivních tokenů na účet (jeden na zařízení / session); nový nad limit zneplatní nejstarší. */
 export const MAX_ACCOUNT_TOKENS = 5;
+/**
+ * Token moda platí 30 dní od vydání (audit L1): kdo ho ukradne (DOM / session úložiště webu), nemá ho napořád.
+ * Klient si po vypršení vydá nový (POST /moderation/gif/access-token vrací `expiresAt`; médium s neplatným
+ * tokenem = 404 → onError v core/gif.js si řekne o nový). Integrační token Židolišty TTL nemá (zpětná kompatibilita).
+ */
+export const ACCOUNT_TOKEN_TTL_MS = 30 * 86_400_000;
 
 /** Vydá nový token moda; nad MAX_ACCOUNT_TOKENS zneplatní nejstarší. Vrací token — jediné místo, kde odchází ven. */
 export async function issueAccountToken(accountId: number, store: GifTokenStore = dbGifTokenStore, now: () => number = Date.now): Promise<string> {
   const token = newToken();
-  await store.insert({ accountId, integrationSlug: null, tokenHash: hashToken(token) });
+  await store.insert({ accountId, integrationSlug: null, tokenHash: hashToken(token), createdAt: new Date(now()) });
   await store.revokeExcess({ accountId }, MAX_ACCOUNT_TOKENS, new Date(now()));
   return token;
+}
+
+/** Odhlášení účtu (lib/webAuth.ts signOutAccount): všechny jeho tokeny pro zamítnuté GIFy neplatí (audit L1). */
+export async function revokeAccountTokens(accountId: number, at: Date = new Date(), store: GifTokenStore = dbGifTokenStore): Promise<void> {
+  await store.revokeExcess({ accountId }, 0, at);
 }
 
 /** Vydá nový integrační token workspace Židolišty (jeden aktivní — starý zneplatní). */
@@ -87,7 +99,9 @@ export function createGifTokenVerifier(deps: GifTokenVerifierDeps) {
     let ok = false;
     try {
       const row = await deps.store.findActive(h);
-      if (row?.accountId != null) ok = await deps.isMod(row.accountId, channel);
+      const expired = row?.accountId != null && !!row.createdAt && deps.now() - row.createdAt.getTime() > ACCOUNT_TOKEN_TTL_MS;
+      if (expired) ok = false;
+      else if (row?.accountId != null) ok = await deps.isMod(row.accountId, channel);
       else if (row?.integrationSlug) ok = (await deps.slugForChannel(channel))?.toLowerCase() === row.integrationSlug.toLowerCase();
     } catch { ok = false; }
     if (cache.size > 5000) cache.clear();

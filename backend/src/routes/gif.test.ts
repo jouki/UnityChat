@@ -189,7 +189,8 @@ test('nemod → 403 na access-token, rejected a akcích nad médiem; mod → tok
   assert.deepEqual(actions, []);
   account = 7;
   const [tok, rej, ...acts] = await Promise.all(calls());
-  assert.deepEqual(tok.json(), { ok: true, token: 'NOVY' });
+  assert.deepEqual([tok.json().ok, tok.json().token], [true, 'NOVY']);
+  assert.ok(Math.abs(tok.json().expiresAt - tok.json().serverNow - 30 * 86_400_000) < 1000, 'token platí 30 dní (audit L1)');
   assert.equal(tok.headers['cache-control'], 'no-store');
   assert.equal(rej.json().nextBefore, `5000:${id}`);
   assert.deepEqual(acts.map((r) => r.statusCode), [200, 200, 200, 200]);

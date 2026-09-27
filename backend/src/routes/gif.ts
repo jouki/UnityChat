@@ -24,7 +24,7 @@ import { workspaceForChannel, type Platform } from '../lib/zidolista.js';
 import { registryPlatformChannel } from '../lib/platformChannels.js';
 import { MEDIA_ID_RE, gifMediaUrl, isGifMessageId } from '../lib/gifIds.js';
 import { pendingView, GIF_MEDIA_ACTIONS, GIF_REJECTED_REASON, REJECTED_RETENTION_MS, type GifDiscardedStatus, type GifFlow, type GifMediaInfo, type GifMediaStatus, type GifStatus, type GifStore } from '../lib/gifRequests.js';
-import { createGifTokenVerifier, dbGifTokenStore, issueAccountToken, type GifTokenVerifier } from '../lib/gifTokens.js';
+import { ACCOUNT_TOKEN_TTL_MS, createGifTokenVerifier, dbGifTokenStore, issueAccountToken, type GifTokenVerifier } from '../lib/gifTokens.js';
 import { parseChannel } from './moderation.js';
 import { RateLimiter, toClientMessage, parseMessageKeys, dbMessageRowsByKeys, gifMediaGone, type ClientMessage, type GifGone } from './chat.js';
 import { config } from '../config.js';
@@ -471,7 +471,8 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     if (!channel) return reply.code(400).send({ ok: false, error: 'channel' });
     if (!(await modsOf(accountId, channel)).length) return reply.code(403).send({ ok: false, error: 'not_mod' });
     const token = await tokens.issue(accountId);
-    return { ok: true, token };
+    // expiresAt (čas serveru, ms): token moda platí 30 dní (audit L1) — klient si pak vydá nový.
+    return { ok: true, token, expiresAt: Date.now() + ACCOUNT_TOKEN_TTL_MS, serverNow: Date.now() };
   });
 
   // Zamítnuté GIFy kanálu (záložka „Zamítnuté GIFy"), nejnovější první; `before` = `<rejectedAt ms>:<mediaId>` (nextBefore).

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
+import { revokeAccountTokens } from './gifTokens.js';
 import { webAccounts, webIdentities, webSessions } from '../db/schema.js';
 import { encryptToken, decryptToken } from './crypto.js';
 import { config } from './../config.js';
@@ -195,6 +196,8 @@ export async function signOutAccount(accountId: number, now = new Date()): Promi
     })
     .where(eq(webIdentities.accountId, accountId));
   await db.delete(webSessions).where(eq(webSessions.accountId, accountId));
+  // Tokeny moda pro zamítnuté GIFy taky (audit L1) — jinak by platily i po odhlášení ze všech zařízení.
+  await revokeAccountTokens(accountId, now);
 }
 
 export function bearerToken(req: FastifyRequest): string | null {
