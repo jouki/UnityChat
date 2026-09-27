@@ -1693,6 +1693,8 @@ class UnityChat {
     this._annivStart();
     try { const r = await chrome.storage.local.get('uc_send_platform'); if (['twitch', 'kick', 'youtube'].includes(r.uc_send_platform)) this._sendPlatform = r.uc_send_platform; } catch {}
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
+    // Broadcast (mod / streamer) si pamatuje zvlášť — platí, jen dokud je role a aspoň dvě přihlášené platformy.
+    try { this._broadcast = (await chrome.storage.local.get('uc_send_broadcast')).uc_send_broadcast === true; } catch {}
     if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
     this._refreshAccount();
     this._bootMark('_init done');
@@ -3794,7 +3796,15 @@ class UnityChat {
     // Uživatel mimo UnityChat vidí jen svou platformu → dočasně přepnout na ni (když na ní mám účet).
     // Vrátí se po odeslání nebo zrušení odpovědi; ruční přepnutí během odpovídání návrat ruší.
     // Původní platforma = ta před první automatickou změnou (další odpověď ji nepřepíše).
-    if (!this._legacySend()) {
+    // Broadcast: odpověď patří jednomu člověku → vždy na platformu autora (i uživatele UnityChatu),
+    // po odeslání / zrušení zase Broadcast.
+    if (!this._legacySend() && (this._isBroadcast() || this._replyPrevBroadcast)) {
+      if (!this._replyPrevBroadcast) { this._replyPrevBroadcast = true; this._replyPrevPlatform = this.activePlatform; }
+      this._broadcast = false;
+      if (platform !== this.activePlatform && this._identity(platform)) this._selectSendPlatform(platform, { quiet: true, auto: true });
+      else this._renderComposer();
+      this._ucLog('Reply', `broadcast → ${platform}:${username} (${this._identity(platform) ? 'platforma autora' : 'autor na nepřihlášené platformě, píšu na ' + this.activePlatform})`);
+    } else if (!this._legacySend()) {
       const needSwitch = !authorUc && platform !== this.activePlatform && this._identity(platform);
       if (needSwitch) {
         if (!this._replyPrevPlatform) this._replyPrevPlatform = this.activePlatform;
@@ -3835,10 +3845,13 @@ class UnityChat {
 
   _restoreReplyPlatform() {
     const prev = this._replyPrevPlatform;
-    if (!prev) return;
+    const bc = this._replyPrevBroadcast;
+    if (!prev && !bc) return;
     this._replyPrevPlatform = null;
-    if (prev !== this.activePlatform && this._identity(prev)) this._selectSendPlatform(prev, { quiet: true, auto: true });
-    this._ucLog('Reply', `platforma zpět na ${prev}`);
+    this._replyPrevBroadcast = false;
+    if (prev && prev !== this.activePlatform && this._identity(prev)) this._selectSendPlatform(prev, { quiet: true, auto: true });
+    if (bc) { this._broadcast = true; this._renderComposer(); }
+    this._ucLog('Reply', `platforma zpět na ${bc ? 'Broadcast' : prev}`);
   }
 
   // @přezdívka → @login pro odchozí text. Záměrně širší než mention regex v
@@ -3879,6 +3892,13 @@ class UnityChat {
     const legacy = this._legacySend();
     if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
     if (this._warnings?.blocked) { this._ucLog('ModMenu', 'send blokováno — nepotvrzené varování'); this._warnings.open(); return; }
+    // Broadcast (mod / streamer, roli ověřuje server): text z pole na všechny přihlášené platformy.
+    // Commandy jdou jen na vybranou platformu (bot by reagoval vícekrát), GIF odkaz Broadcastem vůbec.
+    if (!external && this._isBroadcast() && !text.startsWith('!') && !text.startsWith('/')) {
+      if (window.UC_CORE.hasGifLink(text)) { this._sys('GIF pošli na jednu platformu — vyber ji v menu u pole.'); return; }
+      await this._sendBroadcast(text);
+      return;
+    }
     // GIF odkaz během cooldownu odměny: neodeslat, pole zčervená, bublina „Můžeš až za:" (text zůstává v poli).
     // Výběr z knihovny (opts.gif) taky — cooldown ze serveru (i tiché schválení modem) ho musí zastavit (test2 bod 4.1).
     if ((!external || opts.gif) && !this._gifCd().checkSend(text)) return;
@@ -3936,9 +3956,8 @@ class UnityChat {
     // Optimistic UI: show message instantly
     // Native reply support: Twitch (GQL) + Kick (API reply metadata).
     // For cross-platform or YouTube → fallback to @mention prefix.
-    const identity = legacy ? null : this._identity(platform);
-    const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
-    const ucProfile = this.nicknames.get(platform, username);
+    const base = this._optimisticBase(platform);
+    const username = base.username;
     // Schválený GIF (id gif-<n>) je syntetická zpráva UnityChatu — na platformě neexistuje, nativní
     // odpověď by selhala → odpověď napříč platformami (ucReplyTo / @jméno).
     const replyIsGif = window.UC_CORE.isGifMessageId(reply?.messageId);
@@ -3951,10 +3970,9 @@ class UnityChat {
     }
     // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
     this._lastSentText = wireText;
-    const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
     // Id si držíme stranou: když odeslání selže, musí se tahle optimistická
     // zpráva označit jako neodeslaná a vypadnout z cache (viz _markSendFailed).
-    const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const optId = base.optId;
     // GIF odkaz: kolečko s % u optimistické zprávy hned (jen když odměnu mám / jsem mod), průběh pak ze SSE gif-progress.
     if (hasGif) {
       // Náš odkaz (výběr z knihovny) server nestahuje → „Odesílám…“ bez procent (test2 bod 4).
@@ -3966,8 +3984,8 @@ class UnityChat {
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || userEntry?.color || this._platformColors?.[platform] || null,
-      badgesRaw: userEntry?.badgesRaw || '',
+      color: base.color,
+      badgesRaw: base.badgesRaw,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
@@ -4050,6 +4068,111 @@ class UnityChat {
       this._markSendFailed(optId, err.message);
       this._sys(`Nelze odeslat: ${err.message}`);
     }
+  }
+
+  /** Optimistická zpráva: id, jméno, pod kterým mě platforma ukáže, a barva / badge z posledních známých. */
+  _optimisticBase(platform) {
+    const identity = this._legacySend() ? null : this._identity(platform);
+    const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
+    const ucProfile = this.nicknames.get(platform, username);
+    const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
+    return {
+      optId: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      username,
+      color: ucProfile?.color || userEntry?.color || this._platformColors?.[platform] || null,
+      badgesRaw: userEntry?.badgesRaw || '',
+    };
+  }
+
+  /**
+   * Broadcast: stejný text na všechny přihlášené platformy jedním POST /chat/broadcast. Roli moda / streamera
+   * ověřuje server (lib/chatBroadcast.ts) — bez ní nic neodejde (403 not_mod). Každá platforma má svou
+   * optimistickou zprávu (páruje se s echem jako u běžné zprávy) a neodeslaná část se označí sama.
+   */
+  async _sendBroadcast(text) {
+    const targets = this._broadcastTargets();
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
+    this._msgHistoryIdx = -1;
+    this._msgHistoryDraft = '';
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    const texts = {};
+    const opt = {};
+    for (const p of targets) {
+      texts[p] = this._resolveNicknameMentions(text, p);
+      const base = this._optimisticBase(p);
+      opt[p] = base.optId;
+      this._addMessage({ id: base.optId, platform: p, username: base.username, message: text, color: base.color, badgesRaw: base.badgesRaw, timestamp: Date.now(), _uc: true, _optimistic: true });
+    }
+    this._lastSentText = texts[targets[0]];
+    this._ucLog('Send', `broadcast → ${targets.join(',')} "${text.slice(0, 60)}"`);
+    const failAll = (reason) => {
+      for (const p of targets) this._markSendFailed(opt[p], reason);
+      if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+    };
+    try {
+      const token = await this._ucSessionToken();
+      const r = await fetch(`${UC_API}/chat/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channel: (this.config.channel || '').toLowerCase(), text, texts }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const j = await r.json().catch(() => ({}));
+      this._ucLog('Send', `broadcast → ${r.status} ${j.results ? Object.entries(j.results).map(([p, x]) => `${p}=${x.ok ? 'ok' : x.status + ' ' + x.error}`).join(' ') : (j.error || '')}`);
+      if (r.status === 401) { failAll('přihlášení vypršelo'); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
+      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora'); this._loadWarnings(); return; }
+      if (r.status === 403 && j.error === 'not_mod') {
+        // Server roli nepotvrdil (menu mělo starý stav) → Broadcast pryč, znovu načíst roli.
+        failAll('Broadcast smí jen mod nebo streamer');
+        this._sys('Broadcast smí posílat jen mod nebo streamer kanálu.');
+        this._loadModState();
+        return;
+      }
+      if (!j.results) {
+        const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : j.error === 'gif' ? 'GIF pošli na jednu platformu' : (j.error || `HTTP ${r.status}`);
+        failAll(reason);
+        this._sys(`Chyba: ${reason}`);
+        return;
+      }
+      let failed = 0;
+      for (const p of targets) {
+        const res = j.results[p];
+        if (!res?.ok) { failed++; this._markSendFailed(opt[p], res?.error || 'neodesláno'); continue; }
+        if (p === 'youtube') {
+          window.UC_CORE.watchYoutubeSend({
+            optId: opt[p], platform: p, isGif: false, outbox: this._gifOutInst,
+            pending: () => !!this.store.get(opt[p]) && !this.store.get(opt[p]).sendFailed,
+            markFailed: (reason) => this._markSendFailed(opt[p], reason),
+            log: (tag, t) => this._ucLog(tag, t),
+          });
+        }
+      }
+      if (failed && failed === targets.length && !this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+    } catch (e) {
+      failAll(e.message || 'neodesláno');
+      this._sys(`Nelze odeslat: ${e.message || e}`);
+    }
+  }
+
+  /** Platformy pro Broadcast (core broadcastTargets): mod / streamer s aspoň dvěma přihlášenými, jinak []. */
+  _broadcastTargets() {
+    return this._legacySend() ? [] : window.UC_CORE.broadcastTargets(this._account, !!this._canModerate);
+  }
+
+  /** Píšu teď Broadcastem? (volba + role + přihlášení; bez nich se píše na vybranou platformu) */
+  _isBroadcast() {
+    return !!this._broadcast && this._broadcastTargets().length >= 2;
+  }
+
+  _selectBroadcast() {
+    this._replyPrevPlatform = null;
+    this._replyPrevBroadcast = false;
+    this._broadcast = true;
+    try { chrome.storage.local.set({ uc_send_broadcast: true }); } catch {}
+    this._renderComposer();
+    this.msgInput.focus();
   }
 
   /**
@@ -4989,6 +5112,8 @@ class UnityChat {
     if (this._gifInst || can) { this._gifs().repaint(); if (can) this._gifs().loadPending(); }
     // GIF záložka: taby Zamítnuté + duplikáty jen modovi.
     this._gifPanel?.update();
+    // Broadcast v menu „Psát jako“ jen pro moda / streamera (server roli ověřuje znovu při odeslání).
+    if (changed) this._renderComposer();
     this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
   }
 
@@ -5582,8 +5707,12 @@ class UnityChat {
   }
 
   _selectSendPlatform(platform, { quiet = false, auto = false } = {}) {
-    // Ruční volba během odpovídání = platforma zůstane, návrat po odpovědi se nekoná.
-    if (!auto) this._replyPrevPlatform = null;
+    // Ruční volba během odpovídání = platforma zůstane, návrat po odpovědi se nekoná; ruší i Broadcast.
+    if (!auto) {
+      this._replyPrevPlatform = null;
+      this._replyPrevBroadcast = false;
+      if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+    }
     this._sendPlatform = platform;
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
     if (!this._legacySend()) this._setActivePlatform(platform);
@@ -5610,9 +5739,14 @@ class UnityChat {
     document.body.classList.toggle('uc-warning-pending', warned);
     this.msgInput.disabled = !canWrite || warned;
     this.sendBtn.disabled = !canWrite || warned;
+    const bc = canWrite && this._isBroadcast();
     this.msgInput.placeholder = warned ? 'Máš nepotvrzené varování od moderátora — potvrď ho, pak můžeš psát.'
+      : bc ? 'Zpráva na všechny platformy...'
       : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
-    if (btn) btn.title = id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
+    if (btn) btn.title = bc ? `Broadcast: píšeš na ${this._broadcastTargets().map((p) => NAMES[p]).join(', ')}`
+      : id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
+    // Badge u pole: v Broadcastu všechna tři loga (composer.css #active-badge.bc), jinak logo platformy.
+    this.platformBadge?.classList.toggle('bc', bc);
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
     this._qdDock?.update();
@@ -5625,6 +5759,7 @@ class UnityChat {
     window.UC_CORE.renderPlatformMenu(menu, {
       me: this._account,
       current: this.activePlatform,
+      broadcast: { targets: this._broadcastTargets(), selected: this._isBroadcast(), onSelect: () => this._selectBroadcast() },
       onSelect: (p) => this._selectSendPlatform(p),
       onLogin: (p) => this._loginPlatform(p),
       onUnlink: (p) => this._unlinkPlatform(p),

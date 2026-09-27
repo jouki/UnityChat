@@ -17,6 +17,8 @@ import {
 import { outgoingText, SendError } from '../lib/webSend.js';
 import { sendAsAccount, sendUcReply } from '../lib/accountSend.js';
 import { pendingWarnings } from '../lib/accountWarnings.js';
+import { runBroadcast } from '../lib/chatBroadcast.js';
+import { accountModIdentities } from '../lib/chatRole.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
@@ -35,6 +37,12 @@ const PlatformParam = z.object({ platform: z.enum(['twitch', 'youtube', 'kick'])
 // vlastním účtem, aby mohl mazat/banovat z UnityChatu na platformách, kde to podporují.
 const StartBody = z.object({ returnTo: z.string().url().optional(), mod: z.boolean().optional() }).optional();
 const ExchangeBody = z.object({ code: z.string().min(8).max(200) });
+const BroadcastBody = z.object({
+  channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
+  text: z.string().min(1).max(2000),
+  /** Text pro jednotlivé platformy (@přezdívka → login té platformy); kontroluje se stejně jako `text`. */
+  texts: z.object({ twitch: z.string().min(1).max(2000), kick: z.string().min(1).max(2000), youtube: z.string().min(1).max(2000) }).partial().optional().nullable(),
+});
 const SendBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
   channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
@@ -77,6 +85,7 @@ export function webErrorRedirect(reply: FastifyReply, returnTo: string | undefin
 
 export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest?: Ingest }) {
   const sendLimiter = new RateLimiter(5, 1);   // per účet: 5 najednou, doplňuje 1/s
+  const broadcastLimiter = new RateLimiter(2, 0.25); // per účet: Broadcast = zpráva na 2–3 platformy, max 1 za 4 s
   const startLimiter = new RateLimiter(10, 0.2); // per IP: 10 startů, doplňuje 1 za 5 s
 
   // ---- start OAuth (web) ----
@@ -212,6 +221,28 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       reply.code(status >= 400 && status < 600 ? status : 502);
       return { ok: false, error: err.message };
     }
+  });
+
+  // ---- Broadcast (mod / streamer): zpráva na všechny přihlášené platformy ----
+  // Roli ověřuje jen server (lib/chatBroadcast.ts → accountModIdentities), klient ji podstrčit nemůže.
+  app.post<{ Body: z.infer<typeof BroadcastBody> }>('/chat/broadcast', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = BroadcastBody.safeParse(req.body);
+    if (!body.success) { reply.code(400); return { ok: false, error: 'body' }; }
+    const accountId = req.webAccountId!;
+    if (!broadcastLimiter.allow(String(accountId)) || !sendLimiter.allow(String(accountId))) { reply.code(429); return { ok: false, error: 'slow down' }; }
+    const channel = (body.data.channel || DEFAULT_CHANNEL).toLowerCase();
+    const out = await runBroadcast({ accountId, channel, text: body.data.text, texts: body.data.texts }, {
+      pendingWarnings,
+      modIdentities: (id, ch) => accountModIdentities(id, ch),
+      listIdentities,
+      send: async (platform, text) => {
+        const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
+        return { id: res.id ?? null, sentText: res.sentText ?? null };
+      },
+      log: req.log,
+    });
+    reply.code(out.status);
+    return out.body;
   });
 
   // ---- je streamer live? (web: tečky ve filtrech) ----

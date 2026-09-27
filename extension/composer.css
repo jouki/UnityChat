@@ -29,6 +29,10 @@
 #platform-menu .pm-name { flex: 1; }
 #platform-menu .pm-state { font-size: 11px; opacity: 0.75; }
 #platform-menu .pm-login { color: #ffb347; font-weight: 600; opacity: 1; }
+/* Broadcast (mod / streamer): tři loga vedle sebe, pod ním oddělovač od jednotlivých platforem. */
+#platform-menu .pm-broadcast { border-bottom: 1px solid var(--border, #333); border-radius: 6px 6px 0 0; margin-bottom: 4px; }
+#platform-menu .pm-bc-logos { display: inline-flex; gap: 3px; flex-shrink: 0; }
+#platform-menu .pm-bc-logos .pm-badge { width: 16px; height: 16px; }
 #platform-menu .pm-logout { border-top: 1px solid var(--border, #333); border-radius: 0; margin-top: 4px; opacity: 0.8; }
 
 /* ---- přihlašovací okno (reflektorový hover podle AoE Inviter) ---- */
@@ -104,6 +108,15 @@
 .uc-shade.has-active { background: rgba(2, 2, 4, 0.93); }
 .uc-login-note { line-height: 1.5; }
 
+
+/* Badge u inputu v režimu Broadcast: zlatá loga všech tří platforem (Twitch, Kick, YouTube). */
+#active-badge.badge.bc {
+  width: 46px; height: 22px; padding: 0; font-size: 0; color: transparent; overflow: hidden;
+  background-image: url(icons/platform/twitch-gold.svg), url(icons/platform/kick-gold.svg), url(icons/platform/youtube-gold.svg);
+  background-repeat: no-repeat; background-size: 14px 14px, 12px 12px, 14px 14px;
+  background-position: left center, center center, right center;
+  filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65));
+}
 
 /* Kick logo u inputu je opticky větší než ostatní: 2 px nahoře i dole (jako .pi.ki v chatu). */
 #active-badge.ki, #platform-menu .pm-badge.ki { padding: 2px 0; box-sizing: border-box; background-origin: content-box; background-clip: content-box; }
