@@ -32,6 +32,17 @@ test('toClientMessage: kick a youtube nesou platformní payload', () => {
   assert.equal(y.color, '#ffd600');
 });
 
+test('RateLimiter: přeplnění klíči nevymaže vyčerpané buckety (rotace IP limit neruší, audit SEC-2)', () => {
+  const now = 0;
+  const rl = new RateLimiter(2, 0, () => now);
+  assert.equal(rl.allow('utocnik'), true);
+  assert.equal(rl.allow('utocnik'), true);
+  assert.equal(rl.allow('utocnik'), false);
+  // 6 000 dalších klíčů (rotace IPv6); vyčerpaný útočník, který je aktivní, se nesmí vrátit na plnou kapacitu.
+  for (let i = 0; i < 6000; i++) { rl.allow(`ip${i}`); if (i % 100 === 0) assert.equal(rl.allow('utocnik'), false, `po ${i} klíčích`); }
+  assert.equal(rl.allow('utocnik'), false);
+});
+
 test('RateLimiter: 10 tokenů, doplňuje 10/s', () => {
   let now = 0;
   const rl = new RateLimiter(10, 10, () => now);

@@ -262,12 +262,17 @@ export class RateLimiter {
     const b = this.buckets.get(key) ?? { tokens: this.capacity, at: t };
     b.tokens = Math.min(this.capacity, b.tokens + ((t - b.at) / 1000) * this.perSec);
     b.at = t;
-    if (b.tokens < 1) { this.buckets.set(key, b); return false; }
-    b.tokens -= 1;
+    // LRU: naposledy použitý klíč na konec; při přeplnění pryč nejdéle nepoužité (dřív clear() všech → rotace
+    // IPv6 adres limit rušila i aktivnímu útočníkovi, audit SEC-2).
+    this.buckets.delete(key);
     this.buckets.set(key, b);
-    if (this.buckets.size > 5000) this.buckets.clear();
+    while (this.buckets.size > RateLimiter.MAX_KEYS) this.buckets.delete(this.buckets.keys().next().value!);
+    if (b.tokens < 1) return false;
+    b.tokens -= 1;
     return true;
   }
+
+  static readonly MAX_KEYS = 5000;
 }
 
 const CHANNEL_RE = /^[a-z0-9_]{1,40}$/;
