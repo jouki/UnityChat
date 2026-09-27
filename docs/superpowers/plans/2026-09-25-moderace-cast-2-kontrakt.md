@@ -809,7 +809,9 @@ event: gif-notice          # jen odesílateli
 data: { "requestKey": "twitch:abc", "channel": "robdiesalot", "platform": "twitch", "messageId": "abc",
         "kind": "approved_only" }            # „Nové GIFy teď nejdou, vyber z GIFů v panelu"
 data: { …, "kind": "auto_rejected", "reason": "repeat" | "ban" | "purged" | "unapproved" }   # label „Zamítnuto moderátorem" natrvalo
-data: { …, "kind": "cooldown", "until": 1790497500000, "serverNow": 1790497460000 }   # GIF odkaz během cooldownu
+data: { …, "kind": "cooldown", "until": 1790497500000, "serverNow": 1790497460000, "removed": false }   # GIF odkaz během cooldownu
+        # `removed: true` = zprávu hned smazal běžný filtr odkazů (hláška „… zprávu s odkazem smazal filtr odkazů.“);
+        # jen u odemčené a nevypršelé odměny (`until`), jinak se nic neposílá (review M1/M2).
         # zůstal běžným odkazem (od 2026-09-27, test2 bod 4.1): klient u zprávy nenechá kolečko ani štítek, ukáže hlášku
         # „GIF můžeš poslat až za … — odkaz zůstal jako běžná zpráva.“ a nastaví cooldown; server loguje
         # „gif: cooldown → běžný odkaz“. Posílá filtr odkazů (přístup z cache `denied` kvůli cooldownu — gifCooldownUntilSync)
