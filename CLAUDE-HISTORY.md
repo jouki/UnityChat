@@ -140,6 +140,9 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-27 (výročí na Twitchi)
+- CLAUDE.md: milestone v3.41.63–64 (výročí), ingest ukládá USERNOTICE výročí, UC_LOG tagy `Anniversary` + `UserNotice`.
+
 ### 2026-09-27 (session unitychat-8f)
 
 - **CLAUDE.md** — milestone v3.41.43–53 (GIF náhled, dvě varianty zahození, úpravy po testu, závěrečný audit). Memory `project_gif_library.md` přepsaná na stav po auditu.
