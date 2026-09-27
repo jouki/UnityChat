@@ -16,6 +16,15 @@ import { PLATFORM_NAMES } from './soundboard.js';
 import { escapeHtml } from './html.js';
 import { modErrorText, openModDialog, PLATFORM_LOC } from './mod-menu.js';
 import { CURRENCIES } from './qr-dono.js';
+import { createGifMedia, normalizeGifMedia } from './gif.js';
+
+/** GIF ve zprávě v Profilu: menší než v chatu (seznam zpráv je hustý). */
+export const PROFILE_GIF_W = 240;
+export const PROFILE_GIF_H = 140;
+/** Štítek rozmazaného GIFu v Profilu moda podle stavu média (spec 2026-09-27-gif-review-upravy §3). */
+export const PROFILE_GIF_LABELS = { rejected: 'Zamítnutý GIF', purging: 'GIF ke smazání', withdrawn: 'Stažený GIF' };
+/** Náhled rozmazaného GIFu potřebuje token moda (zamítnuté / ke smazání nejsou veřejné). */
+export const profileGifNeedsToken = (m) => !!m?.gifHidden && (m.gifStatus === 'rejected' || m.gifStatus === 'purging');
 
 export const HISTORY_PAGE = 50;
 const enc = encodeURIComponent;
@@ -222,8 +231,11 @@ export class UserHistoryPanel {
    * @param {(tag: string, text: string) => void} [o.log]
    * @param {number} [o.pageSize]
    * @param {(ms: number) => Promise<void>} [o.sleep]  čekání před opakováním po 429 (testy)
+   * @param {string[]} [o.gifOrigins]  povolené originy médií GIFů (normalizeGifMedia)
+   * @param {{get: () => Promise<string|null>, refresh: () => Promise<string|null>}} [o.gifToken]
+   *   token moda pro zamítnuté / zahozené GIFy (core/gif-library.js GifAccessToken) — jen v paměti, nikdy do DOM atributu
    */
-  constructor({ doc = globalThis.document, api, container, renderMessage, renderBadges, paintName, renderReply, modMenu, deletedStyle, onPlatformCard, platformIcon, channelLabel, log, pageSize = HISTORY_PAGE, sleep } = {}) {
+  constructor({ doc = globalThis.document, api, container, renderMessage, renderBadges, paintName, renderReply, modMenu, deletedStyle, onPlatformCard, platformIcon, channelLabel, log, pageSize = HISTORY_PAGE, sleep, gifOrigins = null, gifToken = null } = {}) {
     this.doc = doc;
     this.api = api;
     this.container = container || null;
@@ -238,6 +250,8 @@ export class UserHistoryPanel {
     this.channelLabel = channelLabel || ((c) => c);
     this.log = log || (() => {});
     this.pageSize = pageSize;
+    this.gifOrigins = gifOrigins;
+    this.gifToken = gifToken;
     this._sleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.el = null;
     this.target = null;
@@ -810,6 +824,8 @@ export class UserHistoryPanel {
     }
     if (!gone && m.replyTo && (m.replyTo.username || m.replyTo.message)) row.appendChild(this._replyEl(msg));
     row.append(this._time(Number(m.timestamp)), this._platformMark(m.platform, uc), tx);
+    // Schválený GIF (Profil vidí jen mod): médium mimo knihovnu (zamítnuté, zahozené) rozmazaně, soubor pryč = štítek.
+    if (!gone && m.gif) { const g = this._gifEl(m); if (g) row.appendChild(g); }
     // GIF (moderace část 4): původní zpráva čekající na schválení (gif_request) se v UnityChatu nevykresluje —
     // po schválení ji nahradí GIF zpráva, po zamítnutí z ní bude gif_rejected (smazaná, mod ji neodkryje).
     if (m.deleted && m.deletedReason === 'gif_request') { row.hidden = true; row.classList.add('uc-gif-held'); }
@@ -817,6 +833,64 @@ export class UserHistoryPanel {
     // Akce moda jen v záložce aktuálního kanálu (v cizím kanálu mod práva nemá).
     if (this.view === 'mod' && this.modMenu && this._isCurrentTab()) row.appendChild(this._actions(m, gone));
     return row;
+  }
+
+  /**
+   * GIF zprávy v Profilu (spec 2026-09-27-gif-review-upravy §3). `gifHidden` (médium zamítnuté / odebrané / purging /
+   * withdrawn) → rozmazaný, klik zaostří, další klik rozmaže; zamítnuté a ke smazání s tokenem moda (po chybě média
+   * jednou nový token). `gif.unavailable` → štítek „[GIF nedostupný]“ (createGifMedia).
+   */
+  _gifEl(m) {
+    const doc = this.doc;
+    const g = normalizeGifMedia(m.gif, { origins: this.gifOrigins });
+    if (!g) { this.log('Profile', `GIF ${m.platform}:${m.id} s cizím médiem → bez náhledu`); return null; }
+    if (m.gif.unavailable === true) g.unavailable = true;
+    const box = doc.createElement('div');
+    box.className = 'uc-uh-gif';
+    const needTok = profileGifNeedsToken(m) && !g.unavailable;
+    let retried = false;
+    const render = (token) => {
+      box.querySelector('.uc-gif')?.remove();
+      const media = createGifMedia(doc, g, {
+        lazy: true, log: this.log, maxW: PROFILE_GIF_W, maxH: PROFILE_GIF_H, token,
+        // Token mohl vypadnout (nejstarší z 5, účet přestal být modem) → jednou nový, jinak štítek „GIF odebrán“.
+        onError: needTok && this.gifToken ? () => {
+          if (retried) return false;
+          retried = true;
+          this.log('Profile', `GIF ${m.id}: médium s tokenem se nenačetlo → nový token`);
+          Promise.resolve().then(() => this.gifToken.refresh()).catch(() => null).then((t) => { if (box.isConnected || box.parentNode) render(t || null); });
+          return true;
+        } : null,
+      });
+      box.insertBefore(media, box.firstChild);
+    };
+    if (m.gifHidden && !g.unavailable) {
+      const label = PROFILE_GIF_LABELS[m.gifStatus] || 'GIF mimo knihovnu';
+      box.classList.add('uc-uh-gif--hidden', 'uc-uh-gif--blur');
+      box.tabIndex = 0;
+      box.setAttribute('role', 'button');
+      box.setAttribute('aria-pressed', 'false');
+      box.setAttribute('aria-label', `${label} — klik zaostří`);
+      box.title = `${label} — klik zaostří, další klik rozmaže`;
+      const tag = doc.createElement('span');
+      tag.className = 'uc-uh-gif-tag';
+      tag.textContent = label;
+      box.appendChild(tag);
+      const toggle = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const blurred = box.classList.toggle('uc-uh-gif--blur');
+        box.setAttribute('aria-pressed', String(!blurred));   // stisknuto = zaostřeno
+        box.setAttribute('aria-label', `${label} — klik ${blurred ? 'zaostří' : 'rozmaže'}`);
+        this.log('Profile', `GIF ${m.id} (${m.gifStatus}) ${blurred ? 'rozmazán' : 'zaostřen'}`);
+      };
+      box.addEventListener('click', toggle);
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') toggle(e); });
+    }
+    // Zamítnuté / ke smazání: vykreslit až s tokenem (bez něj by jen proběhl zbytečný 404).
+    if (needTok && this.gifToken) {
+      Promise.resolve().then(() => this.gifToken.get()).catch(() => null).then((t) => render(t || null));
+    } else render(null);
+    return box;
   }
 
   /** Smazaná / skrytá zpráva stejně jako v chatu (core deletedView + applyDeleted; Profil vidí jen mod). */

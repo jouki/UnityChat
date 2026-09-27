@@ -5120,6 +5120,9 @@ class UnityChat {
         onPlatformCard: (t) => this._openUserCard(t.platform, t.login),
         platformIcon: (p, uc) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}${uc ? '-gold' : ''}.svg` : null),
         log: (tag, text) => this._ucLog(tag, text),
+        // GIFy ve zprávách Profilu: zamítnuté / zahozené rozmazaně, náhled s tokenem moda (stejný jako záložka GIFy).
+        gifOrigins: UC_GIF_ORIGINS,
+        gifToken: this._gifTokens(),
       });
     }
     return this._userHistoryInst;
