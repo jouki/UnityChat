@@ -11,6 +11,12 @@
 
 import { czPlural } from './plural.js';
 import { escapeHtml } from './html.js';
+import { findLinks } from './links.js';
+
+/** Hláška nad polem, když zpráva ke sdílení obsahuje odkaz (sdílí se jen bez odkazů). */
+export const ANNIV_LINK_TEXT = 'Odkazy nejsou ve zprávě povolené.';
+/** Obsahuje zpráva ke sdílení odkaz? (stejná detekce jako filtr odkazů, core/links.js) */
+export const annivHasLink = (text) => findLinks(text).length > 0;
 
 /** Limit textu sdílení — podklad: odhad, běžný limit chatové zprávy Twitche. */
 export const ANNIV_MAX_LEN = 500;
@@ -260,7 +266,10 @@ export class AnniversaryBanner {
     actions.append(cancel, send);
     const note = mk('div', 'uc-anniv-msg');
     note.setAttribute('role', 'alert');
-    inner.append(input, meta, actions, note);
+    const linkWarn = mk('div', 'uc-anniv-linkwarn', ANNIV_LINK_TEXT);
+    linkWarn.setAttribute('role', 'alert');
+    linkWarn.hidden = true;
+    inner.append(linkWarn, input, meta, actions, note);
     form.append(inner);
     root.append(row, form);
 
@@ -269,7 +278,9 @@ export class AnniversaryBanner {
       const len = input.value.length;
       count.textContent = `${len}/${ANNIV_MAX_LEN}`;
       count.classList.toggle('uc-anniv-count--full', len >= ANNIV_MAX_LEN);
-      send.disabled = this._busy || (!allowEmpty && !input.value.trim());
+      const hasLink = annivHasLink(input.value);
+      linkWarn.hidden = !hasLink;
+      send.disabled = this._busy || hasLink || (!allowEmpty && !input.value.trim());
     };
     const setOpen = (open) => {
       root.classList.toggle('uc-anniv--open', open);
@@ -278,9 +289,10 @@ export class AnniversaryBanner {
       if (open) { sync(); try { input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); } catch { /* ignore */ } }
     };
     const submit = async () => {
-      if (this._busy || send.disabled) return;
+      if (this._busy || (send.disabled && !annivHasLink(input.value))) return;
       const text = input.value.trim().slice(0, ANNIV_MAX_LEN);
       if (!allowEmpty && !text) { note.textContent = annivErrorText('empty'); return; }
+      if (annivHasLink(text)) { linkWarn.hidden = false; return; } // odkaz se nesdílí (i Enter)
       this._busy = true;
       root.classList.add('uc-anniv--busy');
       send.textContent = 'Odesílám…';

@@ -104,4 +104,11 @@ const P = require('../extension/core/plural.js');
 assert.equal(P.czPlural(3, 'a', 'b', 'c'), 'b');
 assert.equal(require('../extension/core/user-history.js').czPlural, P.czPlural);
 
+// ---- zpráva ke sdílení nesmí obsahovat odkaz (stejná detekce jako filtr odkazů) ----
+assert.equal(A.annivHasLink('Díky za 7 měsíců!'), false);
+assert.equal(A.annivHasLink('mrkněte na https://example.com'), true);
+assert.equal(A.annivHasLink('twitch.tv/robdiesalot je nej'), true);
+assert.equal(A.annivHasLink(''), false);
+assert.equal(A.ANNIV_LINK_TEXT, 'Odkazy nejsou ve zprávě povolené.');
+
 console.log('test-anniversary: OK');

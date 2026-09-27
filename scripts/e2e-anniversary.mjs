@@ -159,7 +159,16 @@ check('Sdílet → rozbalené pole, Sdílet schované', await until(`document.qu
 check('resub: prázdná zpráva jde odeslat, počítadlo 0/500', await txt('.uc-anniv-count') === '0/500' && await ev(`document.querySelector('.uc-anniv-send').disabled`) === false);
 check('resub: volba série „…mou 3měsíční sérii“, zapnutá', await txt('.uc-anniv-streak') === 'Zobrazit v chatové zprávě mou 3měsíční sérii' && await ev(`document.querySelector('.uc-anniv-streak input').checked`) === true);
 check('pole má limit 500 znaků', await ev(`document.querySelector('.uc-anniv-input').maxLength`) === 500);
+// Odkaz ve zprávě: červené varování nad polem, Odeslat zakázané, Enter nic nepošle.
+await typeInto('.uc-anniv-input', 'mrkněte na https://example.com');
+check('odkaz → varování nad polem', await ev(`(() => { const w = document.querySelector('.uc-anniv-linkwarn'); const i = document.querySelector('.uc-anniv-input'); return !!w && !w.hidden && w.textContent === 'Odkazy nejsou ve zprávě povolené.' && !!(w.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_FOLLOWING); })()`) === true);
+check('odkaz → Odeslat zakázané', await ev(`document.querySelector('.uc-anniv-send').disabled`) === true);
+const gqlBeforeLink = gqlLog.length;
+await ev(`document.querySelector('.uc-anniv-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+await new Promise((r) => setTimeout(r, 300));
+check('odkaz → Enter nic neodešle', gqlLog.length === gqlBeforeLink);
 await typeInto('.uc-anniv-input', 'Díky Robe!');
+check('bez odkazu → varování zmizí', await ev(`document.querySelector('.uc-anniv-linkwarn').hidden`) === true);
 check('počítadlo 10/500', await txt('.uc-anniv-count') === '10/500');
 // Zrušit sbalí, Sdílet znovu otevře s textem.
 await click('.uc-anniv-cancel');

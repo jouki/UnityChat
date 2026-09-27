@@ -2469,6 +2469,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 @keyframes uc-anniv-pulse { 50% { transform: scale(1.12); } }
 .uc-anniv-text { flex: 1; min-width: 0; }
 .uc-anniv-title { font-weight: 700; line-height: 1.3; }
+.uc-anniv-linkwarn { color: #ff6b6b; font-size: 0.8em; line-height: 1.3; margin: 0 0 4px; }
 .uc-anniv-sub { font-size: 0.9em; color: var(--text-secondary); line-height: 1.3; }
 .uc-anniv-share, .uc-anniv-send {
   flex-shrink: 0; border: 0; border-radius: 4px; padding: 5px 12px; font: inherit; font-weight: 700; cursor: pointer;
