@@ -11,6 +11,7 @@
 //   skrytou zprávu nevidí vůbec ('hide').
 // - Mod volí v nastavení (MOD_DELETED_STYLES) — vždy zašedlé: 'label' („Zpráva smazána", bez štítku),
 //   'dim' (text + štítek), 'strike' (přeškrtnutý text + štítek); uložené 'hide' / neznámé = 'label'.
+//   Bez uložené volby 'dim' (DEFAULT_MOD_DELETED_STYLE, kolo 4 bod 5).
 //   Text smazané zprávy si mod dotáhne přes `GET /moderation/deleted-content` (DeletedContentLoader).
 // - OBS (`raw`): smazané i skryté zprávy se skryjí ('hide'). Volba „Skryté" je jen pro OBS.
 //
@@ -18,6 +19,11 @@
 
 export const DELETED_STYLES = ['label', 'dim', 'strike', 'hide'];
 export const DEFAULT_DELETED_STYLE = 'label';
+/**
+ * Výchozí volba „Smazané zprávy“ moda, dokud si ji sám nenastaví: „Zašedlé“ (test 2026-09-27 kolo 4 bod 5).
+ * Uložená volba se nepřepisuje; uložené 'hide' / neznámé dál = 'label'.
+ */
+export const DEFAULT_MOD_DELETED_STYLE = 'dim';
 /** Volby nastavení „Smazané zprávy" (jen mod; 'hide' je jen pro OBS a lidem se nenabízí). */
 export const MOD_DELETED_STYLES = [
   { id: 'label', label: 'Zpráva smazána' },
@@ -56,6 +62,7 @@ export const MOD_ACTION_ICONS = {
 export function deletedView({ style, isMod, raw, hidden } = {}) {
   if (raw) return { mode: 'hide', dimmed: false, tag: false };
   if (isMod) {
+    if (style == null || style === '') style = DEFAULT_MOD_DELETED_STYLE;
     if (style === 'strike' || style === 'dim') return { mode: style, dimmed: true, tag: true };
     return { mode: 'label', dimmed: true, tag: false };
   }

@@ -11,7 +11,7 @@
 // chatu pro vykreslení (tělo zprávy, badge, citace odpovědi, barva jména) — panel nemá vlastní kopie.
 // Cizí text (jména, důvody, zprávy donů) jen přes textContent. Žádné chrome.*, žádné globální stavy.
 
-import { fmtDuration, deletedView, applyDeleted, applyModTag, modTagText, RESTORE_TITLE, MOD_ACTION_ICONS } from './moderation.js';
+import { fmtDuration, deletedView, DEFAULT_MOD_DELETED_STYLE, applyDeleted, applyModTag, modTagText, RESTORE_TITLE, MOD_ACTION_ICONS } from './moderation.js';
 import { PLATFORM_NAMES } from './soundboard.js';
 import { escapeHtml } from './html.js';
 import { modErrorText, openModDialog, PLATFORM_LOC } from './mod-menu.js';
@@ -244,7 +244,7 @@ export class UserHistoryPanel {
     this.paintName = paintName || null;
     this.renderReply = renderReply || null;
     this.modMenu = modMenu || null;
-    this.deletedStyle = deletedStyle || (() => 'label');
+    this.deletedStyle = deletedStyle || (() => DEFAULT_MOD_DELETED_STYLE);
     this.onPlatformCard = onPlatformCard || null;
     this.platformIcon = platformIcon || (() => null);
     this.channelLabel = channelLabel || ((c) => c);
@@ -897,7 +897,7 @@ export class UserHistoryPanel {
   /** restorable = zprávu smazal / skryl server (ne jen ztlumení po timeoutu / banu) → oko místo koše. */
   _paintGone(row, { deleted = true, hidden = false, hasContent = true, restorable = true } = {}) {
     let style = 'label';
-    try { style = this.deletedStyle() || 'label'; } catch {}
+    try { style = this.deletedStyle() || DEFAULT_MOD_DELETED_STYLE; } catch {}
     const view = deletedView({ style, isMod: true, hidden: !deleted && hidden });
     applyDeleted(row, { ...view, hidden: !deleted && hidden, hasContent, restorable });
     row.classList.add('uc-uh-msg--gone');

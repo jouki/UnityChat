@@ -6,6 +6,7 @@ import('../extension/core/moderation.js').then((m) => {
 
   check('DELETED_STYLES obsahuje všechny 4 styly', JSON.stringify(m.DELETED_STYLES) === JSON.stringify(['label', 'dim', 'strike', 'hide']));
   check('DEFAULT_DELETED_STYLE = label', m.DEFAULT_DELETED_STYLE === 'label');
+  check('DEFAULT_MOD_DELETED_STYLE = dim (Zašedlé, kolo 4 bod 5)', m.DEFAULT_MOD_DELETED_STYLE === 'dim');
 
   check('MOD_DELETED_STYLES = 3 volby pro moda (bez „Skryté")', JSON.stringify(m.MOD_DELETED_STYLES.map((o) => o.id + ':' + o.label)) === JSON.stringify(['label:Zpráva smazána', 'dim:Zašedlé', 'strike:Přeškrtnuté']));
 
@@ -25,7 +26,10 @@ import('../extension/core/moderation.js').then((m) => {
     ['mod uložené hide → label', { isMod: true, style: 'hide' }, view('label', true, false)],
     ['mod neznámý style → label', { isMod: true, style: 'x' }, view('label', true, false)],
     ['mod skrytá + strike → strike (mod skrytou vidí)', { isMod: true, hidden: true, style: 'strike' }, view('strike', true, true)],
-    ['mod skrytá výchozí → label', { isMod: true, hidden: true }, view('label', true, false)],
+    // Kolo 4 bod 5: bez uložené volby (style chybí) je výchozí „Zašedlé“; uložená hodnota se respektuje.
+    ['mod skrytá bez volby → dim (výchozí Zašedlé)', { isMod: true, hidden: true }, view('dim', true, true)],
+    ['mod bez volby → dim (výchozí Zašedlé)', { isMod: true }, view('dim', true, true)],
+    ['mod prázdná volba → dim', { isMod: true, style: '' }, view('dim', true, true)],
     ['OBS (raw) smazaná → hide', { raw: true }, view('hide', false, false)],
     ['OBS (raw) skrytá → hide', { raw: true, hidden: true }, view('hide', false, false)],
     ['OBS (raw) i s modem → hide', { raw: true, isMod: true, style: 'strike' }, view('hide', false, false)],
@@ -179,7 +183,7 @@ import('../extension/core/moderation.js').then((m) => {
   // mod skrytá (label): „Zpráva skryta" bez štítku; dim → štítek „Skryto v UnityChatu"
   {
     const { el } = makeMsgEl();
-    m.applyDeleted(el, { ...m.deletedView({ isMod: true, hidden: true }), hidden: true });
+    m.applyDeleted(el, { ...m.deletedView({ isMod: true, hidden: true, style: 'label' }), hidden: true });
     check('applyDeleted mod skrytá: label „Zpráva skryta"', el.querySelector('.uc-deleted-label')?.textContent === 'Zpráva skryta' && !el.querySelector('.uc-deleted-tag'));
     const b = makeMsgEl();
     m.applyDeleted(b.el, { ...m.deletedView({ isMod: true, hidden: true, style: 'dim' }), hidden: true });

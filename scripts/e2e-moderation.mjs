@@ -115,7 +115,12 @@ const rowVis = () => ev(`(() => { const r = document.getElementById('row-deleted
 check('A nastavení „Smazané zprávy" vidí mod, jen 3 volby', await until(`!document.getElementById('row-deleted-style').hidden`, 3000) && await rowVis() === true
   && await ev(`[...document.querySelectorAll('#input-deleted-style option')].map(o => o.value + ':' + o.textContent).join(',')`) === 'label:Zpráva smazána,dim:Zašedlé,strike:Přeškrtnuté');
 const setStyle = (v) => ev(`(() => { const s = document.getElementById('input-deleted-style'); s.value = '${v}'; s.dispatchEvent(new Event('change')); return true; })()`);
-// Mod, výchozí styl „Zpráva smazána": smazaná zpráva z historie (bez obsahu) → label + štítek + ztlumení.
+// Kolo 4 bod 5: bez uložené volby je výchozí „Zašedlé“ (dim).
+check('A bez uložené volby: „Smazané zprávy“ = Zašedlé (dim)', await ev(`document.getElementById('input-deleted-style').value`) === 'dim'
+  && await ev(`(async () => (await chrome.storage.sync.get('uc_config')).uc_config?.deletedStyle ?? null)()`) !== 'label', await ev(`document.getElementById('input-deleted-style').value`));
+check('A bez uložené volby: smazaná zpráva z historie (po dotažení obsahu) jako Zašedlé', await until(`!!document.querySelector('.msg[data-msg-id="e2e-m2"].uc-deleted--dim .uc-deleted-tag')`, 4000), JSON.stringify(await msgState('e2e-m2')));
+await setStyle('label');
+// Mod, styl „Zpráva smazána": smazaná zpráva z historie (bez obsahu) → label + štítek + ztlumení.
 const waitNode = async (fn, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { if (fn()) return true; await sleep(150); } return false; };
 check('A mod: obsah smazané zprávy z historie dotažen přes /moderation/deleted-content', await waitNode(() => contentCalls.length > 0), contentCalls.join(' | '));
 check('A mod: dotaz s kanálem a id smazané zprávy (jeden dotaz)', contentCalls.length === 1 && /channel=robdiesalot/.test(contentCalls[0]) && new URL(contentCalls[0]).searchParams.get('ids') === 'twitch:e2e-m2', contentCalls.join(' | '));
@@ -149,6 +154,12 @@ await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textConten
 check('A POST /moderation/delete s kanálem, platformou a id', posts.length === 1 && posts[0]?.platform === 'twitch' && posts[0]?.messageId === 'e2e-m1' && posts[0]?.channel === 'robdiesalot', JSON.stringify(posts));
 const sysBot = await lastSys();
 check('A výsledek „bot" + chybějící scopes → hláška + „Obnovit přihlášení (moderace)" (Twitch, stejné jako akce z nabídky)', sysBot?.text.startsWith('Na Twitchi akci provedl bot — tvůj účet nemá oprávnění moderovat.') && sysBot.action === 'Obnovit přihlášení (moderace)', JSON.stringify(sysBot));
+// Kolo 4 bod 5: uložená volba se výchozím „Zašedlé“ nepřepíše.
+await ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config || {}; await chrome.storage.sync.set({ uc_config: { ...c, deletedStyle: 'strike' } }); return true; })()`);
+await boot();
+check('A uložená volba (Přeškrtnuté) zůstane po načtení beze změny', await until(`document.getElementById('input-deleted-style').value === 'strike'`, 4000)
+  && await ev(`(async () => (await chrome.storage.sync.get('uc_config')).uc_config.deletedStyle)()`) === 'strike');
+await ev(`(async () => { const c = (await chrome.storage.sync.get('uc_config')).uc_config || {}; await chrome.storage.sync.set({ uc_config: { ...c, deletedStyle: 'label' } }); return true; })()`);
 
 // ---- fáze B: divák (ne mod) ----
 mock.mod = false;

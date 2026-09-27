@@ -36,7 +36,7 @@ const DEFAULTS = {
   acUserFulltext: false, // Fulltext v našeptávači `/user` (mod; vlastní stav — hledání lidí ≠ hledání emotů)
   acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
   mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
-  deletedStyle: 'label', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js; divák nemá volbu)
+  deletedStyle: 'dim', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js DEFAULT_MOD_DELETED_STYLE; divák nemá volbu). Výchozí „Zašedlé“ (kolo 4 bod 5), uložená volba má přednost
 };
 
 // =============================================================
