@@ -16,20 +16,21 @@ function deps(found: Message | null) {
   const forgot: string[] = [];
   const integ: RestoredEvent[] = [];
   const marks: unknown[] = [];
+  const rows: Array<Message | undefined> = [];
   const d: PublishRestoredDeps = {
     markRestored: async (p) => { marks.push(p); return found; },
     broadcast: (event, data) => { sent.push([event, data as RestoredEvent]); },
     now: () => 5_000,
     forget: (platform, id) => { forgot.push(`${platform}:${id}`); },
-    integration: (ev) => { integ.push(ev); },
+    integration: (ev, r) => { integ.push(ev); rows.push(r); },
   };
-  return { d, sent, forgot, integ, marks };
+  return { d, sent, forgot, integ, marks, rows };
 }
 
 const P = { channel: 'robdiesalot', platform: 'twitch' as const, messageId: 'm1', userId: '42', platformChannel: 'robdiesalot', by: 'twitch:modik' };
 
 test('publishRestored: zpráva smazaná filtrem → SSE message-restored s plným obsahem + chat.restored + zapomenutý dedup', async () => {
-  const { d, sent, forgot, integ, marks } = deps(row());
+  const { d, sent, forgot, integ, marks, rows } = deps(row());
   assert.equal(await publishRestored(P, d), 'ok');
   assert.deepEqual(marks, [{ platform: 'twitch', messageId: 'm1', userId: '42', platformChannel: 'robdiesalot' }]);
   assert.equal(sent.length, 1);
@@ -42,6 +43,7 @@ test('publishRestored: zpráva smazaná filtrem → SSE message-restored s plný
   assert.equal((ev.message as { deleted?: boolean }).deleted, undefined);
   assert.deepEqual(forgot, ['twitch:m1']);
   assert.equal(integ.length, 1);
+  assert.equal(rows[0]?.content, 'koukni na neco.cz/x', 'integrace dostane řádek (text pro chat.restored)');
 });
 
 test('publishRestored: nic k obnovení (jiný důvod / autor / kanál) → not_found, nic se neposílá', async () => {

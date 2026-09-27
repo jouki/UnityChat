@@ -101,7 +101,7 @@ const defaultDeps: PublishDeletedDeps = {
   markDeleted,
   broadcast,
   now: Date.now,
-  integration: (ev) => publishModIntegration(ev.channel, 'chat.deleted', ev),
+  integration: (ev) => publishModIntegration(ev.channel, 'chat.deleted', { platform: ev.platform, messageId: ev.messageId, by: ev.by, reason: ev.reason }),
 };
 
 const DEDUP_MS = 60_000;
@@ -137,7 +137,8 @@ export async function publishDeleted(p: PublishDeletedParams, deps: PublishDelet
   const ev = deletedEvent({ channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: t });
   deps.broadcast('message-deleted', ev);
   // Výpadek registru workspaců nesmí shodit mazání (route už poslala SSE, ingest jede dál).
-  try { await deps.integration?.(ev); } catch { /* ignore */ }
+  // Integrace (Židolišta, podpis v2) je důvěryhodná → skutečné `by` i u GIF důvodů (veřejné SSE ho nemá, SEC-4).
+  try { await deps.integration?.({ ...ev, by: p.by }); } catch { /* ignore */ }
 }
 
 /** Zapomenout dedup smazání (obnovení permitem, část 3) — další smazání téže zprávy musí zase projít. */

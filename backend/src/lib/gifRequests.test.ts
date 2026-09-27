@@ -244,6 +244,20 @@ test('intercept: převod selže → filtr by smazal = přeznačit na link_filter
   assert.equal(b.mem.reqs.size, 0);
 });
 
+test('A12 oprava: obnovení ze zprávy (řádek ještě není v archivu) pošle Židolištce chat.restored s textem', async () => {
+  const restoredInt: Array<Record<string, unknown>> = [];
+  const s = setup({
+    access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }),
+    restore: async () => 'not_found',
+    restoredIntegration: (p) => { restoredInt.push(p as unknown as Record<string, unknown>); },
+  });
+  assert.equal(await s.flow.intercept(params({ needAccess: true })), 'denied');
+  assert.equal(restoredInt.length, 1);
+  assert.equal((restoredInt[0].message as { content: string }).content, 'hele https://tenor.com/view/cat-gif-1 lol');
+  assert.equal(restoredInt[0].channel, 'robdiesalot');
+  await s.flow._idle();
+});
+
 test('A12: neznámý přístup, zpráva schovaná hned (gif_request) → neodemčeno = obnovit (filtr ji pouští) / smazat filtrem', async () => {
   const deny = { access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) };
   const a = setup(deny);

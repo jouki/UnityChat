@@ -65,7 +65,7 @@ import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
 import { publishRestored } from './lib/linkRestore.js';
 import { onMessageDeleted, forgetPublished } from './lib/messageDeletes.js';
 import { broadcast } from './sse/bus.js';
-import { publishIntegrationEvent } from './sse/integrationStream.js';
+import { publishIntegrationEvent, publishModIntegration, toChatEvent } from './sse/integrationStream.js';
 
 import { reqSerializer } from './lib/logRedact.js';
 
@@ -126,6 +126,7 @@ const gifFlow = createGifFlow({
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
   restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),
+  restoredIntegration: (p) => { void publishModIntegration(p.channel, 'chat.restored', { platform: p.platform, messageId: p.messageId, by: p.by, chat: (ws) => toChatEvent(p.message, ws) }).catch(() => {}); },
   forgetDeleted: (platform, messageId) => forgetPublished(platform, messageId),
   broadcast,
   publishChat: (platformChannel, platform, msg) => publishChat(platformChannel, platform, msg),

@@ -71,6 +71,20 @@ test('publishDeleted: každé smazání jde i do integračního streamu (dep int
   assert.deepEqual(seen, [{ channel: 'robdiesalot', platform: 'youtube', messageId: 'pd-int-1', by: null, reason: 'platform', at: 1700000000000 }]);
 });
 
+test('publishDeleted: integrace (Židolišta, důvěryhodná) dostane u GIF důvodů skutečné by, veřejné SSE null (SEC-4)', async () => {
+  const pub: Array<Record<string, unknown>> = [];
+  const integ: Array<Record<string, unknown>> = [];
+  const deps: PublishDeletedDeps = {
+    markDeleted: async () => ({ channel: null, login: null }),
+    broadcast: (_e, d) => { pub.push(d as Record<string, unknown>); },
+    now: () => 1700000000000,
+    integration: (ev) => { integ.push(ev as unknown as Record<string, unknown>); },
+  };
+  await publishDeleted({ channel: 'robdiesalot', platform: 'twitch', messageId: 'pd-gif-1', by: 'filter', reason: 'gif_request' as never }, deps);
+  assert.equal(pub[0].by, null);
+  assert.equal(integ[0].by, 'filter');
+});
+
 test('channelMatches: normalizace jako ingest (velikost písmen, YouTube @), chybějící strana → false', () => {
   assert.equal(channelMatches('robdiesalot', 'robdiesalot'), true);
   assert.equal(channelMatches('@RobDiesALot', 'robdiesalot'), true);

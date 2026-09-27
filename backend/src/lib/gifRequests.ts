@@ -719,6 +719,11 @@ export interface GifFlowDeps {
    * flow pošle message-restored sám ze zprávy (settleHeld).
    */
   restore: (p: { channel: string; platform: Platform; messageId: string; userId: string; platformChannel: string }) => Promise<string>;
+  /**
+   * Obnovení schované zprávy, která ještě není v archivu (restore ≠ ok): chat.restored do integračního streamu
+   * s celou zprávou (publishRestored ho v tu chvíli neposlal). Chybí = neposílá se.
+   */
+  restoredIntegration?: (p: { channel: string; platform: Platform; messageId: string; by: string; message: IngestMessage }) => void;
   /** Zapomenout dedup smazání (messageDeletes forgetPublished) — jinak by message-deleted link_filter do 60 s po gif_request spolklo. */
   forgetDeleted?: (platform: Platform, messageId: string) => void;
   broadcast: (event: string, data: object) => void;
@@ -981,6 +986,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       await safe('message-restored ze zprávy', async () => deps.broadcast('message-restored', {
         channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', at: deps.now(), message: toClientMessage(toRow(m), true),
       }));
+      await safe('chat.restored ze zprávy', async () => deps.restoredIntegration?.({ channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', message: m }));
       // Řádek se mohl zapsat se smazáním gif_request (dávka běžela souběžně) → zkusit znovu (další message-restored neškodí).
       later(() => deps.restore(rp));
     }

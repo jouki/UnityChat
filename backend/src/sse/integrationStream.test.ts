@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rolesFromBadges, toChatEvent, modIntegrationEvent, publishIntegrationEvent, publishModIntegration, publishUserModIntegration, subscribeIntegration } from './integrationStream.js';
+import { rolesFromBadges, toChatEvent, chatEventFromRow, modIntegrationEvent, publishIntegrationEvent, publishModIntegration, publishUserModIntegration, subscribeIntegration } from './integrationStream.js';
 
 test('publishUserModIntegration: tvar chat.user_moderated, duration jen u timeoutu, nenamapovaný kanál nic', async () => {
   const ws = { slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robkick', youtube: null }, bot: { mode: 'shared' as const, displayName: 'JoukiBOT' } };
@@ -53,6 +53,37 @@ test('toChatEvent: zpráva smazaná filtrem odkazů jde bez textu, s deleted: tr
   const ev = toChatEvent(m, 'jouki');
   assert.equal(ev.text, '');
   assert.equal(ev.deleted, true);
+});
+
+test('A12 oprava: zpráva schovaná kvůli GIFu (gif_request, i při neznámém přístupu) jde Židolištce S textem + held', () => {
+  const m: IngestMessage = {
+    platform: 'twitch', platformMessageId: 't1', platformUserId: '7', username: 'Divak', channel: 'robdiesalot',
+    content: '!command https://tenor.com/view/cat-gif-1', contentRaw: { badges: 'subscriber/1' }, sentAt: new Date('2026-09-27T10:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null, deleted: { by: 'filter', reason: 'gif_request' },
+  };
+  const ev = toChatEvent(m, 'rob');
+  assert.equal(ev.text, '!command https://tenor.com/view/cat-gif-1');
+  assert.equal(ev.held, true);
+  assert.equal(ev.hiddenReason, 'gif_request');
+  assert.equal(ev.deleted, undefined, 'není smazaná — jen schovaná, čeká na rozhodnutí');
+  assert.equal(ev.isSub, true);
+});
+
+test('chat.restored nese text a celou zprávu (Židolišta ji mohla dostat bez textu — link_filter)', () => {
+  const row = {
+    platform: 'kick', platformMessageId: 'k9', platformUserId: '5', platformUsername: 'Nekdo', channel: 'robkick',
+    content: 'ahoj neco.cz', contentRaw: { badges: [{ type: 'moderator' }] }, sentAt: new Date('2026-09-27T10:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null,
+  };
+  const chat = chatEventFromRow(row as never, 'rob');
+  assert.equal(chat.text, 'ahoj neco.cz');
+  assert.equal(chat.isMod, true);
+  assert.equal(chat.deleted, undefined);
+  const ev = modIntegrationEvent('chat.restored', 'rob', { platform: 'kick', messageId: 'k9', by: 'filter', chat: (ws) => chatEventFromRow(row as never, ws) });
+  assert.equal(ev.text, 'ahoj neco.cz');
+  assert.equal(ev.message?.type, 'chat.message');
+  assert.equal(ev.message?.workspace, 'rob');
+  assert.equal(modIntegrationEvent('chat.deleted', 'rob', { platform: 'kick', messageId: 'k9', by: 'filter', reason: 'mod', chat: () => chat }).text, undefined, 'text jen u chat.restored');
 });
 
 test('modIntegrationEvent: tvary chat.deleted / chat.hidden / chat.unhidden', () => {

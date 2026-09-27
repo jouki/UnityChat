@@ -8,6 +8,7 @@
 // (společný kurzor i replay), jen pro kanály namapované na workspace.
 import type { FastifyReply } from 'fastify';
 import type { IngestMessage } from '../ingest/types.js';
+import type { Message } from '../db/schema.js';
 import { workspaceForChannel, workspaceForChannelSync, type Platform, type WorkspaceInfo } from '../lib/zidolista.js';
 import { isBotAuthor } from '../lib/botIdentities.js';
 
@@ -26,6 +27,13 @@ export interface ChatEvent {
   isBot: boolean;
   /** Smazaná filtrem odkazů už při příjmu → `text` je prázdný (obsah jen v archivu), následuje chat.deleted. */
   deleted?: true;
+  /**
+   * Schovaná v UnityChatu kvůli GIFu (`gif_request`: čeká na převod / schválení, i při neznámém přístupu) — NENÍ
+   * smazaná, `text` je plný (integrace je důvěryhodná, commandy a log Židolišty ji potřebují). Následuje chat.deleted
+   * `gif_request`, pak buď rozhodnutí o GIFu (gif.*), nebo chat.restored (zpráva zase vidět). Od 2026-09-27.
+   */
+  held?: true;
+  hiddenReason?: string;
   replyTo: { messageId: string; user: string | null } | null;
   timestamp: string;
 }
@@ -59,6 +67,7 @@ export function rolesFromBadges(platform: Platform, raw: unknown, username?: str
 
 export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
   const raw = m.contentRaw || {};
+  const held = m.deleted?.reason === 'gif_request';
   const roles = rolesFromBadges(m.platform, raw.badges, m.username, m.channel);
   const replyUser = (raw.replyParentUsername ?? raw.replyParentDisplayName ?? null) as string | null;
   return {
@@ -68,13 +77,24 @@ export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
     platform: m.platform,
     user: m.username,
     userId: m.platformUserId,
-    text: m.deleted ? '' : m.content,
-    ...(m.deleted ? { deleted: true as const } : {}),
+    ...(held
+      ? { text: m.content, held: true as const, hiddenReason: m.deleted!.reason }
+      : { text: m.deleted ? '' : m.content, ...(m.deleted ? { deleted: true as const } : {}) }),
     ...roles,
     isBot: isBotAuthor(m.platform, m.username, workspace, m.platformUserId),
     replyTo: m.replyToMessageId ? { messageId: m.replyToMessageId, user: replyUser } : null,
     timestamp: m.sentAt.toISOString(),
   };
+}
+
+/** Řádek archivu → chat.message (chat.restored nese celou zprávu; Židolišta ji mohla dostat bez textu). */
+export function chatEventFromRow(row: Pick<Message, 'platform' | 'platformMessageId' | 'platformUserId' | 'platformUsername' | 'channel' | 'content' | 'contentRaw' | 'sentAt' | 'isUnitychatUser' | 'isReply' | 'replyToMessageId'>, workspace: string): ChatEvent {
+  return toChatEvent({
+    platform: row.platform as Platform, platformMessageId: row.platformMessageId, platformUserId: row.platformUserId,
+    username: row.platformUsername, channel: row.channel, content: row.content,
+    contentRaw: (row.contentRaw || {}) as Record<string, unknown>, sentAt: row.sentAt,
+    isUnitychatUser: !!row.isUnitychatUser, isReply: !!row.isReply, replyToMessageId: row.replyToMessageId ?? null,
+  }, workspace);
 }
 
 // ---- ring buffer + klienti ----
@@ -98,16 +118,26 @@ export interface ModIntegrationEvent {
   by: string | null;
   /** Jen u chat.deleted: 'mod' | 'platform' | 'link_filter'. */
   reason?: string;
+  /** Jen u chat.restored (od 2026-09-27): text a celá zpráva (tvar chat.message) — Židolišta ji mohla dostat bez textu. */
+  text?: string;
+  message?: ChatEvent;
 }
+
+/** Zpráva pro chat.restored podle workspace (sestaví se až po jeho dohledání). */
+export type ChatForWorkspace = (workspace: string) => ChatEvent | null;
 
 /** Tvar moderační události pro Židolištu; `reason` nese jen chat.deleted. */
 export function modIntegrationEvent(
   type: ModEventType,
   workspace: string,
-  p: { platform: Platform; messageId: string; by: string | null; reason?: string },
+  p: { platform: Platform; messageId: string; by: string | null; reason?: string; chat?: ChatForWorkspace },
 ): ModIntegrationEvent {
   const ev: ModIntegrationEvent = { type, workspace, platform: p.platform, messageId: p.messageId, by: p.by };
   if (type === 'chat.deleted') ev.reason = p.reason;
+  if (type === 'chat.restored' && p.chat) {
+    const msg = p.chat(workspace);
+    if (msg) { ev.text = msg.text; ev.message = msg; }
+  }
   return ev;
 }
 
@@ -177,7 +207,7 @@ const defaultModDeps: ModIntegrationDeps = { workspaceFor: workspaceForChannel, 
 export async function publishModIntegration(
   ucChannel: string,
   type: ModEventType,
-  p: { platform: Platform; messageId: string; by: string | null; reason?: string },
+  p: { platform: Platform; messageId: string; by: string | null; reason?: string; chat?: ChatForWorkspace },
   deps: ModIntegrationDeps = defaultModDeps,
 ): Promise<ModIntegrationEvent | null> {
   const ws = await workspaceForUc(ucChannel, p.platform, deps.workspaceFor);

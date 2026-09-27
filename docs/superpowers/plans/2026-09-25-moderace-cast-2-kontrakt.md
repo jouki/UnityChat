@@ -230,7 +230,9 @@ v DB zruší a jde SSE
   "message": { "platform": "twitch", "id": "abc", "username": "divak", "message": "koukni na neco.cz", "...": "..." } }
 ```
 jako `event: message-restored` (tvar `message` = `/chat/history`) + `chat.restored { workspace, platform, messageId, by }`
-do integračního streamu. Na platformě zpráva zůstává smazaná. Smazání modem / platformou se permitem neobnovuje (na to je
+do integračního streamu. **Od 2026-09-27** nese `chat.restored` navíc `text` a `message` (celá zpráva v tvaru
+`chat.message`, bez `deleted`) — Židolišta ji mohla dostat jen bez textu (smazaná filtrem), takže commandy a log ji
+mají až teď. Zpětně kompatibilní (jen přidaná pole). Na platformě zpráva zůstává smazaná. Smazání modem / platformou se permitem neobnovuje (na to je
 „Odkrýt zprávu“, `POST /moderation/restore`, viz níže).
 Odpověď navíc: `results.restore` = `'ok' | 'not_found' | 'error:no_channel' | 'error:db'` a `restored: boolean`
 (jen když přišlo `messageId`). Klient (addon `_unhideMessage(d, { restore: true })`, core `buildModRequest`)
@@ -691,7 +693,13 @@ event: gif.decided
 data: { "type": "gif.decided", "workspace": "rob", "requestId": 12, "platform": "twitch", "userId": "42", "login": "divak",
         "status": "approved", "by": "twitch:modik" }
 ```
-Původní zpráva přijde jako `chat.message` s `deleted: true` (bez textu) + `chat.deleted` s `reason: "gif_request"`.
+Původní zpráva schovaná kvůli GIFu (`gif_request` — odemčený i **neznámý** přístup, audit A12) přijde **od 2026-09-27**
+jako `chat.message` **s plným textem** a příznaky `held: true`, `hiddenReason: "gif_request"` (bez `deleted`; dřív
+`deleted: true` a prázdný text, takže ji Židolišta neviděla vůbec). Integrace je důvěryhodná (podpis v2, workspace
+kanálu). Pak `chat.deleted` s `reason: "gif_request"` a buď rozhodnutí (`gif.*`), nebo — převod selhal / neodemčeno /
+nejde o GIF — `chat.restored` s `text` a `message`. Zpráva smazaná filtrem (`link_filter`) jde dál bez textu s
+`deleted: true`. **`chat.deleted.by`** nese v integraci skutečného autora smazání i u GIF důvodů (`"filter"`, mod);
+jen veřejné SSE `message-deleted` má u `gif_*` `by: null`.
 Propadnutí: kontrola každých 10 s (`status: expired`, `by: null`). `gif.pending` nese při dříve zamítnutém GIFu
 navíc `previouslyRejected: { at, by }`.
 

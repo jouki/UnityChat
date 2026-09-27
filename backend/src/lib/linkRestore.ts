@@ -9,7 +9,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, type Message } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
-import { publishModIntegration } from '../sse/integrationStream.js';
+import { chatEventFromRow, publishModIntegration } from '../sse/integrationStream.js';
 import { toClientMessage, type ClientMessage } from '../routes/chat.js';
 import { forgetPublished, rememberRestored, type DeleteReason } from './messageDeletes.js';
 import { normPlatformChannel } from './ucChannel.js';
@@ -73,7 +73,8 @@ export interface PublishRestoredDeps {
   forget: (platform: Platform, messageId: string) => void;
   /** Značka „odkryto“ — pozdější smazání téže zprávy z platformy je ozvěna (rememberRestored). */
   remember?: (platform: Platform, messageId: string) => void;
-  integration?: (ev: RestoredEvent) => Promise<unknown> | unknown;
+  /** chat.restored; `row` = obnovený řádek (text a celá zpráva pro Židolištu). */
+  integration?: (ev: RestoredEvent, row?: Message) => Promise<unknown> | unknown;
 }
 
 const defaultDeps: PublishRestoredDeps = {
@@ -82,7 +83,7 @@ const defaultDeps: PublishRestoredDeps = {
   now: Date.now,
   forget: forgetPublished,
   remember: (platform, messageId) => rememberRestored(platform, messageId),
-  integration: (ev) => publishModIntegration(ev.channel, 'chat.restored', { platform: ev.platform, messageId: ev.messageId, by: ev.by }),
+  integration: (ev, row) => publishModIntegration(ev.channel, 'chat.restored', { platform: ev.platform, messageId: ev.messageId, by: ev.by, ...(row ? { chat: (ws) => chatEventFromRow(row, ws) } : {}) }),
 };
 
 /** markRestored → SSE message-restored s celou zprávou → chat.restored. Nic k obnovení = not_found, nic se neposílá. */
@@ -94,7 +95,7 @@ export async function publishRestored(p: RestoreParams, deps: PublishRestoredDep
   if (reasonList(p.reason).some((r) => r !== 'gif_request')) deps.remember?.(p.platform, p.messageId);
   const ev: RestoredEvent = { channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, at: deps.now(), message: toClientMessage(row, true) };
   deps.broadcast('message-restored', ev);
-  try { await deps.integration?.(ev); } catch { /* integrace nesmí shodit moderaci */ }
+  try { await deps.integration?.(ev, row); } catch { /* integrace nesmí shodit moderaci */ }
   return 'ok';
 }
 
