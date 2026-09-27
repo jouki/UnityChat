@@ -2440,6 +2440,74 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 }
 #tw-credits.hidden { display: none; }
 
+/* ==== Banner výročí nad polem pro psaní (core/anniversary.js AnniversaryBanner) ====
+   Jako výzva Twitche: ikona, text, Sdílet, ×; Sdílet rozbalí zprávu (grid 0fr → 1fr). Předplatné = fialová,
+   moderátorské výročí = zelená #00AD03. prefers-reduced-motion → bez animací. */
+#anniv-banner { flex-shrink: 0; padding: 6px 10px 0; background: var(--bg-secondary); border-top: 1px solid var(--border); }
+#anniv-banner.hidden { display: none; }
+.uc-anniv {
+  --anniv: #9146ff; --anniv-rgb: 145, 70, 255;
+  border: 1px solid rgba(var(--anniv-rgb), 0.55);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(var(--anniv-rgb), 0.22), rgba(var(--anniv-rgb), 0.07));
+  box-shadow: 0 0 14px rgba(var(--anniv-rgb), 0.22);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.uc-anniv--mod { --anniv: #00ad03; --anniv-rgb: 0, 173, 3; }
+.uc-anniv--enter { animation: uc-anniv-in 220ms cubic-bezier(.2, .9, .3, 1.05); }
+@keyframes uc-anniv-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+.uc-anniv-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; }
+.uc-anniv-icon {
+  display: inline-flex; flex-shrink: 0; width: 26px; height: 26px; align-items: center; justify-content: center;
+  color: var(--anniv); filter: drop-shadow(0 0 5px rgba(var(--anniv-rgb), 0.6));
+}
+.uc-anniv--resub .uc-anniv-icon { color: #b78cff; }
+.uc-anniv--mod .uc-anniv-icon { color: #3ddc41; }
+.uc-anniv--open .uc-anniv-icon, .uc-anniv--done .uc-anniv-icon { animation: uc-anniv-pulse 1.6s ease-in-out infinite; }
+@keyframes uc-anniv-pulse { 50% { transform: scale(1.12); } }
+.uc-anniv-text { flex: 1; min-width: 0; }
+.uc-anniv-title { font-weight: 700; line-height: 1.3; }
+.uc-anniv-sub { font-size: 0.9em; color: var(--text-secondary); line-height: 1.3; }
+.uc-anniv-share, .uc-anniv-send {
+  flex-shrink: 0; border: 0; border-radius: 4px; padding: 5px 12px; font: inherit; font-weight: 700; cursor: pointer;
+  color: #fff; background: var(--anniv); box-shadow: 0 0 8px rgba(var(--anniv-rgb), 0.45);
+}
+.uc-anniv-share:hover, .uc-anniv-send:hover:not(:disabled) { filter: brightness(1.15); }
+.uc-anniv-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+.uc-anniv-share[hidden] { display: none; }
+.uc-anniv-close, .uc-anniv-cancel {
+  flex-shrink: 0; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font: inherit;
+}
+.uc-anniv-close { width: 24px; height: 24px; border-radius: 4px; font-size: 18px; line-height: 1; }
+.uc-anniv-close:hover, .uc-anniv-cancel:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.uc-anniv-cancel { padding: 5px 10px; border-radius: 4px; }
+.uc-anniv-form { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1); }
+.uc-anniv--open .uc-anniv-form { grid-template-rows: 1fr; }
+.uc-anniv-form-inner { min-height: 0; overflow: hidden; }
+.uc-anniv--open .uc-anniv-form-inner { padding: 0 8px 8px 10px; }
+.uc-anniv-input {
+  display: block; width: 100%; box-sizing: border-box; resize: none; font: inherit; color: var(--text-primary);
+  background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px;
+}
+.uc-anniv-input:focus { outline: none; border-color: var(--anniv); box-shadow: 0 0 0 1px rgba(var(--anniv-rgb), 0.5); }
+.uc-anniv-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 0.88em; color: var(--text-secondary); }
+.uc-anniv-streak { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.uc-anniv-streak input { accent-color: var(--anniv); margin: 0; }
+.uc-anniv-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.uc-anniv-count--full { color: #ff6b6b; }
+.uc-anniv-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.uc-anniv-msg { color: #ff8a8a; font-size: 0.9em; margin-top: 4px; }
+.uc-anniv-msg:empty { display: none; }
+.uc-anniv--busy .uc-anniv-send { cursor: progress; }
+.uc-anniv--done { border-color: rgba(var(--anniv-rgb), 0.9); }
+.uc-anniv--done .uc-anniv-title { color: #fff; }
+@media (prefers-reduced-motion: reduce) {
+  .uc-anniv--enter, .uc-anniv--open .uc-anniv-icon, .uc-anniv--done .uc-anniv-icon { animation: none; }
+  .uc-anniv-form { transition: none; }
+}
+
 /* Highlights banner background tunes to the accent of its single
    featured card (raid avatar sample, etc.). Fallback = the fixed
    cyan/purple gradient defined earlier. */

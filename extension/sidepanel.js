@@ -1690,6 +1690,7 @@ class UnityChat {
     // pin cards entirely. FETCH_PINS pulls pinned messages straight from
     // the server — works regardless of chat UI visibility.
     this._startPinPoll();
+    this._annivStart();
     try { const r = await chrome.storage.local.get('uc_send_platform'); if (['twitch', 'kick', 'youtube'].includes(r.uc_send_platform)) this._sendPlatform = r.uc_send_platform; } catch {}
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
     if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
@@ -1922,7 +1923,7 @@ class UnityChat {
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
           'command', 'redeem', 'highlight', 'annc',
-          'milestone', 'streak', 'modiversary', 'modiv',
+          'milestone', 'streak', 'modiversary', 'modiv', 'anniv',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
@@ -4412,6 +4413,18 @@ class UnityChat {
         this._addMessage({ ...base, message: body, isAnnouncement: true, announcementColor: annColor, color: '#9146ff' });
         break;
       }
+      case 'anniv': {
+        // /uc anniv [resub|gift|mod] [měsíce] [integrity|already] — lokální náhled banneru výročí, nic se neodesílá.
+        const argv = text === 'test message' ? [] : text.trim().split(/\s+/);
+        const kind = ['resub', 'gift', 'mod'].includes(argv[0]) ? argv[0] : 'resub';
+        const months = parseInt(argv[1], 10) || (kind === 'mod' ? 12 : 7);
+        const mock = ['integrity', 'already'].includes(argv[2]) ? argv[2] : true;
+        const item = kind === 'mod'
+          ? { kind: 'mod', key: `mock:mod:${Date.now()}`, months, mock }
+          : { kind: 'resub', key: `mock:resub:${Date.now()}`, id: 'mock', months, streak: kind === 'gift' ? 0 : Math.min(months, 3), isGift: kind === 'gift', gifter: kind === 'gift' ? 'Dárce' : null, mock };
+        this._annivBanner()?.show(item);
+        break;
+      }
       case 'modiversary':
       case 'modiv': {
         // /uc modiversary [měsíce] [text] — moderátorské výročí (USERNOTICE modiversary)
@@ -4619,7 +4632,7 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], modiversary [měsíce] [text], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], modiversary [měsíce] [text], anniv [resub|gift|mod] [měsíce], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
@@ -4636,6 +4649,8 @@ class UnityChat {
       this.emotes.loadFFZ(id);
       this.emotes.loadTwitchChannel(this.config.channel);
       this._loadTwitchBadges(id);
+      // Výročí (sdílení) — po připojení ke kanálu; reconnecty hlídá 5min pojistka.
+      this._checkAnniversary('room');
     };
 
     this.kick.onMessage = (m) => this._addMessage(m);
@@ -5570,6 +5585,11 @@ class UnityChat {
     // Stav odměny GIFů hned (indikátor pod tlačítkem emotů, GIF záložka).
     if (this._signedIn) this._gifCd().fetchState();
     this._gifPanel?.update();
+    // Výročí na Twitchi po přihlášení / změně účtu (stav bere cookie Twitche, ne účet UnityChatu).
+    // Znovu hned jen při změně přihlášeného Twitch účtu (otevření nastavení účet také obnovuje).
+    const annivAcct = acc?.platforms?.twitch?.login || '';
+    this._checkAnniversary('account', { force: annivAcct !== this._annivAcct });
+    this._annivAcct = annivAcct;
     // Vlastní GIF zprávy z historie (zamítnuté / čekající) podle identity účtu → štítek, po odhlášení zase pryč.
     this._reapplyDeleted();
   }
@@ -6564,6 +6584,133 @@ class UnityChat {
   // channel. Runs every 8s (pin state rarely changes faster). Caches
   // the last result in this._gqlPinCards so _handleHighlights merges
   // them into whatever DOM-sourced highlight cards are active.
+  // ---- Výročí na Twitchi: sdílení vlastního výročí předplatného / moderátorského výročí ----
+  // Podklad docs/superpowers/specs/2026-09-27-twitch-vyroci-research.md. Stav i sdílení přes background (GQL s cookie
+  // Twitche: ANNIV_STATUS / ANNIV_SHARE / ANNIV_DISMISS), banner nad polem pro psaní (core/anniversary.js).
+  // Ptá se po připojení ke kanálu (onRoomId) a po přihlášení, pak jednou za 30 min — Twitch výzvu také nepolluje.
+  // Zavření výročí předplatného se pamatuje lokálně podle id notifikace (uc_anniv_dismissed), jako Twitch.
+  _annivBanner() {
+    if (!this._anniv) {
+      const host = document.getElementById('anniv-banner');
+      if (!host) return null;
+      this._anniv = new window.UC_CORE.AnniversaryBanner({
+        doc: document,
+        host,
+        onShare: (item, opts) => this._annivShare(item, opts),
+        onDismiss: (item) => this._annivDismiss(item),
+        onHide: () => this._annivShowNext(),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._anniv;
+  }
+
+  _annivStart() {
+    if (this._annivTimer) return;
+    this._annivTimer = setInterval(() => this._checkAnniversary('interval', { force: true }), 30 * 60 * 1000);
+  }
+
+  async _annivDismissed() {
+    let map = {};
+    try {
+      const r = await chrome.storage.local.get('uc_anniv_dismissed');
+      map = window.UC_CORE.annivPruneDismissed(r.uc_anniv_dismissed || {});
+    } catch { /* ignore */ }
+    // Právě zavřené / sdílené (zápis do storage ještě nemusí být hotový, onHide přijde hned).
+    return { ...map, ...(this._annivGone || {}) };
+  }
+
+  async _annivRemember(key, type) {
+    (this._annivGone ||= {})[key] = { at: Date.now(), type };
+    const map = await this._annivDismissed();
+    map[key] = { at: Date.now(), type };
+    try { await chrome.storage.local.set({ uc_anniv_dismissed: map }); } catch { /* ignore */ }
+  }
+
+  /** Stav výročí pro aktuální kanál. `force` obejde 5min pojistku (onRoomId chodí i při každém reconnectu). */
+  async _checkAnniversary(reason, { force = false } = {}) {
+    const channel = (this.config.channel || '').toLowerCase();
+    const banner = this._annivBanner();
+    if (!banner) return;
+    if (!channel || !this.config.twitch) { this._annivStatus = null; if (!banner.expanded) banner.hide({ instant: true }); return; }
+    if (this._annivStatus && this._annivStatus.channel !== channel) { this._annivStatus = null; banner.hide({ instant: true }); }
+    const now = Date.now();
+    if (!force && this._annivLast?.channel === channel && now - this._annivLast.at < 5 * 60 * 1000) return;
+    if (this._annivInflight?.channel === channel) return this._annivInflight.p;
+    this._annivLast = { channel, at: now };
+    const p = (async () => {
+      let st = null;
+      try { st = await chrome.runtime.sendMessage({ type: 'ANNIV_STATUS', channel }); } catch (e) { st = { ok: false, error: e.message }; }
+      if ((this.config.channel || '').toLowerCase() !== channel) return; // mezitím přepnuto
+      this._ucLog('Anniversary', `check ${reason} ${channel}: ok=${!!st?.ok} loggedIn=${!!st?.loggedIn} resub=${st?.resub ? st.resub.months + 'm' : '-'} mod=${st?.modiversary ? st.modiversary.months + 'm' : '-'}${st?.error ? ' error=' + st.error : ''}`);
+      if (!st?.ok) return; // chyba: nechat, co je vidět
+      this._annivStatus = { ...st, channel };
+      await this._annivShowNext();
+    })().finally(() => { if (this._annivInflight?.p === p) this._annivInflight = null; });
+    this._annivInflight = { channel, p };
+    return p;
+  }
+
+  /** Vybrat výzvu ze známého stavu (resub má přednost) a ukázat ji; nic → banner pryč (rozepsaný nechat). */
+  async _annivShowNext() {
+    const banner = this._annivBanner();
+    if (!banner) return;
+    const st = this._annivStatus;
+    const item = st ? window.UC_CORE.pickAnniversary(st, await this._annivDismissed()) : null;
+    if (item) banner.show({ ...item, channelLogin: st.channel, channelId: st.channelId });
+    else if (banner.current && !banner.expanded && !banner.current.mock) banner.hide();
+  }
+
+  async _annivShare(item, { text, includeStreak }) {
+    const core = window.UC_CORE;
+    if (item.mock) {
+      // /uc anniv — lokální náhled, nic se na Twitch neposílá.
+      await new Promise((r) => setTimeout(r, 500));
+      if (item.mock === 'integrity') return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
+      if (item.mock === 'already') return { ok: false, error: core.annivErrorText('ALREADY_SENT') };
+      return { ok: true };
+    }
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: 'ANNIV_SHARE', kind: item.kind, channelLogin: item.channelLogin, channelId: item.channelId, tokenId: item.id, text, includeStreak });
+    } catch (e) { res = { ok: false, code: 'UNKNOWN', error: e.message }; }
+    this._ucLog('Anniversary', `share ${item.kind}: ok=${!!res?.ok} code=${res?.code || '-'} integrity=${!!res?.integrity} len=${text.length} streak=${!!includeStreak}`);
+    if (res?.integrity) {
+      // Client-Integrity challenge: GQL z rozšíření neprojde → záloha přes výzvu v otevřeném chatu Twitche.
+      const dom = await this._annivDomShare(text);
+      this._ucLog('Anniversary', `záloha přes stránku Twitche: ${dom?.ok ? 'OK' : 'selhala ' + (dom?.error || '')}`);
+      if (!dom?.ok) return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
+      res = { ok: true };
+    }
+    if (!res?.ok) return { ok: false, error: core.annivErrorText(res?.code) };
+    await this._annivRemember(item.key, 'shared');
+    // Za chvíli se Twitch zeptat znovu (výzva by měla zmizet); banner zatím ukazuje potvrzení.
+    setTimeout(() => this._checkAnniversary('shared', { force: true }), 8000);
+    return { ok: true };
+  }
+
+  async _annivDomShare(text) {
+    try {
+      const tab = await this._findStreamTab('twitch');
+      if (!tab?.id || !/twitch\.tv/.test(tab.url || '')) return { ok: false, error: 'no_tab' };
+      let ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null);
+      if (!ping) { await this._injectContentScript(tab); ping = await chrome.tabs.sendMessage(tab.id, { type: 'PING' }).catch(() => null); }
+      if (!ping) return { ok: false, error: 'no_content_script' };
+      return await chrome.tabs.sendMessage(tab.id, { type: 'ANNIV_DOM_SHARE', text });
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  async _annivDismiss(item) {
+    if (item.mock) return;
+    await this._annivRemember(item.key, 'dismissed');
+    if (item.kind === 'mod') {
+      // Twitch křížkem volá DismissUserModiversaryCallout (chybu ignoruje) — lokální záznam drží zavření i při chybě.
+      chrome.runtime.sendMessage({ type: 'ANNIV_DISMISS', kind: 'mod', channelId: item.channelId })
+        .then((r) => this._ucLog('Anniversary', `dismiss mod ok=${!!r?.ok}${r?.integrity ? ' integrity' : ''}`))
+        .catch(() => {});
+    }
+  }
+
   _startPinPoll() {
     if (this._pinPollT) return;
     this._gqlPinCards = [];
