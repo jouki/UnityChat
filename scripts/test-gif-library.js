@@ -437,6 +437,17 @@ Promise.all([
     check('A10 historie: upřesnění přes /gif/held → „Vypršelo“', asked.some((p) => p.includes('kick%3Ah2')) && b.view('kick', 'h2')?.kind === 'expired', `${asked.length} ${JSON.stringify(b.view('kick', 'h2'))}`);
     const vh = L.gifOwnHistoryView(b, { platform: 'twitch', id: 'h3', username: '@ja', deleted: true, deletedReason: 'gif_request' }, me);
     check('A10 historie: vlastní schovaná gif_request → „Schvalování moderátorem“', vh?.kind === 'pending');
+    // Review: upřesnění zamítnutých z historie v jedné dávce (ne dotaz na každou zprávu).
+    const asked2 = [];
+    const b2 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => 0, api: async (p) => { asked2.push(p); return { ok: true, messages: [] }; }, setInterval: () => 1, clearInterval: () => {} });
+    for (let i = 0; i < 10; i++) L.gifOwnHistoryView(b2, { platform: 'twitch', id: `r${i}`, username: 'ja', deleted: true, deletedReason: 'gif_rejected' }, me);
+    await new Promise((r) => setTimeout(r, 0));
+    check('A10 historie: 10 zamítnutých zpráv → 1 dotaz /gif/held', asked2.length === 1 && decodeURIComponent(asked2[0]).includes('twitch:r9'), `${asked2.length}`);
+    const asked3 = [];
+    const b3 = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => 0, api: async (p) => { asked3.push(p); return { ok: true, messages: [] }; }, setInterval: () => 1, clearInterval: () => {} });
+    for (let i = 0; i < 60; i++) L.gifOwnHistoryView(b3, { platform: 'twitch', id: `q${i}`, username: 'ja', deleted: true, deletedReason: 'gif_rejected' }, me);
+    await new Promise((r) => setTimeout(r, 0));
+    check('A10 historie: 60 zamítnutých → 2 dotazy (max 50 klíčů)', asked3.length === 2, `${asked3.length}`);
   }
 
   // --- backend auditu 2026-09-27 (kontrakt pro klienta) ---
@@ -450,7 +461,24 @@ Promise.all([
     const b = await tk.get();
     tn += 1.5 * 86_400_000;
     const c = await tk.get();
-    check('GifAccessToken: expiresAt (čas serveru → lokální) → obnova před vypršením', a === 't1' && b === 't1' && c === 't2' && n === 2, `${a} ${b} ${c} ${n}`);
+    await new Promise((r) => setTimeout(r, 0));
+    check('GifAccessToken: expiresAt (čas serveru → lokální) → den před koncem obnova na pozadí (platný token dál)', a === 't1' && b === 't1' && c === 't1' && n === 2 && tk.current() === 't2', `${a} ${b} ${c} ${n} ${tk.current()}`);
+    // Review: current() (panel, karta moda) v okně obnovy taky obnoví na pozadí.
+    let tn2 = 0, n2 = 0;
+    const tk2 = new L.GifAccessToken({ api: async () => { n2++; return { ok: true, token: `u${n2}`, serverNow: 0, expiresAt: 30 * 86_400_000 }; }, now: () => tn2 });
+    await tk2.get();
+    tn2 = 29.5 * 86_400_000;
+    const cur = tk2.current();
+    await new Promise((r) => setTimeout(r, 0));
+    check('GifAccessToken: current() v okně obnovy → vrátí platný token a obnoví ho na pozadí', cur === 'u1' && n2 === 2 && tk2.current() === 'u2', `${cur} ${n2} ${tk2.current()}`);
+    tn2 = 70 * 86_400_000;
+    check('GifAccessToken: propadlý token current() nevrátí', tk2.current() === null);
+    // Token ze sessionStorage bez expirace → „obnovit brzy“: po prvním použití nový na pozadí.
+    let n3 = 0;
+    const tk3 = new L.GifAccessToken({ api: async () => { n3++; return { ok: true, token: 'novy', serverNow: 0, expiresAt: 30 * 86_400_000 }; }, store: { load: async () => 'ulozeny', save: async () => {}, clear: async () => {} }, now: () => 0 });
+    const s1 = await tk3.get();
+    await new Promise((r) => setTimeout(r, 0));
+    check('GifAccessToken: token ze session bez expirace → použije se a obnoví na pozadí (jednou)', s1 === 'ulozeny' && n3 === 1 && tk3.current() === 'novy' && (tk3.current(), await tk3.get(), n3 === 1), `${s1} ${n3} ${tk3.current()}`);
     const ob = new L.GifOutbox({ channel: () => 'rob', now: () => 0, setInterval: () => 1, clearInterval: () => {} });
     ob.onNotice({ requestKey: 'twitch:u1', channel: 'rob', platform: 'twitch', messageId: 'u1', kind: 'auto_rejected', reason: 'unapproved' });
     check('gif-notice auto_rejected reason unapproved → „Zamítnuto moderátorem“', ob.view('twitch', 'u1')?.text === 'Zamítnuto moderátorem');

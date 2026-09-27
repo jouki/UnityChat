@@ -294,9 +294,24 @@ export class GifOutbox {
     if (state === 'pending') { e.pendingAt = this.now(); e.nextCheck = this.now(); }
     else e.final = state !== 'rejected';   // rejected se ještě upřesní (vypršelo × zamítnuto)
     this._L(`${key} z historie (${reason}) → ${state}`);
-    if (state === 'rejected' && this.api) void this._check([e], { refine: true });
+    if (state === 'rejected' && this.api) this._queueRefine(e);
     else this._arm();
     return e;
+  }
+
+  /**
+   * Upřesnění zamítnutých zpráv z historie sbírat a poslat jedním GET /gif/held (po dávkách HELD_BATCH klíčů, _check)
+   * — historie jich vykreslí víc najednou, dotaz na každou zvlášť by narazil na rate limit.
+   */
+  _queueRefine(e) {
+    (this._refineQ ||= []).push(e);
+    if (this._refineQ.length > 1) return;
+    Promise.resolve().then(() => {
+      const list = this._refineQ || [];
+      this._refineQ = [];
+      const live = list.filter((x) => this._e.get(x.key) === x);
+      if (live.length) void this._check(live, { refine: true });
+    });
   }
 
   _entry(key, platform, messageId) {
@@ -440,7 +455,7 @@ export class GifOutbox {
 
   /** Přepnutí kanálu / odhlášení. */
   clear() {
-    this._e.clear(); this._alias.clear(); this._opt = []; this._req.clear();
+    this._e.clear(); this._alias.clear(); this._opt = []; this._req.clear(); this._refineQ = [];
     if (this._timer) { this._ci(this._timer); this._timer = null; }
   }
 
@@ -675,34 +690,64 @@ export class GifAccessToken {
 
   _L(t) { this.log('Gif', `token: ${t}`); }
 
-  /** Token v paměti (bez síťového dotazu), nebo null (i propadlý). Panel si ho nedrží — po odhlášení je hned pryč. */
-  current() { return this._token && !(Number.isFinite(this._exp) && this.now() >= this._exp) ? this._token : null; }
+  /** Propadlý (známá expirace minula). */
+  _expired() { return Number.isFinite(this._exp) && this.now() >= this._exp; }
+  /** Obnovit: den před koncem platnosti, nebo token ze sessionStorage bez známé expirace („obnovit brzy“). */
+  _renewDue() { return !!this._token && (this._expUnknown || (Number.isFinite(this._exp) && this.now() >= this._exp - GIF_TOKEN_RENEW_MS)); }
+  /** Nový token na pozadí; dosavadní platný zůstává v použití, dokud nový nepřijde. Jeden pokus na okno obnovy. */
+  _renewInBackground() {
+    if (this._inflight || !this._renewDue()) return this._inflight;
+    this._expUnknown = false;
+    this._L('token brzy vyprší / expirace neznámá → nový na pozadí');
+    const p = this._issue(this._epoch).finally(() => { if (this._inflight === p) this._inflight = null; });
+    this._inflight = p;
+    return p;
+  }
+
+  /**
+   * Token v paměti (bez čekání na síť), nebo null (i propadlý). V okně obnovy spustí vydání nového na pozadí.
+   * Panel ani karta si ho nedrží — po odhlášení je hned pryč.
+   */
+  current() {
+    if (!this._token) return null;
+    if (this._expired()) { void this._renewInBackground(); return null; }
+    if (this._renewDue()) void this._renewInBackground();
+    return this._token;
+  }
 
   async get() {
-    // Token platí 30 dní (server posílá expiresAt + serverNow) → den před koncem vydat nový.
-    if (this._token && Number.isFinite(this._exp) && this.now() >= this._exp - GIF_TOKEN_RENEW_MS) {
-      this._L('token brzy vyprší → nový');
+    // Token platí 30 dní (server posílá expiresAt + serverNow) → den před koncem nový na pozadí, platný se vrací dál.
+    if (this._token && !this._expired()) {
+      if (this._renewDue()) void this._renewInBackground();
+      return this._token;
+    }
+    if (this._token) {
+      // Propadlý → čekat na nový.
+      this._L('token propadl → nový');
       this._token = null;
       this._exp = null;
       try { await this.store?.clear?.(); } catch { /* ignore */ }
-      if (!this._inflight) {
-        const ep = this._epoch;
-        const p = this._issue(ep).finally(() => { if (this._inflight === p) this._inflight = null; });
-        this._inflight = p;
-      }
-      return this._inflight;
     }
-    if (this._token) return this._token;
     if (this._inflight) return this._inflight;
     const ep = this._epoch;
     const p = (async () => {
       try {
         const saved = await this.store?.load?.();
         if (ep !== this._epoch) return null;
-        if (saved && typeof saved === 'string') { this._token = saved; this._L('ze session úložiště'); return saved; }
+        if (saved && typeof saved === 'string') {
+          // Session úložiště drží jen hodnotu → expirace neznámá → po prvním použití obnovit na pozadí.
+          this._token = saved;
+          this._exp = null;
+          this._expUnknown = true;
+          this._L('ze session úložiště (expirace neznámá)');
+          return saved;
+        }
       } catch { /* ignore */ }
       return this._issue(ep);
-    })().finally(() => { if (this._inflight === p) this._inflight = null; });
+    })().finally(() => {
+      if (this._inflight === p) this._inflight = null;
+      if (ep === this._epoch && this._expUnknown) void this._renewInBackground();
+    });
     this._inflight = p;
     return p;
   }
@@ -718,6 +763,7 @@ export class GifAccessToken {
       this._token = t;
       const exp = j?.expiresAt != null ? gifLocalTime(j.expiresAt, { serverNow: j.serverNow ?? null, now: this.now() }) : NaN;
       this._exp = Number.isFinite(exp) ? exp : null;
+      this._expUnknown = false;
       try { await this.store?.save?.(t); } catch { /* ignore */ }
       this._L('nový token vydán');
       return t;
@@ -744,7 +790,7 @@ export class GifAccessToken {
     return p;
   }
 
-  clear() { this._epoch++; this._token = null; this._exp = null; this._inflight = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
+  clear() { this._epoch++; this._token = null; this._exp = null; this._expUnknown = false; this._inflight = null; try { this.store?.clear?.(); } catch { /* ignore */ } }
 }
 
 // ---------------------------------------------------------------------------
