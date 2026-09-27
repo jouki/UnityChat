@@ -3,6 +3,7 @@
 // úložiště „naposledy použitých" je injektované (addon i web: localStorage).
 import { escapeAttr } from './html.js';
 import { createIconTip } from './soundboard.js';
+import { registerPanel } from './panel-morph.js';
 
 const RECENT_MAX = 24;
 
@@ -148,6 +149,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     btnTip?.hide();
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
+    // Jiný otevřený panel u pole (soundboard, QR dono) se do tohohle plynule přetvoří (test2 bod 5).
+    morph.opened();
     if (active !== 'emotes') { mounted.get(active)?.show?.(); return; }
     // Na dotykovém zařízení hledání neaktivovat: vyskočila by klávesnice a zakryla emoty.
     const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -163,6 +166,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   }
   const isOpen = () => !panel.classList.contains('hidden');
   const toggle = () => (isOpen() ? close() : open());
+  const morph = registerPanel({ panel, button, isOpen, close, log: (t) => log?.('EmotePicker', t) });
 
   /**
    * Časový pásek (jako u soundboardu): pod tlačítkem emotů a na boční záložce. `progress` 0–1 (ubývá s časem),
@@ -260,7 +264,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     const b = e.target.closest('.uc-ep-e');
     hoverEl.textContent = b ? b.dataset.name : ' ';
   });
-  doc.addEventListener('mousedown', (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target)) close(); });
+  // Klik na tlačítko jiného panelu u pole nezavírá — nový panel tenhle přetvoří (core/panel-morph.js).
+  doc.addEventListener('mousedown', (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); });
   doc.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
 
   return { open, close, toggle, isOpen, selectTab, activeTab: () => active, setIndicator, panel };

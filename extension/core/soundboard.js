@@ -9,6 +9,7 @@
 // Návrhy zvuků (core/sfx-request.js): s option `requestApi` je vedle hledání tlačítko
 // „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
 import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
+import { registerPanel } from './panel-morph.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
@@ -502,6 +503,8 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
+    // Jiný otevřený panel u pole (emoty, QR dono) se do tohohle plynule přetvoří (test2 bod 5).
+    morph.opened();
     const touch = typeof win.matchMedia === 'function' && win.matchMedia('(pointer: coarse)').matches;
     if (!touch) { search.focus(); search.select(); }
   }
@@ -516,6 +519,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   }
   const isOpen = () => !panel.classList.contains('hidden');
   const toggle = () => (isOpen() ? close() : open());
+  const morph = registerPanel({ panel, button, isOpen, close, log: (t) => log?.('Soundboard', t) });
 
   function preview(sound) {
     try {
@@ -641,7 +645,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     else if (b.dataset.act === 'fav') toggleFav(sound);
     else if (b.dataset.act === 'send') send(sound);
   });
-  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target)) close(); };
+  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); };
   const onDocKey = (e) => { if (e.key === 'Escape' && isOpen()) close(); };
   doc.addEventListener('mousedown', onDocDown);
   doc.addEventListener('keydown', onDocKey);
@@ -694,6 +698,7 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       request?.destroy();
       actx?.close?.().catch(() => {});
       win.clearInterval(timer);
+      morph.unregister();
       doc.removeEventListener('mousedown', onDocDown);
       doc.removeEventListener('keydown', onDocKey);
       pauseAll();

@@ -5,6 +5,7 @@
 // Přezdívka je vidět vždy (předvyplněná: UC přezdívka → poslední z dona → jméno z platformy).
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
+import { registerPanel } from './panel-morph.js';
 
 export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
@@ -522,6 +523,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
+    // Jiný otevřený panel u pole (emoty, soundboard) se do tohohle plynule přetvoří (test2 bod 5).
+    morph.opened();
     clearConfigNotice();
     renderCurrency();
     // Změna při zavřeném panelu se jen tiše načte — upozornění patří jen k rozpracovanému formuláři.
@@ -546,6 +549,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     if (verifier) closeVerify();
   }
   const isOpen = () => !panel.classList.contains('hidden');
+  const morph = registerPanel({ panel, button, isOpen, close, log: L });
 
   // ---- události ----
   button.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
@@ -596,7 +600,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     // preventDefault: poslední „e“ by jinak spadlo do pole tokenu, kam se po odkrytí přesune fokus.
     if (detectTestmode(e.key)) { e.preventDefault(); revealTestMode(); }
   });
-  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target)) close(); };
+  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); };
   doc.addEventListener('mousedown', onDocDown);
 
   return {
@@ -608,6 +612,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     refreshIdentity: () => { renderWho(); if (isOpen()) loadProfile(); },
     destroy() {
       close();
+      morph.unregister();
       doc.removeEventListener('mousedown', onDocDown);
       panel.remove();
     },
