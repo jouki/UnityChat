@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, revokeAccountTokens, ACCOUNT_TOKEN_TTL_MS, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
+import { createGifTokenVerifier, hashToken, issueAccountToken, issueIntegrationToken, revokeAccountTokens, revokeTokenValue, ACCOUNT_TOKEN_TTL_MS, type GifTokenStore, type GifTokenRow } from './gifTokens.js';
 
 function memTokens() {
   const rows: Array<GifTokenRow & { tokenHash: string; revokedAt: Date | null }> = [];
@@ -9,6 +9,7 @@ function memTokens() {
       const mine = rows.filter((r) => !r.revokedAt && (owner.accountId !== undefined ? r.accountId === owner.accountId : r.integrationSlug === owner.integrationSlug));
       for (const r of mine.reverse().slice(keep)) r.revokedAt = at; // nejnovější první
     },
+    async revokeHash(hash, at) { for (const r of rows) if (r.tokenHash === hash && !r.revokedAt) r.revokedAt = at; },
     async insert(v) { rows.push({ accountId: v.accountId, integrationSlug: v.integrationSlug, tokenHash: v.tokenHash, revokedAt: null, createdAt: v.createdAt }); },
     async findActive(hash) { const r = rows.find((x) => x.tokenHash === hash && !x.revokedAt); return r ? { accountId: r.accountId, integrationSlug: r.integrationSlug, createdAt: r.createdAt } : null; },
   };
@@ -106,4 +107,14 @@ test('L1: odhlášení účtu (signOutAccount) zneplatní všechny jeho tokeny, 
   assert.equal(rows.find((r) => r.accountId === 8)!.revokedAt, null);
   const verify = createGifTokenVerifier({ store, isMod: async () => true, slugForChannel: async () => 'rob', now: () => 10 });
   assert.equal(await verify(t, 'robdiesalot'), false);
+});
+
+test('L13: token vložený do chatu se zneplatní podle hodnoty (jen ten jeden)', async () => {
+  const { store, rows } = memTokens();
+  const t = await issueAccountToken(7, store, () => 1);
+  const t2 = await issueAccountToken(7, store, () => 2);
+  await revokeTokenValue(t, new Date(3), store);
+  await revokeTokenValue('<nesmysl>', new Date(3), store);
+  assert.ok(rows.find((r) => r.tokenHash === hashToken(t))!.revokedAt);
+  assert.equal(rows.find((r) => r.tokenHash === hashToken(t2))!.revokedAt, null);
 });

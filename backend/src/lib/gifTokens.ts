@@ -20,6 +20,8 @@ export interface GifTokenStore {
   insert(v: GifTokenRow & { tokenHash: string }): Promise<void>;
   /** Aktivní (nezneplatněný) token podle hashe. */
   findActive(tokenHash: string): Promise<GifTokenRow | null>;
+  /** Zneplatní jeden token podle hashe (vyzrazený v chatu, audit L13). */
+  revokeHash(tokenHash: string, at: Date): Promise<void>;
 }
 
 export const dbGifTokenStore: GifTokenStore = {
@@ -31,6 +33,9 @@ export const dbGifTokenStore: GifTokenStore = {
     await db.update(gifAccessTokens).set({ revokedAt: at }).where(inArray(gifAccessTokens.id, excess));
   },
   async insert(v) { await db.insert(gifAccessTokens).values(v); },
+  async revokeHash(tokenHash, at) {
+    await db.update(gifAccessTokens).set({ revokedAt: at }).where(and(eq(gifAccessTokens.tokenHash, tokenHash), isNull(gifAccessTokens.revokedAt)));
+  },
   async findActive(tokenHash) {
     const rows = await db.select({ accountId: gifAccessTokens.accountId, integrationSlug: gifAccessTokens.integrationSlug, createdAt: gifAccessTokens.createdAt })
       .from(gifAccessTokens).where(and(eq(gifAccessTokens.tokenHash, tokenHash), isNull(gifAccessTokens.revokedAt))).limit(1);
@@ -57,6 +62,15 @@ export async function issueAccountToken(accountId: number, store: GifTokenStore 
   await store.insert({ accountId, integrationSlug: null, tokenHash: hashToken(token), createdAt: new Date(now()) });
   await store.revokeExcess({ accountId }, MAX_ACCOUNT_TOKENS, new Date(now()));
   return token;
+}
+
+/**
+ * Token vložený do veřejného chatu (odkaz `/media/gif/<id>?t=`, audit L13) → zneplatnit; klient si vydá nový.
+ * Nesmysl (ne-token) se ignoruje.
+ */
+export async function revokeTokenValue(token: string, at: Date = new Date(), store: GifTokenStore = dbGifTokenStore): Promise<void> {
+  if (!TOKEN_RE.test(token)) return;
+  await store.revokeHash(hashToken(token), at);
 }
 
 /** Odhlášení účtu (lib/webAuth.ts signOutAccount): všechny jeho tokeny pro zamítnuté GIFy neplatí (audit L1). */

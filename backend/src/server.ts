@@ -59,6 +59,7 @@ import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { createPhashWorker, dbGifLibraryStore, startPhashWorker } from './lib/gifLibrary.js';
 import { computePhash, probeMedia } from './lib/gifPhash.js';
+import { revokeTokenValue } from './lib/gifTokens.js';
 import { accountModIdentities } from './lib/chatRole.js';
 import { connectedAccountIds, sendToAccount } from './lib/accountWarnings.js';
 import { publishRestored } from './lib/linkRestore.js';
@@ -179,6 +180,8 @@ const linkFilter = createLinkFilter({
     intercept: (p) => gifFlow.intercept(p),
     reviewRequested: (m) => gifReviews.requested(m),
     lateReview: (m) => gifReviews.lateRequested(m),
+    // Token moda vložený do chatu (odkaz s ?t=) → zneplatnit; do logu nikdy token (audit L13).
+    revokeLeakedToken: (t) => { revokeTokenValue(t).then(() => app.log.info({}, 'gif: token moda vyzrazený v chatu zneplatněn')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: zneplatnění vyzrazeného tokenu selhalo')); },
   },
 });
 

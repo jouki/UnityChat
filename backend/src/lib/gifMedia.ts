@@ -48,6 +48,11 @@ export interface GifSource {
   mode: 'direct' | 'page' | 'own';
   /** mode own: id média v gif_media (32 hex). */
   mediaId?: string;
+  /**
+   * mode own: odkaz nesl token moda (`?t=`, zkopírovaný z náhledu) — ve veřejném chatu je vyzrazený, server ho
+   * zneplatní (audit L13). Nikdy do logu.
+   */
+  leakedToken?: string;
 }
 
 const TRAIL = /[)\]}>,.!?;:'"]+$/;
@@ -77,7 +82,10 @@ export function classifyGifUrl(raw: string, ownHosts: string[] = defaultOwnHosts
   const href = u.toString();
 
   const own = ownHosts.includes(host) && OWN_PATH.exec(u.pathname);
-  if (own) return { url: `${u.origin}${u.pathname}`, mode: 'own', mediaId: own[1] };
+  if (own) {
+    const t = u.searchParams.get('t');
+    return { url: `${u.origin}${u.pathname}`, mode: 'own', mediaId: own[1], ...(t && /^[A-Za-z0-9_-]{20,128}$/.test(t) ? { leakedToken: t } : {}) };
+  }
 
   // 7TV emote stránka → animované WebP z CDN (stránka je SPA bez og tagů).
   const seven = bare === '7tv.app' && /^\/emotes\/([0-9a-z]{10,40})\/?$/i.exec(u.pathname);

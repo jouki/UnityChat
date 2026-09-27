@@ -288,6 +288,8 @@ export interface GifHook {
   reviewRequested?: (m: IngestMessage) => boolean;
   /** Totéž, ale hlášení přišlo až po zprávě (ověří se po stažení média). */
   lateReview?: (m: IngestMessage) => boolean;
+  /** Odkaz na naše médium nesl token moda (`?t=`) → zneplatnit (audit L13, gifTokens revokeTokenValue). */
+  revokeLeakedToken?: (token: string) => void;
 }
 
 export interface LinkVerdict { host: string; channel: string; gif?: boolean }
@@ -345,6 +347,8 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const gif = deps.gif!;
     const candidate = (gif.candidate ?? gifCandidate)(m.content);
     if (!candidate) return null;
+    // Token moda ve veřejném chatu je vyzrazený bez ohledu na to, jestli GIF cesta projde (audit L13).
+    if (candidate.leakedToken) { try { gif.revokeLeakedToken?.(candidate.leakedToken); } catch { /* nic */ } }
     const query: GifAccessQuery = { workspace: ws.slug, platform: m.platform, userId: m.platformUserId, login: m.username.toLowerCase(), role: highestRole(roles) };
     // Přístup (odemčení + cooldown) řídí Židolišta pro všechny včetně modů / broadcastera (spec 2026-09-27-gif-review-upravy
     // §5; role jde v dotazu, Židolišta je může odemknout sama). Mod / broadcaster (badge) s odemčenou odměnou se jen

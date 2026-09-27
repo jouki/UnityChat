@@ -240,6 +240,10 @@ test('classifyGifUrl: odkaz na naše médium (/media/gif/<32 hex>) = mode own + 
   const own = ['api.jouki.cz'];
   assert.deepEqual(classifyGifUrl(`https://api.jouki.cz/media/gif/${id}`, own), { url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own', mediaId: id });
   assert.equal(classifyGifUrl(`api.jouki.cz/media/gif/${id}?t=x`, own)?.mode, 'own');
+  // Token moda vložený omylem do chatu (audit L13) → server ho zneplatní; URL média bez query.
+  const leaked = classifyGifUrl(`https://api.jouki.cz/media/gif/${id}?t=TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT`, own);
+  assert.deepEqual(leaked, { url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own', mediaId: id, leakedToken: 'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' });
+  assert.equal(classifyGifUrl(`https://api.jouki.cz/media/gif/${id}?t=<x>`, own)?.leakedToken, undefined, 'nesmysl není token');
   assert.equal(classifyGifUrl(`https://evil.cz/media/gif/${id}`, own), null);
   assert.equal(classifyGifUrl('https://api.jouki.cz/media/gif/kratke', own), null);
   assert.equal(gifCandidate(`hele https://api.jouki.cz/media/gif/${id}`, own)?.mediaId, id);

@@ -305,6 +305,15 @@ function gifHook(access: 'allowed' | 'denied' | 'unknown', reserve = true) {
 }
 const GIF_TEXT = 'hele https://tenor.com/view/cat-gif-1';
 
+test('L13: odkaz na naše médium s tokenem moda (?t=) → token se zneplatní (i když GIF cesta neprojde)', () => {
+  const id = 'a'.repeat(32);
+  const revoked: string[] = [];
+  const g = gifHook('denied');
+  const { f } = harness(undefined, { gif: { ...g.hook, candidate: () => ({ url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own' as const, mediaId: id, token: 'x', leakedToken: 'TOKEN' }), revokeLeakedToken: (t: string) => { revoked.push(t); } } });
+  f.check(msg({ content: `https://api.jouki.cz/media/gif/${id}?t=TOKEN` }));
+  assert.deepEqual(revoked, ['TOKEN']);
+});
+
 test('GIF: odemčeno (cache) → schovat hned jako gif_request, převod na pozadí; i s vypnutým filtrem', () => {
   for (const settings of [undefined, { ...LINK_FILTER_OFF }]) {
     const g = gifHook('allowed');
