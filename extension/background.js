@@ -106,6 +106,15 @@ function isPlatformTab(tab) {
 }
 
 
+// Nová verze z obchodu je stažená a čeká na restart rozšíření (Chrome ji sám nasadí, až bude rozšíření nečinné —
+// s otevřeným panelem nikdy). Panel rozsvítí tlačítko obnovení; klik = chrome.runtime.reload() → instalace.
+// Stav v storage.session: panel otevřený později ho uvidí taky (core/update-notice.js, pokyn usera 2026-09-27).
+chrome.runtime.onUpdateAvailable?.addListener((details) => {
+  ucLog('Update', `k dispozici ${details?.version || '?'} (běží ${chrome.runtime.getManifest().version})`);
+  chrome.storage.session?.set({ uc_update_ready: details?.version || true }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'UC_UPDATE_READY', version: details?.version || null }).catch(() => {});
+});
+
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 // Seznam souborů bere z manifestu (content_scripts) — jediný zdroj pravdy, včetně sdíleného
 // content/uc-header-button.js, který musí jít před skript platformy.
@@ -195,6 +204,17 @@ chrome.notifications?.onClicked?.addListener((id) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump
   // Text logu pro panel (Firefox si ukládá sám — blob: URL uspané background stránky zaniká).
+  // Panel žádá kontrolu nové verze v obchodě (při otevření a každou hodinu; Chrome ji sám omezuje).
+  if (msg.type === 'CHECK_UPDATE') {
+    try {
+      chrome.runtime.requestUpdateCheck?.((status, details) => {
+        ucLog('Update', `kontrola: ${status}${details?.version ? ' ' + details.version : ''}`);
+        sendResponse({ ok: true, status, version: details?.version || null });
+      });
+      if (!chrome.runtime.requestUpdateCheck) sendResponse({ ok: false });
+    } catch (e) { sendResponse({ ok: false, error: e.message }); }
+    return true;
+  }
   if (msg.type === 'GET_LOGS') {
     _hydrateLogs().then(() => sendResponse({ ok: true, text: _logs.join('\n') }));
     return true;

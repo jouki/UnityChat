@@ -3143,3 +3143,21 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .reply-ctx .rctx-pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
 .reply-ctx .rctx-pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
 .reply-ctx .rctx-pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }
+
+/* ---- Nová verze UnityChatu (core/update-notice.js): tlačítko obnovení v hlavičce svítí, výrazný pulzující glow ---- */
+.uc-update-ready {
+  position: relative;
+  color: #ffb347 !important;
+  border-color: rgba(255, 170, 60, 0.85) !important;
+  background: rgba(255, 140, 0, 0.16) !important;
+  border-radius: 6px;
+  animation: uc-update-glow 1.4s ease-in-out infinite;
+}
+.uc-update-ready svg { filter: drop-shadow(0 0 4px rgba(255, 180, 60, 0.95)); }
+@keyframes uc-update-glow {
+  0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 140, 0, 0.55), 0 0 10px 2px rgba(255, 200, 0, 0.25); text-shadow: 0 0 6px rgba(255, 180, 60, 0.8); }
+  50% { box-shadow: 0 0 10px 3px rgba(255, 140, 0, 0.95), 0 0 22px 7px rgba(255, 200, 0, 0.45); text-shadow: 0 0 12px rgba(255, 200, 80, 1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .uc-update-ready { animation: none; box-shadow: 0 0 8px 2px rgba(255, 140, 0, 0.8); }
+}

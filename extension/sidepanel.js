@@ -1724,10 +1724,31 @@ class UnityChat {
   }
 
 
+  /**
+   * Nová verze addonu (pokyn usera 2026-09-27): background zachytí stažení z obchodu (runtime.onUpdateAvailable,
+   * stav v storage.session) → tlačítko obnovení svítí s textem „Aktualizuj addon!“. Kontrola v obchodě při otevření
+   * panelu a pak každou hodinu (requestUpdateCheck v backgroundu; Chrome ji sám omezuje).
+   */
+  _initUpdateNotice() {
+    chrome.storage.session?.get('uc_update_ready').then((r) => { if (r?.uc_update_ready) this._markUpdateReady(r.uc_update_ready); }).catch(() => {});
+    const check = () => { try { chrome.runtime.sendMessage({ type: 'CHECK_UPDATE' }).then((r) => { if (r?.status === 'update_available') this._markUpdateReady(r.version); }).catch(() => {}); } catch {} };
+    setTimeout(check, 5000);
+    setInterval(check, 60 * 60 * 1000);
+  }
+
+  _markUpdateReady(version) {
+    this._updateReady = true;
+    if (window.UC_CORE.markUpdateReady(document.getElementById('btn-reconnect'), 'addon')) {
+      this._ucLog('Update', `nová verze ${typeof version === 'string' ? version : ''} připravená — tlačítko obnovení svítí`);
+    }
+  }
+
   // Background broadcasts for panel-wide state.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+      if (msg?.type === 'UC_UPDATE_READY') {
+        this._markUpdateReady(msg.version);
+      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
         this._handleDomRedeem(msg.data);
       } else if (msg?.type === 'TW_HIGHLIGHTS') {
         this._handleHighlights(msg);
@@ -2127,7 +2148,10 @@ class UnityChat {
 
     // Reload ikona v hlavičce = dřívější „Připojit": uloží kanály z inputů
     // a znovu připojí vše. „Odpojit" a „Vyčistit chat" zrušeny (v3.38.72).
+    // Stažená nová verze (tlačítko svítí, core/update-notice.js) → klik ji nainstaluje (restart rozšíření).
+    this._initUpdateNotice();
     $('btn-reconnect').addEventListener('click', () => {
+      if (this._updateReady) { this._ucLog('Update', 'instaluji novou verzi (runtime.reload)'); chrome.runtime.reload(); return; }
       this._closeUserHistory('reconnect');
       this.config.channel = $('input-channel').value.trim();
       this.config.kickChannel = $('input-kick-channel').value.trim();

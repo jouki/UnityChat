@@ -477,5 +477,14 @@ const rl = await ev(`(() => { const l = document.createElement('span'); l.classN
 check('reduced motion: zámek bez třesení, ale zčervená a zešedne (uc-lock-flash)', rl === 'uc-lock-flash', rl);
 await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
 
+// ---- Nová verze addonu (core/update-notice.js): stažená verze z obchodu → tlačítko obnovení svítí ----
+check('Update: bez nové verze tlačítko obnovení nesvítí', await ev(`!document.getElementById('btn-reconnect').classList.contains('uc-update-ready')`) === true);
+await ev(`chrome.storage.session.set({ uc_update_ready: '9.9.9' }).then(() => true)`);
+await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+check('Update: stažená nová verze → tlačítko svítí s textem „Aktualizuj addon!“', await until(`(() => { const b = document.getElementById('btn-reconnect'); return b.classList.contains('uc-update-ready') && b.title === 'Nová verze UnityChatu. Aktualizuj addon!'; })()`, 12000));
+const glow = await ev(`(() => { const cs = getComputedStyle(document.getElementById('btn-reconnect')); return { anim: cs.animationName, iter: cs.animationIterationCount, shadow: cs.boxShadow }; })()`);
+check('Update: animovaný glow (pulzuje stále, box-shadow)', glow.anim === 'uc-update-glow' && glow.iter === 'infinite' && /rgba?\(/.test(glow.shadow), JSON.stringify(glow));
+await ev(`chrome.storage.session.remove('uc_update_ready').then(() => true)`);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);
