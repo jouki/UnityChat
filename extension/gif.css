@@ -201,6 +201,23 @@ div.uc-gif-more { cursor: default; }
 .uc-gif-notice[hidden] { display: none; }
 .uc-gif-notice--approved { border-color: #2fbf5b; color: #6ee08f; }
 .uc-gif-notice--rejected { border-color: #e5484d; color: #ff9a9d; }
+.uc-gif-notice--error { border-color: #f5a524; color: #ffc46b; }
+/* Split „Zamítnout ▾“ + nabídka trestu (spec 2026-09-27-gif-review-upravy §2). */
+.uc-gif-split { display: inline-flex; }
+.uc-gif-split > .uc-gif-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.uc-gif-split-more { padding: 5px 7px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: rgba(255, 154, 157, .25); }
+.uc-gif-split-more[aria-expanded="true"] { background: var(--bg-hover, #26262c); }
+.uc-gif-rmenu { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, #2f2f35); }
+.uc-gif-rmenu[hidden] { display: none; }
+.uc-gif-rmenu-row.uc-mm-custom { flex-wrap: wrap; margin: 0; padding: 0; border: 0; gap: 6px; }
+.uc-gif-rmenu-label { flex: 1 1 100%; font-size: 12px; font-weight: 700; color: var(--text-secondary, #adadb8); }
+.uc-gif-rmenu-dur { display: inline-flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.uc-gif-rmenu-dur .uc-mm-unit { flex: 0 0 30px; }
+.uc-gif-rmenu .uc-mm-unit[aria-pressed="true"] { border-color: #ff8c00; background: rgba(255, 140, 0, 0.28); color: #ffc46b; }
+.uc-gif-rmenu .uc-gif-btn { padding: 4px 10px; }
+.uc-gif-btn--danger { color: #fff; background: #a3262b; border-color: transparent; }
+.uc-gif-btn--danger:hover { background: #c02f35; }
+.uc-gif-rmenu-ban { align-self: flex-start; }
 .uc-gif-card-prev { margin-top: 4px; color: #f5a524; font-size: 11px; font-weight: 700; }
 .uc-gif-card-prev::before { content: '⚠ '; }
 .uc-gif-card-prev[hidden], .uc-gif-btn[hidden] { display: none; }

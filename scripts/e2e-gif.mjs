@@ -92,9 +92,9 @@ const H1 = [
   H('gif-10', 'Divak', 'u9', 'text nad nedostupným', 6.7, { gif: { url: murl(hex(20)), kind: 'gif', width: 100, height: 50, unavailable: true } }),
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
-const mock = { mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
+const mock = { modUser: null, mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
   library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set(), wd: [], pg: [], byId: [] };
-const posts = { decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [], byId: [] };
+const posts = { modUser: [], decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [], byId: [] };
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
@@ -172,6 +172,13 @@ s.onevent = async (d) => {
     if (r) return json(r.body, r.code);
     return json({ ok: true, requestId: Number(dm[1]), status: body.approve ? 'approved' : 'rejected' });
   }
+  // Zamítnout + trest z karty (2026-09-27 §2) → stávající moderace uživatele.
+  if (u.includes('/moderation/user') && !u.includes('/moderation/user-')) {
+    posts.modUser.push(body);
+    const r = mock.modUser;
+    if (r) return json(r.body, r.code);
+    return json({ ok: true, results: { twitch: 'ok' } });
+  }
   if (u.includes('/chat/send')) { posts.send.push(body); return json({ ok: true, id: mock.sendId || 'x' }); }
   if (u.includes('/gif/state')) { posts.state.push(u); return json(typeof mock.gifState === 'function' ? mock.gifState() : mock.gifState); }
   if (u.includes('/gif/held')) {
@@ -241,7 +248,7 @@ const c20a = await card(20);
 check('A nová karta: tlačítka 1 s zamčená (aktualizace fronty)', c20a?.disabled === true && c20a.cls.includes('uc-gif-card--locked'), JSON.stringify(c20a));
 check('A … po 1 s odemčená', await until(`(() => { const c = document.querySelector('.uc-gif-card[data-request-id="20"]'); return !!c && [...c.querySelectorAll('.uc-gif-btn--approve, .uc-gif-btn--reject')].every(b => !b.disabled); })()`, 2000));
 const c20 = await card(20);
-check('A karta: jméno, text, náhled, odpočet, tlačítka, u spodku chatu', c20?.who === 'divak20' && c20.text === 'z GET pending' && c20.media && /^[45]:\d\d$/.test(c20.timer || '') && JSON.stringify(c20.buttons) === '["Zamítnout","Schválit"]' && c20.inWrapper && c20.kind === 'Chce poslat GIF' && !c20.prev, JSON.stringify(c20));
+check('A karta: jméno, text, náhled, odpočet, tlačítka, u spodku chatu', c20?.who === 'divak20' && c20.text === 'z GET pending' && c20.media && /^[45]:\d\d$/.test(c20.timer || '') && JSON.stringify(c20.buttons) === '["Zamítnout","▾","Schválit"]' && c20.inWrapper && c20.kind === 'Chce poslat GIF' && !c20.prev, JSON.stringify(c20));
 
 // gif-pending přes /account/stream (jedna dávka — klient se po konci spojení připojuje znovu za 5 s)
 pushAcc(
@@ -332,9 +339,84 @@ pushAcc(['gif-pending', pend0(26, { previouslyRejected: { at: Date.UTC(2026, 8, 
 check('A dříve zamítnutý → karta 26', await until(`!!document.querySelector('.uc-gif-card[data-request-id="26"]')`, 12000));
 await until(`!window.ucGif.gifs().locked && !document.querySelector('.uc-gif-card [data-act="approve"]:disabled')`, 2000);
 const c26 = await card(26);
-check('A … „Dříve zamítnuto … · modik (Twitch)“ + „Automaticky zahazovat 12 h“', /^Dříve zamítnuto .+ · modik \(Twitch\)$/.test(c26?.prev || '') && JSON.stringify(c26.buttons) === '["Automaticky zahazovat 12 h","Zamítnout","Schválit"]', JSON.stringify(c26));
+check('A … „Dříve zamítnuto … · modik (Twitch)“ + „Automaticky zahazovat 12 h“', /^Dříve zamítnuto .+ · modik \(Twitch\)$/.test(c26?.prev || '') && JSON.stringify(c26.buttons) === '["Automaticky zahazovat 12 h","Zamítnout","▾","Schválit"]', JSON.stringify(c26));
 await click(26, 'ban12h');
 check('A „Automaticky zahazovat 12 h“ → POST /moderation/gif/<médium>/ban12h, karta pryč', await until(`!document.querySelector('.uc-gif-card[data-request-id="26"]')`, 4000) && posts.media.some((x) => x.id === MEDIA.card && x.action === 'ban12h'), JSON.stringify(posts.media));
+
+// Zamítnout + trest (spec 2026-09-27-gif-review-upravy §2): split ▾ → timeout (výchozí 10 min / vlastní délka), permaban s potvrzením.
+const waitUnlocked = () => until(`!window.ucGif.gifs().locked && !document.querySelector('.uc-gif-card [data-act="approve"]:disabled')`, 2500);
+const rmenu = (id) => ev(`(() => { const c = document.querySelector('.uc-gif-card[data-request-id="${id}"]'); const m = c?.querySelector('.uc-gif-rmenu'); if (!m) return null;
+  return { open: !m.hidden && getComputedStyle(m).display !== 'none', value: m.querySelector('.uc-gif-rmenu-num').value, unit: m.querySelector('.uc-mm-unit[aria-pressed="true"]')?.dataset.unit,
+    expanded: c.querySelector('.uc-gif-split-more').getAttribute('aria-expanded'), moreHidden: c.querySelector('.uc-gif-split-more').hidden,
+    disabled: [...m.querySelectorAll('button, input')].every(b => b.disabled), label: m.querySelector('.uc-gif-rmenu-label').textContent, ban: m.querySelector('[data-act="reject-ban"]').textContent }; })()`);
+pushAcc(['gif-pending', pend0(30)], ['gif-pending', pend0(31)], ['gif-pending', pend0(32)], ['gif-pending', pend0(33)], ['gif-queue', { channel: 'robdiesalot', pendingCount: 4, headId: 30 }]);
+check('P karta 30', await until(`!!document.querySelector('.uc-gif-card[data-request-id="30"]')`, 12000));
+const m30a = await rmenu(30);
+check('P nabídka trestu je zavřená, během zámku 1 s zamčená i ona', m30a && !m30a.open && m30a.expanded === 'false' && m30a.disabled && !m30a.moreHidden, JSON.stringify(m30a));
+await waitUnlocked();
+await click(30, 'reject-more');
+const m30 = await rmenu(30);
+check('P ▾ → „Zamítnout + timeout“ [10] [m] + „Zamítnout + permaban…“', m30?.open && m30.expanded === 'true' && m30.value === '10' && m30.unit === 'm' && !m30.disabled
+  && m30.label === 'Zamítnout + timeout' && m30.ban === 'Zamítnout + permaban…', JSON.stringify(m30));
+check('P … fokus v poli délky', await ev(`document.activeElement?.classList.contains('uc-gif-rmenu-num')`) === true);
+await ev(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+check('P Esc nabídku zavře', (await rmenu(30))?.open === false);
+await click(30, 'reject-more');
+const dec30 = posts.decide.length;
+await click(30, 'reject-timeout');
+check('P Zamítnout + timeout → POST decide approve:false', await until(`true`, 10) && await (async () => { const t = Date.now(); while (Date.now() - t < 4000) { if (posts.decide.length > dec30) return true; await sleep(100); } return false; })()
+  && posts.decide.at(-1).id === '30' && posts.decide.at(-1).body?.approve === false, JSON.stringify(posts.decide.at(-1)));
+check('P … pak POST /moderation/user timeout 600 s pro odesílatele', await (async () => { const t = Date.now(); while (Date.now() - t < 4000) { if (posts.modUser.length) return true; await sleep(100); } return false; })()
+  && JSON.stringify(posts.modUser[0]) === JSON.stringify({ channel: 'robdiesalot', platform: 'twitch', userId: 'u30', login: 'divak30', action: 'timeout', durationSec: 600 }), JSON.stringify(posts.modUser));
+check('P … hláška „Zamítnuto · Timeout 10 min pro divak30: …“, další karta 31', await until(`(document.querySelector('.uc-gif-notice:not([hidden])')?.textContent || '').startsWith('Zamítnuto · Timeout 10 min pro divak30') && !!document.querySelector('.uc-gif-card[data-request-id="31"]')`, 4000), JSON.stringify(await stack()));
+
+// Vlastní délka 2 h + chyba moderace → hláška, zamítnutí platí.
+await waitUnlocked();
+mock.modUser = { code: 403, body: { ok: false, error: 'target_protected' } };
+await click(31, 'reject-more');
+await ev(`(() => { const c = document.querySelector('.uc-gif-card[data-request-id="31"]'); c.querySelector('.uc-gif-rmenu-num').value = '2'; c.querySelector('.uc-mm-unit[data-unit="h"]').click(); return true; })()`);
+check('P jednotka h zvolená (aria-pressed)', (await rmenu(31))?.unit === 'h');
+await click(31, 'reject-timeout');
+check('P vlastní délka 2 h → durationSec 7200', await (async () => { const t = Date.now(); while (Date.now() - t < 4000) { if (posts.modUser.length > 1) return true; await sleep(100); } return false; })() && posts.modUser[1].durationSec === 7200 && posts.modUser[1].userId === 'u31', JSON.stringify(posts.modUser[1]));
+check('P chyba moderace → „Zamítnuto, ale timeout se nepovedl: …“, zamítnutí platí (karta 32)', await until(`document.querySelector('.uc-gif-notice:not([hidden])')?.textContent === 'Zamítnuto, ale timeout se nepovedl: Na streamera nebo moda to nejde.' && !!document.querySelector('.uc-gif-card[data-request-id="32"]')`, 4000)
+  && posts.decide.some((x) => x.id === '31' && x.body?.approve === false), JSON.stringify(await stack()));
+mock.modUser = null;
+
+// Neplatná délka (0) → nic neodejde.
+await waitUnlocked();
+await click(32, 'reject-more');
+const decBad = posts.decide.length;
+await ev(`(() => { const i = document.querySelector('.uc-gif-card[data-request-id="32"] .uc-gif-rmenu-num'); i.value = '999'; document.querySelector('.uc-gif-card[data-request-id="32"] .uc-mm-unit[data-unit="h"]').click(); return true; })()`);
+await click(32, 'reject-timeout');
+await sleep(300);
+check('P délka nad 14 dní → nic neodejde, pole zčervená', posts.decide.length === decBad && await ev(`document.querySelector('.uc-gif-card[data-request-id="32"] .uc-gif-rmenu-row').classList.contains('uc-mm-custom--bad')`) === true);
+
+// Permaban: potvrzovací dialog; Zrušit = nic, potvrdit = zamítnout + ban.
+await click(32, 'reject-ban');
+check('P permaban → dialog „Trvale zabanovat divak32 na Twitchi?“', await until(`document.querySelector('.uc-mod-dialog h2')?.textContent === 'Trvale zabanovat divak32 na Twitchi?'`, 2000));
+await ev(`[...document.querySelectorAll('.uc-mod-dialog button')].find(b => b.textContent === 'Zrušit').click()`);
+await sleep(200);
+check('P Zrušit → nic neodejde, karta zůstává', !posts.decide.some((x) => x.id === '32') && await ev(`!document.querySelector('.uc-mod-dialog') && !!document.querySelector('.uc-gif-card[data-request-id="32"]')`) === true);
+await click(32, 'reject-ban');
+await until(`!!document.querySelector('.uc-mod-dialog')`, 2000);
+await ev(`document.querySelector('.uc-mod-dialog button[type=submit]').click()`);
+check('P potvrzeno → decide zamítnout + POST /moderation/user ban', await (async () => { const t = Date.now(); while (Date.now() - t < 4000) { if (posts.modUser.length > 2) return true; await sleep(100); } return false; })()
+  && posts.decide.some((x) => x.id === '32' && x.body?.approve === false) && posts.modUser[2].action === 'ban' && posts.modUser[2].userId === 'u32' && posts.modUser[2].durationSec === undefined, JSON.stringify(posts.modUser[2]));
+check('P … dialog zavřený, hláška „Zamítnuto · Ban pro divak32: …“', await until(`!document.querySelector('.uc-mod-dialog') && (document.querySelector('.uc-gif-notice:not([hidden])')?.textContent || '').startsWith('Zamítnuto · Ban pro divak32')`, 4000), JSON.stringify(await stack()));
+
+// O GIFu rozhodl jiný mod dřív (409) → trest se neprovede.
+await until(`!!document.querySelector('.uc-gif-card[data-request-id="33"]')`, 4000);
+await waitUnlocked();
+mock.decide['33'] = { code: 409, body: { ok: false, error: 'already_decided', status: 'approved', decidedBy: 'twitch:modik' } };
+const mu33 = posts.modUser.length;
+await click(33, 'reject-more');
+await click(33, 'reject-timeout');
+check('P 409 → „Už rozhodl modik (Twitch) — trest se neprovedl“, bez /moderation/user', await until(`document.querySelector('.uc-gif-notice:not([hidden])')?.textContent === 'Už rozhodl modik (Twitch) — trest se neprovedl'`, 4000) && posts.modUser.length === mu33, JSON.stringify(await stack()));
+// Vlastní GIF (mod v Dev módu) bez ▾.
+pushAcc(['gif-pending', pend0(34, { own: true })], ['gif-queue', { channel: 'robdiesalot', pendingCount: 1, headId: 34 }]);
+check('P vlastní GIF → bez ▾', await until(`!!document.querySelector('.uc-gif-card[data-request-id="34"]')`, 12000) && (await rmenu(34))?.moreHidden === true);
+pushAcc(['gif-decided', { requestId: 34, channel: 'robdiesalot', approved: false, status: 'rejected', by: 'twitch:jinymod' }], ['gif-queue', { channel: 'robdiesalot', pendingCount: 0, headId: null }]);
+await until(`!document.querySelector('.uc-gif-card')`, 12000);
 
 // gif-queue s neznámou první žádostí → dotáhnout GET pending; prázdná fronta → nic
 const pendB = posts.pending.length;

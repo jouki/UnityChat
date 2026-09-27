@@ -24,6 +24,35 @@ export function customDurationSec(value, unitSec, max) {
   const sec = n * unitSec;
   return sec >= 1 && sec <= max ? sec : null;
 }
+/**
+ * Číselné pole vlastní délky (sdílené nabídkou moda i kartou GIFu „Zamítnout + timeout“): celé číslo ≥ 1,
+ * kolečko myši ±1, Enter → `onEnter`; šipky/Home/End patří poli (nepropadnou do navigace nabídky / karty).
+ * @returns {{input: HTMLInputElement, clamp: () => number}}  clamp() opraví hodnotu a vrátí ji
+ */
+export function createDurationNumber(doc, { value = 1, label = 'Délka', onEnter = null, className = 'uc-mm-custom-num' } = {}) {
+  const input = doc.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.step = '1';
+  input.value = String(value);
+  input.inputMode = 'numeric';
+  input.className = className;
+  input.setAttribute('aria-label', label);
+  const clamp = () => { const n = Math.floor(Number(input.value)); const v = Number.isFinite(n) && n >= 1 ? n : 1; input.value = String(v); return v; };
+  input.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    input.value = String(Math.max(1, (Math.floor(Number(input.value)) || 1) + (e.deltaY < 0 ? 1 : -1)));
+  }, { passive: false });
+  input.addEventListener('change', clamp);
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Tab') return;
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); onEnter?.(); }
+  });
+  return { input, clamp };
+}
+
 export const NICKNAME_MAX = 30;
 export const WARN_REASON_MAX = 500;
 
@@ -566,28 +595,8 @@ export class ModMenu {
     const doc = this.doc;
     const row = doc.createElement('div');
     row.className = 'uc-mm-custom';
-    const input = doc.createElement('input');
-    input.type = 'number';
-    input.min = '1';
-    input.step = '1';
-    input.value = '1';
-    input.inputMode = 'numeric';
-    input.className = 'uc-mm-custom-num';
-    input.setAttribute('aria-label', `Vlastní délka (${parent.label})`);
-    const clamp = () => { const n = Math.floor(Number(input.value)); input.value = String(Number.isFinite(n) && n >= 1 ? n : 1); };
-    input.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const n = Math.max(1, (Math.floor(Number(input.value)) || 1) + (e.deltaY < 0 ? 1 : -1));
-      input.value = String(n);
-    }, { passive: false });
-    input.addEventListener('change', clamp);
-    input.addEventListener('click', (e) => e.stopPropagation());
-    // Šipky/Home/End patří poli, ne navigaci v nabídce; Enter = sekundy.
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' || e.key === 'Tab') return;
-      e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); row.querySelector('.uc-mm-unit')?.click(); }
-    });
+    // Enter = sekundy (první jednotka).
+    const { input, clamp } = createDurationNumber(doc, { label: `Vlastní délka (${parent.label})`, onEnter: () => row.querySelector('.uc-mm-unit')?.click() });
     row.appendChild(input);
     for (const u of CUSTOM_UNITS) {
       const b = doc.createElement('button');

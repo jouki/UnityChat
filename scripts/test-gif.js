@@ -242,6 +242,19 @@ Promise.all([
   check('gifMsgMediaId', g.gifMsgMediaId({ gif: { url: URL_OK } }) === ID && g.gifMsgMediaId({}) === null && g.gifMsgMediaId(null) === null);
   check('gifShortDate', /^\d+\. \d+\. \d+:\d\d$/.test(g.gifShortDate(Date.UTC(2026, 8, 27, 10, 5))) && g.gifShortDate(0) === '' && g.gifShortDate('x') === '');
 
+  // --- Zamítnout + trest (spec 2026-09-27-gif-review-upravy §2) ---
+  check('GIF_PENALTY_DEFAULT = 10 min', eq(g.GIF_PENALTY_DEFAULT, { value: 10, unit: 'm' }) && g.gifPenaltySec(10, 'm') === 600);
+  check('gifPenaltySec: s / h, strop 14 dní, neplatné → null', g.gifPenaltySec(30, 's') === 30 && g.gifPenaltySec(2, 'h') === 7200
+    && g.gifPenaltySec(336, 'h') === 1_209_600 && g.gifPenaltySec(337, 'h') === null && g.gifPenaltySec(0, 'm') === null && g.gifPenaltySec(5, 'd') === null && g.gifPenaltySec('x', 's') === null);
+  check('gifBanConfirmTitle', g.gifBanConfirmTitle({ login: 'divak', platform: 'twitch' }) === 'Trvale zabanovat divak na Twitchi?'
+    && g.gifBanConfirmTitle({ login: 'k', platform: 'kick' }) === 'Trvale zabanovat k na Kicku?' && g.gifBanConfirmTitle({ login: 'y', platform: 'youtube' }) === 'Trvale zabanovat y na YouTube?');
+  const REQ = { platform: 'twitch', login: 'divak' };
+  const okTo = g.gifPenaltyNotice({ kind: 'timeout', durationSec: 600 }, REQ, { results: { twitch: 'ok' } });
+  check('gifPenaltyNotice: timeout ok', okTo.startsWith('Zamítnuto · Timeout 10 min pro divak'), okTo);
+  check('gifPenaltyNotice: ban ok', g.gifPenaltyNotice({ kind: 'ban' }, REQ, { results: { twitch: 'ok' } }).startsWith('Zamítnuto · Ban pro divak'));
+  check('gifPenaltyNotice: chyba moderace = zamítnutí platí', g.gifPenaltyNotice({ kind: 'timeout', durationSec: 60 }, REQ, null, { error: 'target_protected', status: 403 }) === 'Zamítnuto, ale timeout se nepovedl: Na streamera nebo moda to nejde.'
+    && g.gifPenaltyNotice({ kind: 'ban' }, REQ, null, { status: 429 }).startsWith('Zamítnuto, ale ban se nepovedl: Moc akcí'));
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

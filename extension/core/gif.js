@@ -5,7 +5,9 @@
 //    max 400 × 250 px se zachovaným poměrem, lazy load, při chybě štítek „GIF odebrán“;
 //  - fronta ke schválení pro mody (GifRequests, GIF knihovna 2026-09-26): FIFO — jedna karta = nejstarší čekající +
 //    „+N čeká“, SSE `gif-pending` / `gif-decided` / `gif-queue` z /account/stream, zámek tlačítek 1 s / 0,3 s,
-//    POST /moderation/gif/:id/decide (409 → „Už rozhodl X“), GET /moderation/gif/pending, ban12h.
+//    POST /moderation/gif/:id/decide (409 → „Už rozhodl X“), GET /moderation/gif/pending, ban12h;
+//    split „Zamítnout ▾“: Zamítnout + timeout (výběr délky jako custom timeout v core/mod-menu.js, výchozí 10 min)
+//    / Zamítnout + permaban (modální potvrzení) → po zamítnutí POST /moderation/user (spec 2026-09-27-gif-review-upravy §2).
 //    Stav pro odesílatele ukazuje štítek u zprávy (core/gif-library.js GifOutbox), ne karta.
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer).
@@ -13,6 +15,7 @@
 import { escapeAttr } from './html.js';
 import { PLATFORM_NAMES } from './soundboard.js';
 import { actorLabel } from './user-history.js';
+import { buildModRequest, createDurationNumber, CUSTOM_UNITS, customDurationSec, MAX_TIMEOUT_SEC, modErrorText, openModDialog, PLATFORM_LOC, summarizeModResult } from './mod-menu.js';
 
 export const GIF_MAX_W = 400;
 export const GIF_MAX_H = 250;
@@ -460,6 +463,31 @@ export const GIF_LOCK_OWN_MS = 300;
 /** Jak dlouho zůstane hláška „Už rozhodl X“ / „Schváleno · X“ nad kartou. */
 export const GIF_NOTICE_MS = 2500;
 
+/** Výchozí trest u „Zamítnout + timeout“ (spec 2026-09-27-gif-review-upravy §2): 10 min. */
+export const GIF_PENALTY_DEFAULT = { value: 10, unit: 'm' };
+
+/** Délka trestu z pole + jednotky (s / m / h) → sekundy (1 s … 14 dní), jinak null. */
+export function gifPenaltySec(value, unitId) {
+  const u = CUSTOM_UNITS.find((x) => x.id === unitId);
+  return u ? customDurationSec(value, u.sec, MAX_TIMEOUT_SEC) : null;
+}
+
+/** Nadpis potvrzení permabanu z karty: „Trvale zabanovat divak na Twitchi?“. */
+export function gifBanConfirmTitle(req) {
+  const where = PLATFORM_LOC[req?.platform] || PLATFORM_NAMES[req?.platform] || req?.platform || '';
+  return `Trvale zabanovat ${req?.login || 'uživatele'}${where ? ` na ${where}` : ''}?`;
+}
+
+/**
+ * Hláška po „Zamítnout + trest“: úspěch = „Zamítnuto · Timeout 10 min pro divak: …“; chyba moderace = zamítnutí platí,
+ * „Zamítnuto, ale timeout se nepovedl: …“.
+ */
+export function gifPenaltyNotice(penalty, req, res, err) {
+  const target = { platform: req.platform, login: req.login };
+  if (err) return `Zamítnuto, ale ${penalty.kind === 'ban' ? 'ban' : 'timeout'} se nepovedl: ${modErrorText(err)}`;
+  return `Zamítnuto · ${summarizeModResult(penalty.kind, target, res || {}, { durationSec: penalty.durationSec })}`;
+}
+
 /** „+3 čeká“ (počet dalších čekajících za kartou). */
 export const gifWaitingText = (n) => `+${Math.max(0, Math.trunc(Number(n) || 0))} čeká`;
 
@@ -685,21 +713,31 @@ export class GifRequests {
     return this._loadingPending;
   }
 
-  /** Klik na Schválit / Zamítnout (jen karta, která je vidět, a ne během zámku). */
-  async decide(requestId, approve) {
+  /**
+   * Klik na Schválit / Zamítnout (jen karta, která je vidět, a ne během zámku). `penalty` ({ kind: 'timeout',
+   * durationSec } | { kind: 'ban' }) = „Zamítnout + trest“: po MÉM zamítnutí POST /moderation/user pro odesílatele
+   * (chyba moderace = hláška, zamítnutí platí; když rozhodl někdo jiný, trest se neprovede).
+   */
+  async decide(requestId, approve, penalty = null) {
     const id = String(requestId);
     const card = this._cards.get(id);
     if (!card || card.busy) return null;
     if (this._shownId === id && this._lock.locked()) { this._L(`decide ${id}: zamčeno ještě ${this._lock.remaining()} ms`); return null; }
     card.busy = true; card.error = '';
     this._paint();
-    this._L(`decide ${id} ${approve ? 'approve' : 'reject'}`);
+    this._L(`decide ${id} ${approve ? 'approve' : 'reject'}${penalty ? ` + ${penalty.kind}${penalty.durationSec ? ` ${penalty.durationSec} s` : ''}` : ''}`);
+    const req = card.req;
     try {
       const r = await this.api(`/moderation/gif/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { approve: !!approve } });
       card.busy = false;
       const status = ['approved', 'rejected'].includes(r?.status) ? r.status : (approve ? 'approved' : 'rejected');
       // SSE (gif-decided / gif-queue) předběhlo HTTP odpověď → karta už je pryč jako moje rozhodnutí, jen potvrdit.
-      if (card.resolvedBySse) { this._rememberDecided(id, status); this._L(`decide ${id} → ${status} (SSE bylo rychlejší)`); return status; }
+      if (card.resolvedBySse) {
+        this._rememberDecided(id, status);
+        this._L(`decide ${id} → ${status} (SSE bylo rychlejší)`);
+        if (penalty && !approve && status === 'rejected') await this._penalize(req, penalty);
+        return status;
+      }
       // Mezitím karta zmizela (clear po přepnutí kanálu) → nic nevykreslovat.
       if (this._cards.get(id) !== card) return null;
       if (r?.published === false) this._L(`decide ${id}: schváleno, ale zpráva se nezapsala (published:false)`);
@@ -709,6 +747,7 @@ export class GifRequests {
       this._cards.delete(id);
       this._queueDrop(id);
       this._render();
+      if (penalty && !approve && status === 'rejected') await this._penalize(req, penalty);
       return status;
     } catch (e) {
       card.busy = false;
@@ -717,8 +756,8 @@ export class GifRequests {
         const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
         const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
         const by = e.body?.decidedBy ?? e.decidedBy ?? null;
-        this._L(`decide ${id}: 409 po SSE (${st}, ${by ?? '-'})`);
-        this._setNotice(gifAlreadyDecidedText(st, by), st);
+        this._L(`decide ${id}: 409 po SSE (${st}, ${by ?? '-'})${penalty ? ' → trest se neprovede' : ''}`);
+        this._setNotice(`${gifAlreadyDecidedText(st, by)}${penalty ? ' — trest se neprovedl' : ''}`, st);
         this._render();
         return st;
       }
@@ -729,11 +768,11 @@ export class GifRequests {
         const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
         const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
         const by = e.body?.decidedBy ?? e.decidedBy ?? null;
-        this._L(`decide ${id}: 409 už rozhodnuto (${st}, ${by ?? '-'})`);
+        this._L(`decide ${id}: 409 už rozhodnuto (${st}, ${by ?? '-'})${penalty ? ' → trest se neprovede' : ''}`);
         this._rememberDecided(id, st);
         this._cards.delete(id);
         this._queueDrop(id);
-        this._setNotice(gifAlreadyDecidedText(st, by), st);
+        this._setNotice(`${gifAlreadyDecidedText(st, by)}${penalty ? ' — trest se neprovedl' : ''}`, st);
         this._render();
         return st;
       }
@@ -748,6 +787,60 @@ export class GifRequests {
       this._paint();
       return null;
     }
+  }
+
+  /** Trest odesílateli po mém zamítnutí (POST /moderation/user, stejný požadavek jako nabídka moda). */
+  async _penalize(req, penalty) {
+    const target = { channel: req.channel, platform: req.platform, userId: req.userId, login: req.login };
+    this._setNotice(`Zamítnuto · ${penalty.kind === 'ban' ? 'ban' : 'timeout'} pro ${req.login}…`, 'rejected', this.noticeMs * 4);
+    this._render();
+    const r = buildModRequest(penalty.kind, target, { durationSec: penalty.durationSec });
+    let res = null, err = null;
+    try { res = await this.api(r.path, { method: r.method, body: r.body }); }
+    catch (e) { err = e; }
+    this._L(`trest ${penalty.kind} ${req.platform}:${req.userId} → ${err ? `FAIL ${err?.status || 0} ${err?.error || err?.message || err}` : JSON.stringify(res?.results || 'ok').slice(0, 200)}`);
+    this._setNotice(gifPenaltyNotice(penalty, req, res, err), err ? 'error' : 'rejected', err ? this.noticeMs * 2 : Math.round(this.noticeMs * 1.6));
+    this._render();
+    return !err;
+  }
+
+  /** „Zamítnout + timeout“ z nabídky ▾ karty (délka z pole + jednotky). */
+  rejectWithTimeout(requestId) {
+    const id = String(requestId);
+    const el = [...(this.el?.querySelectorAll('.uc-gif-card') || [])].find((c) => c.dataset.requestId === id);
+    if (!el || !this._cards.has(id)) return null;
+    const input = el.querySelector('.uc-gif-rmenu-num');
+    const unit = el.querySelector('.uc-gif-rmenu .uc-mm-unit[aria-pressed="true"]')?.dataset.unit || GIF_PENALTY_DEFAULT.unit;
+    const sec = gifPenaltySec(input?.value, unit);
+    if (sec == null) {
+      const row = el.querySelector('.uc-gif-rmenu-row');
+      row?.classList.add('uc-mm-custom--bad');
+      this._st(() => row?.classList.remove('uc-mm-custom--bad'), 600);
+      this._L(`karta ${id}: neplatná délka timeoutu (${input?.value} ${unit})`);
+      return null;
+    }
+    return this.decide(id, false, { kind: 'timeout', durationSec: sec });
+  }
+
+  /** „Zamítnout + permaban…“ → modální potvrzení (openModDialog z core/mod-menu.js). */
+  confirmRejectBan(requestId) {
+    const id = String(requestId);
+    const card = this._cards.get(id);
+    if (!card || card.busy) return null;
+    this._L(`permaban ${id}: potvrzení`);
+    return openModDialog({
+      doc: this.doc,
+      title: gifBanConfirmTitle(card.req),
+      subtitle: 'GIF se zamítne a uživatel dostane trvalý ban (i na propojených platformách účtu UnityChatu). Zrušíš ho přes Unban.',
+      submitLabel: 'Zamítnout + ban',
+      danger: true,
+      onSubmit: async () => {
+        if (!this._cards.has(id)) throw new Error('O GIFu už je rozhodnuto.');
+        if (this._shownId === id && this._lock.locked()) throw new Error('Tlačítka jsou ještě chvíli zamčená, zkus to znovu.');
+        const st = await this.decide(id, false, { kind: 'ban' });
+        if (st === null && this._cards.has(id)) throw new Error(this._cards.get(id).error || 'Zamítnutí se nepovedlo.');
+      },
+    });
   }
 
   /** „Automaticky zahazovat 12 h“ (dříve zamítnutý GIF, od všech) → POST /moderation/gif/:mediaId/ban12h. */
@@ -838,11 +931,11 @@ export class GifRequests {
     }
   }
 
-  _setNotice(text, kind) {
+  _setNotice(text, kind, ms = this.noticeMs) {
     if (!text) return;
     this._notice = { text, kind };
     if (this._noticeT) this._ct(this._noticeT);
-    this._noticeT = this._st(() => { this._noticeT = null; this._notice = null; this._render(); }, this.noticeMs);
+    this._noticeT = this._st(() => { this._noticeT = null; this._notice = null; this._render(); }, ms);
   }
 
   _root() {
@@ -858,13 +951,41 @@ export class GifRequests {
       const card = b.closest('.uc-gif-card');
       if (!card) return;
       e.stopPropagation();
-      if (b.dataset.act === 'approve') this.decide(card.dataset.requestId, true);
-      else if (b.dataset.act === 'reject') this.decide(card.dataset.requestId, false);
-      else if (b.dataset.act === 'ban12h') this.ban12h(card.dataset.requestId);
+      const act = b.dataset.act;
+      if (act === 'approve') this.decide(card.dataset.requestId, true);
+      else if (act === 'reject') this.decide(card.dataset.requestId, false);
+      else if (act === 'ban12h') this.ban12h(card.dataset.requestId);
+      else if (act === 'reject-more') this._toggleRejectMenu(card);
+      else if (act === 'unit') {
+        for (const u of card.querySelectorAll('.uc-gif-rmenu .uc-mm-unit')) u.setAttribute('aria-pressed', String(u === b));
+      } else if (act === 'reject-timeout') this.rejectWithTimeout(card.dataset.requestId);
+      else if (act === 'reject-ban') this.confirmRejectBan(card.dataset.requestId);
+    });
+    // Esc v nabídce ▾ ji zavře (ne celý panel).
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      const card = e.target.closest?.('.uc-gif-card');
+      const menu = card?.querySelector('.uc-gif-rmenu');
+      if (!menu || menu.hidden) return;
+      e.preventDefault(); e.stopPropagation();
+      this._toggleRejectMenu(card, false);
+      card.querySelector('.uc-gif-split-more')?.focus();
     });
     this.container.appendChild(el);
     this.el = el;
     return el;
+  }
+
+  /** Nabídka ▾ u Zamítnout (Zamítnout + timeout / + permaban). */
+  _toggleRejectMenu(cardEl, open) {
+    const menu = cardEl.querySelector('.uc-gif-rmenu');
+    const btn = cardEl.querySelector('.uc-gif-split-more');
+    if (!menu || !btn) return;
+    const show = open ?? menu.hidden;
+    menu.hidden = !show;
+    btn.setAttribute('aria-expanded', String(show));
+    this._L(`karta ${cardEl.dataset.requestId}: nabídka trestu ${show ? 'otevřena' : 'zavřena'}`);
+    if (show) cardEl.querySelector('.uc-gif-rmenu-num')?.focus();
   }
 
   /** Karta = nejstarší čekající; při změně karty zámek (0,3 s po mém rozhodnutí, jinak 1 s). */
@@ -952,9 +1073,34 @@ export class GifRequests {
       <div class="uc-gif-card-err" role="alert" hidden></div>
       <div class="uc-gif-card-actions">
         <button type="button" class="uc-gif-btn uc-gif-btn--ban" data-act="ban12h" hidden title="Tento GIF bude 12 hodin automaticky zamítnut u všech">Automaticky zahazovat 12 h</button>
-        <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="reject">Zamítnout</button>
+        <span class="uc-gif-split">
+          <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="reject">Zamítnout</button><button type="button" class="uc-gif-btn uc-gif-btn--reject uc-gif-split-more" data-act="reject-more" aria-haspopup="true" aria-expanded="false" aria-label="Zamítnout a potrestat" title="Zamítnout a potrestat">▾</button>
+        </span>
         <button type="button" class="uc-gif-btn uc-gif-btn--approve" data-act="approve">Schválit</button>
+      </div>
+      <div class="uc-gif-rmenu" role="group" aria-label="Zamítnout a potrestat" hidden>
+        <div class="uc-gif-rmenu-row uc-mm-custom">
+          <span class="uc-gif-rmenu-label">Zamítnout + timeout</span>
+          <span class="uc-gif-rmenu-dur"></span>
+          <button type="button" class="uc-gif-btn uc-gif-btn--reject" data-act="reject-timeout">Potvrdit</button>
+        </div>
+        <button type="button" class="uc-gif-btn uc-gif-btn--danger uc-gif-rmenu-ban" data-act="reject-ban">Zamítnout + permaban…</button>
       </div>`;
+    // Výběr délky jako custom timeout v nabídce moda (číslo + s / m / h), výchozí 10 min.
+    const dur = el.querySelector('.uc-gif-rmenu-dur');
+    const { input } = createDurationNumber(doc, { value: GIF_PENALTY_DEFAULT.value, label: 'Délka timeoutu', className: 'uc-mm-custom-num uc-gif-rmenu-num', onEnter: () => this.rejectWithTimeout(req.requestId) });
+    dur.appendChild(input);
+    for (const u of CUSTOM_UNITS) {
+      const b = doc.createElement('button');
+      b.type = 'button';
+      b.className = 'uc-mm-unit';
+      b.dataset.act = 'unit';
+      b.dataset.unit = u.id;
+      b.textContent = u.id;
+      b.title = { s: 'sekundy', m: 'minuty', h: 'hodiny' }[u.id];
+      b.setAttribute('aria-pressed', String(u.id === GIF_PENALTY_DEFAULT.unit));
+      dur.appendChild(b);
+    }
     const pi = el.querySelector('.uc-gif-card-pi');
     const icon = this.platformIcon(req.platform);
     pi.title = PLATFORM_NAMES[req.platform] || req.platform;
@@ -1001,7 +1147,10 @@ export class GifRequests {
     err.textContent = card.error || '';
     err.hidden = !card.error;
     el.querySelector('.uc-gif-btn--ban').hidden = !req.previouslyRejected;
-    for (const b of el.querySelectorAll('.uc-gif-card-actions button')) b.disabled = !!card.busy || locked;
+    // Vlastní GIF (mod v Dev módu) sám sebe trestat nemůže → bez ▾.
+    el.querySelector('.uc-gif-split-more').hidden = !!req.own;
+    if (req.own) el.querySelector('.uc-gif-rmenu').hidden = true;
+    for (const b of el.querySelectorAll('.uc-gif-card-actions button, .uc-gif-rmenu button, .uc-gif-rmenu input')) b.disabled = !!card.busy || locked;
     el.setAttribute('aria-label', `${req.own ? 'Tvůj GIF' : `GIF od ${req.login}`}${extra ? `, ${gifWaitingText(extra)}` : ''}`);
   }
 }
