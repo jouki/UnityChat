@@ -95,7 +95,7 @@ const H1 = [
 const mock = { modUser: null, mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
   library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set(), wd: [], pg: [], byId: [] };
 const posts = { modUser: [], decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [], byId: [] };
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1 };
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now() });
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 const pushAcc = (...evs) => {
@@ -616,7 +616,7 @@ check('C 409 po SSE → hláška „Už rozhodl jiny (Twitch)“', coreSse?.res3
 
 // ---- fáze B: divák = odesílatel (štítky u vlastní zprávy místo karty) ----
 mock.mod = false;
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 1 };
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 const pendBefore = posts.pending.length;
 await boot();
 await until(`!document.body.classList.contains('uc-can-moderate')`);
@@ -730,7 +730,7 @@ const sendGif = async (id, text) => {
   await clickSend();
   return waitFor(() => posts.send.length > n, 4000);
 };
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1 };
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now() });
 check('I1 GIF odeslán účtem (POST /chat/send → id)', await sendGif('e2e-i1', 'echo bez textu https://tenor.com/view/i1-gif-1'));
 pushAcc(PR('e2e-i1', 'download', 30));
 check('I1 průběh podle id z /chat/send → štítek u optimistické zprávy', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.uc-gif-st-pct')?.textContent === '30 %')`, 12000), JSON.stringify(await optGif('i1-gif')));
@@ -803,7 +803,7 @@ await typeIn('');
 // ---- fáze G (divák): záložka GIFy v panelu emotů, výběr z knihovny, indikátor odměny ----
 const LIB = (n, tags, extra = {}) => ({ mediaId: hex(n), url: murl(hex(n)), kind: 'gif', width: 200, height: 100, tags, useCount: 20 - n, lastUsedAt: Date.now(), ...extra });
 mock.library = [LIB(11, ['cat', 'dance']), LIB(12, ['dog']), LIB(13, ['cat', 'fail'])];
-mock.gifState = { ok: true, allowed: false, cooldownUntil: null, cooldownSec: 60, serverNow: 1 };
+mock.gifState = () => ({ ok: true, allowed: false, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 const gl = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="gif"]'); const vis = (e) => !!e && !e.hidden && getComputedStyle(e).display !== 'none';
   return { shown: vis(p), items: p ? [...p.querySelectorAll('.uc-gl-grid:not(.uc-gl-grid--rej) .uc-gl-i')].map(i => i.dataset.id.slice(-2)).join(',') : null,
@@ -910,10 +910,18 @@ const coreCh = await ev(`(async () => {
 check('G souběh kanálu: přepnutí s otevřeným panelem → nový dotaz, starý výsledek zahozen', coreCh?.first === 1 && coreCh.second === 2 && coreCh.afterReset === 'b', JSON.stringify(coreCh));
 check('G souběh kanálu: kanál se změnil během dotazu → po doběhnutí znovu načíst', coreCh?.refetch === true && coreCh.final === 'd', JSON.stringify(coreCh));
 // Odemčená odměna → výběr pošle náš odkaz do chatu
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 1 };
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 check('G odměna aktivní → hlavička „Odměna „Posílání GIFů“ je aktivní“, odemčeno', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"]').classList.contains('uc-gl--locked')`, 3000)
   && (await gl())?.reward === 'Odměna „Posílání GIFů“ je aktivní', JSON.stringify(await gl()));
+// X1 (audit 2026-09-27): vlastní GIF ještě čeká → výběr z knihovny se nepošle, hláška „Počkej …“.
+await ev(`(() => { const o = window.ucGif.out(); o.clear(); o.onOwnPending({ requestId: 991, channel: 'robdiesalot', platform: 'twitch', messageId: 'x1-own', login: 'divak', media: { url: '${murl(hex(12))}', kind: 'gif' }, expiresAt: Date.now() + 300000, own: true }); return o.busy(); })()`);
+const sendX1 = posts.send.length;
+await glClick('.uc-gl-i[data-id$="0c"] .uc-gl-pick');
+await sleep(300);
+check('X1 vlastní GIF čeká → výběr z knihovny neodejde, hláška „Počkej, až mod rozhodne o tvém GIFu.“', posts.send.length === sendX1 && (await gl())?.msg === 'Počkej, až mod rozhodne o tvém GIFu.', JSON.stringify(await gl()));
+// Stav vlastních GIFů z předchozích fází (I1, D) pryč — další výběr má odejít.
+await ev(`(window.ucGif.out().clear(), true)`);
 const sendG1 = posts.send.length;
 await glClick('.uc-gl-i[data-id$="0c"] .uc-gl-pick');
 check('G výběr → POST /chat/send s odkazem api.jouki.cz/media/gif/<id>, panel zavřený', await waitFor(() => posts.send.length > sendG1, 4000)

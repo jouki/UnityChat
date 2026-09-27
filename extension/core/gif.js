@@ -11,8 +11,7 @@
 //    Stav pro odesílatele ukazuje štítek u zprávy (core/gif-library.js GifOutbox), ne karta.
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer).
-// Cizí text jde do DOM jen přes textContent / escapeAttr.
-import { escapeAttr } from './html.js';
+// Cizí text jde do DOM jen přes textContent.
 import { PLATFORM_NAMES } from './soundboard.js';
 import { actorLabel } from './user-history.js';
 import { buildModRequest, createDurationNumber, CUSTOM_UNITS, customDurationSec, MAX_TIMEOUT_SEC, modErrorText, openModDialog, PLATFORM_LOC, summarizeModResult } from './mod-menu.js';
@@ -59,9 +58,10 @@ export const isGifVideo = (g) => g?.kind === 'mp4';
 export const isGifMessageId = (id) => /^gif-\d+$/.test(String(id ?? ''));
 
 /**
- * Původní zpráva s GIF odkazem čeká na schválení (smazaná s důvodem `gif_request`): v UnityChatu se
- * NEvykresluje vůbec — divák ani mod (odesílatel má kartu „čeká na schválení"). Po schválení ji nahradí GIF
- * zpráva (`replaces`), po zamítnutí / propadnutí přijde znovu message-deleted s `gif_rejected` → běžně smazaná.
+ * Původní zpráva s GIF odkazem čeká na schválení (smazaná s důvodem `gif_request`): ostatním (divák, mod, OBS) se
+ * NEvykresluje vůbec. Odesílatel ji vidí dál se štítkem (core/gif-library.js GifOutbox, gif-host.js). Po schválení
+ * přijde GIF jako nová zpráva na konci chatu, po zamítnutí / propadnutí message-deleted s `gif_rejected` → ostatním
+ * běžně smazaná, odesílateli červený štítek.
  */
 export const GIF_HELD_REASON = 'gif_request';
 export const GIF_REJECTED_REASON = 'gif_rejected';
@@ -177,14 +177,31 @@ export function gifFitSize(width, height, maxW = GIF_MAX_W, maxH = GIF_MAX_H) {
   return { width: Math.max(1, Math.round(w * k)), height: Math.max(1, Math.round(h * k)) };
 }
 
-const sameChannel = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
+/** Stejný kanál (bez ohledu na velikost písmen), prázdný nikdy. */
+export const sameChannel = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
 
-/** SSE `gif-pending` (nebo položka GET /moderation/gif/pending) → žádost, nebo null. */
+/**
+ * Čas serveru → lokální hodiny klienta (audit F1: karta moda / štítek odesílatele nesmí záviset na posunu hodin).
+ * Přednost: `serverNow` v datech (posun přesně pro tuto odpověď), jinak `offset` hostitele (lokální − serverový,
+ * z posledního GET /gif/state), jinak beze změny.
+ */
+export function gifLocalTime(serverTs, { serverNow = null, now = Date.now(), offset = 0 } = {}) {
+  const t = Number(serverTs);
+  if (!Number.isFinite(t)) return t;
+  const sn = Number(serverNow);
+  if (serverNow != null && Number.isFinite(sn) && sn > 0) return t - sn + now;
+  return Number.isFinite(offset) ? t + offset : t;
+}
+
+/**
+ * SSE `gif-pending` (nebo položka GET /moderation/gif/pending) → žádost, nebo null. `expiresAt` je v lokálním čase
+ * (`opts.now`, `opts.offset`, `d.serverNow` → gifLocalTime); `createdAt` zůstává serverový (jen pořadí FIFO).
+ */
 export function normalizeGifPending(d, opts = {}) {
   if (!d || typeof d !== 'object') return null;
   const requestId = d.requestId != null && /^\d+$/.test(String(d.requestId)) ? String(d.requestId) : null;
   const media = normalizeGifMedia(d.media, opts);
-  const expiresAt = Number(d.expiresAt);
+  const expiresAt = gifLocalTime(d.expiresAt, { serverNow: d.serverNow ?? null, now: opts.now ?? Date.now(), offset: opts.offset || 0 });
   if (!requestId || !media || !d.channel || !Number.isFinite(expiresAt)) return null;
   return {
     requestId,
@@ -576,8 +593,10 @@ export class GifRequests {
    * @param {string[]} [o.origins]  povolené originy médií
    * @param {number} [o.lockOtherMs] / [o.lockOwnMs] / [o.noticeMs]  (testy)
    */
-  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
+  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, serverOffset, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
     this.doc = doc;
+    /** Posun hodin (lokální − serverový) z GET /gif/state, když událost nenese `serverNow` (audit F1). */
+    this.serverOffset = serverOffset || (() => 0);
     this.container = container || doc.body;
     this.api = api;
     this.channel = channel || (() => '');
@@ -640,7 +659,7 @@ export class GifRequests {
 
   /** SSE `gif-pending` (i po připojení streamu). Vrací true, když přibyla nová žádost. */
   onPending(d) {
-    const req = normalizeGifPending(d, { origins: this.origins });
+    const req = normalizeGifPending(d, { origins: this.origins, now: this.now(), offset: this.serverOffset() });
     if (!req) { this._L(`gif-pending ignorováno (chybná data ${d?.requestId ?? '?'})`); return false; }
     if (!sameChannel(req.channel, this.channel())) { this._L(`gif-pending ${req.requestId} z jiného kanálu (${req.channel})`); return false; }
     if (this._decided.has(req.requestId)) { this._L(`gif-pending ${req.requestId} už rozhodnutý (${this._decided.get(req.requestId)})`); return false; }
@@ -706,14 +725,26 @@ export class GifRequests {
     const ch = String(this.channel() || '').toLowerCase();
     if (!ch || !this.api) return Promise.resolve(0);
     this._loadingPending = (async () => {
+      // Karty známé před dotazem: které server nevrátí, už nečekají (audit F5 — gif-queue s neznámou hlavou).
+      const before = new Set(this._cards.keys());
       let j;
       try { j = await this.api(`/moderation/gif/pending?channel=${encodeURIComponent(ch)}`); }
       catch (e) { this._L(`pending FAIL ${e?.status || 0} ${e?.error || e?.message || e}`); return 0; }
       if (!sameChannel(ch, this.channel())) return 0;   // mezitím přepnutý kanál
       const list = Array.isArray(j?.requests) ? j.requests : [];
+      const listed = new Set(list.map((r) => String(r?.requestId ?? '')));
+      let gone = 0;
+      for (const id of before) {
+        const c = this._cards.get(id);
+        if (!c || c.busy || listed.has(id)) continue;
+        this._cards.delete(id);
+        this._queueDrop(id);
+        gone++;
+      }
       let n = 0;
       for (const r of list) if (this.onPending(r)) n++;
-      this._L(`pending ${ch}: ${list.length} žádostí, ${n} nových`);
+      this._L(`pending ${ch}: ${list.length} žádostí, ${n} nových${gone ? `, ${gone} už nečeká` : ''}`);
+      if (gone && !n) this._render();
       return n;
     })().finally(() => { this._loadingPending = null; });
     return this._loadingPending;
@@ -760,28 +791,30 @@ export class GifRequests {
       return status;
     } catch (e) {
       card.busy = false;
-      // Karta zmizela přes SSE jako „moje“, ale server vrátil 409 → rozhodl někdo jiný: doplnit hlášku.
-      if (card.resolvedBySse && e?.error === 'already_decided') {
+      // 409 already_decided: hostitel vrací HTTP status v `status`; stav žádosti z těla 409 je v `body.status`
+      // (nebo řetězcový `status`) → hláška „Už rozhodl X“ (trest se neprovede).
+      const already = (why) => {
         const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
         const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
         const by = e.body?.decidedBy ?? e.decidedBy ?? null;
-        this._L(`decide ${id}: 409 po SSE (${st}, ${by ?? '-'})${penalty ? ' → trest se neprovede' : ''}`);
-        this._setNotice(`${gifAlreadyDecidedText(st, by)}${penalty ? ' — trest se neprovedl' : ''}`, st);
+        this._L(`decide ${id}: 409 ${why} (${st}, ${by ?? '-'})${penalty ? ' → trest se neprovede' : ''}`);
+        return { st, text: `${gifAlreadyDecidedText(st, by)}${penalty ? ' — trest se neprovedl' : ''}` };
+      };
+      // Karta zmizela přes SSE jako „moje“, ale server vrátil 409 → rozhodl někdo jiný: doplnit hlášku.
+      if (card.resolvedBySse && e?.error === 'already_decided') {
+        const { st, text } = already('po SSE');
+        this._setNotice(text, st);
         this._render();
         return st;
       }
       if (this._cards.get(id) !== card) return null;
       this._L(`decide ${id} FAIL ${e?.status || 0} ${e?.error || e?.message || e}`);
       if (e?.error === 'already_decided') {
-        // Hostitel vrací HTTP status v `status`; stav žádosti z těla 409 je v `body.status` (nebo řetězcový `status`).
-        const raw = e.body?.status ?? (typeof e.status === 'string' ? e.status : null);
-        const st = ['approved', 'rejected', 'expired'].includes(raw) ? raw : 'closed';
-        const by = e.body?.decidedBy ?? e.decidedBy ?? null;
-        this._L(`decide ${id}: 409 už rozhodnuto (${st}, ${by ?? '-'})${penalty ? ' → trest se neprovede' : ''}`);
+        const { st, text } = already('už rozhodnuto');
         this._rememberDecided(id, st);
         this._cards.delete(id);
         this._queueDrop(id);
-        this._setNotice(`${gifAlreadyDecidedText(st, by)}${penalty ? ' — trest se neprovedl' : ''}`, st);
+        this._setNotice(text, st);
         this._render();
         return st;
       }
@@ -808,6 +841,8 @@ export class GifRequests {
     try { res = await this.api(r.path, { method: r.method, body: r.body }); }
     catch (e) { err = e; }
     this._L(`trest ${penalty.kind} ${req.platform}:${req.userId} → ${err ? `FAIL ${err?.status || 0} ${err?.error || err?.message || err}` : JSON.stringify(res?.results || 'ok').slice(0, 200)}`);
+    // Mezitím přepnutý kanál (audit F6): hláška o trestu patří starému kanálu → jen do logu.
+    if (!sameChannel(req.channel, this.channel())) { this._L(`trest ${penalty.kind}: kanál se mezitím přepnul → bez hlášky`); return !err; }
     this._setNotice(gifPenaltyNotice(penalty, req, res, err), err ? 'error' : 'rejected', err ? this.noticeMs * 2 : Math.round(this.noticeMs * 1.6));
     this._render();
     return !err;
@@ -1164,16 +1199,3 @@ export class GifRequests {
   }
 }
 
-
-/** Atribut-bezpečné HTML média pro hostitele, který skládá zprávu jako řetězec (OBS / raw režim webu). */
-export function gifMediaHtml(gif) {
-  const g = gif && isGifMediaUrl(gif.url) ? gif : null;
-  if (!g) return '';
-  if (g.unavailable === true) return `<div class="uc-gif uc-gif--failed uc-gif--unavailable"><span class="uc-gif-fallback">${GIF_UNAVAILABLE_TEXT}</span></div>`;
-  const fit = gifFitSize(g.width, g.height);
-  const size = fit ? ` width="${fit.width}" height="${fit.height}" style="width:${fit.width}px;aspect-ratio:${g.width} / ${g.height}"` : '';
-  const cls = `uc-gif${fit ? '' : ' uc-gif--nosize'}`;
-  return isGifVideo(g)
-    ? `<div class="${cls}"><video class="uc-gif-media" src="${escapeAttr(g.url)}" autoplay loop muted playsinline preload="auto" aria-label="GIF"${size}></video></div>`
-    : `<div class="${cls}"><img class="uc-gif-media" src="${escapeAttr(g.url)}" alt="GIF" loading="lazy" decoding="async"${size}></div>`;
-}

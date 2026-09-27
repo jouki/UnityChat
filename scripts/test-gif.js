@@ -60,13 +60,6 @@ Promise.all([
   check('gifOwnStatusText', g.gifOwnStatusText('pending') === 'GIF čeká na schválení' && g.gifOwnStatusText('approved') === 'GIF byl schválen' && g.gifOwnStatusText('rejected') === 'GIF byl zamítnut' && g.gifOwnStatusText('expired') === 'O GIFu nikdo nerozhodl včas');
   check('gifDecideErrorText', g.gifDecideErrorText({ error: 'already_decided', status: 409 }) === 'O GIFu už rozhodl jiný mod.' && g.gifDecideErrorText({ error: 'not_mod', status: 403 }) === 'Rozhodovat můžou jen modi.' && g.gifDecideErrorText({ error: 'HTTP 401', status: 401 }) === 'Přihlášení vypršelo, přihlas se znovu.' && g.gifDecideErrorText({ error: 'boom', status: 500 }) === 'Rozhodnutí se nepodařilo odeslat, zkus to znovu.');
 
-  // --- HTML varianta (OBS / raw) ---
-  const hv = g.gifMediaHtml({ url: URL_OK, kind: 'mp4', width: 800, height: 400 });
-  check('gifMediaHtml: video autoplay loop muted playsinline, 400×200', /<video[^>]+autoplay loop muted playsinline/.test(hv) && /width="400" height="200"/.test(hv), hv);
-  const hi = g.gifMediaHtml({ url: URL_OK, kind: 'webp' });
-  check('gifMediaHtml: img lazy, bez rozměrů nosize', /<img[^>]+loading="lazy"/.test(hi) && /uc-gif--nosize/.test(hi), hi);
-  check('gifMediaHtml: cizí URL → prázdné', g.gifMediaHtml({ url: 'https://x/"><script>', kind: 'gif' }) === '');
-
   // --- /account/stream: další handlery (gif-pending / gif-decided) ---
   class FakeES {
     constructor(url) { this.url = url; this.l = {}; FakeES.last = this; }
@@ -138,6 +131,9 @@ Promise.all([
   G.onInput('hele https://tenor.com/view/cat-gif-1');
   await G.fetchState();
   check('GifCooldown: GIF odkaz → GET /gif/state (kanál, platforma)', calls[0] === '/gif/state?channel=robdiesalot&platform=kick', calls.join(' | '));
+  check('GifCooldown.serverOffset: lokální − serverový čas z /gif/state (audit F1)', G.serverOffset() === 1_000_000 - 50_000, String(G.serverOffset()));
+  await G.refreshIfStale();
+  check('GifCooldown.refreshIfStale: čerstvý stav → bez dotazu', calls.length === 1);
   const bubble = host.querySelector('.uc-gif-cd');
   check('GifCooldown: bublina s kolečkem a číslem sekund', G.visible && bubble.querySelector('.uc-gif-cd-text').textContent === 'GIF můžeš poslat za' && bubble.querySelector('.uc-gif-cd-ring em').textContent === '10' && bubble.querySelector('.uc-qd-ring') !== null);
   t += 4_000; tick?.();
@@ -227,8 +223,6 @@ Promise.all([
   check('normalizeGifMedia: unavailable jen true', g.normalizeGifMedia({ url: URL_OK, kind: 'gif', unavailable: true }).unavailable === true
     && g.normalizeGifMedia({ url: URL_OK, kind: 'gif', unavailable: 'ano' }).unavailable === undefined && !('unavailable' in g.normalizeGifMedia({ url: URL_OK })));
   check('GIF_UNAVAILABLE_TEXT', g.GIF_UNAVAILABLE_TEXT === '[GIF nedostupný]');
-  check('gifMediaHtml (OBS): unavailable → štítek bez média', g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }) === '<div class="uc-gif uc-gif--failed uc-gif--unavailable"><span class="uc-gif-fallback">[GIF nedostupný]</span></div>'
-    && !g.gifMediaHtml({ url: URL_OK, kind: 'gif', unavailable: true }).includes('<img'));
   const ev = g.normalizeGifMediaEvent({ channel: 'RobDiesALot', mediaId: ID, state: 'visible', messageIds: ['twitch:gif-1', 'twitch:gif-1', 'evil:x', 'kick:gif-2', null] }, 'robdiesalot');
   check('normalizeGifMediaEvent: visible s klíči zpráv (jen platné, bez duplicit)', ev?.state === 'visible' && ev.mediaId === ID && eq(ev.messageIds, ['twitch:gif-1', 'kick:gif-2']), JSON.stringify(ev));
   check('normalizeGifMediaEvent: strop 200 klíčů', g.normalizeGifMediaEvent({ channel: 'rob', mediaId: ID, state: 'visible', messageIds: Array.from({ length: 250 }, (_, i) => `twitch:gif-${i}`) }, 'rob').messageIds.length === 200);

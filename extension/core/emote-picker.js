@@ -1,6 +1,7 @@
 // Výběr emotů (tlačítko v poli pro psaní) — sdílené addonem i webem.
 // Data bere z EmoteManageru (core/emotes.js), DOM dostává zvenku (host + dokument),
 // úložiště „naposledy použitých" je injektované (addon i web: localStorage).
+import { escapeAttr } from './html.js';
 
 const RECENT_MAX = 24;
 
@@ -46,7 +47,8 @@ export function insertEmote(textarea, name) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Všechny atributy v šablonách jsou v uvozovkách → escapeAttr (core/html.js) stačí i na text.
+const esc = (s) => escapeAttr(s);
 
 /**
  * Picker: tlačítko `button` otevírá/zavírá panel vložený do `host` (#input-area).
