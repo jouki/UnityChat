@@ -36,6 +36,10 @@
 .uc-qd-who button { margin-left: 6px; padding: 2px 8px; border: none; border-radius: 4px; background: var(--accent-gradient); color: #1a1000; font: inherit; font-weight: 700; cursor: pointer; }
 .uc-qd-plat { opacity: 0.7; }
 .uc-qd-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* Popisky ve dvojici stejně vysoké (tlačítko „▶ ukázka“ u TTS hlasu je vyšší než text) a výběr hlasu
+   stejně vysoký jako pole částky — jinak by pole vedle sebe nesedělo na jedné lince. */
+.uc-qd-row .uc-qd-l { min-height: 19px; }
+.uc-qd-row input, .uc-qd-row select { height: 34px; }
 @media (max-width: 360px) { .uc-qd-row { grid-template-columns: 1fr; } }
 .uc-qd-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .uc-qd-l { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; }
