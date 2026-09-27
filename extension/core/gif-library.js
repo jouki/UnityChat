@@ -67,6 +67,13 @@ export const GIF_STATUS_TEXT = {
   expired: 'Vypršelo',
   not_allowed: 'Nové GIFy teď nejdou',
 };
+/**
+ * Konečné (červené) stavy vlastního GIFu → důvod smazání: odesílatel takovou zprávu vidí jako SMAZANOU (ztlumené
+ * „Zpráva smazána“, mod podle svého stylu) se štítkem a bez živého odkazu (test 2026-09-27 kolo 4 bod 4a).
+ */
+const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: 'gif_not_allowed' };
+export const isGifOwnFinal = (view) => !!view && Object.prototype.hasOwnProperty.call(GIF_OWN_FINAL_REASON, view.kind);
+export const gifOwnFinalReason = (view) => (isGifOwnFinal(view) ? GIF_OWN_FINAL_REASON[view.kind] : null);
 export const GIF_PREV_REJECTED_TIP = 'tento GIF byl už dříve zamítnut';
 export const GIF_APPROVED_ONLY_TEXT = 'Nové GIFy teď nejdou, vyber z GIFů v panelu';
 /** Náš odkaz (id) na GIF z knihovny: krátký stav bez procent, dokud server nezačne stahovat (test2 bod 4). */
@@ -659,6 +666,8 @@ const WARN_SVG ='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="tr
 export function paintGifStatus(doc, msgEl, view) {
   if (!msgEl) return null;
   let st = msgEl.querySelector(':scope > .uc-gif-st');
+  // uc-gif-own-final: odkaz ve smazané vlastní zprávě není živý (gif.css).
+  msgEl.classList.toggle('uc-gif-own-final', isGifOwnFinal(view));
   if (!view || view.kind === 'approved') { st?.remove(); msgEl.classList.remove('uc-gif-own'); return null; }
   msgEl.classList.add('uc-gif-own');
   if (!st) {

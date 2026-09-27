@@ -4872,8 +4872,10 @@ class UnityChat {
     const tx = el.querySelector('.tx');
     if (tx && msg) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
     // Obnovená zpráva se schváleným GIFem (obnova zahozeného / znovu v knihovně): médium zpátky pod text.
-    // Jen když médium v uzlu chybí (smazání ho odebralo) — jinak by se GIF zbytečně načítal znovu.
-    if (msg?.gif && !el.querySelector(':scope > .uc-gif')) {
+    // Jen když médium v uzlu chybí (smazání ho odebralo) — jinak by se GIF zbytečně načítal znovu. Server u odkryté
+    // zprávy hlásí odebraný / nedostupný GIF (removed / unavailable) → štítek stejnou cestou jako čerstvý stav.
+    const cur = el.querySelector(':scope > .uc-gif');
+    if (msg?.gif && (!cur || ((msg.gif.removed || msg.gif.unavailable) && !cur.classList.contains('uc-gif--failed')))) {
       const g = window.UC_CORE.normalizeGifMedia?.(msg.gif, { origins: UC_GIF_ORIGINS });
       if (g) { msg.gif = g; this._appendGifMedia(el, msg); this._ucLog('Gif', `obnovená zpráva ${msg.platform}:${msg.id} → GIF zpátky`); }
       else delete msg.gif;
@@ -8706,6 +8708,8 @@ class UnityChat {
         });
         // Re-apply @mention highlighting — innerHTML overwrite wiped spans
         this._processMentions(tx, realMsg.platform);
+        // Vlastní GIF v konečném stavu je smazaný (kolo 4 bod 4a) — echo mu text s odkazem nevrátí.
+        if (el.classList.contains('uc-gif-own-final')) this._applyGifOwn(el, this.store.get(String(realMsg.id)) || realMsg);
       }
     }
 

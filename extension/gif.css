@@ -29,8 +29,9 @@
   font-style: italic;
   opacity: .6;
 }
-/* Soubor staženého GIFu smazán ze serveru → štítek „[GIF nedostupný]“ (zpráva s textem zůstává). */
-.uc-gif--unavailable .uc-gif-fallback {
+/* Soubor staženého GIFu smazán ze serveru → štítek „[GIF nedostupný]“ (zpráva s textem zůstává); GIF odebraný
+   z knihovny / zahozený („GIF odebrán“ — 404 i odkrytá zpráva) má stejný štítek (kolo 4 bod 3). */
+.uc-gif--unavailable .uc-gif-fallback, .uc-gif--removed .uc-gif-fallback {
   font-style: normal;
   padding: 1px 8px;
   border: 1px dashed rgba(255, 255, 255, 0.28);
@@ -226,6 +227,9 @@ div.uc-gif-more { cursor: default; }
 .uc-gif-card--locked .uc-gif-btn:disabled { opacity: .45; cursor: wait; }
 
 /* ---- Štítek u vlastní GIF zprávy (odesílatel): kolečko %, peach „Schvalování moderátorem ( )“, červený ---- */
+/* Vlastní GIF zpráva v konečném stavu (zamítnuto / vypršelo / nové GIFy nejdou) = smazaná; mod se stylem
+   zašedlé / přeškrtnuté text vidí, ale odkaz v něm není živý (kolo 4 bod 4a). */
+.uc-gif-own-final .tx a { pointer-events: none; color: inherit; text-decoration: none; cursor: default; }
 .uc-gif-st {
   display: flex;
   width: fit-content;
@@ -417,5 +421,8 @@ div.uc-gif-more { cursor: default; }
 @media (hover: none) { .uc-gl-more { opacity: .85; } }
 @media (prefers-reduced-motion: reduce) { .uc-gl-reward--flash { animation: none; outline: 1px solid #e5484d; } }
 /* OBS (raw režim webu): štítek „GIF odebrán“ (médium se nenačetlo = odebráno / zahozeno) se na streamu neukazuje,
-   stejně jako zprávy gif_removed (audit F16). „[GIF nedostupný]“ zůstává (spec 2026-09-27-gif-nahled-zahozeni §2). */
+   stejně jako zprávy gif_removed (audit F16). Od kola 4 (bod 4c) se celá taková zpráva v OBS skryje, i s „[GIF nedostupný]“. */
 body.uc-raw .uc-gif--failed:not(.uc-gif--unavailable) { display: none; }
+/* Kolo 4 bod 4c: zpráva s GIFem, který je pryč (unavailable / odebraný / 404), se v OBS nevykreslí vůbec — jinak z ní
+   zbylo jen „jméno:“ (core GIF_GONE_CLASS). Stejně jako smazané zprávy. */
+body.uc-raw .msg.uc-gif-gone { display: none; }

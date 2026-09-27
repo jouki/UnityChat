@@ -104,6 +104,10 @@ Promise.all([
   box.onNotice({ requestKey: 'twitch:m6', channel: 'robdiesalot', platform: 'twitch', messageId: 'm6', kind: 'auto_rejected', reason: 'repeat' });
   check('Outbox: gif-notice auto_rejected → „Zamítnuto moderátorem“', box.view('twitch', 'm6')?.text === 'Zamítnuto moderátorem');
   check('GIF_APPROVED_ONLY_TEXT', L.GIF_APPROVED_ONLY_TEXT === 'Nové GIFy teď nejdou, vyber z GIFů v panelu');
+  // Kolo 4 bod 4a: konečné červené stavy = odesílatel vidí zprávu smazanou (důvod pro vzhled smazané zprávy).
+  check('isGifOwnFinal / gifOwnFinalReason: rejected, expired, not_allowed ano; progress, pending, approved ne',
+    ['rejected', 'expired', 'not_allowed'].every((k) => L.isGifOwnFinal({ kind: k })) && !['progress', 'pending', 'approved'].some((k) => L.isGifOwnFinal({ kind: k })) && !L.isGifOwnFinal(null)
+    && L.gifOwnFinalReason({ kind: 'rejected' }) === 'gif_rejected' && L.gifOwnFinalReason({ kind: 'expired' }) === 'gif_rejected' && L.gifOwnFinalReason({ kind: 'not_allowed' }) === 'gif_not_allowed' && L.gifOwnFinalReason({ kind: 'pending' }) === null);
   // optimistická zpráva: kolečko hned, spárování přes alias
   box.noteOptimistic('sent-1', 'twitch', { show: true });
   check('Outbox: optimistická → kolečko 0 % hned', box.view('twitch', 'sent-1')?.kind === 'progress');

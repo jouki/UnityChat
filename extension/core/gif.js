@@ -49,7 +49,8 @@ const dim = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 && 
 export function normalizeGifMedia(g, { origins = null } = {}) {
   if (!g || typeof g !== 'object' || !isGifMediaUrl(g.url, origins)) return null;
   const kind = String(g.kind || '').toLowerCase();
-  return { url: String(g.url), kind: KINDS.has(kind) ? kind : 'gif', width: dim(g.width), height: dim(g.height), ...(g.unavailable === true ? { unavailable: true } : {}) };
+  return { url: String(g.url), kind: KINDS.has(kind) ? kind : 'gif', width: dim(g.width), height: dim(g.height),
+    ...(g.unavailable === true ? { unavailable: true } : {}), ...(g.removed === true && g.unavailable !== true ? { removed: true } : {}) };
 }
 
 export const isGifVideo = (g) => g?.kind === 'mp4';
@@ -341,6 +342,12 @@ export const GIF_REMOVED_TEXT = 'GIF odebrán';
 /** Štítek místo média staženého GIFu, jehož soubor mod odstranil ze serveru (zpráva zůstává). */
 export const GIF_UNAVAILABLE_TEXT = '[GIF nedostupný]';
 
+/**
+ * Třída zprávy, jejíž GIF je pryč (štítek „GIF odebrán“ / „[GIF nedostupný]“ místo média): OBS takovou zprávu
+ * nevykreslí vůbec, stejně jako smazanou (gif.css `body.uc-raw`, kolo 4 bod 4c — dřív tam zbylo jen „jméno:“).
+ */
+export const GIF_GONE_CLASS = 'uc-gif-gone';
+
 /** Obsah prvku `.uc-gif` → štítek místo média (video zastavit a odpojit od IO). */
 function gifFallback(doc, wrap, text, extraClass = '') {
   const v = wrap.querySelector('video');
@@ -355,6 +362,8 @@ function gifFallback(doc, wrap, text, extraClass = '') {
   wrap.classList.add('uc-gif--failed');
   if (extraClass) wrap.classList.add(extraClass);
   wrap.classList.remove('uc-gif--nosize');
+  // Už ve zprávě (chyba načtení, SSE unavailable) → označit zprávu; nové médium značí hostitel (appendGifMedia).
+  wrap.closest?.('.msg')?.classList.add(GIF_GONE_CLASS);
 }
 
 /** Max klíčů zpráv v `gif-media` / GET /chat/messages (stejně jako server). */
@@ -412,6 +421,9 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
   if (!g) return wrap;
   // Soubor smazán ze serveru (stažený GIF) → štítek, nic nenačítat.
   if (g.unavailable) { gifFallback(doc, wrap, GIF_UNAVAILABLE_TEXT, 'uc-gif--unavailable'); return wrap; }
+  // Odkrytá zpráva s GIFem odebraným z knihovny / zahozeným (server `removed`, routes/chat.ts toRestoredMessage)
+  // → stejný štítek jako po 404 (kolo 4 bod 3), nic nenačítat.
+  if (g.removed) { gifFallback(doc, wrap, GIF_REMOVED_TEXT, 'uc-gif--removed'); return wrap; }
   const fit = gifFitSize(g.width, g.height, maxW, maxH);
   const video = isGifVideo(g);
   const m = doc.createElement(video ? 'video' : 'img');
@@ -431,7 +443,7 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     log?.('Gif', `médium se nenačetlo ${g.url}${token ? ' (s tokenem)' : ''}`);
     // Hostitel si může říct o nový token a médium vykreslit znovu (zamítnuté GIFy moda) → true = vyřízeno.
     if (onError && onError({ wrap, url: g.url, token }) === true) return;
-    gifFallback(doc, wrap, GIF_REMOVED_TEXT);
+    gifFallback(doc, wrap, GIF_REMOVED_TEXT, 'uc-gif--removed');
   };
   m.addEventListener('error', fail);
   if (video) {

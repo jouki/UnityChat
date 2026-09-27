@@ -11,8 +11,8 @@
 //  - odeslání: watchYoutubeSend (YouTube bez echa), pairGifEcho (echo vlastní GIF zprávy přes id).
 //
 // Bez chrome.*. DOM jen přes předané uzly / `doc`, síť přes injektované `api`.
-import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason } from './gif.js';
-import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
+import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason } from './gif.js';
+import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, isGifOwnFinal, gifOwnFinalReason, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
 import { clearDeleted } from './moderation.js';
 
 const isGifReason = (reason) => String(reason || '').startsWith('gif_');
@@ -36,6 +36,8 @@ export function appendGifMedia(doc, el, gif, { log, onSized } = {}) {
   }
   const tx = el.querySelector(':scope > .tx');
   if (tx) tx.after(media); else el.appendChild(media);
+  // GIF pryč (removed / unavailable) → OBS zprávu skryje; obnovený viditelný GIF značku sundá.
+  el.classList.toggle(GIF_GONE_CLASS, media.classList.contains('uc-gif--failed'));
   return media;
 }
 
@@ -217,8 +219,10 @@ export function gifOwnView(outbox, el, msg, identity = null) {
  * GIF větve vzhledu smazané / skryté zprávy (sdílené addonem i webem). Vrací true = vyřízeno (hostitel dál
  * nemaluje), false = běžná smazaná zpráva (hostitel pokračuje; médium smazaného GIFu už je pryč).
  *
- *  - vlastní GIF (`own` = gifOwnView): zpráva zůstává vidět se štítkem (kolečko %, „Schvalování moderátorem“,
- *    červený „Zamítnuto moderátorem“ / „Vypršelo“); schválení = štítek pryč, zpráva se schová jako u ostatních,
+ *  - vlastní GIF (`own` = gifOwnView): rozpracovaný / čekající zůstává vidět s textem a štítkem (kolečko %,
+ *    „Schvalování moderátorem“); konečný červený stav („Zamítnuto moderátorem“, „Vypršelo“, „Nové GIFy teď nejdou“)
+ *    = štítek + false → hostitel zprávu vykreslí jako smazanou (kolo 4 bod 4a, odkaz není živý); schválení = štítek
+ *    pryč, zpráva se schová jako u ostatních,
  *  - gif_request (čeká): ostatním schovaná úplně (`uc-gif-held`) + pojistka `hold` (GET /gif/held),
  *  - OBS (`raw`): zamítnutý / nepovolený GIF se neukáže ani jako „Smazáno“ (čekající GIF v OBS nikdy),
  *  - smazaný GIF: server médium přestane servírovat → pryč z dat i z DOM.
@@ -237,6 +241,12 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
   const id = msg.id != null ? String(msg.id) : el.dataset?.msgId;
   if (own && own.kind !== 'approved' && (held || (deleted && isGifReason(msg.deletedReason)))) {
     el.classList.remove('uc-gif-held');
+    if (isGifOwnFinal(own)) {
+      // Rozhodnuto (zamítnuto / vypršelo / nové GIFy nejdou): hostitel dál maluje běžně smazanou zprávu, štítek zůstává.
+      release(pl, id);
+      paintGifStatus(doc, el, own);
+      return false;
+    }
     clearDeleted(el);
     const tx = el.querySelector('.tx');
     if (tx && tx.querySelector('.uc-deleted-label') && hasContent(msg)) rerender(el, tx, msg);
@@ -297,6 +307,13 @@ export function applyGifOwn(doc, el, msg, { view, outbox = null, isModerated, pa
     return 'dropped';
   }
   if (msg && isModerated(msg)) { paintDeleted(el, msg); return 'deleted'; }
+  // Konečný červený stav, ale smazání ze serveru (message-deleted) ještě nedorazilo / nedorazí (optimistická zpráva,
+  // gif-notice approved_only) → odesílatel ji vidí jako smazanou hned (kolo 4 bod 4a). Data zprávy se nemění.
+  if (isGifOwnFinal(view)) {
+    const base = msg || { platform, id: el.dataset?.msgId, message: el.querySelector?.('.tx')?.textContent || '' };
+    paintDeleted(el, { ...base, _deleted: true, deletedReason: gifOwnFinalReason(view) });
+    return 'deleted';
+  }
   paintGifStatus(doc, el, view || null);
   return 'painted';
 }

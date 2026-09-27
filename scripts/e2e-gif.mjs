@@ -240,7 +240,6 @@ check('A I2 gif_removed z historie → smazaná zpráva bez média (mod ji vidí
 const g10 = await ev(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); if (!m) return null; return { text: m.querySelector('.tx')?.textContent, label: m.querySelector('.uc-gif--unavailable .uc-gif-fallback')?.textContent, img: !!m.querySelector('.uc-gif-media'), deleted: m.classList.contains('uc-deleted') }; })()`);
 check('A historie: stažený GIF bez souboru → text zůstává, místo GIFu „[GIF nedostupný]“, nic se nenačítá', g10?.text === 'text nad nedostupným' && g10.label === '[GIF nedostupný]' && !g10.img && !g10.deleted
   && await ev(`![...performance.getEntriesByType('resource')].some(e => e.name.includes(${JSON.stringify(hex(20))}))`) === true, JSON.stringify(g10));
-
 // GET pending (mod) → karta 20 (FIFO: jen nejstarší čekající)
 check('A GET /moderation/gif/pending s kanálem', await until(`true`, 10) && posts.pending.some((x) => /pending\?channel=robdiesalot$/.test(x)), posts.pending.join(' | '));
 check('A karta z GET pending', await until(`!!document.querySelector('.uc-gif-card[data-request-id="20"]')`, 5000));
@@ -467,6 +466,20 @@ check('A GIF zpráva 📌 nemá', await until(`!!document.querySelector('.msg[da
 // Smazání GIFu modem → médium pryč
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-21', by: 'twitch:jinymod' }]);
 check('A message-deleted gif-21 → GIF pryč, zpráva smazaná', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-21"]'); return !!m && m.classList.contains('uc-deleted') && !m.querySelector('.uc-gif'); })()`, 6000));
+// Kolo 4 bod 3: „GIF odebrán“ i „[GIF nedostupný]“ = stejně nastylovaný štítek, čerstvý stav i po „Odkrýt zprávu“ (message-restored).
+const pill = (id) => ev(`(() => { const f = document.querySelector('.msg[data-msg-id="${id}"] .uc-gif-fallback'); if (!f) return null; const cs = getComputedStyle(f); const m = f.closest('.msg');
+  return { t: f.textContent, removed: !!f.closest('.uc-gif--removed'), unavailable: !!f.closest('.uc-gif--unavailable'), border: cs.borderTopStyle, radius: cs.borderTopLeftRadius, italic: cs.fontStyle, op: cs.opacity, deleted: m.classList.contains('uc-deleted'), img: !!m.querySelector('.uc-gif-media') }; })()`);
+const p6 = await pill('gif-6'), p10 = await pill('gif-10');
+check('A štítek „GIF odebrán“ (404) vypadá stejně jako „[GIF nedostupný]“ (rámeček, bez kurzívy)', p6?.t === 'GIF odebrán' && p6.removed && p10?.unavailable && p6.border === p10.border && p6.border === 'dashed' && p6.italic === p10.italic && p6.italic === 'normal' && p6.radius === p10.radius && p6.op === p10.op, JSON.stringify({ p6, p10 }));
+mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-9', by: 'twitch:modik', message: { platform: 'twitch', id: 'gif-9', username: 'Divak', userId: 'u9', message: 'odkrytá s odebraným', timestamp: Date.now(), color: '#1e90ff', gif: { url: murl(hex(22)), kind: 'gif', width: 100, height: 50, removed: true } } }]);
+check('A odkrytá zpráva s odebraným GIFem (removed) → štítek „GIF odebrán“ jako čerstvý, nic se nenačítá', await until(`document.querySelector('.msg[data-msg-id="gif-9"] .uc-gif--removed .uc-gif-fallback')?.textContent === 'GIF odebrán'`, 6000)
+  && await (async () => { const p = await pill('gif-9'); return !p.deleted && !p.img && p.border === p10.border && p.italic === p10.italic && p.radius === p10.radius; })()
+  && await ev(`![...performance.getEntriesByType('resource')].some(e => e.name.includes(${JSON.stringify(hex(22))}))`) === true, JSON.stringify(await pill('gif-9')));
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-10', by: 'twitch:jinymod' }]);
+await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); return !!m && m.classList.contains('uc-deleted') && !m.querySelector('.uc-gif'); })()`, 6000);
+mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-10', by: 'twitch:modik', message: { platform: 'twitch', id: 'gif-10', username: 'Divak', userId: 'u9', message: 'text nad nedostupným', timestamp: Date.now(), color: '#1e90ff', gif: { url: murl(hex(20)), kind: 'gif', width: 100, height: 50, unavailable: true } } }]);
+check('A odkrytá zpráva s nedostupným GIFem (unavailable) → štítek „[GIF nedostupný]“ jako čerstvý', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); return !!m && !m.classList.contains('uc-deleted') && m.querySelector('.uc-gif--unavailable .uc-gif-fallback')?.textContent === '[GIF nedostupný]'; })()`, 6000), JSON.stringify(await pill('gif-10')));
+
 
 // ---- fáze A2 (UX): schovaná původní zpráva, nahrazení GIFem na místě, gif_rejected, mod bez bubliny ----
 const isShown = (id) => `(() => { const m = document.querySelector('.msg[data-msg-id="${id}"]'); return !!m && getComputedStyle(m).display !== 'none'; })()`;
@@ -625,7 +638,11 @@ const own = (id) => ev(`(() => { const m = document.querySelector('.msg[data-msg
   const w = s?.querySelector('.uc-gif-st-warn');
   return { shown: getComputedStyle(m).display !== 'none', held: m.classList.contains('uc-gif-held'), deleted: m.classList.contains('uc-deleted'), text: m.querySelector('.tx')?.textContent || '',
     kind: s?.dataset.kind || null, label: s ? (s.querySelector('.uc-gif-st-pct, .uc-gif-st-txt')?.textContent || '') : null, spin: !!s?.querySelector('.uc-gif-st-spin'),
-    warn: !!w && !w.hidden, warnTip: w?.getAttribute('title') || null, color: s ? getComputedStyle(s).color : null, ring: !!s?.querySelector('.uc-qd-ring') }; })()`);
+    warn: !!w && !w.hidden, warnTip: w?.getAttribute('title') || null, color: s ? getComputedStyle(s).color : null, ring: !!s?.querySelector('.uc-qd-ring'),
+    dimmed: m.classList.contains('uc-deleted--dimmed'), label2: m.querySelector('.tx .uc-deleted-label')?.textContent || null, link: !!m.querySelector('.tx a[href]') }; })()`);
+// Kolo 4 bod 4a: konečný stav vlastního GIFu (zamítnuto / vypršelo / nové GIFy nejdou) = odesílatel zprávu vidí jako
+// smazanou (divák: ztlumené „Zpráva smazána“), bez odkazu, s červeným štítkem.
+const ownFinal = (o, kind, label) => !!o && o.shown && o.deleted && o.dimmed && o.label2 === 'Zpráva smazána' && !o.link && !/https?:/.test(o.text) && o.kind === kind && o.label === label && /rgb\(255, 138, 142\)/.test(o.color);
 const OWNMSG = (id, text) => ['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: id, by: 'filter', message: { platform: 'twitch', id, username: 'ModUser', userId: 'u7', message: text, timestamp: Date.now(), color: '#1e90ff' } }];
 const PR = (id, phase, pct, extra = {}) => ['gif-progress', { requestKey: `twitch:${id}`, channel: 'robdiesalot', platform: 'twitch', messageId: id, phase, pct, ...extra }];
 pushAcc(
@@ -663,13 +680,14 @@ check('B zamítnuto → červený „Zamítnuto moderátorem“', await until(`d
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-own1', by: 'twitch:modik', reason: 'gif_rejected' }]);
 await sleep(1500);
 const o1r = await own('e2e-own1');
-check('B gif_rejected → zpráva nezmizí, text zůstává, štítek červený natrvalo', o1r?.shown && !o1r.deleted && o1r.kind === 'rejected' && o1r.text.includes('tenor.com') && /rgb\(255, 138, 142\)/.test(o1r.color), JSON.stringify(o1r));
+check('B gif_rejected → zpráva nezmizí, ale smazaná (ztlumená „Zpráva smazána“, bez odkazu), štítek červený natrvalo', ownFinal(o1r, 'rejected', 'Zamítnuto moderátorem'), JSON.stringify(o1r));
 // Vypršelo
 mock.sse.push(OWNMSG('e2e-own2', 'druhý https://giphy.com/gifs/x-2'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-own2"]')`, 8000);
 pushAcc(PR('e2e-own2', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(31, { own: true, login: 'moduser', messageId: 'e2e-own2' })],
   ['gif-decided', { requestId: 31, channel: 'robdiesalot', approved: false, status: 'expired', by: null, own: true }]);
 check('B vypršelo → červený „Vypršelo“', await until(`document.querySelector('.msg[data-msg-id="e2e-own2"] .uc-gif-st-txt')?.textContent === 'Vypršelo'`, 12000), JSON.stringify(await own('e2e-own2')));
+check('B vypršelo → zpráva jako smazaná, bez odkazu (kolo 4 bod 4a)', ownFinal(await own('e2e-own2'), 'expired', 'Vypršelo'), JSON.stringify(await own('e2e-own2')));
 check('B bez ⚠ u GIFu, který zamítnutý nebyl', await ev(`!document.querySelector('.msg[data-msg-id="e2e-own2"] .uc-gif-st-warn:not([hidden])')`) === true);
 // Schváleno → původní zpráva pryč, GIF na konci chatu (čas schválení, ne čas původní zprávy)
 mock.sse.push(OWNMSG('e2e-own3', 'třetí https://tenor.com/view/dog-gif-3'));
@@ -694,6 +712,10 @@ await until(`!!document.querySelector('.msg[data-msg-id="e2e-own4"]')`, 8000);
 pushAcc(PR('e2e-own4', 'download', 40), ['gif-notice', { requestKey: 'twitch:e2e-own4', channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-own4', kind: 'approved_only' }]);
 check('B gif-notice approved_only → hláška „Nové GIFy teď nejdou, vyber z GIFů v panelu“', await until(`[...document.querySelectorAll('#chat .sys')].some(m => m.textContent === 'Nové GIFy teď nejdou, vyber z GIFů v panelu')`, 12000));
 check('B … a štítek u zprávy', (await own('e2e-own4'))?.label === 'Nové GIFy teď nejdou', JSON.stringify(await own('e2e-own4')));
+check('B nové GIFy nejdou (gif_not_allowed) → odesílatel zprávu vidí smazanou: „Zpráva smazána“, bez odkazu, červený štítek (kolo 4 bod 4a)', ownFinal(await own('e2e-own4'), 'not_allowed', 'Nové GIFy teď nejdou'), JSON.stringify(await own('e2e-own4')));
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-own4', by: 'filter', reason: 'gif_not_allowed' }]);
+await sleep(800);
+check('B … po message-deleted gif_not_allowed pořád stejně', ownFinal(await own('e2e-own4'), 'not_allowed', 'Nové GIFy teď nejdou'), JSON.stringify(await own('e2e-own4')));
 // Selhání převodu (běžný odkaz) → štítek pryč
 mock.sse.push(OWNMSG('e2e-own5', 'pátý https://i.4pcdn.org/pol/1.gif'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-own5"]')`, 8000);
@@ -753,8 +775,12 @@ check('I1 … optimistická zpráva s odkazem zmizela (žádný duplikát)', awa
 check('I1 třetí GIF odeslán', await sendGif('e2e-i3', 'zamitnuty https://tenor.com/view/i3-gif-3'));
 pushAcc(PR('e2e-i3', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(41, { own: true, login: 'moduser', messageId: 'e2e-i3' })],
   ['gif-decided', { requestId: 41, channel: 'robdiesalot', approved: false, status: 'rejected', own: true }]);
-check('I1 bez echa → zamítnuto: optimistická zůstane s červeným „Zamítnuto moderátorem“', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('i3-gif') && m.querySelector('.uc-gif-st')?.dataset.kind === 'rejected')`, 12000), JSON.stringify(await optGif('i3-gif')));
-check('I1 … ne jako neodeslaná', (await optGif('i3-gif'))?.failed === false);
+// Kolo 4 bod 4a: zamítnutá optimistická = smazaná („Zpráva smazána“, bez odkazu) s červeným štítkem.
+const optRej = () => ev(`(() => { const m = [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].find(x => x.querySelector('.uc-gif-st')?.dataset.kind === 'rejected'); if (!m) return null;
+  return { shown: getComputedStyle(m).display !== 'none', deleted: m.classList.contains('uc-deleted'), label: m.querySelector('.tx .uc-deleted-label')?.textContent || null, link: m.querySelector('.tx').textContent.includes('i3-gif'), failed: m.classList.contains('send-failed') }; })()`);
+check('I1 bez echa → zamítnuto: optimistická zůstane jako smazaná s červeným „Zamítnuto moderátorem“', await until(`(() => { const m = [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].find(x => x.querySelector('.uc-gif-st')?.dataset.kind === 'rejected'); return !!m && m.classList.contains('uc-deleted'); })()`, 12000)
+  && (await optRej())?.label === 'Zpráva smazána' && !(await optRej()).link, JSON.stringify(await optRej()));
+check('I1 … ne jako neodeslaná', (await optRej())?.failed === false);
 mock.sendId = null;
 
 // ---- fáze D (divák): bublina cooldownu ----
