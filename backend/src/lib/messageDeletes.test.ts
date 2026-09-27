@@ -4,6 +4,13 @@ import { deletedEvent, publishDeleted, channelMatches, rememberRestored, restore
 
 const url = process.env.TEST_DATABASE_URL;
 
+test('deletedEvent: GIF důvody veřejně bez toho, kdo rozhodl (audit SEC-4)', () => {
+  for (const reason of ['gif_rejected', 'gif_not_allowed', 'gif_request', 'gif_removed'] as const) {
+    assert.equal(deletedEvent({ channel: 'robdiesalot', platform: 'twitch', messageId: 'abc', by: 'twitch:jouki', reason: reason as never, at: 1 }).by, null, reason);
+  }
+  assert.equal(deletedEvent({ channel: 'robdiesalot', platform: 'twitch', messageId: 'abc', by: 'twitch:jouki', reason: 'mod', at: 1 }).by, 'twitch:jouki');
+});
+
 test('deletedEvent: tvar SSE message-deleted', () => {
   const e = deletedEvent({ channel: 'robdiesalot', platform: 'twitch', messageId: 'abc', by: 'twitch:jouki', reason: 'mod', at: 1700000000000 });
   assert.deepEqual(e, { channel: 'robdiesalot', platform: 'twitch', messageId: 'abc', by: 'twitch:jouki', reason: 'mod', at: 1700000000000 });

@@ -293,7 +293,7 @@ test('decide: zamítnutí = médium zůstává jako zamítnuté (retence, token)
   assert.deepEqual([md.status, md.rejectedAt?.getTime(), md.rejectedBy], ['rejected', 1_000_000, 'twitch:moda']);
   assert.equal(s.mem.rejections.get(`robdiesalot|${MEDIA}|twitch|42`), 1);
   assert.equal(names(s.calls).some((n) => n === 'broadcast:gif-message' || n === 'publishChat' || n === 'used'), false);
-  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: 'twitch:moda', reason: 'gif_rejected', at: 1_000_000 });
+  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: null, reason: 'gif_rejected', at: 1_000_000 });
   assert.equal((s.calls.find((c) => c[0] === 'notify:gif-decided')![1] as { approved: boolean }).approved, false);
 
   const e = setup();
@@ -419,7 +419,7 @@ test('decide: zápis do archivu selže i napodruhé → nic se nerozešle, coold
   assert.equal(tries, 2);
   // Původní zpráva nezůstane navždy schovaná: gif_request → gif_rejected + message-deleted.
   assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'), s.mem.log.join(' | '));
-  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: 'twitch:moda', reason: 'gif_rejected', at: 1_000_000 });
+  assert.deepEqual(s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1], { channel: 'robdiesalot', platform: 'twitch', messageId: 'm1', by: null, reason: 'gif_rejected', at: 1_000_000 });
   assert.equal(names(s.calls).some((n) => n === 'broadcast:gif-message' || n === 'publishChat' || n === 'warm'), false);
   assert.equal(names(s.calls).includes('used'), true);
 

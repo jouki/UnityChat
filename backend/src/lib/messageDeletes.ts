@@ -64,9 +64,13 @@ export interface DeletedEvent {
   at: number;
 }
 
-/** Tvar SSE `message-deleted` (bus.ts broadcast je jen JSON.stringify — pořadí polí tu nezáleží). */
+/**
+ * Tvar SSE `message-deleted` (bus.ts broadcast je jen JSON.stringify — pořadí polí tu nezáleží).
+ * GIF důvody (`gif_*`) jdou bez `by`: veřejný stream nesmí prozradit, kdo o GIFu rozhodl (audit SEC-4).
+ */
 export function deletedEvent(p: { channel: string; platform: Platform; messageId: string; by: string | null; reason: DeleteReason; at: number }): DeletedEvent {
-  return { channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, reason: p.reason, at: p.at };
+  const by = String(p.reason).startsWith('gif_') ? null : p.by;
+  return { channel: p.channel, platform: p.platform, messageId: p.messageId, by, reason: p.reason, at: p.at };
 }
 
 export interface PublishDeletedParams {

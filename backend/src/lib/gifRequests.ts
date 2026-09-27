@@ -825,7 +825,7 @@ export function createGifFlow(deps: GifFlowDeps) {
     const k = userKey(r.channel, r.platform, r.userId);
     if (pending.get(k) === r.id) pending.delete(k);
     // Zamítnuto / propadlo: původní zpráva (v UC dosud nevykreslená, gif_request) → běžně smazaná.
-    if ((status === 'rejected' || status === 'expired') && !opts.keepOriginal) await rejectOriginal(r, status === 'rejected' ? by : null);
+    if ((status === 'rejected' || status === 'expired') && !opts.keepOriginal) await rejectOriginal(r);
     // Auto-schválení modem / z knihovny: nikdo žádost neviděl (gif-pending ani gif.pending nešlo) → ani rozhodnutí neohlašovat.
     if (opts.quiet) return;
     const ev = { requestId: r.id, channel: r.channel, approved: status === 'approved', status, by };
@@ -834,10 +834,14 @@ export function createGifFlow(deps: GifFlowDeps) {
     await emitQueue(r.channel);
   };
 
-  /** Původní zpráva: gif_request → gif_rejected v archivu + SSE message-deleted (klienti ji ukážou jako smazanou). */
-  const rejectOriginal = async (r: GifRequest, by: string | null) => {
+  /**
+   * Původní zpráva: gif_request → gif_rejected v archivu + SSE message-deleted (klienti ji ukážou jako smazanou).
+   * `/nicknames/stream` je veřejný (i replay) → bez `by`: odesílatel nesmí vidět, KDO o jeho GIFu rozhodl (audit SEC-4);
+   * mod je v gif-decided modům a v moderation_actions.
+   */
+  const rejectOriginal = async (r: GifRequest) => {
     await safe('přeznačení původní zprávy na gif_rejected', () => deps.store.retagDeleted(r.platform as Platform, r.messageId, 'gif_request', GIF_REJECTED_REASON));
-    await safe('message-deleted gif_rejected', async () => deps.broadcast('message-deleted', { channel: r.channel, platform: r.platform, messageId: r.messageId, by: by ?? 'filter', reason: GIF_REJECTED_REASON, at: deps.now() }));
+    await safe('message-deleted gif_rejected', async () => deps.broadcast('message-deleted', { channel: r.channel, platform: r.platform, messageId: r.messageId, by: null, reason: GIF_REJECTED_REASON, at: deps.now() }));
   };
 
   /**
@@ -960,7 +964,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         published = false;
         deps.log.warn({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF se nezapsal do archivu → nerozeslán');
         // Původní zpráva nesmí zůstat navždy schovaná (gif_request) → běžně smazaná (gif_rejected + message-deleted).
-        await rejectOriginal(r, p.by);
+        await rejectOriginal(r);
       }
       await usedP;
     } else if (r.mediaId) {
