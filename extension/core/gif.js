@@ -287,6 +287,11 @@ export function gifDecideErrorText(err) {
  * mimo DOM) — po vrácení uzlu do chatu přijde nové protnutí a video se znovu spustí.
  */
 const videoIo = new WeakMap();   // window → IntersectionObserver
+/**
+ * Odložený zdroj líného videa (element → URL). Jen v paměti: URL může nést token moda (`?t=`, zamítnuté GIFy),
+ * do DOM atributu (dřív data-uc-src) nesmí.
+ */
+const lazyVideoSrc = new WeakMap();
 function playSafe(v) {
   try { const p = v.play?.(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch { /* autoplay odmítnut */ }
 }
@@ -299,7 +304,8 @@ function gifVideoObserver(win) {
       for (const e of entries) {
         const v = e.target;
         if (e.isIntersecting) {
-          if (!v.getAttribute('src') && v.dataset.ucSrc) v.src = v.dataset.ucSrc;
+          const src = lazyVideoSrc.get(v);
+          if (!v.getAttribute('src') && src) v.src = src;
           playSafe(v);
         } else {
           try { v.pause(); } catch { /* ignore */ }
@@ -420,7 +426,7 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     const io = lazy ? gifVideoObserver(doc.defaultView) : null;
     if (io) {
       m.preload = 'none';
-      m.dataset.ucSrc = src;
+      lazyVideoSrc.set(m, src);   // ne do atributu (token moda)
       io.observe(m);
     } else {
       m.preload = 'auto';
@@ -738,8 +744,11 @@ export class GifRequests {
         if (penalty && !approve && status === 'rejected') await this._penalize(req, penalty);
         return status;
       }
-      // Mezitím karta zmizela (clear po přepnutí kanálu) → nic nevykreslovat.
-      if (this._cards.get(id) !== card) return null;
+      // Mezitím karta zmizela (clear po přepnutí kanálu) → nic nevykreslovat; trest se už neprovede (jiný kanál).
+      if (this._cards.get(id) !== card) {
+        if (penalty && status === 'rejected') this._L(`decide ${id}: zamítnuto, ale karta mezitím zmizela (přepnutí kanálu) → ${penalty.kind} se neprovedl`);
+        return null;
+      }
       if (r?.published === false) this._L(`decide ${id}: schváleno, ale zpráva se nezapsala (published:false)`);
       this._L(`decide ${id} → ${status}`);
       this._rememberDecided(id, status);

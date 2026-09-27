@@ -1213,16 +1213,33 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
 
   /** Otevřená nabídka ⋯ uvnitř panelu (neusekne se o okraj — spec 2026-09-27-gif-review-upravy §4). */
   function placeMenu() {
+    armMenuResize();
     const menu = st.menu ? body.querySelector('.uc-gl-menu:not([hidden])') : null;
     const tile = menu?.parentElement;
     if (!menu || !tile) return;
+    const box = body.getBoundingClientRect();
+    // Nabídka širší než panel → zúžit na šířku panelu (text položek se zalomí).
+    const avail = Math.max(0, Math.floor(box.width - 2 * GIF_MENU_MARGIN));
+    menu.style.maxWidth = `${avail}px`;
+    menu.style.minWidth = `${Math.min(150, avail)}px`;
     menu.style.left = ''; menu.style.right = ''; menu.style.top = '';
-    const p = gifMenuPlacement(tile.getBoundingClientRect(), menu.getBoundingClientRect(), body.getBoundingClientRect());
+    const p = gifMenuPlacement(tile.getBoundingClientRect(), menu.getBoundingClientRect(), box);
     menu.style.right = 'auto';
     menu.style.left = `${p.left}px`;
     menu.style.top = `${p.top}px`;
     menu.dataset.place = p.up ? 'up' : 'down';
-    L(`nabídka ${st.menu}: ${p.up ? 'nad' : 'pod'} ⋯, left ${Math.round(p.left)} px`);
+    L(`nabídka ${st.menu}: ${p.up ? 'nad' : 'pod'} ⋯, left ${Math.round(p.left)} px, max ${avail} px`);
+  }
+
+  /** Otevřená nabídka ⋯ sleduje změnu velikosti panelu (ResizeObserver, jinak resize okna); zavřená listener odpojí. */
+  let menuResize = null;
+  function armMenuResize() {
+    if (st.menu && !menuResize) {
+      const on = () => { if (st.menu) placeMenu(); };
+      const RO = win.ResizeObserver;
+      if (typeof RO === 'function') { const ro = new RO(on); ro.observe(body); menuResize = () => ro.disconnect(); }
+      else { win.addEventListener('resize', on); menuResize = () => win.removeEventListener('resize', on); }
+    } else if (!st.menu && menuResize) { menuResize(); menuResize = null; }
   }
 
   /**
@@ -1496,7 +1513,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       arm();
       if (!(typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) && st.tab === 'lib') search.focus();
     },
-    hide() { st.visible = false; st.menu = null; st.confirm = null; st.preview = null; paintConfirm(); paintPreview(); arm(); },
+    hide() { st.visible = false; st.menu = null; armMenuResize(); st.confirm = null; st.preview = null; paintConfirm(); paintPreview(); arm(); },
     /** Stav odměny / role se změnil → hlavička, pásek, taby. */
     update() {
       if (!isMod() && (st.tab === 'rej' || st.dups.length)) {
@@ -1529,7 +1546,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       }, Math.max(0, delayMs));
     },
     state: () => ({ tab: st.tab, items: st.items.length, rejected: st.rej.length, withdrawn: st.wd.length, purging: st.pg.length, duplicates: st.dups.length, preview: st.preview ? `${st.preview.sec}:${st.preview.id}` : null }),
-    destroy() { if (timer) win.clearInterval(timer); timer = null; if (refetchT) win.clearTimeout(refetchT); refetchT = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
+    destroy() { st.menu = null; armMenuResize(); if (timer) win.clearInterval(timer); timer = null; if (refetchT) win.clearTimeout(refetchT); refetchT = null; doc.removeEventListener('keydown', onKey, true); pane.replaceChildren(); },
   };
 }
 

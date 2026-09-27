@@ -292,7 +292,7 @@ div.uc-gif-more { cursor: default; }
 .uc-gl-tab.on { color: var(--accent-light, #ffc800); border-color: rgba(255, 140, 0, 0.55); }
 .uc-gl-reward { position: relative; padding: 6px 10px 7px; font-size: 11px; color: var(--text-secondary, #9a9aa6); border-bottom: 1px solid var(--border, #2f2f35); }
 .uc-gl-reward[hidden] { display: none; }
-.uc-gl-reward--active, .uc-gl-reward--mod { color: var(--accent-light, #ffc800); }
+.uc-gl-reward--active { color: var(--accent-light, #ffc800); }
 .uc-gl-reward--locked, .uc-gl-reward--login { color: #ffbe98; }
 .uc-gl-reward--flash { animation: uc-gl-flash 0.4s ease-in-out 3; }
 @keyframes uc-gl-flash { 50% { background: rgba(229, 72, 77, 0.25); } }

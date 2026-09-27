@@ -114,6 +114,7 @@ s.onevent = async (d) => {
   if (u.includes('/media/gif/')) {
     const [id, qs] = u.split('/media/gif/')[1].split('?');
     posts.media.push({ id, t: qs ? new URLSearchParams(qs).get('t') : null });
+    if (id === `${'0'.repeat(30)}38`) return;   // video (gif-56): podržet — jde jen o atributy prvku, ne o dekódování
     return call('Fetch.fulfillRequest', { requestId: rid, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'image/gif' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: GIF_1PX.toString('base64') }, sid);
   }
   if (u.includes('/nicknames/stream')) return fulfill(rid, sid, 200, 'text/event-stream', sseBody(mock.sse.splice(0)));
@@ -443,12 +444,12 @@ check('H fokus do panelu a po zavření zpět na původní prvek', focusBack?.in
 // (zamítnutý s tokenem moda), klik zaostří / rozmaže, soubor pryč = štítek. Samostatný panel nad mockem v paměti.
 const gh = (n) => ('0'.repeat(31) + n.toString(16)).slice(-32);
 const GM = (id, n, extra) => ({ ...H(id, 'Tester', 'u1', `gif text ${n}`, n), gif: { url: `https://api.jouki.cz/media/gif/${gh(n)}`, kind: 'gif', width: 200, height: 100 }, ...extra });
-const GIF_MSGS = [GM('gif-51', 51, {}), GM('gif-52', 52, { gifHidden: true, gifStatus: 'rejected' }), GM('gif-53', 53, { gifHidden: true, gifStatus: 'withdrawn' }), GM('gif-54', 54, {}), { ...GM('gif-55', 55, {}), gif: { url: `https://api.jouki.cz/media/gif/${gh(55)}`, kind: 'gif', width: 200, height: 100, unavailable: true } }];
+const GIF_MSGS = [GM('gif-51', 51, {}), GM('gif-52', 52, { gifHidden: true, gifStatus: 'rejected' }), GM('gif-53', 53, { gifHidden: true, gifStatus: 'withdrawn' }), GM('gif-54', 54, {}), GM('gif-56', 56, { gifHidden: true, gifStatus: 'purging', gif: { url: `https://api.jouki.cz/media/gif/${gh(56)}`, kind: 'mp4', width: 200, height: 100 } }), { ...GM('gif-55', 55, {}), gif: { url: `https://api.jouki.cz/media/gif/${gh(55)}`, kind: 'gif', width: 200, height: 100, unavailable: true } }];
 await ev(`(() => { const p = new window.UC_CORE.UserHistoryPanel({ doc: document, container: document.getElementById('chat-wrapper'), gifOrigins: ['https://api.jouki.cz'],
   gifToken: { get: async () => 'tk-uh', refresh: async () => 'tk-uh2' },
   api: async (path) => path.includes('/summary') ? ${JSON.stringify(summaryMod('tester'))} : path.includes('/messages') ? { ok: true, messages: ${JSON.stringify(GIF_MSGS)}, nextBefore: null } : { ok: true, available: false, items: [] } });
   p.open({ channel: 'robdiesalot', platform: 'twitch', userId: 'u1', login: 'tester' }); window.__uhGif = p; return true; })()`);
-check('P3 Profil: zprávy s GIFem vykreslené', await until(`document.querySelectorAll('.uc-uh .uc-uh-msg .uc-uh-gif').length === 5`, 5000), await ev(`document.querySelectorAll('.uc-uh .uc-uh-gif').length`));
+check('P3 Profil: zprávy s GIFem vykreslené', await until(`document.querySelectorAll('.uc-uh .uc-uh-msg .uc-uh-gif').length === 6`, 5000), await ev(`document.querySelectorAll('.uc-uh .uc-uh-gif').length`));
 const uhg = (id) => ev(`(() => { const r = document.querySelector('.uc-uh-msg[data-id="${id}"]'); const b = r?.querySelector('.uc-uh-gif'); if (!b) return null; const m = b.querySelector('.uc-gif-media');
   return { text: r.querySelector('.uc-uh-tx').textContent, blur: b.classList.contains('uc-uh-gif--blur'), hidden: b.classList.contains('uc-uh-gif--hidden'), tag: b.querySelector('.uc-uh-gif-tag')?.textContent || null,
     src: m?.getAttribute('src') || null, filter: m ? getComputedStyle(m).filter : null, label: b.querySelector('.uc-gif-fallback')?.textContent || null, pressed: b.getAttribute('aria-pressed'),
@@ -458,6 +459,12 @@ check('P3 schválený GIF normálně (bez rozmazání, bez tokenu)', g51 && !g51
 check('P3 zamítnutý: rozmazaný + štítek, text zprávy zůstává, náhled s tokenem moda', await until(`!!document.querySelector('.uc-uh-msg[data-id="gif-52"] .uc-gif-media')`, 3000)
   && await (async () => { const g = await uhg('gif-52'); return g.blur && g.tag === 'Zamítnutý GIF' && /blur/.test(g.filter) && g.src.endsWith('?t=tk-uh') && g.text === 'gif text 52' && g.pressed === 'false'; })(), JSON.stringify(await uhg('gif-52')));
 check('P3 token jen v src, v žádném jiném atributu', (await uhg('gif-52'))?.attrTok === false);
+// Video ke smazání (purging, s tokenem): líné video nesmí token uložit do data-uc-src; po zobrazení ho má jen src.
+await until(`!!document.querySelector('.uc-uh-msg[data-id="gif-56"] video')`, 3000);
+await ev(`document.querySelector('.uc-uh-msg[data-id="gif-56"]').scrollIntoView()`);
+await sleep(400);
+const v56 = await ev(`(() => { const r = document.querySelector('.uc-uh'); const bad = [...r.querySelectorAll('*'), r].flatMap(e => [...e.attributes].filter(a => a.name !== 'src' && a.value.includes('tk-uh')).map(a => e.tagName + '@' + a.name)); const v = document.querySelector('.uc-uh-msg[data-id="gif-56"] video'); return { bad, src: v?.getAttribute('src') || '', data: v ? Object.keys(v.dataset) : null }; })()`);
+check('P3 Profil: token (obrázek i video) v žádném atributu kromě src, video bez data-uc-src', v56 && !v56.bad.length && Array.isArray(v56.data) && !v56.data.includes('ucSrc'), JSON.stringify(v56));
 const g53 = await uhg('gif-53');
 check('P3 stažený (withdrawn): rozmazaný, veřejně bez tokenu', g53?.blur && g53.tag === 'Stažený GIF' && g53.src === `https://api.jouki.cz/media/gif/${gh(53)}`, JSON.stringify(g53));
 await ev(`document.querySelector('.uc-uh-msg[data-id="gif-52"] .uc-uh-gif').click()`);

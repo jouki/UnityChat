@@ -15,7 +15,9 @@ export function retryUrl(url, attempt) {
  * @param {{ log?: (text: string) => void, match?: (img: HTMLImageElement) => boolean }} [o]
  */
 export function installEmoteRetry(doc, { log, match } = {}) {
-  const isEmote = match || ((img) => img.classList.contains('emote') || !!img.closest('.es-item, .uc-ep, .emote-stack'));
+  // GIFy (i náhledy v panelu emotů) ne: URL zamítnutého média nese token moda — nesmí do data-uc-src ani do logu,
+  // a chybu média řeší createGifMedia („GIF odebrán“ / nový token).
+  const isEmote = match || ((img) => !img.classList.contains('uc-gif-media') && (img.classList.contains('emote') || !!img.closest('.es-item, .uc-ep, .emote-stack')));
   const win = doc.defaultView;
   doc.addEventListener('error', (e) => {
     const img = e.target;
