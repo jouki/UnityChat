@@ -250,10 +250,9 @@ export function syncGifOwnFinal(msg, view) {
  * nemaluje), false = běžná smazaná zpráva (hostitel pokračuje; médium smazaného GIFu už je pryč).
  *
  *  - vlastní GIF (`own` = gifOwnView): rozpracovaný / čekající zůstává vidět s textem a štítkem (kolečko %,
- *    „Schvalování moderátorem“); konečný červený stav „Zamítnuto moderátorem“ / „Vypršelo“ = štítek + false →
- *    hostitel zprávu vykreslí jako smazanou (kolo 4 bod 4a, odkaz není živý); „Nové GIFy teď nejsou povolené“
- *    (gif_not_allowed) = text mírně ztlumený, odkaz neživý, jen štítek — bez vzhledu smazané zprávy a bez „Smazáno“,
- *    i pro moda (user 2026-09-27); schválení = štítek pryč, zpráva se schová jako u ostatních,
+ *    „Schvalování moderátorem“); konečný červený stav („Zamítnuto moderátorem“, „Vypršelo“, „Nové GIFy teď nejsou
+ *    povolené“) = text mírně ztlumený, odkaz neživý, jen štítek — bez vzhledu smazané zprávy a bez „Smazáno“, i pro
+ *    moda (user 2026-09-27); schválení = štítek pryč, zpráva se schová jako u ostatních,
  *  - gif_request (čeká): ostatním schovaná úplně (`uc-gif-held`) + pojistka `hold` (GET /gif/held),
  *  - gif_not_allowed cizí zprávy: schovaná úplně všem (divák, mod, OBS; živě i z historie) — ani „Zpráva smazána“,
  *  - OBS (`raw`): zamítnutý / nepovolený GIF se neukáže ani jako „Smazáno“ (čekající GIF v OBS nikdy),
@@ -276,20 +275,17 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
     if (isGifOwnFinal(own)) {
       syncGifOwnFinal(msg, own);
       release(pl, id);
-      if (own.kind === 'not_allowed') {
-        // Nové GIFy nejsou povolené: vlastní text (bez obsahu z historie prázdný) + štítek, bez vzhledu smazané zprávy.
-        clearDeleted(el);
-        const tx = el.querySelector('.tx');
-        if (tx && tx.querySelector('.uc-deleted-label')) {
-          if (hasContent(msg)) rerender(el, tx, msg); else tx.replaceChildren();
-        }
-        paintGifStatus(doc, el, own);
-        disableTextLinks(el);
-        return true;
+      // Rozhodnuto (zamítnuto / vypršelo / nové GIFy nejsou povolené): vlastní text (bez obsahu z historie prázdný)
+      // mírně ztlumený, odkaz neživý + červený štítek; bez vzhledu smazané zprávy a bez „Smazáno“, i pro moda
+      // (user 2026-09-27, sjednoceno se specem).
+      clearDeleted(el);
+      const tx = el.querySelector('.tx');
+      if (tx && tx.querySelector('.uc-deleted-label')) {
+        if (hasContent(msg)) rerender(el, tx, msg); else tx.replaceChildren();
       }
-      // Rozhodnuto (zamítnuto / vypršelo): hostitel dál maluje běžně smazanou zprávu, štítek zůstává.
       paintGifStatus(doc, el, own);
-      return false;
+      disableTextLinks(el);
+      return true;
     }
     clearDeleted(el);
     const tx = el.querySelector('.tx');

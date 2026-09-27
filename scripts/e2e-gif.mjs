@@ -94,6 +94,8 @@ const H1 = [
   // vlastní (přihlášený moduser) jen se štítkem „Nové GIFy teď nejsou povolené“, bez „Zpráva smazána“ / „Smazáno“.
   H('e2e-na-h', 'Divak', 'u9', '', 6.8, { deleted: true, deletedReason: 'gif_not_allowed' }),
   H('e2e-na-hown', 'ModUser', 'u7', '', 6.9, { deleted: true, deletedReason: 'gif_not_allowed' }),
+  // Vlastní zamítnutý GIF z historie: odesílatel (i mod) štítek bez „Smazáno“, ostatní dál smazanou (user 2026-09-27).
+  H('e2e-rej-own', 'ModUser', 'u7', '', 6.95, { deleted: true, deletedReason: 'gif_rejected' }),
   H('e2e-a2', 'Tester', 'u1', 'po GIFech', 7),
 ];
 const mock = { modUser: null, mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
@@ -572,11 +574,16 @@ const naView = (id) => ev(`(() => { const m = document.querySelector('.msg[data-
     label2: m.querySelector('.tx .uc-deleted-label')?.textContent || null, kind: s?.dataset.kind || null, label: s?.querySelector('.uc-gif-st-txt')?.textContent || null,
     link: !!m.querySelector('.tx a[href]'), text: m.querySelector('.tx')?.textContent || '', op: Number(getComputedStyle(m.querySelector('.tx')).opacity),
     color: s ? getComputedStyle(s).color : null }; })()`);
-// Odesílatel (divák i mod): text (bez odkazu, mírně ztlumený) + červený štítek, bez vzhledu smazané zprávy a bez „Smazáno“.
-const naOwnOk = (o, withText = true) => !!o && o.shown && !o.deleted && !o.tag && !o.label2 && o.kind === 'not_allowed' && o.label === NA_TEXT && !o.link
-  && o.op < 1 && o.op > 0.3 && /rgb\(255, 138, 142\)/.test(o.color) && (!withText || /tenor\.com/.test(o.text));
+// Odesílatel (divák i mod), konečný červený stav (nepovolené / zamítnuto / vypršelo): text (bez odkazu, mírně ztlumený)
+// + červený štítek, bez vzhledu smazané zprávy a bez „Smazáno“ (user 2026-09-27).
+const ownMuted = (o, kind, label, withText = true) => !!o && o.shown && !o.deleted && !o.tag && !o.label2 && o.kind === kind && o.label === label && !o.link
+  && o.op < 1 && o.op > 0.3 && /rgb\(255, 138, 142\)/.test(o.color) && (!withText || /https?:\/\//.test(o.text));
+const naOwnOk = (o, withText = true) => ownMuted(o, 'not_allowed', NA_TEXT, withText);
 // Ostatní: zpráva není vidět vůbec (ani „Zpráva smazána“).
 const naHidden = (o) => o === null || (!o.shown && !o.label2);
+check('A gif_rejected vlastní z historie (mod, „Zašedlé“) → štítek „Zamítnuto moderátorem“ bez „Smazáno“ / „Zpráva smazána“', await until(`document.querySelector('.msg[data-msg-id="e2e-rej-own"] .uc-gif-st')?.dataset.kind === 'rejected'`, 5000)
+  && ownMuted(await naView('e2e-rej-own'), 'rejected', 'Zamítnuto moderátorem', false), JSON.stringify(await naView('e2e-rej-own')));
+check('A gif_rejected cizí z historie → mod ji dál vidí jako smazanou', await (async () => { const o = await naView('e2e-rej'); return !!o && o.shown && o.deleted && o.tag === 'Smazáno'; })(), JSON.stringify(await naView('e2e-rej')));
 check('A gif_not_allowed cizí z historie → mod ji nevidí vůbec', naHidden(await naView('e2e-na-h')), JSON.stringify(await naView('e2e-na-h')));
 check('A gif_not_allowed vlastní z historie (mod, styl „Zašedlé“) → štítek bez „Smazáno“ / „Zpráva smazána“', await until(`document.querySelector('.msg[data-msg-id="e2e-na-hown"] .uc-gif-st')?.dataset.kind === 'not_allowed'`, 5000)
   && naOwnOk(await naView('e2e-na-hown'), false), JSON.stringify(await naView('e2e-na-hown')));
@@ -678,9 +685,6 @@ const own = (id) => ev(`(() => { const m = document.querySelector('.msg[data-msg
     kind: s?.dataset.kind || null, label: s ? (s.querySelector('.uc-gif-st-pct, .uc-gif-st-txt')?.textContent || '') : null, spin: !!s?.querySelector('.uc-gif-st-spin'),
     warn: !!w && !w.hidden, warnTip: w?.getAttribute('title') || null, color: s ? getComputedStyle(s).color : null, ring: !!s?.querySelector('.uc-qd-ring'),
     dimmed: m.classList.contains('uc-deleted--dimmed'), label2: m.querySelector('.tx .uc-deleted-label')?.textContent || null, link: !!m.querySelector('.tx a[href]') }; })()`);
-// Kolo 4 bod 4a: konečný stav vlastního GIFu (zamítnuto / vypršelo) = odesílatel zprávu vidí jako
-// smazanou (divák: ztlumené „Zpráva smazána“), bez odkazu, s červeným štítkem.
-const ownFinal = (o, kind, label) => !!o && o.shown && o.deleted && o.dimmed && o.label2 === 'Zpráva smazána' && !o.link && !/https?:/.test(o.text) && o.kind === kind && o.label === label && /rgb\(255, 138, 142\)/.test(o.color);
 const OWNMSG = (id, text) => ['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: id, by: 'filter', message: { platform: 'twitch', id, username: 'ModUser', userId: 'u7', message: text, timestamp: Date.now(), color: '#1e90ff' } }];
 const PR = (id, phase, pct, extra = {}) => ['gif-progress', { requestKey: `twitch:${id}`, channel: 'robdiesalot', platform: 'twitch', messageId: id, phase, pct, ...extra }];
 pushAcc(
@@ -718,14 +722,17 @@ check('B zamítnuto → červený „Zamítnuto moderátorem“', await until(`d
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-own1', by: 'twitch:modik', reason: 'gif_rejected' }]);
 await sleep(1500);
 const o1r = await own('e2e-own1');
-check('B gif_rejected → zpráva nezmizí, ale smazaná (ztlumená „Zpráva smazána“, bez odkazu), štítek červený natrvalo', ownFinal(o1r, 'rejected', 'Zamítnuto moderátorem'), JSON.stringify(o1r));
+check('B gif_rejected → odesílatel: text bez odkazu, mírně ztlumený, červený štítek natrvalo, bez „Zpráva smazána“ / „Smazáno“ (user 2026-09-27)', ownMuted(await naView('e2e-own1'), 'rejected', 'Zamítnuto moderátorem'), JSON.stringify(await naView('e2e-own1')));
 // Vypršelo
 mock.sse.push(OWNMSG('e2e-own2', 'druhý https://giphy.com/gifs/x-2'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-own2"]')`, 8000);
 pushAcc(PR('e2e-own2', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(31, { own: true, login: 'moduser', messageId: 'e2e-own2' })],
   ['gif-decided', { requestId: 31, channel: 'robdiesalot', approved: false, status: 'expired', by: null, own: true }]);
 check('B vypršelo → červený „Vypršelo“', await until(`document.querySelector('.msg[data-msg-id="e2e-own2"] .uc-gif-st-txt')?.textContent === 'Vypršelo'`, 12000), JSON.stringify(await own('e2e-own2')));
-check('B vypršelo → zpráva jako smazaná, bez odkazu (kolo 4 bod 4a)', ownFinal(await own('e2e-own2'), 'expired', 'Vypršelo'), JSON.stringify(await own('e2e-own2')));
+check('B vypršelo → odesílatel: text bez odkazu + štítek, bez vzhledu smazané zprávy', ownMuted(await naView('e2e-own2'), 'expired', 'Vypršelo'), JSON.stringify(await naView('e2e-own2')));
+check('B gif_rejected vlastní z historie (divák) → štítek bez „Zpráva smazána“', await until(`document.querySelector('.msg[data-msg-id="e2e-rej-own"] .uc-gif-st')?.dataset.kind === 'rejected'`, 5000)
+  && ownMuted(await naView('e2e-rej-own'), 'rejected', 'Zamítnuto moderátorem', false), JSON.stringify(await naView('e2e-rej-own')));
+check('B gif_rejected cizí z historie → divák dál „Zpráva smazána“', await (async () => { const o = await naView('e2e-rej'); return !!o && o.shown && o.deleted && o.label2 === 'Zpráva smazána'; })(), JSON.stringify(await naView('e2e-rej')));
 check('B bez ⚠ u GIFu, který zamítnutý nebyl', await ev(`!document.querySelector('.msg[data-msg-id="e2e-own2"] .uc-gif-st-warn:not([hidden])')`) === true);
 // Schváleno → původní zpráva pryč, GIF na konci chatu (čas schválení, ne čas původní zprávy)
 mock.sse.push(OWNMSG('e2e-own3', 'třetí https://tenor.com/view/dog-gif-3'));
@@ -833,11 +840,11 @@ check('I1 … optimistická zpráva s odkazem zmizela (žádný duplikát)', awa
 check('I1 třetí GIF odeslán', await sendGif('e2e-i3', 'zamitnuty https://tenor.com/view/i3-gif-3'));
 pushAcc(PR('e2e-i3', 'done', 100, { outcome: 'pending' }), ['gif-pending', pend0(41, { own: true, login: 'moduser', messageId: 'e2e-i3' })],
   ['gif-decided', { requestId: 41, channel: 'robdiesalot', approved: false, status: 'rejected', own: true }]);
-// Kolo 4 bod 4a: zamítnutá optimistická = smazaná („Zpráva smazána“, bez odkazu) s červeným štítkem.
+// Zamítnutá optimistická = text bez živého odkazu s červeným štítkem, bez vzhledu smazané zprávy (user 2026-09-27).
 const optRej = () => ev(`(() => { const m = [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].find(x => x.querySelector('.uc-gif-st')?.dataset.kind === 'rejected'); if (!m) return null;
-  return { shown: getComputedStyle(m).display !== 'none', deleted: m.classList.contains('uc-deleted'), label: m.querySelector('.tx .uc-deleted-label')?.textContent || null, link: m.querySelector('.tx').textContent.includes('i3-gif'), failed: m.classList.contains('send-failed') }; })()`);
-check('I1 bez echa → zamítnuto: optimistická zůstane jako smazaná s červeným „Zamítnuto moderátorem“', await until(`(() => { const m = [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].find(x => x.querySelector('.uc-gif-st')?.dataset.kind === 'rejected'); return !!m && m.classList.contains('uc-deleted'); })()`, 12000)
-  && (await optRej())?.label === 'Zpráva smazána' && !(await optRej()).link, JSON.stringify(await optRej()));
+  return { shown: getComputedStyle(m).display !== 'none', deleted: m.classList.contains('uc-deleted'), label: m.querySelector('.tx .uc-deleted-label')?.textContent || null, text: m.querySelector('.tx').textContent.includes('i3-gif'), link: !!m.querySelector('.tx a[href]'), failed: m.classList.contains('send-failed') }; })()`);
+check('I1 bez echa → zamítnuto: optimistická zůstane s textem (odkaz neživý) a červeným „Zamítnuto moderátorem“, ne smazaná', await until(`(() => { const m = [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].find(x => x.querySelector('.uc-gif-st')?.dataset.kind === 'rejected'); return !!m && !m.classList.contains('uc-deleted'); })()`, 12000)
+  && (await optRej())?.label === null && (await optRej()).text && !(await optRej()).link, JSON.stringify(await optRej()));
 check('I1 … ne jako neodeslaná', (await optRej())?.failed === false);
 mock.sendId = null;
 

@@ -68,10 +68,9 @@ export const GIF_STATUS_TEXT = {
   not_allowed: 'Nové GIFy teď nejsou povolené',
 };
 /**
- * Konečné (červené) stavy vlastního GIFu → důvod smazání. Zamítnuto / vypršelo: odesílatel zprávu vidí jako SMAZANOU
- * (ztlumené „Zpráva smazána“, mod podle svého stylu) se štítkem a bez živého odkazu (test 2026-09-27 kolo 4 bod 4a).
- * Nové GIFy nejsou povolené (gif_not_allowed): odesílatel vidí svůj text mírně ztlumený, bez živého odkazu, jen se
- * štítkem — bez „SMAZÁNO“ / „Zpráva smazána“ (i mod); ostatní zprávu nevidí vůbec (core gif-host paintGifDeleted).
+ * Konečné (červené) stavy vlastního GIFu → důvod smazání. Odesílatel (divák i mod) vidí svůj text mírně ztlumený, bez
+ * živého odkazu, jen se štítkem — bez „SMAZÁNO“ / „Zpráva smazána“ (user 2026-09-27, core gif-host paintGifDeleted).
+ * Ostatní: zamítnuto / vypršelo = smazaná zpráva, nové GIFy nejsou povolené (gif_not_allowed) = nevidí vůbec.
  */
 const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: GIF_NOT_ALLOWED_REASON };
 export const isGifOwnFinal = (view) => !!view && Object.prototype.hasOwnProperty.call(GIF_OWN_FINAL_REASON, view.kind);
@@ -668,10 +667,8 @@ const WARN_SVG ='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="tr
 export function paintGifStatus(doc, msgEl, view) {
   if (!msgEl) return null;
   let st = msgEl.querySelector(':scope > .uc-gif-st');
-  // uc-gif-own-final: odkaz ve smazané vlastní zprávě není živý (gif.css); uc-gif-own-na: nové GIFy nejsou povolené
-  // → text jen mírně ztlumený, bez vzhledu smazané zprávy.
+  // uc-gif-own-final: konečný červený stav vlastní zprávy → text mírně ztlumený, odkaz není živý (gif.css).
   msgEl.classList.toggle('uc-gif-own-final', isGifOwnFinal(view));
-  msgEl.classList.toggle('uc-gif-own-na', view?.kind === 'not_allowed');
   if (!view || view.kind === 'approved') { st?.remove(); msgEl.classList.remove('uc-gif-own'); return null; }
   msgEl.classList.add('uc-gif-own');
   if (!st) {
