@@ -611,15 +611,15 @@ export class GifAccessToken {
 // ---------------------------------------------------------------------------
 
 /**
- * Stav odměny z GifCooldown.snapshot() ({ allowed, mod, until, sec, mode, rewardUntil, rewardTotalMs }) v čase `now`:
- * { mode: unknown|login|mod|locked|active|cooldown, canSend, cooldownMs, remainingMs|null, progress|null, text, approvedOnly }.
+ * Stav odměny z GifCooldown.snapshot() ({ allowed, until, sec, mode, rewardUntil, rewardTotalMs }) v čase `now`:
+ * { mode: unknown|login|locked|active|cooldown, canSend, cooldownMs, remainingMs|null, progress|null, text, approvedOnly }.
  * `progress` (0–1, ubývá) jen když server pošle konec odměny (`rewardUntil`); bez něj pásek není.
  */
 export function gifRewardView(st, now, { loggedIn = true } = {}) {
   if (!loggedIn) return { mode: 'login', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly: false, text: 'Přihlas se k UnityChatu, ať můžeš GIFy posílat.' };
   if (!st) return { mode: 'unknown', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly: false, text: '' };
   const approvedOnly = st.mode === 'approved';
-  if (st.mod) return { mode: 'mod', canSend: true, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly, text: 'Jako mod posíláš GIFy bez odměny.' };
+  // Mod / broadcaster bez výjimky: zámek, pásek i cooldown jako ostatní (spec 2026-09-27-gif-review-upravy §5).
   const rem = Number.isFinite(st.rewardUntil) ? st.rewardUntil - now : null;
   if (!st.allowed || (rem !== null && rem <= 0)) {
     return { mode: 'locked', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly, text: 'Odměna „Posílání GIFů“ není aktivní. Knihovnu vidíš, poslat GIF jde s odemčenou odměnou.' };

@@ -95,7 +95,7 @@ const H1 = [
 const mock = { modUser: null, mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
   library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set(), wd: [], pg: [], byId: [] };
 const posts = { modUser: [], decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [], byId: [] };
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
+mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1 };
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 const pushAcc = (...evs) => {
@@ -531,7 +531,7 @@ check('A2 živě GIF modem: gif-60 vidět na místě původní zprávy, jednou, 
 const gifInView = `(() => { const c = document.getElementById('chat'); const m = document.querySelector('.msg[data-msg-id="gif-60"]'); if (!m) return false; return c.scrollHeight - c.scrollTop - c.clientHeight < 2 && m.getBoundingClientRect().bottom <= c.getBoundingClientRect().bottom + 1; })()`;
 check('A2 živě GIF modem: chat zůstal dole, gif-60 celý ve výhledu', await until(gifInView, 3000),
   await ev(`(() => { const c = document.getElementById('chat'); const m = document.querySelector('.msg[data-msg-id="gif-60"]'); return JSON.stringify({ gap: c.scrollHeight - c.scrollTop - c.clientHeight, bottom: m && Math.round(m.getBoundingClientRect().bottom), chatBottom: Math.round(c.getBoundingClientRect().bottom) }); })()`));
-// Mod (bez Dev módu) píše GIF: stav mod → bez bubliny, odeslání bez gifReview.
+// Mod (bez Dev módu) s odemčenou odměnou bez cooldownu píše GIF: bez bubliny, odeslání bez gifReview.
 const typeIn = (text) => ev(`(() => { const i = document.getElementById('msg-input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 const clickSend = () => ev(`(() => { const b = document.getElementById('btn-send'); b.disabled = false; b.click(); return true; })()`);
 const stateBefore = posts.state.length;
@@ -923,7 +923,8 @@ await ev(`document.getElementById('btn-emotes').click()`);
 
 // ---- fáze G2 (mod): GIFy | Zamítnuté GIFy, duplikáty, odebrání z knihovny, token pro zamítnuté ----
 mock.mod = true;
-mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
+// Mod bez výjimky (2026-09-27 §5): stav odměny jako divák (tady odemčeno, konec za 5 min).
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now(), rewardUntil: Date.now() + 300_000 });
 mock.dups = [{ id: 4, channel: 'robdiesalot', score: 0.83, status: 'pending', createdAt: Date.now(), first: { ...LIB(11, ['cat']), status: 'approved' }, second: { ...LIB(14, []), status: 'rejected' } }];
 mock.rejected = [15, 16].map((n) => ({ mediaId: hex(n), url: murl(hex(n)), kind: 'gif', width: 200, height: 100, rejectedAt: Date.now() - 86400000, rejectedBy: 'twitch:modik', vault: false, deleteAt: Date.now() + 13 * 86400000 }));
 mock.rejMedia = new Set([hex(14), hex(15), hex(16)]);
@@ -935,6 +936,8 @@ await ev(`document.getElementById('btn-emotes').click()`);
 await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
 check('G2 mod: taby GIFy | Zamítnuté GIFy + „Možné duplikáty (1)“', await until(`!!document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-dups')`, 6000)
   && (await gl())?.tabs && (await gl()).dups === 'Možné duplikáty (1)', JSON.stringify(await gl()));
+const g2r = await gl();
+check('G2 mod bez výjimky: hlavička ukazuje stav odměny („Odměna ještě …“), ne „Jako mod posíláš GIFy bez odměny.“', /^Odměna ještě \d/.test(g2r?.reward || '') && !/bez odměny/.test(g2r.reward) && !g2r.locked, JSON.stringify(g2r));
 check('G2 náhled zamítnutého: 404 s prvním tokenem → nový token (POST access-token) → načteno', await until(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.src.includes(${JSON.stringify(`t=${goodTok}`)}) && i.complete && i.naturalWidth > 0)`, 8000),
   JSON.stringify({ token: posts.token, tok: posts.mediaTok }));
 check('G2 schválený GIF v duplikátu bez tokenu', await ev(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.getAttribute('src') === ${JSON.stringify(murl(hex(11)))})`) === true);

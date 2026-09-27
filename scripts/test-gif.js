@@ -101,9 +101,9 @@ Promise.all([
   check('gifCooldownText', cd.gifCooldownText(true) === 'Můžeš až za:' && cd.gifCooldownText(false) === 'GIF můžeš poslat za');
   check('gifCooldownRing: 30 s z 60 → 180°, číslo 30', eq(cd.gifCooldownRing(30_000, 60_000), { deg: 180, sec: 30 }));
   check('gifCooldownRing: 0,2 s → číslo 1, 60 s bez celkové délky → 0°', cd.gifCooldownRing(200, 60_000).sec === 1 && cd.gifCooldownRing(60_000, 0).deg === 0);
-  check('normalizeGifState: posun hodin přes serverNow', eq(cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: 15_000, cooldownSec: 60, serverNow: 5_000 }, 100_000), { allowed: true, until: 110_000, sec: 60, mod: false, mode: 'all', rewardUntil: null, rewardTotalMs: null, at: 100_000 }));
+  check('normalizeGifState: posun hodin přes serverNow', eq(cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: 15_000, cooldownSec: 60, serverNow: 5_000 }, 100_000), { allowed: true, until: 110_000, sec: 60, mode: 'all', rewardUntil: null, rewardTotalMs: null, at: 100_000 }));
   check('normalizeGifState: režim approved + konec odměny (posun hodin)', (() => { const s = cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: 5_000, mode: 'approved', rewardUntil: 65_000, rewardTotalMs: 600_000 }, 100_000); return s.mode === 'approved' && s.rewardUntil === 160_000 && s.rewardTotalMs === 600_000; })());
-  check('normalizeGifState: mod, bez cooldownu; chyba → null', cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true }, 5).mod === true && cd.normalizeGifState({ ok: false }, 1) === null);
+  check('normalizeGifState: `mod` ze starého serveru se ignoruje (mod bez výjimky); chyba → null', !('mod' in cd.normalizeGifState({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true }, 5)) && cd.normalizeGifState({ ok: false }, 1) === null);
 
   // Minimální DOM pro GifCooldown.
   class El {
@@ -160,10 +160,10 @@ Promise.all([
   check('GifCooldown: po odeslání GIFu lokální cooldown 60 s', G.visible && bubble.querySelector('.uc-gif-cd-ring em').textContent === '60' && calls.length === 2);
   G.onDecided({ requestId: 1, channel: 'robdiesalot', status: 'rejected', own: true });
   check('GifCooldown: vlastní GIF zamítnut → cooldown pryč', !G.visible && G.remainingMs() === 0);
-  // Mod (bez Dev módu) cooldown nemá ani po odeslání; Dev mód → review=1 v dotazu.
-  G.reset(); state = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: 1, mod: true };
+  // Mod bez výjimky (2026-09-27 §5): cooldown po odeslání jako divák (i kdyby starý server poslal `mod: true`); Dev mód → review=1 v dotazu.
+  G.reset(); state = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 30, serverNow: 1, mod: true };
   G.onInput('https://giphy.com/gifs/x-1'); await G.fetchState(); G.onSent('https://giphy.com/gifs/x-1'); G.onInput('https://giphy.com/gifs/x-1');
-  check('GifCooldown: mod → bez bubliny', !G.visible && G.checkSend('https://giphy.com/gifs/x-1') === true);
+  check('GifCooldown: mod → cooldown a bublina jako u diváka', G.visible && G.remainingMs() === 30_000 && G.checkSend('https://giphy.com/gifs/x-1') === false);
   const R = new cd.GifCooldown({ doc, host: new El('div'), api: async (p) => { calls.push(p); return state; }, channel: () => 'robdiesalot', platform: () => 'twitch', review: () => true, now: () => t, setInterval: () => 1, clearInterval: () => {} });
   await R.fetchState();
   check('GifCooldown: Dev mód moda → review=1', calls.at(-1) === '/gif/state?channel=robdiesalot&platform=twitch&review=1', calls.at(-1));

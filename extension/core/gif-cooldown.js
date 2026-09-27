@@ -8,7 +8,8 @@
 //  - Stav: GET /gif/state?channel=&platform=[&review=1] (Bearer) při prvním GIF odkazu v poli, cache do konce
 //    cooldownu (jinak 60 s). Po odeslání GIFu se cooldown nastaví lokálně z `cooldownSec`; zamítnutí /
 //    propadnutí vlastní žádosti (gif-decided own) ho zruší, schválení ho obnoví od teď.
-//  - Mod / broadcaster (server vrátí `mod: true`) cooldown nemá — kromě Dev módu (`review`), kde se počítá jako divák.
+//  - Mod / broadcaster bez výjimky (spec 2026-09-27-gif-review-upravy §5): odměnu i cooldown má ze Židolišty jako divák;
+//    `review` (Dev mód) se dál posílá jen kvůli schvalování jako divák.
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path)` (hostitel přidá Bearer).
 import { hasGifLink } from './gif-links.js';
@@ -45,7 +46,6 @@ export function normalizeGifState(j, localNow) {
     allowed: j.allowed === true,
     until: j.cooldownUntil != null && Number.isFinite(cd) ? cd + shift : null,
     sec: Number.isFinite(sec) && sec > 0 ? Math.min(sec, 86_400) : 0,
-    mod: j.mod === true,
     mode: j.mode === 'approved' ? 'approved' : 'all',
     rewardUntil: (j.rewardUntil ?? j.until) != null && Number.isFinite(ru) ? ru + shift : null,
     rewardTotalMs: Number.isFinite(rTotal) && rTotal > 0 ? rTotal : null,
@@ -83,7 +83,7 @@ export class GifCooldown {
     const w = doc?.defaultView || globalThis;
     this._si = si || w.setInterval.bind(w);
     this._ci = ci || w.clearInterval.bind(w);
-    this._state = null;     // { key, allowed, until, sec, mod, at, total }
+    this._state = null;     // { key, allowed, until, sec, at, total }
     this._inflight = null;
     this._text = '';
     this._blocked = false;
@@ -106,19 +106,19 @@ export class GifCooldown {
   /** Zbývá do konce cooldownu (ms), 0 = bez cooldownu / neznámé. */
   remainingMs() {
     const s = this._fresh();
-    if (!s || s.mod || s.until === null) return 0;
+    if (!s || s.until === null) return 0;
     return Math.max(0, s.until - this.now());
   }
 
   /**
-   * Stav odměny pro GIF záložku / indikátor (core/gif-library.js gifRewardView): { allowed, mod, until, sec, mode,
+   * Stav odměny pro GIF záložku / indikátor (core/gif-library.js gifRewardView): { allowed, until, sec, mode,
    * rewardUntil, rewardTotalMs } v lokálním čase, nebo null (neznámý / jiný kanál / propadlý).
    */
   snapshot() {
     // Jen shoda kanálu / platformy (ne 60s čerstvost): časy (cooldown, konec odměny) se počítají proti hodinám.
     const s = this._state && this._state.key === this._key() ? this._state : null;
     if (!s) return null;
-    return { allowed: s.allowed, mod: s.mod, until: s.until, sec: s.sec, mode: s.mode, rewardUntil: s.rewardUntil, rewardTotalMs: s.rewardTotalMs || this._rewardTotalFallback(s) };
+    return { allowed: s.allowed, until: s.until, sec: s.sec, mode: s.mode, rewardUntil: s.rewardUntil, rewardTotalMs: s.rewardTotalMs || this._rewardTotalFallback(s) };
   }
 
   /**
@@ -151,7 +151,7 @@ export class GifCooldown {
         const st = normalizeGifState(j, this.now());
         if (!st || key !== this._key()) return null;
         this._state = { ...st, key, total: st.until !== null ? Math.max(st.sec * 1000, st.until - this.now()) : 0 };
-        this._L(`stav ${pl} allowed=${st.allowed}${st.mod ? ' mod' : ''} zbývá=${Math.ceil(this.remainingMs() / 1000)} s (cd ${st.sec} s)${review ? ' review' : ''}`);
+        this._L(`stav ${pl} allowed=${st.allowed} zbývá=${Math.ceil(this.remainingMs() / 1000)} s (cd ${st.sec} s)${review ? ' review' : ''}`);
         this._update();
         try { this.onState(this.snapshot()); } catch { /* ignore */ }
         return this._state;
@@ -185,11 +185,11 @@ export class GifCooldown {
     return false;
   }
 
-  /** Zpráva s GIF odkazem odešla → cooldown lokálně z cooldownSec (mod bez Dev módu ne). */
+  /** Zpráva s GIF odkazem odešla → cooldown lokálně z cooldownSec (i mod). */
   onSent(text) {
     if (!hasGifLink(text)) return;
     const s = this._fresh();
-    if (!s || !s.allowed || s.mod || !s.sec) return;
+    if (!s || !s.allowed || !s.sec) return;
     s.until = this.now() + s.sec * 1000;
     s.total = s.sec * 1000;
     this._L(`GIF odeslán → cooldown ${s.sec} s lokálně`);
@@ -203,7 +203,7 @@ export class GifCooldown {
     if (String(x.channel) !== String(this.channel() || '').toLowerCase()) return;
     if (x.approved) {
       const s = this._state;
-      if (s && !s.mod && s.sec) { s.until = this.now() + s.sec * 1000; s.total = s.sec * 1000; s.at = this.now(); }
+      if (s && s.sec) { s.until = this.now() + s.sec * 1000; s.total = s.sec * 1000; s.at = this.now(); }
     } else {
       this._state = null;
       this._blocked = false;

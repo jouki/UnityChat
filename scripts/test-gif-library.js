@@ -240,7 +240,8 @@ Promise.all([
   const RV = L.gifRewardView;
   check('gifRewardView: nepřihlášený', RV(null, 0, { loggedIn: false }).mode === 'login' && !RV(null, 0, { loggedIn: false }).canSend);
   check('gifRewardView: neznámý stav', RV(null, 0).mode === 'unknown');
-  check('gifRewardView: mod smí vždy', RV({ allowed: true, mod: true }, 0).canSend && RV({ allowed: true, mod: true }, 0).mode === 'mod');
+  check('gifRewardView: mod bez výjimky — bez odměny zamčeno, v cooldownu čeká, bez textu „bez odměny“', RV({ allowed: false, mod: true }, 0).mode === 'locked' && !RV({ allowed: false, mod: true }, 0).canSend
+    && RV({ allowed: true, mod: true, until: 5_000 }, 0).mode === 'cooldown' && !/bez odměny/.test(RV({ allowed: true, mod: true }, 0).text));
   const locked = RV({ allowed: false, mod: false, until: null }, 0);
   check('gifRewardView: bez odměny zamčeno + hláška', locked.mode === 'locked' && !locked.canSend && /není aktivní/.test(locked.text));
   const act = RV({ allowed: true, mod: false, until: null, rewardUntil: 250_000, rewardTotalMs: 1_000_000 }, 0);
