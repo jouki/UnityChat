@@ -38,11 +38,11 @@ function memStore(now: () => number) {
       return [...media.values()].filter((x) => x.channel === channel && (by.url ? x.urlNorm === by.url : x.sha256 === by.sha256))
         .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0] ?? null;
     },
-    async setMediaApproved(id, at) {
+    async setMediaApproved(id, at, opts) {
       const x = media.get(id);
       if (!x) return id;
-      // Zahozené médium se nevzkřísí → null (souběh se zahozením).
-      if (!['pending', 'rejected', 'approved'].includes(x.status)) return null;
+      // Zahozené médium se nevzkřísí → null (souběh se zahozením); z knihovny jen dosud schválené.
+      if (!(opts?.onlyApproved ? ['approved'] : ['pending', 'rejected', 'approved']).includes(x.status)) return null;
       // Unikátní (channel, sha256) pro schválené: jiné schválené médium se stejným obsahem vyhrává.
       const other = [...media.values()].find((o) => o.id !== id && o.status === 'approved' && o.channel === x.channel && o.sha256 === x.sha256);
       if (other) return other.id;
@@ -597,6 +597,33 @@ const from = (userId: string, messageId: string, url = TENOR, over: Record<strin
   ...over,
 });
 const events = (calls: Array<[string, unknown]>, name: string) => calls.filter((c) => c[0] === name).map((c) => c[1] as Record<string, unknown>);
+
+test('A2: GIF z knihovny souběžně s „Odebrat z knihovny“ → instantní schválení médium nevrátí do knihovny, zpráva automaticky zamítnuta', async () => {
+  const told: Array<[string, Record<string, unknown>]> = [];
+  const s = setup({ toSender: async () => (e: string, d: object) => { told.push([e, d as Record<string, unknown>]); } });
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  // Mod odebere GIF z knihovny přesně v okně mezi dedupem (findMedia = approved) a instantním schválením.
+  const orig = s.mem.store.insertRequest.bind(s.mem.store);
+  s.mem.store.insertRequest = async (v) => {
+    await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:modb', accountId: 2 });
+    return orig(v);
+  };
+  s.calls.length = 0;
+  assert.equal(await s.flow.intercept(from('43', 'm2')), 'rejected');
+  const md = s.mem.media.get(MEDIA)!;
+  assert.deepEqual([md.status, md.rejectedBy], ['rejected', 'twitch:modb'], 'akce moda platí');
+  assert.equal(s.mem.reqs.get(2)!.status, 'rejected');
+  assert.equal(names(s.calls).includes('broadcast:gif-message'), false);
+  assert.ok(events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'));
+  assert.equal(told.find(([e]) => e === 'gif-notice')![1].kind, 'auto_rejected');
+  assert.equal(s.mem.rejections.size, 0, 'bez strike');
+  // Mod (auto) GIF dál schválit smí (jeho rozhodnutí), i když je médium zamítnuté.
+  s.mem.store.insertRequest = orig;
+  assert.equal(await s.flow.intercept(from('44', 'm3', TENOR, { auto: true })), 'approved');
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'approved');
+  await s.flow._idle();
+});
 
 test('SEC-8: okamžité schválení (knihovna / mod) při běžícím globálním cooldownu chatu → neprojde, zpráva se vrátí (bez žádosti)', async () => {
   const claims: string[] = [];
