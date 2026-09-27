@@ -792,8 +792,11 @@ export const SETTLE_RETRY_MS = 5000;
 
 /** Dorovnání schválených žádostí bez zprávy (audit A1): řeší se až po této době od rozhodnutí (souběh s decide). */
 export const RECONCILE_GRACE_MS = 60_000;
-/** … a nejvýš takhle staré (starší schválené bez zprávy už nikdo nečeká). */
-export const RECONCILE_WINDOW_MS = 7 * 86_400_000;
+/**
+ * … a nejvýš takhle staré (starší schválené bez zprávy už nikdo nečeká; první běh po nasazení tak nevysype do chatu
+ * staré GIFy z doby před dorovnáním).
+ */
+export const RECONCILE_WINDOW_MS = 86_400_000;
 /** Po tolika neúspěšných pokusech o dopsání se žádost zamítne (původní zpráva nesmí zůstat navždy schovaná). */
 export const RECONCILE_MAX_ATTEMPTS = 10;
 const RECONCILE_BATCH = 50;

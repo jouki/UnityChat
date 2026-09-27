@@ -576,7 +576,7 @@ kdo o jeho GIFu rozhodl — závěrečná review 2026-09-26, M4); mody ho dostá
   (audit A1)** žádost zůstává schválená a původní zpráva schovaná; zprávu dopíše **dorovnání** (níže). Dřív se původní
   zpráva přeznačila na `gif_rejected`.
 - **Dorovnání schválených žádostí (audit A1):** 30 s po startu a pak 1×/min backend najde žádosti `approved`
-  rozhodnuté před víc než 60 s (nejvýš 7 dní zpět), kterým chybí syntetická zpráva `gif-<id>` nebo jejich médium
+  rozhodnuté před víc než 60 s (nejvýš 24 h zpět), kterým chybí syntetická zpráva `gif-<id>` nebo jejich médium
   zůstalo `pending` (restart / chyba DB mezi rozhodnutím a zápisem). Čekající médium schválí (souběh dedupu → sloučí),
   chybějící zprávu zapíše s časem schválení a rozešle (`gif-message`, `/chat/stream`). Médium zamítnuté / zahozené /
   smazané a zpráva chybí → žádost `rejected`, původní zpráva `gif_rejected` + `message-deleted`. Po 10 neúspěšných
