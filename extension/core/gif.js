@@ -77,19 +77,21 @@ export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;
  * Důvod, který si hostitel pamatuje pro zprávu podle id, i když ji ještě nemá (SSE message-deleted předběhlo zprávu
  * z IRC / echo): schovaná (gif_request) i nový nepovolený GIF (gif_not_allowed) se pak vykreslí rovnou schovaně.
  * `prev` = zapamatovaný důvod, `next` = nový důvod (gifHeldAfter). null = nepamatovat. Ozvěna smazání z platformy
- * (`next` prázdné) zapamatovaný gif_not_allowed nechá.
+ * (`next` prázdné / `platform`) zapamatovaný gif_not_allowed nechá.
  */
 export function gifEarlyReason(prev, next) {
   if (isGifHeldReason(next) || next === GIF_NOT_ALLOWED_REASON) return next;
-  if (!next && prev === GIF_NOT_ALLOWED_REASON) return prev;
+  if ((!next || next === 'platform') && prev === GIF_NOT_ALLOWED_REASON) return prev;
   return null;
 }
 
 /**
  * Nový důvod smazání u zprávy, která je zrovna schovaná jako gif_request: `platform` (bot ji smazal i na
  * platformě — ozvěna) ji nechá schovanou; gif_rejected / mod / cokoli jiného ji ukáže jako smazanou.
+ * Stejně u gif_not_allowed (nový GIF nepovolený, bot ho smazal na platformě): ozvěna `platform` / bez důvodu ho nechá.
  */
 export function gifHeldAfter(prevReason, nextReason) {
+  if (prevReason === GIF_NOT_ALLOWED_REASON && (!nextReason || nextReason === 'platform')) return GIF_NOT_ALLOWED_REASON;
   if (!isGifHeldReason(prevReason)) return isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason ?? null;
   return !nextReason || nextReason === 'platform' || isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason;
 }

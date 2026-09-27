@@ -589,7 +589,7 @@ mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', 
 check('A gif_not_allowed cizí živě → mod ji nevidí vůbec (ani jako smazanou)', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="e2e-na-live"]'); return !m || getComputedStyle(m).display === 'none'; })()`, 8000),
   JSON.stringify(await naView('e2e-na-live')));
 await sleep(300);
-check('A … ani po ozvěně smazání z platformy (CLEARMSG bez důvodu)', await (async () => { await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-live')`); return naHidden(await naView('e2e-na-live')); })(), JSON.stringify(await naView('e2e-na-live')));
+check('A … ani po ozvěně smazání z platformy (CLEARMSG bez důvodu, message-deleted platform)', await (async () => { await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-live')`); await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-live', { reason: 'platform' })`); return naHidden(await naView('e2e-na-live')); })(), JSON.stringify(await naView('e2e-na-live')));
 // Vlastní zpráva moda: gif-notice approved_only + message-deleted gif_not_allowed → štítek, bez „Smazáno“.
 mock.sse.push(NAMSG('e2e-na-mown', 'ModUser', 'u7', 'moje https://tenor.com/view/na-gif-2'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-na-mown"]')`, 8000);
@@ -771,6 +771,7 @@ mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', 
   ['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-na-early', by: 'filter', reason: 'gif_not_allowed' }]);
 await sleep(800);
 await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-early')`);   // ozvěna smazání z platformy před zprávou
+await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-early', { reason: 'platform' })`);
 await ev(`(window.ucGif.add({ platform: 'twitch', id: 'e2e-na-early', username: 'Divak', userId: 'u9', message: 'pozdní https://tenor.com/view/na-gif-4', timestamp: Date.now(), historical: false, color: '#1e90ff' }), true)`);
 check('B gif_not_allowed předběhlo zprávu (IRC později) → zpráva se vykreslí rovnou schovaná', naHidden(await naView('e2e-na-early')), JSON.stringify(await naView('e2e-na-early')));
 // Selhání převodu (běžný odkaz) → štítek pryč

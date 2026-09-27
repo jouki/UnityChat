@@ -84,6 +84,9 @@ Promise.all([
   // gif_not_allowed (user 2026-09-27): zpráva, která dorazí až po message-deleted, se vykreslí rovnou schovaná.
   check('gifEarlyReason: gif_request i gif_not_allowed se pamatují', g.gifEarlyReason(null, 'gif_request') === 'gif_request' && g.gifEarlyReason('gif_request', 'gif_not_allowed') === 'gif_not_allowed');
   check('gifEarlyReason: ozvěna z platformy (bez důvodu) gif_not_allowed nechá', g.gifEarlyReason('gif_not_allowed', null) === 'gif_not_allowed' && g.gifEarlyReason(undefined, null) === null);
+  check('gifHeldAfter: gif_not_allowed + ozvěna z platformy (platform / bez důvodu) → dál gif_not_allowed', g.gifHeldAfter('gif_not_allowed', 'platform') === 'gif_not_allowed' && g.gifHeldAfter('gif_not_allowed', null) === 'gif_not_allowed');
+  check('gifHeldAfter: gif_not_allowed + mod → mod; gif_request → gif_not_allowed', g.gifHeldAfter('gif_not_allowed', 'mod') === 'mod' && g.gifHeldAfter('gif_request', 'gif_not_allowed') === 'gif_not_allowed');
+  check('gifEarlyReason: ozvěna „platform“ gif_not_allowed nechá', g.gifEarlyReason('gif_not_allowed', 'platform') === 'gif_not_allowed');
   check('gifEarlyReason: gif_rejected / mod / platform → nepamatovat', g.gifEarlyReason('gif_request', 'gif_rejected') === null && g.gifEarlyReason('gif_not_allowed', 'mod') === null && g.gifEarlyReason(null, 'platform') === null);
   check('gifHeldAfter: nová zpráva', g.gifHeldAfter(undefined, 'gif_request') === 'gif_request' && g.gifHeldAfter(null, 'platform') === 'platform' && g.gifHeldAfter('mod', 'gif_request') === 'gif_request');
   check('gifReplacedTarget', eq(g.gifReplacedTarget({ replaces: 'twitch:abc-1' }), { platform: 'twitch', id: 'abc-1' }) && g.gifReplacedTarget({ replaces: 'evil:x' }) === null && g.gifReplacedTarget({}) === null);
