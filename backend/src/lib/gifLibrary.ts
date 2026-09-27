@@ -11,7 +11,7 @@
 // Použití (use_count++, last_used_at) počítá lib/gifRequests.ts při každém zobrazení schváleného GIFu (decideCore).
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { gifDuplicates, gifMedia } from '../db/schema.js';
+import { gifBans, gifDuplicates, gifMedia, gifRejections } from '../db/schema.js';
 import { gifMediaUrl, MEDIA_ID_RE } from './gifIds.js';
 import { normalizeTags, MAX_TAGS, MAX_TAG_LEN, type GifKind } from './gifMedia.js';
 import { sequenceSimilarity, PHASH_MIN_SCORE } from './gifPhash.js';
@@ -169,6 +169,16 @@ export function adoptSourceUrlSql(keep: string, url: string): SQL {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
+ * Schválení média ruší „tresty“ (spec 2026-09-27-gif-review-upravy-design.md §1): zamítnutí (strike) všech uživatelů
+ * i zákaz 12 h pro médium. Volá se VŽDY v téže transakci jako schválení (rozhodnutí moda, „Schválit“ ze Zamítnutých,
+ * obnova do schváleného, sloučení do schváleného) — po pozdějším odebrání z knihovny je další poslání běžná žádost.
+ */
+export async function clearMediaStrikes(tx: Tx, mediaId: string): Promise<void> {
+  await tx.delete(gifRejections).where(eq(gifRejections.mediaId, mediaId));
+  await tx.delete(gifBans).where(eq(gifBans.mediaId, mediaId));
+}
+
+/**
  * Médium `drop` do `keep` (v transakci volajícího): odkazy (zprávy, žádosti) přesměrovat, `drop` smazat (jeho
  * zamítnutí, zákaz a návrhy duplikátů kaskádou), jeho URL zdroje převzít, když ji `keep` nemá.
  * Používá ho sloučení duplikátu (mergeInto) i souběh dedupu při schválení (lib/gifRequests.ts mergeMedia).
@@ -291,6 +301,8 @@ export const dbGifLibraryStore: GifLibraryStore = {
         vault: mergedVault(approve || k.status === 'approved', k.vault, d.vault),
         ...(approve ? { status: 'approved', approvedAt: d.approvedAt ?? at, rejectedAt: null, rejectedBy: null } : {}),
       }).where(eq(gifMedia.id, keep));
+      // Sloučení do schváleného = schválení → tresty ponechaného média pryč (tresty `drop` smazalo kaskádové mazání).
+      if (approve || k.status === 'approved') await clearMediaStrikes(tx, keep);
       return { ok: true };
     });
   },

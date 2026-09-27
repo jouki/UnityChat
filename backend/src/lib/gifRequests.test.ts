@@ -19,6 +19,11 @@ function memStore(now: () => number) {
   let mediaSeq = 0;
   let retagOk = true;
   const rk = (ch: string, id: string, pl: string, u: string) => `${ch}|${id}|${pl}|${u}`;
+  // Schválení ruší tresty média (zamítnutí všech uživatelů + zákaz), jako clearMediaStrikes v DB.
+  const clearStrikes = (id: string) => {
+    for (const k of [...rejections.keys()]) if (k.split('|')[1] === id) rejections.delete(k);
+    for (const k of [...bans.keys()]) if (k.split('|')[1] === id) bans.delete(k);
+  };
   const livePending = (id: string, at: Date) => [...reqs.values()].filter((r) => r.mediaId === id && r.status === 'pending' && r.expiresAt > at);
   const store: GifStore = {
     async saveMedia(m, meta) {
@@ -42,11 +47,14 @@ function memStore(now: () => number) {
       const other = [...media.values()].find((o) => o.id !== id && o.status === 'approved' && o.channel === x.channel && o.sha256 === x.sha256);
       if (other) return other.id;
       Object.assign(x, { status: 'approved', approvedAt: x.approvedAt ?? at, rejectedAt: null, rejectedBy: null, vault: false });
+      clearStrikes(id);
       return id;
     },
     async mergeMedia(from, to) {
       for (const r of reqs.values()) if (r.mediaId === from) r.mediaId = to;
       media.delete(from);
+      clearStrikes(from);
+      clearStrikes(to);
       log.push(`merge:${from}->${to}`);
     },
     async setMediaRejected(id, by, at) { const x = media.get(id); if (x && (x.status === 'pending' || x.status === 'rejected')) Object.assign(x, { status: 'rejected', rejectedAt: at, rejectedBy: by }); },
@@ -72,6 +80,7 @@ function memStore(now: () => number) {
       if (other) return { status: 'approved' as const, mergedInto: other.id };
       const rej = to === 'rejected' ? { rejectedAt: at, rejectedBy: x.rejectedBy ?? x.purgedBy ?? by } : {};
       Object.assign(x, { status: to, statusBeforePurge: null, purgedAt: null, purgedBy: null, purgeAt: null, ...rej });
+      if (to === 'approved') clearStrikes(id);
       return { status: to };
     },
     async removeMediaFile(id) {
@@ -103,6 +112,7 @@ function memStore(now: () => number) {
     },
     async markMediaUsed(id) { const x = media.get(id); if (x) x.useCount++; },
     async rejectionCount(ch, id, pl, u) { return rejections.get(rk(ch, id, pl, u)) ?? 0; },
+    async hasRejections(ch, id) { return [...rejections.keys()].some((k) => k.startsWith(`${ch}|${id}|`)); },
     async addRejection(ch, id, pl, u) { const n = (rejections.get(rk(ch, id, pl, u)) ?? 0) + 1; rejections.set(rk(ch, id, pl, u), n); return n; },
     async activeBan(ch, id, at) { const b = bans.get(`${ch}|${id}`); return b && b.until > at ? b : null; },
     async setBan(ch, id, until, by) { bans.set(`${ch}|${id}`, { until, by }); },
@@ -1228,4 +1238,53 @@ test('setMediaRejected zahozené médium nepřepíše', async () => {
   await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1, keepMessages: true });
   await s.mem.store.setMediaRejected(MEDIA, 'x', new Date());
   assert.equal(s.mem.media.get(MEDIA)!.status, 'withdrawn');
+});
+
+test('schválení ruší tresty: zamítnuto → schváleno ze Zamítnutých → odebráno z knihovny → další poslání = běžná žádost bez ⚠', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.rejections.get(`robdiesalot|${MEDIA}|twitch|42`), 1);
+  assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'approve', by: 'twitch:moda', accountId: 1 })).status, 200);
+  assert.equal(s.mem.rejections.size, 0, 'schválení smazalo strike');
+  assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'unapprove', by: 'twitch:moda', accountId: 1 })).status, 200);
+  assert.equal(s.mem.rejections.size, 0, 'odebrání strike nepřidává');
+  s.advance(1000);
+  assert.equal(await s.flow.intercept(from('42', 'm2')), 'requested');
+  assert.equal((s.mem.reqs.get(2)!.meta as Record<string, unknown>).previouslyRejected, undefined, 'bez ⚠');
+  // Znovu zamítnout → 1 strike (ne 2), další poslání ke schválení s ⚠, až třetí automaticky.
+  await s.flow.decide({ requestId: 2, approve: false, by: 'twitch:modb', accountId: 2 });
+  assert.equal(s.mem.rejections.get(`robdiesalot|${MEDIA}|twitch|42`), 1);
+  assert.equal(await s.flow.intercept(from('42', 'm3')), 'requested');
+  assert.ok((s.mem.reqs.get(3)!.meta as Record<string, unknown>).previouslyRejected);
+  await s.flow._idle();
+});
+
+test('schválení ruší tresty: rozhodnutí moda (2. pokus schválen) i zákaz 12 h všech uživatelů', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  await s.flow.intercept(from('43', 'm2'));
+  await s.flow.decide({ requestId: 2, approve: false, by: 'twitch:moda', accountId: 1 });
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'ban12h', by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.bans.size, 1);
+  s.advance(12 * 3600_000 + 1);
+  assert.equal(await s.flow.intercept(from('44', 'm3')), 'requested');
+  await s.flow.decide({ requestId: 3, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.rejections.size, 0, 'strike 42 i 43 pryč');
+  assert.equal(s.mem.bans.size, 0, 'zákaz pryč');
+  await s.flow._idle();
+});
+
+test('schválení ruší tresty: obnova zahozeného do schváleného', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  // Legacy strike na schváleném médiu (před zavedením mazání) — obnova ho smaže taky.
+  s.mem.rejections.set(`robdiesalot|${MEDIA}|twitch|42`, 1);
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1 });
+  assert.equal(s.mem.rejections.size, 1, 'zahození strike nemaže ani nepřidává');
+  assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'twitch:moda', accountId: 1 })).status, 200);
+  assert.equal(s.mem.rejections.size, 0);
+  await s.flow._idle();
 });

@@ -38,7 +38,7 @@ import { gifUsable } from './gifAccess.js';
 import type { GifCandidate, GifFetchProgress, GifSource, ResolvedGif } from './gifMedia.js';
 import { GifError, normalizeSourceUrl, textWithoutLink } from './gifMedia.js';
 import { gifMediaUrl, gifMessageId, gifMessageState } from './gifIds.js';
-import { moveMediaInto } from './gifLibrary.js';
+import { clearMediaStrikes, moveMediaInto } from './gifLibrary.js';
 import type { Platform } from './zidolista.js';
 
 type Log = { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
@@ -184,7 +184,8 @@ export interface GifStore {
   /** Médium kanálu podle normalizované URL nebo sha256; přednost approved > rejected > pending. */
   findMedia(channel: string, by: { url?: string; sha256?: string }): Promise<GifMediaInfo | null>;
   /**
-   * approved + approved_at (první), zruší rejected_* a vault. Vrací id schváleného média: když už je stejný obsah
+   * approved + approved_at (první), zruší rejected_* a vault a v téže transakci i tresty média (gif_rejections všech
+   * uživatelů + gif_bans). Vrací id schváleného média: když už je stejný obsah
    * (channel, sha256) schválený jako JINÉ médium (souběh dedupu, unikátní index), vrátí jeho id a toto nemění.
    */
   // null = médium mezitím trvale zahozené (withdrawn / purging / unavailable) nebo pryč → schválení se neprovede.
@@ -225,6 +226,11 @@ export interface GifStore {
   setMediaUnapproved(id: string, by: string, at: Date): Promise<boolean>;
   markMediaUsed(id: string, at: Date): Promise<void>;
   rejectionCount(channel: string, mediaId: string, platform: string, userId: string): Promise<number>;
+  /**
+   * Má médium v kanálu nějaké zamítnutí modem (strike kohokoli)? Karta ⚠ „už dříve zamítnut“ jen tehdy — po schválení
+   * se strike mažou, takže GIF odebraný z knihovny (unapprove) jde dál jako běžná žádost bez ⚠.
+   */
+  hasRejections(channel: string, mediaId: string): Promise<boolean>;
   /** +1 zamítnutí uživatele; vrací nový počet. */
   addRejection(channel: string, mediaId: string, platform: string, userId: string, at: Date): Promise<number>;
   activeBan(channel: string, mediaId: string, at: Date): Promise<{ until: Date; by: string | null } | null>;
@@ -301,10 +307,15 @@ export const dbGifStore: GifStore = {
     for (let attempt = 0; ; attempt++) {
       // Zahozené médium (withdrawn / purging / unavailable) se schválením z karty nevzkřísí (souběh se zahozením).
       // 0 řádků = médium mezitím zahozené nebo pryč → null (volající žádost zamítne, nic nerozešle).
+      // Schválení + zrušení trestů (zamítnutí uživatelů, zákaz 12 h) v jedné transakci (spec 2026-09-27-gif-review-upravy §1).
       try {
-        const rows = await db.update(gifMedia).set(attempt ? { ...set, sourceUrlNorm: null } : set)
-          .where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected', 'approved']))).returning({ id: gifMedia.id });
-        return rows.length ? id : null;
+        return await db.transaction(async (tx) => {
+          const rows = await tx.update(gifMedia).set(attempt ? { ...set, sourceUrlNorm: null } : set)
+            .where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected', 'approved']))).returning({ id: gifMedia.id });
+          if (!rows.length) return null;
+          await clearMediaStrikes(tx, id);
+          return id;
+        });
       }
       catch (e) {
         if (!isUniqueViolation(e) || attempt) throw e;
@@ -320,7 +331,8 @@ export const dbGifStore: GifStore = {
     }
   },
   async mergeMedia(fromId, toId) {
-    await db.transaction(async (tx) => { await moveMediaInto(tx, fromId, toId); });
+    // Cíl je vždy schválené médium (souběh dedupu při schválení, obnova sloučená do schváleného) → i jeho tresty pryč.
+    await db.transaction(async (tx) => { await moveMediaInto(tx, fromId, toId); await clearMediaStrikes(tx, toId); });
   },
   async setMediaRejected(id, by, at) {
     await db.update(gifMedia).set({ status: 'rejected', rejectedAt: at, rejectedBy: by }).where(and(eq(gifMedia.id, id), inArray(gifMedia.status, ['pending', 'rejected'])));
@@ -354,9 +366,14 @@ export const dbGifStore: GifStore = {
       : base;
     for (let attempt = 0; ; attempt++) {
       try {
-        const rows = await db.update(gifMedia).set(attempt ? { ...clear, sourceUrlNorm: null } : clear)
-          .where(and(eq(gifMedia.id, id), eq(gifMedia.status, 'purging'))).returning({ id: gifMedia.id });
-        return rows.length ? { status: to } : null;
+        return await db.transaction(async (tx) => {
+          const rows = await tx.update(gifMedia).set(attempt ? { ...clear, sourceUrlNorm: null } : clear)
+            .where(and(eq(gifMedia.id, id), eq(gifMedia.status, 'purging'))).returning({ id: gifMedia.id });
+          if (!rows.length) return null;
+          // Obnova do schváleného = schválení → tresty pryč (téže transakce).
+          if (to === 'approved') await clearMediaStrikes(tx, id);
+          return { status: to };
+        });
       } catch (e) {
         if (!isUniqueViolation(e) || attempt || to !== 'approved') throw e;
         // Stejný obsah je mezitím schválený jako jiné médium → sloučit do něj (volající).
@@ -408,6 +425,11 @@ export const dbGifStore: GifStore = {
     const rows = await db.select({ count: gifRejections.count }).from(gifRejections)
       .where(and(eq(gifRejections.channel, channel), eq(gifRejections.mediaId, mediaId), eq(gifRejections.platform, platform), eq(gifRejections.userId, userId))).limit(1);
     return rows[0]?.count ?? 0;
+  },
+  async hasRejections(channel, mediaId) {
+    const rows = await db.select({ one: sql`1` }).from(gifRejections)
+      .where(and(eq(gifRejections.channel, channel), eq(gifRejections.mediaId, mediaId))).limit(1);
+    return rows.length > 0;
   },
   async addRejection(channel, mediaId, platform, userId, at) {
     const rows = await db.insert(gifRejections).values({ channel, mediaId, platform, userId, count: 1, lastAt: at })
@@ -1081,7 +1103,9 @@ export function createGifFlow(deps: GifFlowDeps) {
               deps.log.info({ channel: p.ucChannel, platform: m.platform, reason, count: n }, 'gif: dříve zamítnutý GIF → automaticky zamítnuto');
               return finish('rejected');
             }
-            previouslyRejected = { at: known.rejectedAt ? known.rejectedAt.getTime() : null, by: known.rejectedBy };
+            // ⚠ jen když GIF někdo opravdu zamítl (strike); odebraný z knihovny (bez strike) = běžná žádost.
+            const struck = count > 0 || await deps.store.hasRejections(p.ucChannel, known.id).catch(() => true);
+            if (struck) previouslyRejected = { at: known.rejectedAt ? known.rejectedAt.getTime() : null, by: known.rejectedBy };
           }
           instant = auto || approvedKnown;
           let mediaId: string | null = known?.id ?? null;
