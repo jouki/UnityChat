@@ -85,7 +85,9 @@ async function realClick(sel) {
 }
 
 // Vzorkování každého snímku: kolik panelů je vidět (bez ducha), kolik duchů, šířka viditelného panelu.
-const PANELS = '.uc-ep, .uc-sb, .uc-qd';
+// Soundboard je od 2026-09-27 záložka SFX v panelu emotů (.uc-ep), ne samostatný panel.
+const PANELS = '.uc-ep, .uc-qd';
+const SFX_PANE = `!document.querySelector('.uc-ep-pane[data-pane="sfx"]').hidden`;
 await call('Page.enable', {}, sessionId);
 await call('Page.addScriptToEvaluateOnNewDocument', { source: `
   window.__morph = { frames: [], on: false };
@@ -139,9 +141,14 @@ async function switchTo(btn, cls, label) {
   return fr;
 }
 
-await switchTo('#btn-sfx', 'uc-sb', 'emoty → soundboard');
-check('soundboard: obsah (zvuky) a tlačítko aktivní, emoty zavřené', await ev(`document.querySelectorAll('.uc-sb .uc-sb-s').length > 0 && document.getElementById('btn-sfx').classList.contains('active') && !document.getElementById('btn-emotes').classList.contains('active')`) === true);
-await switchTo('#btn-qrdono', 'uc-qd', 'soundboard → QR dono');
+// Emoty → nota: jen přepnutí záložky ve stejném panelu (žádné přetvoření ani duch).
+await startRec();
+await realClick('#btn-sfx');
+await sleep(450);
+{ const fr = await stopRec();
+  check('emoty → nota: pořád jeden panel emotů, bez ducha (jen přepnutí záložky)', fr.length > 5 && fr.every((f) => f.n === 1 && f.g === 0 && f.cls === 'uc-ep'), JSON.stringify(fr.filter((f) => f.n !== 1 || f.g || f.cls !== 'uc-ep').slice(0, 4))); }
+check('soundboard: záložka SFX s obsahem (zvuky), nota aktivní, smajlík ne', await ev(`${SFX_PANE} && document.querySelectorAll('.uc-sb .uc-sb-s').length > 0 && document.getElementById('btn-sfx').classList.contains('active') && !document.getElementById('btn-emotes').classList.contains('active')`) === true);
+await switchTo('#btn-qrdono', 'uc-qd', 'SFX → QR dono');
 check('QR dono: formulář vidět, soundboard zavřený', await ev(`!!document.querySelector('.uc-qd form') && document.getElementById('btn-qrdono').classList.contains('active') && !document.getElementById('btn-sfx').classList.contains('active')`) === true);
 await switchTo('#btn-emotes', 'uc-ep', 'QR dono → emoty');
 check('emoty: rozepsané hledání zůstalo („abc“), fokus v hledání', await ev(`document.querySelector('.uc-ep-search input').value === 'abc' && document.activeElement === document.querySelector('.uc-ep-search input')`) === true);
@@ -152,7 +159,7 @@ await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', b
 check('Esc zavře panel (hned duch = zavřený, po animaci skrytý)', await ev(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].every((e) => e.classList.contains('hidden') || e.classList.contains('uc-morph-ghost'))`) === true
   && await until(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].every((e) => e.classList.contains('hidden'))`, 1500), await shown());
 await realClick('#btn-sfx');
-check('nota znovu otevře soundboard (z nuly)', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`, 2000));
+check('nota znovu otevře soundboard (z nuly)', await until(`!document.querySelector('.uc-ep').classList.contains('hidden') && ${SFX_PANE}`, 2000));
 // Klik do chatu nad panely (horní okraj seznamu zpráv).
 { const r = await ev(`(() => { const r = document.getElementById('chat').getBoundingClientRect(); return { x: r.left + 40, y: r.top + 12 }; })()`); await mouse('mousePressed', r.x, r.y); await mouse('mouseReleased', r.x, r.y); }
 check('klik mimo (do chatu) panel zavře', await until(`[...document.querySelectorAll(${JSON.stringify(PANELS)})].every((e) => e.classList.contains('hidden'))`, 2000), await shown());
@@ -162,7 +169,7 @@ await realClick('#btn-emotes');
 await until(`!document.querySelector('.uc-ep').classList.contains('hidden')`, 2000);
 await ev(`document.getElementById('btn-sfx').click()`);
 await sleep(450);
-check('přepnutí bez myši (click z klávesnice): zůstane jen soundboard', (await shown()) === 'uc-sb', await shown());
+check('přepnutí bez myši (click z klávesnice): zůstane jen panel na záložce SFX', (await shown()) === 'uc-ep' && await ev(SFX_PANE) === true, await shown());
 await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
 
 // Review C1: rychlé A → B → C (odstup 60 ms, druhé přetvoření během prvního) → žádný zamrzlý inline stav.
@@ -172,7 +179,7 @@ await realClick('#btn-sfx'); await sleep(60);
 await realClick('#btn-qrdono'); await sleep(700);
 check('C1 rychle emoty → nota → QR: jen QR, žádné zbylé inline styly ani duch', (await shown()) === 'uc-qd' && (await leftovers()).length === 0, JSON.stringify({ shown: await shown(), left: await leftovers() }));
 await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(200);
-for (const [btn, cls] of [['#btn-emotes', 'uc-ep'], ['#btn-sfx', 'uc-sb'], ['#btn-qrdono', 'uc-qd']]) {
+for (const [btn, cls] of [['#btn-emotes', 'uc-ep'], ['#btn-sfx', 'uc-ep'], ['#btn-qrdono', 'uc-qd']]) {
   await realClick(btn); await sleep(350);
   const ok = (await shown()) === cls && (await leftovers()).length === 0
     && await ev(`(() => { const p = document.querySelector('.${cls}'); const r = p.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 30); return !!hit && p.contains(hit) && getComputedStyle(p).pointerEvents !== 'none'; })()`) === true;
@@ -197,7 +204,13 @@ await startRec();
 await realClick('#btn-sfx');
 await sleep(300);
 const fr = await stopRec();
-check('reduced motion: okamžitá výměna — bez ducha, vždy jeden panel, hned soundboard', fr.length > 3 && fr.every((f) => f.g === 0 && f.n === 1) && fr.slice(1).every((f) => f.cls === 'uc-sb'), JSON.stringify(fr.slice(0, 4)));
+check('reduced motion: okamžitá výměna — bez ducha, vždy jeden panel, hned záložka SFX', fr.length > 3 && fr.every((f) => f.g === 0 && f.n === 1 && f.cls === 'uc-ep') && await ev(SFX_PANE) === true, JSON.stringify(fr.slice(0, 4)));
+// QR → nota: přetvoření QR do panelu emotů na záložce SFX (nota je tlačítko panelu emotů).
+await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+await ev(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(400);
+await realClick('#btn-qrdono'); await sleep(400);
+await switchTo('#btn-sfx', 'uc-ep', 'QR dono → nota');
+check('QR dono → nota: panel emotů na záložce SFX', await ev(SFX_PANE) === true);
 await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);

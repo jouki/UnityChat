@@ -61,12 +61,14 @@ const { result: { sessionId } } = await call('Target.attachToTarget', { targetId
 // ---- mock backendu ----
 const iso = (ms) => new Date(ms).toISOString();
 let mockGifLocked = false;
+// Odměna soundboardu: odemčená = nota v poli vidět (2026-09-27: jen s aktivní odměnou); §2 ji zamkne (zamčené zvuky).
+let mockSfxUnlocked = true;
 const soundboard = () => ({
   ok: true, channel: 'robdiesalot', platform: 'twitch', serverNow: iso(Date.now()), loggedIn: true,
   tiers: [{ tier: 1, name: 'BASIC', position: 1 }],
   sounds: [{ id: 1, name: 'boom', displayName: null, tier: 1, emoji: '💥', icon: null, url: 'https://api-zidolista.jouki.cz/public/sfx/rob/e2e.mp3', durationMs: 1000, gainDb: 0 }],
-  // Bez odemčeného tieru (panel se otevře, zvuky zamčené) a zvuk v Oblíbených — test zatřesení zámku.
-  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: [], cooldown: { globalReadyAt: null, userReadyAt: null } },
+  // Zamčeno (mockSfxUnlocked false): bez odemčeného tieru (záložka SFX se zamčenými zvuky) a zvuk v Oblíbených — test zatřesení zámku.
+  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: mockSfxUnlocked ? [{ tier: 1, startedAt: iso(Date.now() - 60000), expiresAt: iso(Date.now() + 3600000) }] : [], cooldown: { globalReadyAt: null, userReadyAt: null } },
   favorites: [1], recent: [],
 });
 s.onevent = async (d) => {
@@ -128,6 +130,11 @@ await call('Page.addScriptToEvaluateOnNewDocument', { source: `
 const rec = (fnSrc) => ev(`(() => { window.__recFn = ${fnSrc}; window.__rec.frames = []; window.__rec.on = true; return true; })()`);
 const stop = () => ev(`(() => { window.__rec.on = false; return window.__rec.frames; })()`);
 
+// Soundboard = záložka SFX v panelu emotů (2026-09-27).
+const SFX_OPEN = `(() => { const p = document.querySelector('.uc-ep'); return !p.classList.contains('hidden') && !p.classList.contains('uc-morph-ghost') && !document.querySelector('.uc-ep-pane[data-pane="sfx"]').hidden; })()`;
+const SFX_CLOSED = `document.querySelector('.uc-ep').classList.contains('hidden')`;
+const setSfxLock = async (locked) => { mockSfxUnlocked = !locked; await ev(`window.ucSfx.reload().then(() => true)`); await sleep(150); };
+
 // ---- boot ----
 await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
 await sleep(1500);
@@ -171,10 +178,10 @@ check('§1 po zavření: bez inline stylů, bez ducha', !c2.style && !c2.ghost &
 await realClick('#btn-sfx'); await sleep(350);
 await esc(); await sleep(40);
 await realClick('#btn-sfx'); await sleep(450);
-check('§1 klik během zavírání: panel zase otevřený a čistý', await ev(`(() => { const p = document.querySelector('.uc-sb'); return !p.classList.contains('hidden') && !p.classList.contains('uc-morph-ghost') && !p.style.cssText; })()`) === true);
+check('§1 klik během zavírání: panel zase otevřený a čistý', await ev(`${SFX_OPEN} && !document.querySelector('.uc-ep').style.cssText`) === true);
 // Klik mimo zavře (s animací).
 { const r = await ev(`(() => { const r = document.getElementById('chat').getBoundingClientRect(); return { x: r.left + 40, y: r.top + 12 }; })()`); await mouse('mousePressed', r.x, r.y); await mouse('mouseReleased', r.x, r.y); }
-check('§1 klik mimo panel zavře', await until(`document.querySelector('.uc-sb').classList.contains('hidden')`, 1500));
+check('§1 klik mimo panel zavře', await until(SFX_CLOSED, 1500));
 
 // ---- §1 posuvný indikátor: boční záložky Emoty | GIFy ----
 await realClick('#btn-emotes'); await sleep(350);
@@ -315,7 +322,7 @@ await tap('.uc-ep-tab[data-tab="emotes"]'); await sleep(300);
 check('§4 dotyk: návrat na záložku Emoty bez fokusu do hledání (dřívější příčina regrese)', await ev(`document.activeElement !== document.querySelector('.uc-ep-search input')`) === true);
 await tap('#btn-emotes'); await sleep(350);
 await tap('#btn-sfx'); await sleep(400);
-check('§4 dotyk: soundboard bez fokusu do hledání', await ev(`!document.querySelector('.uc-sb').classList.contains('hidden') && document.activeElement !== document.querySelector('.uc-sb-top input')`) === true);
+check('§4 dotyk: soundboard bez fokusu do hledání', await ev(`${SFX_OPEN} && document.activeElement !== document.querySelector('.uc-sb-top input')`) === true);
 await tap('#btn-sfx'); await sleep(350);
 await call('Emulation.setEmulatedMedia', { features: [] }, sessionId);
 await call('Emulation.setTouchEmulationEnabled', { enabled: false }, sessionId);
@@ -323,8 +330,31 @@ await realClick('#btn-emotes'); await sleep(350);
 check('§4 zpět myš: otevření emotů dá fokus do hledání', await ev(`document.activeElement === document.querySelector('.uc-ep-search input')`) === true);
 await esc(); await sleep(350);
 
-// ---- §2 zamčený zvuk v Oblíbených: zámek u zvuku + v hlášce, ne v hlavičce tieru; přestavění neutne ----
+// ---- 2026-09-27: nota jen s aktivní odměnou; záložka SFX v panelu vždy ----
+check('SFX: záložka SFX v panelu emotů', await ev(`!!document.querySelector('.uc-ep-tab[data-tab="sfx"]') && !document.querySelector('.uc-ep-tab[data-tab="sfx"]').hidden && document.querySelector('.uc-ep-tab[data-tab="sfx"]').textContent.trim() === 'SFX'`) === true);
+check('SFX: s odměnou nota vidět (nesbalená)', await ev(`!document.getElementById('btn-sfx').classList.contains('uc-tool-collapsed') && document.getElementById('btn-sfx').getBoundingClientRect().width > 20`) === true);
+check('SFX: pásek odměny zvuků na notě, na smajlíku ne', await ev(`document.getElementById('btn-sfx').classList.contains('uc-sb-timed') && (() => { const b = document.querySelector('#btn-emotes .uc-ep-btn-bar'); return !b || b.hidden; })()`) === true);
+check('SFX: pásek odměny i na záložce SFX', await ev(`!document.querySelector('.uc-ep-tab[data-tab="sfx"] .uc-ep-tab-bar').hidden`) === true);
 await realClick('#btn-sfx'); await sleep(350);
+check('SFX: nota otevře panel emotů na záložce SFX, aktivní je nota (ne smajlík)', await ev(`${SFX_OPEN} && document.getElementById('btn-sfx').classList.contains('active') && !document.getElementById('btn-emotes').classList.contains('active')`) === true);
+await realClick('#btn-emotes'); await sleep(300);
+check('SFX: smajlík při otevřeném SFX přepne na Emoty (panel zůstane)', await ev(`!document.querySelector('.uc-ep').classList.contains('hidden') && !document.querySelector('.uc-ep-pane[data-pane="emotes"]').hidden && document.getElementById('btn-emotes').classList.contains('active')`) === true);
+await realClick('#btn-sfx'); await sleep(300);
+check('SFX: nota při otevřených Emotech přepne na SFX', await ev(SFX_OPEN) === true);
+await realClick('#btn-sfx'); await sleep(350);
+check('SFX: nota při otevřeném SFX panel zavře', await until(SFX_CLOSED, 1500));
+{
+  const w0 = await ev(`document.getElementById('btn-sfx').getBoundingClientRect().width`);
+  await rec(`() => Math.round(document.getElementById('btn-sfx').getBoundingClientRect().width * 10) / 10`);
+  await setSfxLock(true); await sleep(400);
+  const fr = await stop();
+  check('SFX: odměna vypršela → nota se animovaně sbalí (mezisnímky šířky)', fr.some((w) => w > 1 && w < w0 - 1) && fr.at(-1) === 0, JSON.stringify(fr.slice(0, 12)));
+  check('SFX: bez odměny záložka SFX zůstává', await ev(`!document.querySelector('.uc-ep-tab[data-tab="sfx"]').hidden`) === true);
+}
+
+// ---- §2 zamčený zvuk v Oblíbených: zámek u zvuku + v hlášce, ne v hlavičce tieru; přestavění neutne ----
+await realClick('#btn-emotes'); await sleep(350);
+await realClick('.uc-ep-tab[data-tab="sfx"]'); await sleep(300);
 check('§2 soundboard bez odměny: zámek + „Odměna není aktivována“, zamčený zvuk se zámkem', await ev(`!!document.querySelector('.uc-sb-status .uc-lock') && document.querySelector('.uc-sb-status').textContent.trim() === 'Odměna není aktivována' && !!document.querySelector('.uc-sb-sec[data-sec="fav"] .uc-sb-s.locked .uc-sb-slock')`) === true);
 await realClick('.uc-sb-sec[data-sec="fav"] .uc-sb-play');
 await sleep(60);
@@ -383,10 +413,12 @@ check('bod 6 soundboard: zámek hned vedle textu, oba vlevo (text netlačený do
 await esc(); await sleep(350);
 const tipCenter = (sel) => ev(`(() => { const t = document.querySelector(${JSON.stringify(sel)}); if (!t || getComputedStyle(t).display === 'none') return null; const h = t.querySelector('.uc-sb-tip-t');
   const a = t.getBoundingClientRect(), b = h.getBoundingClientRect(); return { title: h.textContent, n: t.children.length, top: Math.round((b.top - a.top) * 10) / 10, bottom: Math.round((a.bottom - b.bottom) * 10) / 10 }; })()`);
-await ev(`document.getElementById('btn-sfx').dispatchEvent(new MouseEvent('mouseenter'))`);
-const tc = await tipCenter('#input-area > .uc-sb-tip:not(.hidden)');
-check('bod 1: tooltip „Odměna není aktivována“ jen s nadpisem — nahoře i dole stejné odsazení', tc?.title === 'Odměna není aktivována' && tc.n === 1 && Math.abs(tc.top - tc.bottom) <= 0.5, JSON.stringify(tc));
-await ev(`document.getElementById('btn-sfx').dispatchEvent(new MouseEvent('mouseleave'))`);
+await realClick('#btn-emotes'); await sleep(350);
+await ev(`document.querySelector('.uc-ep-tab[data-tab="sfx"]').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tc = await tipCenter('.uc-ep > .uc-sb-tip:not(.hidden)');
+check('bod 1: záložka SFX bez odměny: tooltip „Odměna není aktivována“ jen s nadpisem — nahoře i dole stejné odsazení', tc?.title === 'Odměna není aktivována' && tc.n === 1 && Math.abs(tc.top - tc.bottom) <= 0.5, JSON.stringify(tc));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="sfx"]').dispatchEvent(new MouseEvent('mouseleave'))`);
+await esc(); await sleep(350);
 
 // ---- bod 2: ikona emotů bez aktivní GIF odměny tooltip neukazuje (nepůsobí jako zamčené emoty) ----
 mockGifLocked = true;
@@ -406,12 +438,13 @@ check('bod 2: záložka GIFy zamčenou odměnu dál ukazuje (vycentrovaný toolt
 await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
 await realClick('.uc-ep-tab[data-tab="emotes"]'); await sleep(200);
 await esc(); await sleep(350);
+await setSfxLock(false); await sleep(350);
 await realClick('#btn-sfx'); await sleep(350);
 
 // ---- Esc v soundboardu / QR: fokus zpět do pole (myš), na dotyku ne ----
 await ev(`document.querySelector('.uc-sb-top input').focus()`);
 await esc();
-check('Esc v soundboardu (myš): panel zavřený, fokus v poli pro psaní', await ev(`document.activeElement === document.getElementById('msg-input')`) === true && await until(`document.querySelector('.uc-sb').classList.contains('hidden')`, 1500));
+check('Esc v soundboardu (myš): panel zavřený, fokus v poli pro psaní', await ev(`document.activeElement === document.getElementById('msg-input')`) === true && await until(SFX_CLOSED, 1500));
 await ev(`document.getElementById('msg-input').blur()`);
 await realClick('#btn-qrdono'); await sleep(350);
 await esc();

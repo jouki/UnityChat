@@ -166,9 +166,11 @@ await ev(`chrome.storage.local.set({ uc_session: 'tok' })`);
 await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
 
 // ---- 0: divák bez aktivní odměny ----
-check('0 nota bez odměny: ztlumená, ale vidět', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && !b.classList.contains('hidden') && b.classList.contains('uc-sb-off'); })()`, 12000));
-await click('#btn-sfx');
-check('0 panel se otevře i bez odměny', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`));
+// 2026-09-27: nota jen s aktivní odměnou; soundboard = záložka SFX v panelu emotů (vidět vždy).
+check('0 nota bez odměny: sbalená (není vidět)', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && b.classList.contains('uc-sb-na') && b.classList.contains('uc-tool-collapsed'); })()`, 12000));
+await click('#btn-emotes');
+await click('.uc-ep-tab[data-tab="sfx"]');
+check('0 záložka SFX se otevře i bez odměny', await until(`!document.querySelector('.uc-ep').classList.contains('hidden') && !document.querySelector('.uc-ep-pane[data-pane="sfx"]').hidden`));
 check('0 zvuky zamčené', await until(`document.querySelectorAll('.uc-sb-s').length > 0 && [...document.querySelectorAll('.uc-sb-s')].every(s => s.classList.contains('locked'))`));
 const lockTxt = await txt('.uc-sb-status');
 check('0 řádek: zámek + jen „Odměna není aktivována“ (bez druhé věty, spec 2026-09-27 §2)', (lockTxt || '').trim() === 'Odměna není aktivována' && await ev(`!!document.querySelector('.uc-sb-status .uc-lock svg')`) === true, lockTxt);
@@ -181,15 +183,16 @@ check('0 zámek po ~1 s zase šedý (animace doběhla)', await until(`!document.
 await click('.uc-sb-reqbtn');
 check('0 „Navrhnout zvuk“ jde otevřít i bez odměny', await until(`document.querySelector('.uc-sb').classList.contains('uc-sb-req-on') && !document.querySelector('.uc-sr').classList.contains('hidden')`));
 await click('.uc-sr-back');
-await click('#btn-sfx');   // zavřít
-check('0 panel zavřený', await until(`document.querySelector('.uc-sb').classList.contains('hidden')`));
+await click('#btn-emotes');   // zavřít (smajlík na záložce SFX přepne na Emoty, druhý klik zavře)
+await click('#btn-emotes');
+check('0 panel zavřený', await until(`document.querySelector('.uc-ep').classList.contains('hidden')`));
 mock.unlocked = true;
 mock.sse.push(['soundboard-change', { channel: 'robdiesalot', reason: 'sfx-unlocks' }]);
 
 // ---- A: tlačítko v soundboardu ----
 check('A nota soundboardu aktivní (přihlášený, tier odemčený)', await until(`(() => { const b = document.getElementById('btn-sfx'); return !!b && !b.classList.contains('hidden') && !b.classList.contains('uc-sb-off'); })()`, 12000));
 await click('#btn-sfx');
-check('A panel soundboardu otevřený', await until(`!document.querySelector('.uc-sb').classList.contains('hidden')`));
+check('A panel soundboardu otevřený', await until(`!document.querySelector('.uc-ep').classList.contains('hidden') && !document.querySelector('.uc-ep-pane[data-pane="sfx"]').hidden`));
 // Panel z nuly vyroste z noty (~200 ms, spec 2026-09-27 §1) — tahy značek měří až hotový panel.
 await until(`document.querySelector('.uc-sb').getAnimations().length === 0`, 2000);
 const reqBtn = await ev(`(() => { const b = document.querySelector('.uc-sb-top .uc-sb-reqbtn'); return b ? { title: b.title, afterSearch: b.previousElementSibling?.type === 'search', svg: !!b.querySelector('svg') } : null; })()`);
@@ -218,7 +221,10 @@ check('B úsek zvýrazněný mezi značkami', await ev(`(() => { const s = docum
 await ev(`document.querySelectorAll('.loading-overlay').forEach((o) => o.remove())`);
 await dragHandle('end', 0.2);
 const te1 = await txt('.uc-sr-te');
-check('C tah konce na 20 % → konec 0:19,0', te1 === '0:19,0', te1);
+// Myš v CDP jde po celých pixelech; na užší ose (záložka SFX v panelu emotů) je 1 px ≈ 0,5 s → tolerance 2 px (celé pixely + zaokrouhlení obdélníku osy).
+const secOf = (t) => { const m = /^(\d+):(\d+),(\d)$/.exec(t || ''); return m ? Number(m[1]) * 60 + Number(m[2]) + Number(m[3]) / 10 : NaN; };
+const pxSec = await ev(`95 / document.querySelector('.uc-sr-track').getBoundingClientRect().width`);
+check('C tah konce na 20 % → konec 0:19,0 (± 2 px)', Math.abs(secOf(te1) - 19) <= 2 * pxSec + 0.05, `${te1} (1 px = ${pxSec?.toFixed(2)} s)`);
 await dragHandle('start', 0.1);
 check('C tah začátku na 10 % → 0:09,5', (await txt('.uc-sr-ts')) === '0:09,5', await txt('.uc-sr-ts'));
 await dragHandle('end', 0.9);

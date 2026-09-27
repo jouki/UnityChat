@@ -62,9 +62,14 @@ const esc = (s) => escapeAttr(s);
  * @param {object} o.emotes           EmoteManager
  * @param {{ load(): string[], save(list: string[]): void }} [o.recent]
  * @param {(tag: string, text: string) => void} [o.log]
- * @param {Array<{ key: string, label: string, icon?: string, mount(pane: HTMLElement): { show?(): void, hide?(): void } }>} [o.tabs]
- *        další záložky vlevo (svislé, pod „Emoty“) — např. GIFy (core/gif-library.js createGifPanel)
- * @returns {{ open(tab?: string): void, close(): void, toggle(): void, isOpen(): boolean, selectTab(key: string): void,
+ * @param {Array<{ key: string, label: string, icon?: string, button?: HTMLElement, buttonIndicator?: boolean,
+ *          mount(pane: HTMLElement): { show?(): void, hide?(): void } }>} [o.tabs]
+ *        další záložky vlevo (svislé, pod „Emoty“) — např. GIFy (core/gif-library.js createGifPanel), SFX (soundboard).
+ *        `button` = vlastní ikona v poli (nota → SFX): otevírá panel na té záložce a dokud je záložka otevřená, je
+ *        aktivní ona, ne smajlík. `buttonIndicator: false` = pásek / tooltip odměny záložky jen na záložce (a na její
+ *        ikoně), ne na smajlíku.
+ * @returns {{ open(tab?: string): void, close(): void, toggle(tab?: string): void, isOpen(): boolean, selectTab(key: string): void,
+ *             setTabHidden(key: string, hidden: boolean): void,
  *             activeTab(): string, setIndicator(key: string, v: { progress: number|null, title?: string, tip?: object|null }|null): void }}
  *          `tip` = stav vlastního tooltipu ikony emotů a záložky (core/soundboard.js renderIconTip)
  */
@@ -96,6 +101,18 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   const hoverEl = panel.querySelector('.uc-ep-hover');
   let active = 'emotes';
   const mounted = new Map();   // key → { show, hide }
+  // Záložky s vlastní ikonou v poli (nota → SFX). Ikona sbalená / skrytá (odměna neaktivní) aktivní být nemůže.
+  const tabButtons = tabs.map((t) => t.button).filter(Boolean);
+  const shownBtn = (b) => !!b && !b.hidden && !b.classList.contains('hidden') && !b.classList.contains('uc-tool-collapsed');
+  const activeButton = () => { const b = tabs.find((t) => t.key === active)?.button; return shownBtn(b) ? b : button; };
+  function syncButtons(open = isOpen()) {
+    const cur = activeButton();
+    for (const b of [button, ...tabButtons]) {
+      const on = open && b === cur;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-expanded', String(on));
+    }
+  }
   const indicators = new Map(); // key → { progress, title }
   let recentList = [];
   try { recentList = (recent?.load?.() || []).filter((x) => typeof x === 'string'); } catch { /* ignore */ }
@@ -142,6 +159,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     }
     for (const p of panel.querySelectorAll('.uc-ep-pane')) p.hidden = p.dataset.pane !== next;
     slide?.update();
+    if (isOpen()) syncButtons(true);
     if (prev !== next && mounted.has(prev)) mounted.get(prev).hide?.();
     if (def && isOpen()) mounted.get(key)?.show?.();
     if (prev !== next) log?.('EmotePicker', `záložka ${next}`);
@@ -155,8 +173,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     panel.classList.remove('hidden');
     slide?.update({ animate: false });
     btnTip?.hide();
-    button.classList.add('active');
-    button.setAttribute('aria-expanded', 'true');
+    syncButtons(true);
     // Z nuly vyroste z tlačítka; jiný otevřený panel u pole (soundboard, QR dono) se do tohohle přetvoří (test2 bod 5).
     morph.opened();
     if (active !== 'emotes') { mounted.get(active)?.show?.(); return; }
@@ -167,15 +184,38 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   function close({ instant = false } = {}) {
     if (!isOpen()) return;
     tabTip?.hide();
-    button.classList.remove('active');
-    button.setAttribute('aria-expanded', 'false');
+    syncButtons(false);
     mounted.get(active)?.hide?.();
     morph.hide(() => panel.classList.add('hidden'), { instant });
   }
   // Duch (zavírání / přetvoření do jiného panelu) není otevřený → klik ho znovu otevře (review I1).
   const isOpen = () => panelShown(panel);
-  const toggle = () => { morph.settle(); return isOpen() ? close() : open(); };
-  const morph = registerPanel({ panel, button, isOpen, close: () => close({ instant: true }), log: (t) => log?.('EmotePicker', t) });
+  /**
+   * Bez `tab` = smajlík: otevřený panel zavře, jen když je na záložce smajlíku (z SFX přepne na Emoty), zavřený otevře
+   * na poslední záložce smajlíku. S `tab` (nota): otevřený na té záložce zavře, jinak na ni přepne / otevře.
+   */
+  const toggle = (tab) => {
+    morph.settle();
+    const ownTab = (k) => !tabs.find((t) => t.key === k)?.button;
+    if (tab) {
+      if (isOpen() && active === tab) return close();
+      if (isOpen()) { selectTab(tab); return undefined; }
+      return open(tab);
+    }
+    if (isOpen() && ownTab(active)) return close();
+    if (isOpen()) { selectTab('emotes'); render(); return undefined; }
+    return open(ownTab(active) ? undefined : 'emotes');
+  };
+  const morph = registerPanel({ panel, button: activeButton, extraButtons: [button, ...tabButtons], isOpen, close: () => close({ instant: true }), log: (t) => log?.('EmotePicker', t) });
+
+  /** Záložku schovat (kanál nemá zvuky) — otevřený panel na ní přejde na Emoty. */
+  function setTabHidden(key, hidden) {
+    const b = panel.querySelector(`.uc-ep-tab[data-tab="${CSS_ESC(key)}"]`);
+    if (!b || b.hidden === !!hidden) return;
+    b.hidden = !!hidden;
+    if (hidden && active === key) selectTab('emotes');
+    slide?.update({ animate: false });
+  }
 
   /**
    * Časový pásek (jako u soundboardu): pod tlačítkem emotů a na boční záložce. `progress` 0–1 (ubývá s časem),
@@ -192,7 +232,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     if (bar) { bar.hidden = !cur; if (cur) bar.style.setProperty('--p', cur.progress.toFixed(4)); }
     // Nativní title ani aria-label se každou sekundu nepřepisují (blikal, test2 bod 3; review M4) — odpočet je jen
     // ve vlastním tooltipu, aria-label záložky zůstává její název.
-    const best = [...indicators.values()].reduce((a, x) => (!a || x.progress > a.progress ? x : a), null);
+    const onSmiley = (k) => tabs.find((t) => t.key === k)?.buttonIndicator !== false;
+    const best = [...indicators].filter(([k]) => onSmiley(k)).map(([, x]) => x).reduce((a, x) => (!a || x.progress > a.progress ? x : a), null);
     let bb = button.querySelector(':scope > .uc-ep-btn-bar');
     if (best && !bb) { bb = doc.createElement('span'); bb.className = 'uc-ep-btn-bar'; button.appendChild(bb); }
     button.classList.toggle('uc-ep-timed', !!best);
@@ -210,7 +251,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
    * u ikony nic neukazuje, jinak by to působilo jako zamčené emoty (bod 2 testu 2026-09-27); záložka GIFy ji ukáže dál.
    */
   const TIP_ACTIVE = new Set(['active', 'cooldown']);
-  const buttonTip = () => [...tipStates.values()].find((s) => TIP_ACTIVE.has(s?.mode)) || null;
+  const buttonTip = () => [...tipStates].find(([k, s]) => tabs.find((t) => t.key === k)?.buttonIndicator !== false && TIP_ACTIVE.has(s?.mode))?.[1] || null;
   const tabTipState = (key) => tipStates.get(key) || plainTip(key === 'emotes' ? 'Emoty' : (tabs.find((t) => t.key === key)?.label || key));
   const btnTip = tabs.length ? createIconTip({ host }) : null;
   const tabTip = tabs.length ? createIconTip({ host: panel, placement: 'side' }) : null;
@@ -232,7 +273,9 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
 
   // Záložky se připojí hned (indikátor odměny na záložce musí běžet i před prvním otevřením).
   for (const t of tabs) {
-    try { mounted.set(t.key, t.mount(panel.querySelector(`.uc-ep-pane[data-pane="${CSS_ESC(t.key)}"]`)) || {}); }
+    // Druhý argument = ovládání vlastní záložky (volatelné hned při připojení, kdy hostitel picker ještě nemá).
+    const ctl = { setIndicator: (v) => setIndicator(t.key, v), setHidden: (h) => setTabHidden(t.key, h) };
+    try { mounted.set(t.key, t.mount(panel.querySelector(`.uc-ep-pane[data-pane="${CSS_ESC(t.key)}"]`), ctl) || {}); }
     catch (e) { log?.('EmotePicker', `záložka ${t.key} se nepřipojila: ${e?.message || e}`); }
   }
 
@@ -255,6 +298,13 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   button.setAttribute('aria-expanded', 'false');
   button.addEventListener('mousedown', (e) => e.preventDefault());   // neukrást fokus textarea
   button.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  // Ikona záložky v poli (nota) — otevřít / přepnout / zavřít panel na její záložce.
+  for (const t of tabs) {
+    if (!t.button) continue;
+    t.button.setAttribute('aria-haspopup', 'dialog');
+    t.button.setAttribute('aria-expanded', 'false');
+    t.button.addEventListener('mousedown', (e) => e.preventDefault());
+  }
   search.addEventListener('input', render);
   search.addEventListener('keydown', (e) => {
     e.stopPropagation();
@@ -277,10 +327,10 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     hoverEl.textContent = b ? b.dataset.name : ' ';
   });
   // Klik na tlačítko jiného panelu u pole nezavírá — nový panel tenhle přetvoří (core/panel-morph.js).
-  doc.addEventListener('mousedown', (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); });
+  doc.addEventListener('mousedown', (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !tabButtons.some((b) => b.contains(e.target)) && !morph.isSwitch(e.target)) close(); });
   doc.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
 
-  return { open, close, toggle, isOpen, selectTab, activeTab: () => active, setIndicator, panel };
+  return { open, close, toggle, isOpen, selectTab, setTabHidden, activeTab: () => active, setIndicator, panel };
 }
 
 const CSS_ESC = (s) => String(s).replace(/["\\]/g, '\\$&');

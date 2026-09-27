@@ -46,9 +46,11 @@ export const toolsPadding = (used) => (used ? TOOL_EDGE + used * TOOL_STEP + 2 :
  * @param {object} o
  * @param {HTMLElement} o.inlineParent   kontejner pole pro psaní (.msg-input-wrap, position: relative)
  * @param {HTMLTextAreaElement} [o.input] pole pro psaní (výchozí: textarea v inlineParent)
- * @param {Array<{ button: HTMLElement, minWidth?: number | (() => number), available?: () => boolean }>} o.items
+ * @param {Array<{ button: HTMLElement, minWidth?: number | (() => number), available?: () => boolean, collapse?: () => boolean }>} o.items
  *        v pořadí zleva doprava. `available` = dock tlačítko i skrývá (atribut hidden); bez něj skrytí řeší
  *        hostitel (nota bez soundboardu má třídu hidden). `minWidth` = práh, pod kterým ikona ustoupí psaní.
+ *        `collapse` = ikona se animovaně sbalí / objeví jako QR (nota jen s aktivní odměnou; hostitel mění třídu
+ *        tlačítka, dock ji sleduje).
  * @param {() => boolean} [o.touch]      dotykové zařízení (výchozí: matchMedia('(pointer: coarse)'))
  * (Staré volby `row`, `rowHasOther`, `inlineVisible` se ignorují — řádek s ikonami už není.)
  */
@@ -85,7 +87,7 @@ export function createToolDock({ inlineParent, input, items, touch } = {}) {
       const shown = shownNow(b);
       const minWidth = typeof it.minWidth === 'function' ? it.minWidth() : it.minWidth;
       // Ikona otevřeného panelu neustupuje (zavřela by se pod rukama).
-      const collapsed = shown && !b.classList.contains('active') && toolYields({ minWidth, width, hasText, focused, touch: t });
+      const collapsed = shown && !b.classList.contains('active') && (!!it.collapse?.() || toolYields({ minWidth, width, hasText, focused, touch: t }));
       return { shown, collapsed };
     });
     const { rights, used } = layoutTools(slots);

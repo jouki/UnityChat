@@ -1145,7 +1145,6 @@ class UnityChat {
     this._initEmotePicker();
     // Emote, který se nenačetl (výpadek sítě/CDN), zkusit znovu — jinak zůstane rozbitý do reloadu.
     window.UC_CORE?.installEmoteRetry?.(document, { log: (t) => this._ucLog('EmoteRetry', t) });
-    this._initSoundboard();
     this._initQrDono();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
@@ -1163,6 +1162,8 @@ class UnityChat {
     try { window.ucGifHold = () => this._gifHold(); } catch {}
     // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
+    // Soundboard (záložka SFX): znovu načíst stav (e2e přepíná odemčení odměny).
+    try { window.ucSfx = { reload: () => this._loadSoundboard(), sb: () => this._sfx }; } catch {}
     try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
 
     this._init();
@@ -1203,8 +1204,14 @@ class UnityChat {
         save: (list) => localStorage.setItem('uc_recent_emotes', JSON.stringify(list)),
       },
       log: (tag, text) => this._ucLog(tag, text),
-      // Boční záložka GIFy (GIF knihovna, core/gif-library.js).
-      tabs: core.createGifPanel ? [{ key: 'gif', label: 'GIFy', icon: core.GIF_TAB_SVG, mount: (pane) => this._mountGifPanel(pane) }] : [],
+      // Boční záložky: GIFy (GIF knihovna, core/gif-library.js) a SFX (soundboard, core/soundboard.js) — nota v poli
+      // je zkratka na SFX a její odměnu smajlík neukazuje (2026-09-27).
+      tabs: [
+        ...(core.createGifPanel ? [{ key: 'gif', label: 'GIFy', icon: core.GIF_TAB_SVG, mount: (pane) => this._mountGifPanel(pane) }] : []),
+        ...(core.createSoundboard && document.getElementById('btn-sfx')
+          ? [{ key: 'sfx', label: 'SFX', icon: core.SFX_TAB_SVG, button: document.getElementById('btn-sfx'), buttonIndicator: false, mount: (pane, tab) => this._initSoundboard(pane, tab) }]
+          : []),
+      ],
     });
     this._gifPanel?.update();
   }
@@ -1405,7 +1412,8 @@ class UnityChat {
         input: document.getElementById('msg-input'),
         items: [
           { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
-          { button: document.getElementById('btn-sfx') },
+          // Nota jen s odemčenou odměnou soundboardu (core NOTE_MODES → třída uc-sb-na): sbalí se / objeví jako QR.
+          { button: document.getElementById('btn-sfx'), collapse: () => document.getElementById('btn-sfx').classList.contains('uc-sb-na') },
           { button: document.getElementById('btn-emotes') },
         ],
       });
@@ -1444,14 +1452,26 @@ class UnityChat {
     };
   }
 
-  /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
-  _initSoundboard() {
+  /**
+   * Soundboard sound efektů (sdílený core/soundboard.js) = záložka SFX v panelu emotů; nota v poli ji otevírá a je vidět
+   * jen s odemčenou odměnou. Volá ho panel emotů při připojení záložky (mount) → vrací { show, hide }.
+   */
+  _initSoundboard(pane, tab) {
     const core = window.UC_CORE;
     const btn = document.getElementById('btn-sfx');
-    if (!btn || !core?.createSoundboard) return;
+    if (!btn || !core?.createSoundboard) return {};
     this._sfx = core.createSoundboard({
       host: document.getElementById('input-area'),
+      pane,
       button: btn,
+      embed: {
+        open: () => this._emotePicker?.open('sfx'),
+        close: () => this._emotePicker?.close(),
+        isShown: () => !!this._emotePicker?.isOpen() && this._emotePicker.activeTab() === 'sfx',
+        frame: () => this._emotePicker?.panel,
+      },
+      onIndicator: (v) => tab.setIndicator(v),
+      onTabHidden: (hidden) => tab.setHidden(hidden),
       // Klik na zvuk = `!se <jméno>` vlastním účtem diváka, stejnou cestou jako psaní (command → bez markeru).
       onSend: (s) => this._sendMessage({ text: `!se ${s.name}` }),
       onFavorite: async (soundId, on) => {
@@ -1477,6 +1497,7 @@ class UnityChat {
       // Tlačítko „Navrhnout zvuk“ vedle hledání (core/sfx-request.js).
       requestApi: this._sfxRequestApi(),
     });
+    return this._sfx;
   }
 
   /** Stav soundboardu pro aktivní platformu + kanál (GET /soundboard, Bearer volitelně). */

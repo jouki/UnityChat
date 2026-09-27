@@ -61,17 +61,15 @@
 }
 .uc-sb-tip-cd { margin-top: 6px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
-/* ---- panel (vzhled podle Discord soundboardu) ---- */
+/* ---- panel (vzhled podle Discord soundboardu) = záložka SFX v panelu emotů (core/emote-picker.js) ---- */
 .uc-sb {
-  position: absolute; bottom: 100%; right: 10px; z-index: 30;
-  width: min(380px, calc(100% - 20px)); height: min(420px, 65vh);
-  display: flex; flex-direction: column;
-  background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.5);
-  margin-bottom: 6px; overflow: hidden;
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex; flex-direction: column; overflow: hidden;
 }
-.uc-sb.hidden { display: none; }
-@media (max-width: 480px) { .uc-sb { left: 8px; right: 8px; width: auto; } }
+/* Nepřihlášený: výzva v řádku stavu odměny — klik = přihlášení. */
+.uc-sb-login { padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+/* Nota v poli bez odemčené odměny: dock ji sbalí (uc-tool-collapsed); bez docku (starý layout) prostě schovat. */
+.uc-sb-btn.uc-sb-na:not(.uc-dock-inline) { display: none; }
 .uc-sb-top { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--border); }
 .uc-sb-top input[type="search"] {
   flex: 1; min-width: 0; box-sizing: border-box; padding: 6px 9px;

@@ -210,23 +210,28 @@ export function refocusField(button, field = null) {
 export const panelShown = (panel) => !!panel && !panel.classList.contains('hidden') && !isMorphGhost(panel);
 
 /**
- * Zaregistrovat panel. `panel` = kontejner panelu, `button` = jeho tlačítko, `isOpen()`, `close()` (okamžité zavření).
+ * Zaregistrovat panel. `panel` = kontejner panelu, `button` = jeho tlačítko (nebo funkce, která vrací to právě platné —
+ * panel emotů otevřený na záložce SFX patří notě), `isOpen()`, `close()` (okamžité zavření). `extraButtons` = další
+ * tlačítka, která panel otevírají (nota → záložka SFX): klik na ně jiný otevřený panel nezavře, ale přetvoří.
  * Vrací { isSwitch(target), settle(), opened(), hide(done, { instant }), unregister() }.
  */
-export function registerPanel({ panel, button, isOpen, close, log }) {
+export function registerPanel({ panel, button, extraButtons = [], isOpen, close, log }) {
   const doc = panel.ownerDocument;
   trackPointer(doc);
   let reg = registries.get(doc);
   if (!reg) { reg = new Set(); registries.set(doc, reg); }
+  const btnOf = () => (typeof button === 'function' ? button() : button);
   const entry = {
-    panel, button, close,
+    panel, close,
+    get button() { return btnOf(); },
+    buttons: () => [btnOf(), ...extraButtons].filter(Boolean),
     /** Otevřený = viditelný a ne odcházející duch přetvoření (review I1: klik na A během A → B ho má otevřít). */
     isOpen: () => !isMorphGhost(panel) && isOpen(),
     /** Před přepnutím / otevřením: dokončit přetvoření nebo zavírání, kterého se panel účastní. */
     settle() { settleMorph(panel); },
     /** Klik (mousedown) na tlačítko jiného panelu → nezavírat, nový panel tenhle přetvoří. */
     isSwitch(target) {
-      for (const o of reg) if (o !== entry && o.button && target && o.button.contains?.(target)) return true;
+      for (const o of reg) if (o !== entry && target && o.buttons().some((b) => b.contains?.(target))) return true;
       return false;
     },
     /** Právě jsem se zobrazil → jiné otevřené panely přetvořit do mě (první) / zavřít (ostatní); jinak vyrůst z tlačítka. */
@@ -234,7 +239,7 @@ export function registerPanel({ panel, button, isOpen, close, log }) {
       // Rozběhnutá přetvoření / zavírání dokončit dřív, než se změří (duchové se zavřou, styly vrátí).
       for (const o of reg) if (o !== entry) settleMorph(o.panel);
       const others = [...reg].filter((o) => o !== entry && o.panel.isConnected && safeOpen(o));
-      if (!others.length) return animatePanelIn(panel, { button });
+      if (!others.length) return animatePanelIn(panel, { button: btnOf() });
       const [first, ...rest] = others;
       for (const o of rest) safeClose(o);
       // Aktivní tlačítko (a posuvný indikátor u ikon) přejde na nový panel hned, ne až po doběhnutí přetvoření.
@@ -243,7 +248,7 @@ export function registerPanel({ panel, button, isOpen, close, log }) {
       return morphPanels(first.panel, panel, { done: () => safeClose(first), log });
     },
     /** Zavřít s animací do tlačítka; `done` = skutečné skrytí (třída hidden). */
-    hide(done, { instant = false } = {}) { return animatePanelOut(panel, { button, done, instant }); },
+    hide(done, { instant = false } = {}) { return animatePanelOut(panel, { button: btnOf(), done, instant }); },
     unregister() { reg.delete(entry); },
   };
   reg.add(entry);
