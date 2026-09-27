@@ -45,7 +45,7 @@ import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
 import { isBotAccount } from './lib/botIdentities.js';
 import { workspaceForChannelSync } from './lib/zidolista.js';
-import { deletePlatformMessage } from './lib/modActions.js';
+import { deletePlatformMessage, deleteOwnMessageAsSender } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
 import { registryPlatformChannel } from './lib/platformChannels.js';
 import { db } from './db/index.js';
@@ -125,6 +125,12 @@ const gifFlow = createGifFlow({
   claim: (workspace) => claimGifSlot(workspace),
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
+  // Kanál bez bota → vlastní zprávu moda smazat jeho tokenem (kolo 4 bod 4b; jen mod s účtem UnityChatu a scopy).
+  deleteAsSender: (p) => deleteOwnMessageAsSender(p, {
+    account: (platform, userId) => senderAccount(platform, userId),
+    modIdentities: (accountId, channel) => accountModIdentities(accountId, channel),
+    del: (q) => deletePlatformMessage(q, { log: app.log }),
+  }),
   restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),
   restoredIntegration: (p) => { void publishModIntegration(p.channel, 'chat.restored', { platform: p.platform, messageId: p.messageId, by: p.by, chat: (ws) => toChatEvent(p.message, ws) }).catch(() => {}); },
   forgetDeleted: (platform, messageId) => forgetPublished(platform, messageId),

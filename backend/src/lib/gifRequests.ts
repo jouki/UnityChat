@@ -725,6 +725,12 @@ export interface GifFlowDeps {
   /** deletePlatformMessage botem workspace (accountId null). */
   deletePlatform: (p: { accountId: null; channel: string; platform: Platform; messageId: string }) => Promise<string>;
   /**
+   * Kanál bez bota (deletePlatform → error:no_actor): smazat VLASTNÍ zprávu odesílatele jeho tokenem — jen když má
+   * účet UnityChatu, je mod / broadcaster kanálu a token má moderátorské scopy (kolo 4 bod 4b). Výsledek
+   * deletePlatformMessage, nebo null = odesílatel na to nemá (divák) → zpráva na platformě zůstane. Cizím modem nikdy.
+   */
+  deleteAsSender?: (p: { channel: string; platform: Platform; messageId: string; userId: string; login: string }) => Promise<string | null>;
+  /**
    * Převod selhal a filtr by zprávu pustil → obnovit v UC (publishRestored pro deleted_reason gif_request).
    * 'ok' = řádek obnoven a message-restored odešlo; cokoli jiného (not_found = řádek ještě není v archivu) →
    * flow pošle message-restored sám ze zprávy (settleHeld).
@@ -974,6 +980,26 @@ export function createGifFlow(deps: GifFlowDeps) {
    * (schovaná gif_request / přeznačená z link_filter → přeznačit + message-deleted; zobrazená → publishDeleted),
    * na platformě botem (když ji nesmazal už filtr).
    */
+  /**
+   * Smazání zprávy odesílatele na platformě botem workspace; kanál bez bota (no_actor) → tokenem odesílatele, je-li
+   * mod s účtem UnityChatu (deps.deleteAsSender). Chyby jen do logu (tokeny nikdy). Vrací výsledek pro log.
+   */
+  const deleteOnPlatform = async (ucChannel: string, m: IngestMessage): Promise<string> => {
+    let result = 'error:exception';
+    try { result = await deps.deletePlatform({ accountId: null, channel: ucChannel, platform: m.platform, messageId: m.platformMessageId }); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání zprávy na platformě vyhodilo výjimku'); }
+    if (result !== 'error:no_actor' || !deps.deleteAsSender) return result;
+    let own: string | null = null;
+    try { own = await deps.deleteAsSender({ channel: ucChannel, platform: m.platform, messageId: m.platformMessageId, userId: m.platformUserId, login: m.username.toLowerCase() }); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání tokenem odesílatele vyhodilo výjimku'); }
+    if (own === null) {
+      deps.log.info({ channel: ucChannel, platform: m.platform }, 'gif: kanál bez bota a odesílatel není mod s účtem UnityChatu → zpráva na platformě zůstává');
+      return result;
+    }
+    deps.log.info({ channel: ucChannel, platform: m.platform, result: own }, 'gif: kanál bez bota → vlastní zpráva moda smazána tokenem odesílatele');
+    return `sender:${own}`;
+  };
+
   const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON, why: { reason?: string; requestId?: number } = {}) => {
     const { m } = p;
     const pl = m.platform, id = m.platformMessageId;
@@ -990,9 +1016,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       await heldSettled({ workspace: p.workspace, platform: pl, messageId: id, outcome: reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : 'rejected', requestId: why.requestId, by: 'filter', reason: why.reason });
     }
     if (p.preDeleted !== 'link_filter') {
-      let result = 'error:exception';
-      try { result = await deps.deletePlatform({ accountId: null, channel: p.ucChannel, platform: pl, messageId: id }); }
-      catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání zprávy na platformě vyhodilo výjimku'); }
+      const result = await deleteOnPlatform(p.ucChannel, m);
       deps.log.info({ channel: p.ucChannel, platform: pl, reason, result }, 'gif: zpráva s odkazem smazána');
     }
   };
@@ -1445,9 +1469,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         // přeznačení na gif_request proběhlo výš).
         if (p.preDeleted !== 'link_filter') {
           if (p.preDeleted === null) await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
-          let result = 'error:exception';
-          try { result = await deps.deletePlatform({ accountId: null, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId }); }
-          catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání původní zprávy na platformě vyhodilo výjimku'); }
+          const result = await deleteOnPlatform(p.ucChannel, m);
           deps.log.info({ channel: p.ucChannel, platform: m.platform, result }, 'gif: původní zpráva smazána');
         }
         if (instantOut) {

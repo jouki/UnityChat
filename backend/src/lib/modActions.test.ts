@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deletePlatformMessage, banPlatformUser, unbanUser, warnUser, kickMinutes, type ModDeps } from './modActions.js';
+import { deletePlatformMessage, deleteOwnMessageAsSender, banPlatformUser, unbanUser, warnUser, kickMinutes, type ModDeps } from './modActions.js';
 import { MOD_SCOPES } from './modScopes.js';
 import type { WorkspaceInfo, Platform } from './zidolista.js';
 
@@ -259,4 +259,21 @@ test('ban bez aktéra → error:no_actor', async () => {
   const r = await banPlatformUser({ accountId: null, channel: 'robdiesalot', platform: 'twitch', userId: 'u9', durationSec: 60 }, deps({ calls }));
   assert.equal(r.result, 'error:no_actor');
   assert.equal(calls.length, 0);
+});
+
+test('deleteOwnMessageAsSender (kolo 4 bod 4b): jen odesílatel s účtem UnityChatu, který je v kanálu mod na téže platformě', async () => {
+  const del: Array<Record<string, unknown>> = [];
+  const d = {
+    account: async (platform: Platform, userId: string) => (platform === 'twitch' && userId === '50' ? 7 : platform === 'twitch' && userId === '42' ? 8 : null),
+    modIdentities: async (accountId: number) => (accountId === 7 ? [{ platform: 'twitch' as const, login: 'modik', role: 'moderator' as const }, { platform: 'kick' as const, login: 'jiny', role: 'moderator' as const }] : []),
+    del: async (p: { accountId: number; channel: string; platform: Platform; messageId: string }) => { del.push(p); return 'ok' as const; },
+  };
+  const P = (o: Partial<{ platform: Platform; userId: string; login: string }> = {}) => ({ channel: 'robdiesalot', platform: 'twitch' as Platform, messageId: 'm1', userId: '50', login: 'Modik', ...o });
+  assert.equal(await deleteOwnMessageAsSender(P(), d), 'ok');
+  assert.deepEqual(del, [{ accountId: 7, channel: 'robdiesalot', platform: 'twitch', messageId: 'm1' }], 'vlastním účtem odesílatele');
+  assert.equal(await deleteOwnMessageAsSender(P({ userId: '42', login: 'divak' }), d), null, 'divák (účet bez role moda) → nic');
+  assert.equal(await deleteOwnMessageAsSender(P({ userId: '99', login: 'cizi' }), d), null, 'bez účtu UnityChatu → nic');
+  assert.equal(await deleteOwnMessageAsSender(P({ login: 'nekdojiny' }), d), null, 'login identity ≠ odesílatel → nic');
+  assert.equal(await deleteOwnMessageAsSender(P({ platform: 'kick' }), d), null, 'jiná platforma (účet tam nemá tutéž identitu) → nic');
+  assert.equal(del.length, 1);
 });

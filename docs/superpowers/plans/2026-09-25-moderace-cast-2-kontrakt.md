@@ -798,6 +798,17 @@ audit `gif_not_allowed`. Neznámá URL se kvůli sha256 přesto stáhne (průbě
 v tomto režimu nevolá**; skončí-li přímé stažení `bot_protection` (Cloudflare), bere se odkaz jako nový GIF (smazat
 + `approved_only`). Jiná chyba převodu = běžný odkaz.
 
+**Kanál bez bota (od 2026-09-27, kolo 4 bod 4b):** když mazání zprávy odesílatele na platformě
+(`deletePlatformMessage` s `accountId: null`) vrátí `error:no_actor` a odesílatel je mod / broadcaster kanálu s účtem
+UnityChatu a moderátorskými scopy, smaže se jeho **vlastní** zpráva jeho tokenem (`modActions.ts
+deleteOwnMessageAsSender`: účet podle identity odesílatele → `accountModIdentities` s touž platformou a loginem →
+`deletePlatformMessage` s jeho `accountId`). Divák → zpráva na platformě zůstane, jen log. Cizím modem nikdy. Platí
+pro všechna mazání toku GIFů (`gif_request`, `gif_rejected`, `gif_not_allowed`).
+
+**Odesílatel a konečný stav (od 2026-09-27, kolo 4 bod 4a):** vlastní zprávu v konečném stavu (zamítnuto, vypršelo,
+nové GIFy nejdou) vidí jako **smazanou** (ztlumené „Zpráva smazána", mod podle svého stylu, odkaz není živý)
+s červeným štítkem, i když `message-deleted` ještě nedorazilo (core `applyGifOwn` / `paintGifDeleted`).
+
 **Soukromé SSE `/account/stream` (nové):**
 ```
 event: gif-progress        # jen odesílateli (účet s propojenou identitou autora zprávy)
@@ -1018,6 +1029,14 @@ integrace (`private, no-store`; náhled v „Ke smazání"), `unavailable` `404`
 `approved`, `pending` (alias), `withdrawn` → GIF normálně; `rejected`, `purging`, médium neexistuje → smazaná
 `{ message: '', deleted: true, deletedReason: "gif_removed" }` bez `gif`; `unavailable` → **nesmazaná** zpráva s textem
 a `gif: { url, kind, width, height, unavailable: true }` (URL zůstává — starší klient dostane 404 → „GIF odebrán").
+
+**Odkrytá / obnovená zpráva (od 2026-09-27, kolo 4 bod 3):** `message-restored`, `message-unhidden` a `message`
+v odpovědi `POST /moderation/restore` (`routes/chat.ts toRestoredMessage`) nesou GIF se stavem média — zpráva se
+nikdy neposílá jako smazaná (mod ji právě odkryl): `unavailable` → `gif.unavailable: true` („[GIF nedostupný]"),
+`rejected` / `purging` / médium neexistuje → `gif.removed: true` (štítek „GIF odebrán", nic se nenačítá). Klient
+oba štítky kreslí stejnou funkcí a stejně nastylované (core `createGifMedia`, třídy `uc-gif--unavailable` /
+`uc-gif--removed`; stejně i štítek po 404). Chyba DB → GIF jako dosud. **OBS (`raw`)** takovou zprávu (`unavailable`,
+`removed`, 404, `gif_removed`) nevykreslí vůbec (třída zprávy `uc-gif-gone`), stejně jako smazanou.
 
 **SSE `gif-media` na `/nicknames/stream` (veřejné) — po každé změně stavu média (zahození, obnova, odstranění
 souboru, odebrání z knihovny, schválení ze zamítnutých):**

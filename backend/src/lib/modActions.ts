@@ -237,6 +237,33 @@ export async function deletePlatformMessage(
   return result;
 }
 
+export interface DeleteAsSenderDeps {
+  /** Účet UnityChatu odesílatele podle platformní identity (gifRequests senderAccount); null = nemá. */
+  account: (platform: Platform, userId: string) => Promise<number | null>;
+  /** Identity účtu, kde je mod / broadcaster kanálu (chatRole accountModIdentities). */
+  modIdentities: (accountId: number, channel: string) => Promise<Array<{ platform: Platform; login: string }>>;
+  /** deletePlatformMessage s accountId odesílatele (withModActor ověří scopy i roli ještě jednou). */
+  del: (p: { accountId: number; channel: string; platform: Platform; messageId: string }) => Promise<ModResult>;
+}
+
+/**
+ * Kanál bez bota (deletePlatformMessage s accountId null → error:no_actor): VLASTNÍ zprávu odesílatele smazat jeho
+ * tokenem — jen když má účet UnityChatu a je v kanálu mod / broadcaster právě tou identitou, která zprávu poslala
+ * (test 2026-09-27 kolo 4 bod 4b; GIF v režimu „jen schválené“). Nikdy cizí zprávu a nikdy cizím modem.
+ * null = odesílatel na to nemá (divák, bez účtu) → hostitel jen zaloguje.
+ */
+export async function deleteOwnMessageAsSender(
+  p: { channel: string; platform: Platform; messageId: string; userId: string; login: string },
+  deps: DeleteAsSenderDeps,
+): Promise<ModResult | null> {
+  const accountId = await deps.account(p.platform, p.userId);
+  if (accountId === null) return null;
+  const login = p.login.toLowerCase();
+  const mods = await deps.modIdentities(accountId, p.channel);
+  if (!mods.some((m) => m.platform === p.platform && m.login.toLowerCase() === login)) return null;
+  return deps.del({ accountId, channel: p.channel, platform: p.platform, messageId: p.messageId });
+}
+
 /** Předvolby timeoutu (s) v nabídce moda; ban = permanentní (durationSec null). */
 export const TIMEOUT_DURATIONS = [5, 30, 60, 300, 600, 1800, 3600, 7200] as const;
 /** Vlastní délka timeoutu (nabídka moda i Chat Log): 1 s až Twitch limit 14 dní. */

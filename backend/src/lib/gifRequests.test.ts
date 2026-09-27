@@ -976,6 +976,33 @@ test('režim approved: nový GIF → zpráva smazána (gif_not_allowed) + gif-no
   await b.flow._idle();
 });
 
+test('kolo 4 bod 4b: kanál bez bota (no_actor) → vlastní zprávu moda smaže jeho token; divák bez bota zůstane (log)', async () => {
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const logs: string[] = [];
+  const log = { ...quiet, info: (_o: object, m: string) => { logs.push(m); } };
+  const asSender: Array<Record<string, unknown>> = [];
+  // Mod (u50) má účet UnityChatu s moderátorskými scopy → smaže se jeho tokenem; divák (u42) → null (nesmí).
+  const deleteAsSender = async (p: { channel: string; platform: string; messageId: string; userId: string; login: string }) => {
+    asSender.push(p);
+    return p.userId === '50' ? 'ok' : null;
+  };
+  const s = setup({ access, log, deletePlatform: async (p) => { s.calls.push(['deletePlatform', p]); return 'error:no_actor'; }, deleteAsSender });
+  assert.equal(await s.flow.intercept({ ...from('50', 'm5'), auto: true }), 'not_allowed');
+  assert.deepEqual(asSender.map((p) => [p.userId, p.messageId, p.channel, p.platform]), [['50', 'm5', 'robdiesalot', 'twitch']], 'jen po no_actor, vlastní zpráva');
+  assert.ok(logs.some((m) => /tokenem odesílatele/.test(m)), logs.join(' | '));
+  logs.length = 0;
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  assert.equal(asSender.at(-1)!.userId, '42');
+  assert.ok(logs.some((m) => /na platformě zůstává/.test(m)), logs.join(' | '));
+  // S botem (výsledek ≠ no_actor) se token odesílatele vůbec nezkouší.
+  const before = asSender.length;
+  const b = setup({ access, deleteAsSender });
+  assert.equal(await b.flow.intercept({ ...from('50', 'm6'), auto: true }), 'not_allowed');
+  assert.equal(asSender.length, before);
+  await s.flow._idle();
+  await b.flow._idle();
+});
+
 test('režim approved: neznámá URL se stahuje jen přímo (bez Bright Data); bot_protection = nový GIF → smazat + approved_only', async () => {
   const told: Array<[string, Record<string, unknown>]> = [];
   const seen: Array<boolean | undefined> = [];
