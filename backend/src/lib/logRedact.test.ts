@@ -14,6 +14,8 @@ test('redactUrl: t, token, access_token, key (i velkými písmeny / zakódované
   assert.equal(redactUrl('/x?channel=robdiesalot&before=1'), '/x?channel=robdiesalot&before=1');
   assert.equal(redactUrl('/bez-query'), '/bez-query');
   assert.equal(redactUrl(undefined), '');
+  // Jednorázový ticket /account/stream (audit L2).
+  assert.equal(redactUrl(`/account/stream?ticket=${TOKEN}`), '/account/stream?ticket=***');
 });
 
 test('reqSerializer ve Fastify loggeru: token se v logu požadavku neobjeví', async () => {

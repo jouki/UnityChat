@@ -1,6 +1,7 @@
 // Tajné query parametry nesmí do logu (Fastify loguje `req.url` u každého požadavku):
-// token pro zamítnuté GIFy (`/media/gif/:id?t=`) a obecně token / access_token / key.
-const SECRET_PARAMS = new Set(['t', 'token', 'access_token', 'key']);
+// token pro zamítnuté GIFy (`/media/gif/:id?t=`), jednorázový ticket `/account/stream?ticket=` a obecně
+// token / access_token / key.
+const SECRET_PARAMS = new Set(['t', 'token', 'access_token', 'key', 'ticket']);
 
 /** URL (cesta + query) s hodnotami tajných parametrů nahrazenými `***`. Nerozparsovatelné query zůstane bez změny parametrů jiných jmen. */
 export function redactUrl(url: string | undefined): string {
