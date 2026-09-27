@@ -338,14 +338,24 @@ test('GIF: neodemčeno → běžný filtr; neznámé → filtr + ověření na p
   assert.deepEqual(m2.deleted, { by: 'filter', reason: 'link_filter' });
   assert.equal(unknown.intercepts[0].preDeleted, 'link_filter');
   assert.equal(unknown.intercepts[0].needAccess, true);
-  // Mod v Dev módu (gifReview, filtr ho pouští) s neznámým přístupem: zpráva zůstane, GIF se ověří zpětně.
+  // Mod v Dev módu (gifReview, filtr ho pouští) s neznámým přístupem: zprávu ostatní nevidí (schovaná gif_request,
+  // audit A12), GIF se ověří; když to GIF žádost není, zpráva se obnoví (intercept → settleHeld, filterAct null).
   const review = gifHook('unknown');
   const b2 = harness(undefined, { gif: { ...review.hook, reviewRequested: () => true } });
   const m3 = msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } });
-  assert.equal(b2.f.check(m3), null);
-  assert.equal(m3.deleted, undefined);
-  assert.equal(review.intercepts[0].preDeleted, null);
+  assert.deepEqual(b2.f.check(m3), { host: 'tenor.com', channel: 'robdiesalot', gif: true });
+  assert.deepEqual(m3.deleted, { by: 'filter', reason: 'gif_request' });
+  assert.equal(review.intercepts[0].preDeleted, 'gif_request');
+  assert.equal(review.intercepts[0].needAccess, true);
+  assert.equal(review.intercepts[0].filterAct, null, 'filtr by ji pustil → po zjištění obnovit');
   assert.equal(review.intercepts[0].auto, undefined);
+  // Filtr vypnutý, divák s neznámým přístupem → taky schovat hned.
+  const off = gifHook('unknown');
+  const b3 = harness({ ...LINK_FILTER_OFF }, { gif: off.hook });
+  const m4 = msg({ content: GIF_TEXT });
+  assert.deepEqual(b3.f.check(m4), { host: 'tenor.com', channel: 'robdiesalot', gif: true });
+  assert.deepEqual(m4.deleted, { by: 'filter', reason: 'gif_request' });
+  assert.equal(off.intercepts[0].preDeleted, 'gif_request');
 
   const bot = gifHook('allowed');
   const c = harness(undefined, { gif: bot.hook });
@@ -384,14 +394,14 @@ test('GIF od moda / broadcastera: přístup ze Židolišty jako divák (role v d
   assert.equal(dn.f.check(md), null);
   assert.equal(md.deleted, undefined);
   assert.equal(denied.intercepts.length, 0);
-  // Neznámý přístup → zpráva zůstane, GIF se ověří zpětně (needAccess) a při odemčení schválí sám.
+  // Neznámý přístup → schovat hned (audit A12), GIF se ověří (needAccess) a při odemčení schválí sám; jinak obnovit.
   const unknown = gifHook('unknown');
   const un = harness(undefined, { gif: { ...unknown.hook, reviewRequested: () => false, lateReview: () => false } });
   const mu = msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } });
-  assert.equal(un.f.check(mu), null);
-  assert.equal(mu.deleted, undefined);
+  assert.deepEqual(un.f.check(mu), { host: 'tenor.com', channel: 'robdiesalot', gif: true });
+  assert.deepEqual(mu.deleted, { by: 'filter', reason: 'gif_request' });
   assert.equal(unknown.intercepts[0].needAccess, true);
-  assert.equal(unknown.intercepts[0].preDeleted, null);
+  assert.equal(unknown.intercepts[0].preDeleted, 'gif_request');
   assert.equal(unknown.intercepts[0].auto, true);
   // Dev mód (hlášení před zprávou) + neodemčeno → běžný odkaz, žádné auto.
   const d = gifHook('denied');

@@ -244,6 +244,24 @@ test('intercept: převod selže → filtr by smazal = přeznačit na link_filter
   assert.equal(b.mem.reqs.size, 0);
 });
 
+test('A12: neznámý přístup, zpráva schovaná hned (gif_request) → neodemčeno = obnovit (filtr ji pouští) / smazat filtrem', async () => {
+  const deny = { access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) };
+  const a = setup(deny);
+  assert.equal(await a.flow.intercept(params({ needAccess: true })), 'denied');
+  assert.deepEqual(names(a.calls), ['publishDeleted', 'restore'], 'schovaná zpráva se vrátí všem');
+  assert.equal(a.mem.reqs.size, 0);
+  assert.equal(a.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
+  let acted = 0;
+  const b = setup(deny);
+  assert.equal(await b.flow.intercept(params({ needAccess: true, filterAct: async () => { acted++; } })), 'denied');
+  assert.equal(acted, 1, 'filtr by ji smazal → smaže');
+  assert.deepEqual(b.mem.log, ['retag:m1:gif_request->link_filter']);
+  // Odemčeno → běžná žádost (zpráva už je schovaná).
+  const c = setup();
+  assert.equal(await c.flow.intercept(params({ needAccess: true })), 'requested');
+  await a.flow._idle(); await b.flow._idle();
+});
+
 test('intercept: neznámý přístup → ověřit; neodemčeno = nic se nestane; zobrazená zpráva se po úspěchu smaže zpětně', async () => {
   const denied = setup({ access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) });
   assert.equal(await denied.flow.intercept(params({ preDeleted: null, needAccess: true })), 'denied');

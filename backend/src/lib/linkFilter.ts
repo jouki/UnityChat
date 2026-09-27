@@ -336,8 +336,10 @@ export function createLinkFilter(deps: LinkFilterDeps) {
 
   /**
    * GIF cesta: přístup z cache 'allowed' → zprávu schovat hned (deleted_reason gif_request) a převést na pozadí;
-   * 'unknown' → běžné rozhodnutí filtru a ověření + převod na pozadí (zobrazenou zprávu pak smaže zpětně);
-   * 'denied' → běžný odkaz. Jedna žádost na uživatele současně (tryReserve).
+   * 'unknown' → filtr by ji smazal: běžné rozhodnutí filtru a ověření + převod na pozadí; filtr ji pouští: taky
+   * schovat hned jako gif_request (ostatní diváci čekající zprávu nesmí vidět, audit A12) a po ověření buď žádost,
+   * nebo obnovit (intercept → settleHeld, publishRestored); 'denied' → běžný odkaz. Jedna žádost na uživatele
+   * současně (tryReserve).
    */
   const checkGif = (m: IngestMessage, ucChannel: string, ws: WorkspaceInfo, roles: Roles, host: string | null, linkBlocked: (h: string) => boolean): LinkVerdict | null => {
     const gif = deps.gif!;
@@ -353,13 +355,13 @@ export function createLinkFilter(deps: LinkFilterDeps) {
     const access = gif.accessSync(query);
     if (access === 'denied' || !gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
     const filterAct = host ? () => act(m, ucChannel, host) : null;
-    if (access === 'allowed') {
+    if (access === 'allowed' || !host) {
       m.deleted = { by: 'filter', reason: 'gif_request' };
-      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: false, filterAct, linkBlocked, ...auto }).catch(() => {});
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: access !== 'allowed', filterAct, linkBlocked, ...auto }).catch(() => {});
       return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
     }
-    // unknown: filtr rozhodne jako vždy; GIF se ověří a případně zachytí zpětně.
-    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: host ? 'link_filter' : null, needAccess: true, filterAct: null, linkBlocked, ...auto }).catch(() => {});
+    // unknown + filtr maže: filtr rozhodne jako vždy (zpráva je smazaná hned); GIF se ověří a případně zachytí zpětně.
+    void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'link_filter', needAccess: true, filterAct: null, linkBlocked, ...auto }).catch(() => {});
     return null;
   };
 

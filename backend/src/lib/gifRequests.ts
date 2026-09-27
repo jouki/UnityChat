@@ -1091,7 +1091,11 @@ export function createGifFlow(deps: GifFlowDeps) {
         progress('detect', 0);
         // Přístup (cache 60 s): odemčení a cooldown (i mod — spec 2026-09-27-gif-review-upravy §5), requestTtlSec a režim odměny.
         const access = await deps.access(p.query).catch(() => null);
-        if (p.needAccess && !gifUsable(access, deps.now())) return finish('denied');
+        if (p.needAccess && !gifUsable(access, deps.now())) {
+          // Zpráva schovaná předem (neznámý přístup, audit A12) → rozhodnout: filtr by ji smazal = smazat, jinak obnovit.
+          if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p); }
+          return finish('denied');
+        }
         const mode = access?.mode ?? 'all';
         progress('access', 10);
 
