@@ -598,6 +598,28 @@ const from = (userId: string, messageId: string, url = TENOR, over: Record<strin
 });
 const events = (calls: Array<[string, unknown]>, name: string) => calls.filter((c) => c[0] === name).map((c) => c[1] as Record<string, unknown>);
 
+test('SEC-8: okamžité schválení (knihovna / mod) při běžícím globálním cooldownu chatu → neprojde, zpráva se vrátí (bez žádosti)', async () => {
+  const claims: string[] = [];
+  let free = true;
+  const s = setup({ claim: (ws) => { claims.push(ws); return free; } });
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(claims, [], 'ruční schválení modem si slot nebere (cooldown nastaví gif-used)');
+  free = false;
+  s.calls.length = 0;
+  assert.equal(await s.flow.intercept(from('43', 'm2')), 'denied');
+  assert.deepEqual(claims, ['rob']);
+  assert.equal(s.mem.reqs.size, 1, 'žádná žádost');
+  assert.equal(names(s.calls).includes('broadcast:gif-message'), false);
+  assert.ok(names(s.calls).includes('restore'), 'schovaná zpráva se vrátí jako běžný odkaz');
+  assert.equal(s.flow.tryReserve('robdiesalot', 'twitch', '43'), true);
+  // Mod (auto) bez výjimky.
+  assert.equal(await s.flow.intercept(from('44', 'm3', 'https://media1.tenor.com/m/b/other.gif', { auto: true })), 'denied');
+  free = true;
+  assert.equal(await s.flow.intercept(from('45', 'm4')), 'approved');
+  await s.flow._idle();
+});
+
 test('dedup URL: schválený GIF (i s utm/fragmentem) → rovnou gif-message bez žádosti a bez stahování, use_count++, cooldown platí', async () => {
   let resolves = 0;
   const s = setup({ resolve: async () => { resolves++; return resolved; } });

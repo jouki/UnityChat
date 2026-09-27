@@ -713,6 +713,11 @@ export interface GifFlowDeps {
   recordAction?: (v: { channel: string; accountId: number | null; actor: string; action: string; platform: string; targetLogin: string | null; targetMessageId?: string | null; params: object; result: object }) => Promise<void>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Okamžité schválení (auto modem / GIF z knihovny) si synchronně vezme slot globálního cooldownu chatu
+   * (gifAccess.ts claimGifSlot, audit SEC-8); false = cooldown běží, GIF teď neprojde. Chybí = bez kontroly.
+   */
+  claim?: (workspace: string) => boolean;
   /** Médium smazané z DB (propadnutí, trvalé zahození, retence) → pryč i z paměťové cache /media/gif (tombstone). */
   mediaDeleted?: (id: string) => void;
   /** Stav média se změnil (zamítnuto, vault, schváleno ze zamítnutých) → cache /media/gif zahodit (bez tombstone). */
@@ -1098,6 +1103,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         }
 
         let instant = false;
+        // Globální cooldown chatu běží (okamžité schválení by GIF pustilo hned, audit SEC-8) → jako neodemčeno.
+        let blocked = false;
         if (res.ok) {
           const known = res.known;
           const approvedKnown = known?.status === 'approved';
@@ -1140,7 +1147,10 @@ export function createGifFlow(deps: GifFlowDeps) {
           instant = auto || approvedKnown;
           let mediaId: string | null = known?.id ?? null;
           let savedFresh = false;
-          try {
+          if (instant && deps.claim && !deps.claim(p.workspace)) {
+            blocked = true;
+            deps.log.info({ channel: p.ucChannel, platform: m.platform, auto }, 'gif: globální cooldown chatu běží → okamžité schválení neprojde');
+          } else try {
             if (!mediaId && res.fresh) {
               mediaId = await deps.store.saveMedia(res.fresh, { channel: p.ucChannel, sourceUrlNorm: urlNorm, sha256: res.sha256 });
               savedFresh = true;
@@ -1189,7 +1199,7 @@ export function createGifFlow(deps: GifFlowDeps) {
             // jinak by zpráva zůstala smazaná bez žádosti a permit by ji už neobnovil.
             await safe('vrácení na link_filter', () => deps.store.retagDeleted(m.platform, m.platformMessageId, 'gif_request', 'link_filter'));
           }
-          return finish('failed');
+          return finish(blocked ? 'denied' : 'failed');
         }
 
         // Mod / broadcaster nebo známý schválený GIF z knihovny: schválit HNED po insertu (stejná cesta jako

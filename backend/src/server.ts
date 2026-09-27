@@ -53,7 +53,7 @@ import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
 import integrationGifRoutes from './routes/integrationGif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta } from './lib/gifRequests.js';
-import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
+import { claimGifSlot, gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
@@ -120,6 +120,7 @@ const gifFlow = createGifFlow({
   resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
+  claim: (workspace) => claimGifSlot(workspace),
   publishDeleted: (p) => publishDeleted(p),
   deletePlatform: (p) => deletePlatformMessage(p, { log: app.log }),
   restore: (p) => publishRestored({ ...p, by: 'filter', reason: 'gif_request' }),

@@ -96,9 +96,51 @@ function localUntil(q: GifAccessQuery, now: number): number | null {
   return u;
 }
 
+/**
+ * Globální cooldown chatu per workspace (audit SEC-8): po každém GIFu zobrazeném v chatu (schválení modem, auto,
+ * okamžité schválení z knihovny) ho server nastaví sám podle `cooldownGlobalSec` ze Židolišty. Jinak by uživatelé
+ * s „allowed“ v cache (60 s i déle) prošli, než Židolišta cache zneplatní. Mody bez výjimky.
+ */
+const globalCooldown = new Map<string, number>();
+const wsPrefix = (workspace: string) => `${workspace.toLowerCase()}|`;
+
+/** Nejdelší `cooldownGlobalSec` workspace z cache (všechny odpovědi Židolišty ho nesou stejný); 0 = neznámý / bez něj. */
+function globalSecFor(workspace: string): number {
+  const prefix = wsPrefix(workspace);
+  let sec = 0;
+  for (const [k, e] of cache) if (k.startsWith(prefix) && e.value?.cooldownGlobalSec) sec = Math.max(sec, e.value.cooldownGlobalSec);
+  return sec;
+}
+
+function globalUntil(workspace: string, now: number): number | null {
+  const k = workspace.toLowerCase();
+  const u = globalCooldown.get(k);
+  if (u === undefined) return null;
+  if (u <= now) { globalCooldown.delete(k); return null; }
+  return u;
+}
+
+function noteGlobal(workspace: string, now: number): void {
+  const sec = globalSecFor(workspace);
+  if (!sec) return;
+  const k = workspace.toLowerCase();
+  globalCooldown.set(k, Math.max(globalCooldown.get(k) ?? 0, now + sec * 1000));
+  if (globalCooldown.size > 1000) for (const [w, u] of globalCooldown) if (u <= now) globalCooldown.delete(w);
+}
+
+/**
+ * Okamžité zobrazení GIFu (auto / z knihovny) si globální cooldown zarezervuje synchronně: běží → false (GIF teď
+ * neprojde), jinak ho hned nastaví (souběh dvou GIFů naráz, audit SEC-8). Bez známého cooldownGlobalSec → true.
+ */
+export function claimGifSlot(workspace: string, now: number = Date.now()): boolean {
+  if (globalUntil(workspace, now) !== null) return false;
+  noteGlobal(workspace, now);
+  return true;
+}
+
 function applyLocal(q: GifAccessQuery, a: GifAccess | null, now: number): GifAccess | null {
-  const u = localUntil(q, now);
-  if (!a || u === null) return a;
+  const u = Math.max(localUntil(q, now) ?? 0, globalUntil(q.workspace, now) ?? 0);
+  if (!a || !u) return a;
   return { ...a, cooldownUntil: Math.max(a.cooldownUntil ?? 0, u) };
 }
 
@@ -149,6 +191,7 @@ export function gifAccessSync(q: GifAccessQuery, deps: GifAccessDeps = {}): 'all
   if (!hit || (!hit.inflight && now - hit.at >= CACHE_MS)) void gifAccess(q, deps).catch(() => {});
   if (localUntil(q, now) !== null) return 'denied';
   if (!hit || (hit.inflight && hit.at === 0)) return 'unknown';
+  if (globalUntil(q.workspace, now) !== null) return 'denied';
   return gifUsable(hit.value, now) ? 'allowed' : 'denied';
 }
 
@@ -166,6 +209,8 @@ export async function gifUsed(p: { workspace: string; platform: Platform; userId
   let cdSec = 0;
   for (const [k, e] of cache) if (k.startsWith(prefix) && e.value) cdSec = Math.max(cdSec, e.value.cooldownSec);
   localCooldown.set(prefix, now() + (cdSec || DEFAULT_COOLDOWN_SEC) * 1000);
+  // GIF je v chatu → globální cooldown chatu hned i lokálně (audit SEC-8).
+  noteGlobal(p.workspace, now());
   if (localCooldown.size > 5000) for (const [k, u] of localCooldown) if (u <= now()) localCooldown.delete(k);
   let until: number | null = null;
   let confirmed = false;
@@ -208,4 +253,4 @@ export function invalidateGifAccess(workspace: string): number {
 }
 
 /** Jen pro testy. */
-export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); }
+export function _resetGifAccessCache(): void { cache.clear(); localCooldown.clear(); globalCooldown.clear(); }
