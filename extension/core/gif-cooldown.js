@@ -224,6 +224,28 @@ export class GifCooldown {
     try { this.onState(this.snapshot()); } catch { /* ignore */ }
   }
 
+  /**
+   * Konec cooldownu ze serveru (čas SERVERU + `serverNow`): `done` approved u tichého schválení (mod / GIF z knihovny —
+   * gif-decided nejde) a gif-notice cooldown (test2 bod 4.1). Přebíjí lokální odhad z cooldownSec (mod ho má často 0,
+   * globální cooldown chatu klient z cooldownSec nezná). null = server cooldown nehlásí → beze změny.
+   */
+  onServerCooldown(until, serverNow) {
+    const u = Number(until);
+    if (until == null || !Number.isFinite(u)) return;
+    const sn = Number(serverNow);
+    const local = u + (Number.isFinite(sn) && sn > 0 ? this.now() - sn : this.serverOffset());
+    const now = this.now();
+    if (local <= now) return;
+    let s = this._state && this._state.key === this._key() ? this._state : null;
+    // Stav ještě neznámý (GIF z jiného zařízení / bez GET /gif/state): cooldown platí, zbytek se načte později (at 0).
+    if (!s) s = this._state = { key: this._key(), allowed: true, until: null, sec: 0, mode: 'all', rewardUntil: null, rewardTotalMs: null, at: 0, total: 0 };
+    s.until = local;
+    s.total = Math.max(local - now, (s.sec || 0) * 1000);
+    this._L(`cooldown ze serveru → zbývá ${Math.ceil((local - now) / 1000)} s`);
+    this._update();
+    try { this.onState(this.snapshot()); } catch { /* ignore */ }
+  }
+
   /** Přepnutí kanálu / platformy / odhlášení. */
   reset() {
     this._state = null;

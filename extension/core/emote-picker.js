@@ -2,6 +2,7 @@
 // Data bere z EmoteManageru (core/emotes.js), DOM dostává zvenku (host + dokument),
 // úložiště „naposledy použitých" je injektované (addon i web: localStorage).
 import { escapeAttr } from './html.js';
+import { createIconTip } from './soundboard.js';
 
 const RECENT_MAX = 24;
 
@@ -62,7 +63,8 @@ const esc = (s) => escapeAttr(s);
  * @param {Array<{ key: string, label: string, icon?: string, mount(pane: HTMLElement): { show?(): void, hide?(): void } }>} [o.tabs]
  *        další záložky vlevo (svislé, pod „Emoty“) — např. GIFy (core/gif-library.js createGifPanel)
  * @returns {{ open(tab?: string): void, close(): void, toggle(): void, isOpen(): boolean, selectTab(key: string): void,
- *             activeTab(): string, setIndicator(key: string, v: { progress: number|null, title?: string }|null): void }}
+ *             activeTab(): string, setIndicator(key: string, v: { progress: number|null, title?: string, tip?: object|null }|null): void }}
+ *          `tip` = stav vlastního tooltipu ikony emotů a záložky (core/soundboard.js renderIconTip)
  */
 export function createEmotePicker({ host, button, textarea, emotes, recent, log, tabs = [] }) {
   const doc = host.ownerDocument;
@@ -78,7 +80,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   panel.innerHTML = tabs.length
     ? `<div class="uc-ep-side" role="tablist" aria-orientation="vertical">
         <button type="button" class="uc-ep-tab on" role="tab" data-tab="emotes" aria-selected="true" title="Emoty">${EMOTE_TAB_SVG}<span>Emoty</span></button>
-        ${tabs.map((t) => `<button type="button" class="uc-ep-tab" role="tab" data-tab="${esc(t.key)}" aria-selected="false" title="${esc(t.label)}">${t.icon || ''}<span>${esc(t.label)}</span><i class="uc-ep-tab-bar" hidden></i></button>`).join('')}
+        ${tabs.map((t) => `<button type="button" class="uc-ep-tab" role="tab" data-tab="${esc(t.key)}" aria-selected="false" aria-label="${esc(t.label)}">${t.icon || ''}<span>${esc(t.label)}</span><i class="uc-ep-tab-bar" hidden></i></button>`).join('')}
       </div>
       <div class="uc-ep-pane uc-ep-main" data-pane="emotes">${main}</div>
       ${tabs.map((t) => `<div class="uc-ep-pane" data-pane="${esc(t.key)}" hidden></div>`).join('')}`
@@ -143,6 +145,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     if (tab) selectTab(tab);
     if (active === 'emotes') render();
     panel.classList.remove('hidden');
+    btnTip?.hide();
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
     if (active !== 'emotes') { mounted.get(active)?.show?.(); return; }
@@ -153,6 +156,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   function close() {
     if (panel.classList.contains('hidden')) return;
     panel.classList.add('hidden');
+    tabTip?.hide();
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     mounted.get(active)?.hide?.();
@@ -167,16 +171,49 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   function setIndicator(key, v) {
     if (v && Number.isFinite(v.progress)) indicators.set(key, { progress: Math.min(1, Math.max(0, v.progress)), title: v.title || '' });
     else indicators.delete(key);
+    // Stav pro vlastní tooltip (ikona emotů + záložka): i bez pásku (zamčeno, cooldown bez konce odměny).
+    if (v?.tip) tipStates.set(key, v.tip); else tipStates.delete(key);
     const tab = panel.querySelector(`.uc-ep-tab[data-tab="${CSS_ESC(key)}"]`);
     const bar = tab?.querySelector('.uc-ep-tab-bar');
     const cur = indicators.get(key);
     if (bar) { bar.hidden = !cur; if (cur) bar.style.setProperty('--p', cur.progress.toFixed(4)); }
-    if (tab) tab.title = cur?.title ? `${tabs.find((t) => t.key === key)?.label || key} — ${cur.title}` : (tabs.find((t) => t.key === key)?.label || key);
+    // Nativní title se každou sekundu neprepisuje (blikal, test2 bod 3) — text jde do vlastního tooltipu a aria-label.
+    const label = tabs.find((t) => t.key === key)?.label || key;
+    const aria = cur?.title ? `${label} — ${cur.title}` : label;
+    if (tab && tab.getAttribute('aria-label') !== aria) tab.setAttribute('aria-label', aria);
     const best = [...indicators.values()].reduce((a, x) => (!a || x.progress > a.progress ? x : a), null);
     let bb = button.querySelector(':scope > .uc-ep-btn-bar');
     if (best && !bb) { bb = doc.createElement('span'); bb.className = 'uc-ep-btn-bar'; button.appendChild(bb); }
     button.classList.toggle('uc-ep-timed', !!best);
     if (bb) { bb.hidden = !best; if (best) button.style.setProperty('--uc-ep-p', best.progress.toFixed(4)); }
+    // Otevřený tooltip: jen nový text / pásek (prvek zůstává).
+    if (btnTip?.open) btnTip.update(buttonTip());
+    if (tabTip?.open && tabTipKey === key) tabTip.update(tabTipState(key));
+  }
+
+  // ---- vlastní tooltipy (stejné jako u noty soundboardu, core/soundboard.js createIconTip) — test2 body 1 a 3 ----
+  const tipStates = new Map();   // key záložky → stav tooltipu (gifRewardTip)
+  const plainTip = (title) => ({ mode: 'plain', title });
+  /** Ikona emotů: stav první záložky, která ho hlásí (GIFy), jinak jen „Emoty“. */
+  const buttonTip = () => [...tipStates.values()][0] || plainTip('Emoty');
+  const tabTipState = (key) => tipStates.get(key) || plainTip(tabs.find((t) => t.key === key)?.label || key);
+  const btnTip = tabs.length ? createIconTip({ host }) : null;
+  const tabTip = tabs.length ? createIconTip({ host: panel, placement: 'side' }) : null;
+  let tabTipKey = null;
+  if (btnTip) {
+    button.removeAttribute('title');
+    if (!button.getAttribute('aria-label')) button.setAttribute('aria-label', 'Emoty');
+    const showBtn = () => { if (!isOpen()) btnTip.show(button, buttonTip()); };
+    button.addEventListener('mouseenter', showBtn);
+    button.addEventListener('focus', showBtn);
+    button.addEventListener('mouseleave', () => btnTip.hide());
+    button.addEventListener('blur', () => btnTip.hide());
+    for (const b of panel.querySelectorAll('.uc-ep-tab')) {
+      const key = b.dataset.tab;
+      if (key === 'emotes') continue;
+      b.addEventListener('mouseenter', () => { tabTipKey = key; tabTip.show(b, tabTipState(key)); });
+      b.addEventListener('mouseleave', () => { tabTipKey = null; tabTip.hide(); });
+    }
   }
 
   // Záložky se připojí hned (indikátor odměny na záložce musí běžet i před prvním otevřením).

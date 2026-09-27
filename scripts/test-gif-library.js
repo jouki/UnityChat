@@ -562,6 +562,67 @@ Promise.all([
     check('pairGifEcho: cizí / optimistická už není → null', H.pairGifEcho({ platform: 'youtube', id: 'X' }, ob, () => true) === null && H.pairGifEcho({ platform: 'youtube', id: 'LCC.5' }, ob, () => false) === null);
   }
 
+  {
+    // test2 bod 4: náš odkaz (id) na GIF z knihovny → „Odesílám…“ bez procent, kolečko až s fází stahování.
+    let n = 0; const ch = [];
+    const ob = new L.GifOutbox({ channel: () => 'rob', now: () => n, onChange: (k) => ch.push(...k), hasMessage: () => false, setInterval: () => 1, clearInterval: () => {} });
+    ob.noteOptimistic('sent-o1', 'twitch', { show: true, own: true });
+    check('test2: náš odkaz → „Odesílám…“ bez procent', eq(ob.view('twitch', 'sent-o1'), { kind: 'sending', text: L.GIF_SENDING_TEXT }) && L.GIF_SENDING_TEXT === 'Odesílám…', JSON.stringify(ob.view('twitch', 'sent-o1')));
+    const PK = (phase, pct, extra = {}) => ({ requestKey: 'twitch:o1', channel: 'rob', platform: 'twitch', messageId: 'o1', phase, pct, ...extra });
+    ob.onProgress(PK('detect', 0)); ob.onProgress(PK('access', 10)); ob.onProgress(PK('verify', 95));
+    check('test2: detect / access / verify u našeho odkazu → pořád „Odesílám…“ (spárováno)', ob.keyOf('twitch', 'sent-o1') === 'twitch:o1' && ob.view('twitch', 'sent-o1')?.kind === 'sending');
+    check('test2: „Odesílám…“ blokuje další výběr (busy)', ob.busy() === true);
+    ob.onProgress(PK('done', 100, { outcome: 'approved', cooldownUntil: 50_000, serverNow: 0 }));
+    check('test2: done approved → štítek pryč', ob.view('twitch', 'o1')?.kind === 'approved');
+    ob.noteOptimistic('sent-o2', 'twitch', { show: true, own: true });
+    ob.onProgress({ ...PK('download', 30), requestKey: 'twitch:o2', messageId: 'o2' });
+    check('test2: fáze stahování → kolečko s %', ob.view('twitch', 'sent-o2')?.kind === 'progress' && ob.view('twitch', 'sent-o2')?.text === '30 %');
+    ob.noteOptimistic('sent-o3', 'twitch', { show: true });
+    check('test2: cizí odkaz (Tenor) → kolečko 0 % hned jako dřív', ob.view('twitch', 'sent-o3')?.kind === 'progress');
+    // 4.1: gif-notice cooldown → bez kolečka i štítku + hláška
+    const notes = [];
+    const ob2 = new L.GifOutbox({ channel: () => 'rob', now: () => n, onNotice: (kind, e, d) => notes.push([kind, d?.until]), hasMessage: () => false, setInterval: () => 1, clearInterval: () => {} });
+    ob2.noteOptimistic('sent-c1', 'twitch', { show: true, own: true });
+    ob2.onNotice({ requestKey: 'twitch:c1', channel: 'rob', platform: 'twitch', messageId: 'c1', kind: 'cooldown', until: 42_000, serverNow: 0 });
+    check('test2 4.1: gif-notice cooldown → optimistická bez kolečka i štítku', ob2.view('twitch', 'sent-c1') === null && ob2.view('twitch', 'c1') === null && !ob2.governs('twitch', 'sent-c1'));
+    check('test2 4.1: gif-notice cooldown → hláška hostiteli s until', eq(notes, [['cooldown', 42_000]]), JSON.stringify(notes));
+    ob2.onProgress({ requestKey: 'twitch:c1', channel: 'rob', platform: 'twitch', messageId: 'c1', phase: 'detect', pct: 0 });
+    check('test2 4.1: pozdní průběh po hlášce cooldown kolečko nevrátí', ob2.view('twitch', 'c1') === null);
+    check('gifCooldownNoticeText: 3 tvary + odkaz zůstal', L.gifCooldownNoticeText(42_000) === 'GIF můžeš poslat až za 42 s — odkaz zůstal jako běžná zpráva.'
+      && L.gifCooldownNoticeText(90_000) === 'GIF můžeš poslat až za 1:30 — odkaz zůstal jako běžná zpráva.', L.gifCooldownNoticeText(42_000));
+  }
+  {
+    // test2 4.1: gifAccountHandlers → cooldown ze serveru (done approved s cooldownUntil, gif-notice cooldown)
+    const got = [];
+    const out = { onProgress: () => {}, onNotice: () => {} };
+    const cdn = { onServerCooldown: (u, sn) => got.push([u, sn]) };
+    const { handlers } = H.gifAccountHandlers({ requests: () => ({}), outbox: () => out, cooldown: () => cdn });
+    handlers['gif-progress']({ phase: 'done', outcome: 'approved', cooldownUntil: 9_000, serverNow: 1_000 });
+    handlers['gif-progress']({ phase: 'done', outcome: 'approved', cooldownUntil: null, serverNow: 1_000 });
+    handlers['gif-progress']({ phase: 'download', pct: 30 });
+    handlers['gif-notice']({ kind: 'cooldown', until: 7_000, serverNow: 1_000 });
+    handlers['gif-notice']({ kind: 'approved_only' });
+    check('test2 4.1: gifAccountHandlers → cooldown.onServerCooldown (done approved / notice cooldown)', eq(got, [[9_000, 1_000], [null, 1_000], [7_000, 1_000]]), JSON.stringify(got));
+  }
+  {
+    // test2 bod 1 + 3: tooltip ikony emotů / záložky GIFy — stav odměny (mod i divák bez výjimky, zamčeno, cooldown)
+    const T = L.gifRewardTip;
+    const RV = L.gifRewardView;
+    const act = T(RV({ allowed: true, until: null, rewardUntil: 268_000, rewardTotalMs: 400_000 }, 0));
+    check('gifRewardTip: aktivní → „GIF odměna aktivní“, řádek s časem 4:28 a páskem', act.mode === 'active' && act.title === 'GIF odměna aktivní'
+      && act.rows.length === 1 && act.rows[0].name === 'Posílání GIFů' && act.rows[0].remainingMs === 268_000 && act.rows[0].progress === 0.67 && !act.cooldownMs, JSON.stringify(act));
+    const cd = T(RV({ allowed: true, until: 42_000, rewardUntil: 268_000, rewardTotalMs: 400_000 }, 0));
+    check('gifRewardTip: cooldown → nadpis „GIF odměna — cooldown“ + cooldown 42 s', cd.mode === 'cooldown' && cd.title === 'GIF odměna — cooldown' && cd.cooldownMs === 42_000 && cd.rows.length === 1, JSON.stringify(cd));
+    const lk = T(RV({ allowed: false }, 0));
+    check('gifRewardTip: zamčeno → „GIF odměna není aktivní“ + popis', lk.mode === 'locked' && lk.title === 'GIF odměna není aktivní' && /Knihovnu vidíš/.test(lk.lines[0]) && !lk.rows?.length);
+    const un = T(RV({ allowed: true, until: null }, 0));
+    check('gifRewardTip: bez konce odměny → „bez omezení“ (remainingMs null)', un.rows[0].remainingMs === null && un.rows[0].progress === null);
+    check('gifRewardTip: nepřihlášený → výzva', T(RV(null, 0, { loggedIn: false })).lines[0].startsWith('Přihlas se'));
+    check('gifRewardTip: neznámý stav → null', T(RV(null, 0)) === null);
+    const ap = T(RV({ allowed: true, until: null, mode: 'approved' }, 0));
+    check('gifRewardTip: režim approved → řádek „Teď jdou jen GIFy z knihovny.“', ap.lines.includes('Teď jdou jen GIFy z knihovny.'));
+  }
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

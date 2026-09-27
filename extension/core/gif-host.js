@@ -177,8 +177,16 @@ export function gifAccountHandlers({ requests, outbox = () => null, cooldown = (
       'gif-decided': (d) => { requests().onDecided(d); cooldown()?.onDecided(d); if (d?.own) outbox()?.onDecided(d); },
       // GIF knihovna: fronta (FIFO karta modům), průběh stahování a hlášky odesílateli.
       'gif-queue': (d) => requests().onQueue(d),
-      'gif-progress': (d) => outbox()?.onProgress(d),
-      'gif-notice': (d) => outbox()?.onNotice(d),
+      // Tiché schválení (mod / knihovna) nemá gif-decided → konec cooldownu nese `done` (test2 bod 4.1); GIF odkaz
+      // během cooldownu → gif-notice cooldown. Obojí nastaví bublinu / zámek výběru (GifCooldown.onServerCooldown).
+      'gif-progress': (d) => {
+        outbox()?.onProgress(d);
+        if (d?.phase === 'done' && d.outcome === 'approved' && d && 'cooldownUntil' in d) cooldown()?.onServerCooldown?.(d.cooldownUntil ?? null, d.serverNow);
+      },
+      'gif-notice': (d) => {
+        outbox()?.onNotice(d);
+        if (d?.kind === 'cooldown') cooldown()?.onServerCooldown?.(d.until ?? null, d.serverNow);
+      },
     },
     onOpen: ({ reconnect } = {}) => {
       const n = outbox()?.resync() || 0;

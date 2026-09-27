@@ -129,7 +129,7 @@ s.onevent = async (d) => {
     return;
   }
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
-  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, warnings: [] });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: mock.meLogin || 'moduser', displayName: mock.meLogin || 'ModUser' }, kick: null, youtube: null }, warnings: [] });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   // Obsah smazaných zpráv pro moda (smazaný GIF server neposílá) — nesmí odejít na produkci.
   if (u.includes('/moderation/deleted-content')) return json({ ok: true, messages: {} });
@@ -926,7 +926,7 @@ const sendG1 = posts.send.length;
 await glClick('.uc-gl-i[data-id$="0c"] .uc-gl-pick');
 check('G výběr → POST /chat/send s odkazem api.jouki.cz/media/gif/<id>, panel zavřený', await waitFor(() => posts.send.length > sendG1, 4000)
   && posts.send.at(-1).text.startsWith(murl(hex(12))) && await ev(`document.querySelector('.uc-ep').classList.contains('hidden')`) === true, JSON.stringify(posts.send.at(-1)));
-check('G … zpráva s naším odkazem má kolečko průběhu (GIF odkaz)', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('/media/gif/') && !!m.querySelector('.uc-gif-st'))`, 3000));
+check('G … zpráva s naším odkazem: štítek „Odesílám…“ bez procent (test2 bod 4)', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('/media/gif/') && m.querySelector('.uc-gif-st--sending .uc-gif-st-txt')?.textContent === 'Odesílám…' && !m.querySelector('.uc-gif-st-pct'))`, 3000));
 await ev(`document.getElementById('btn-emotes').click()`);
 check('G po odeslání cooldown v hlavičce („Další GIF můžeš poslat za …“), výběr zamčený', await until(`/^Další GIF můžeš poslat za /.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
 await ev(`document.getElementById('btn-emotes').click()`);
@@ -942,6 +942,89 @@ await sleep(1200);
 const ind2 = await ev(`Number(document.getElementById('btn-emotes').style.getPropertyValue('--uc-ep-p'))`);
 check('G pásek ubývá s časem', ind2 < ind.p, `${ind.p} → ${ind2}`);
 await ev(`document.getElementById('btn-emotes').click()`);
+
+// ---- test2 bod 1 + 3: vlastní tooltip ikony emotů a záložky GIFy (jako soundboard), bez nativního title ----
+const tipOf = (sel) => ev(`(() => { const t = document.querySelector(${JSON.stringify(sel)}); if (!t || t.classList.contains('hidden') || getComputedStyle(t).display === 'none') return null;
+  return { mode: [...t.classList].find(c => c.startsWith('uc-sb-tip-') && c !== 'uc-sb-tip-t') || '', title: t.querySelector('.uc-sb-tip-t')?.textContent || '', lines: [...t.querySelectorAll('.uc-sb-tip-l')].map(l => l.textContent),
+    rows: [...t.querySelectorAll('.uc-sb-tip-r')].map(r => ({ name: r.querySelector('span')?.textContent, time: r.querySelector('b')?.textContent, bar: !!r.querySelector('i'), p: Number(r.querySelector('i')?.style.getPropertyValue('--p') || NaN) })),
+    cd: t.querySelector('.uc-sb-tip-cd')?.textContent || null }; })()`);
+check('T2 ikona emotů bez nativního title (vlastní tooltip)', await ev(`!document.getElementById('btn-emotes').hasAttribute('title')`) === true);
+await ev(`(() => { const b = document.getElementById('btn-emotes'); b.dispatchEvent(new MouseEvent('mouseenter')); window.__tipEl = document.querySelector('#input-area > .uc-sb-tip:not(.uc-sb-tip.hidden):last-of-type') || [...document.querySelectorAll('#input-area > .uc-sb-tip')].find(t => !t.classList.contains('hidden')); return true; })()`);
+const TIPSEL = '#input-area > .uc-sb-tip:not(.hidden)';
+const tip1 = await tipOf(TIPSEL);
+check('T2 tooltip ikony emotů: „GIF odměna aktivní“, řádek s časem (5:00 / 4:5x) a páskem ≈ 50 %', tip1?.title === 'GIF odměna aktivní' && tip1.rows.length === 1 && tip1.rows[0].name === 'Posílání GIFů'
+  && /^(5:00|4:5\d)$/.test(tip1.rows[0].time) && tip1.rows[0].bar && Math.abs(tip1.rows[0].p - 0.5) < 0.03, JSON.stringify(tip1));
+await ev(`(() => { window.__tipRow = document.querySelector('${TIPSEL} .uc-sb-tip-r'); return true; })()`);
+await sleep(2200);
+const tip1b = await tipOf(TIPSEL);
+check('T2 tooltip se každou sekundu aktualizuje jen textem (prvek zůstává, čas klesá)', tip1b?.rows[0].time !== tip1.rows[0].time && await ev(`document.querySelector('${TIPSEL} .uc-sb-tip-r') === window.__tipRow`) === true, JSON.stringify([tip1.rows[0].time, tip1b?.rows[0].time]));
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
+check('T2 mouseleave → tooltip pryč', await tipOf(TIPSEL) === null);
+await ev(`document.getElementById('btn-emotes').click()`);
+await ev(`(() => { const tab = document.querySelector('.uc-ep-tab[data-tab="gif"]'); window.__titleMut = 0; window.__titleObs = new MutationObserver((l) => { window.__titleMut += l.length; }); window.__titleObs.observe(tab, { attributes: true, attributeFilter: ['title'] }); tab.dispatchEvent(new MouseEvent('mouseenter')); return true; })()`);
+const TABTIP = '.uc-ep > .uc-sb-tip:not(.hidden)';
+const tip2 = await tipOf(TABTIP);
+check('T2 tooltip záložky GIFy = stejný obsah jako u ikony', tip2?.title === 'GIF odměna aktivní' && tip2.rows[0]?.name === 'Posílání GIFů' && /^\d:\d\d$/.test(tip2.rows[0].time), JSON.stringify(tip2));
+await sleep(2200);
+check('T2 záložka GIFy: nativní title nevzniká ani se nepřepisuje (neproblikává)', await ev(`(() => { const tab = document.querySelector('.uc-ep-tab[data-tab="gif"]'); window.__titleObs.disconnect(); return !tab.hasAttribute('title') && window.__titleMut === 0; })()`) === true,
+  JSON.stringify(await ev(`({ title: document.querySelector('.uc-ep-tab[data-tab="gif"]').getAttribute('title'), mut: window.__titleMut })`)));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
+await ev(`document.getElementById('btn-emotes').click()`);
+mock.gifState = () => ({ ok: true, allowed: false, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
+await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tip3 = await tipOf(TIPSEL);
+check('T2 tooltip zamčeno: „GIF odměna není aktivní“ + popis, bez řádku', tip3?.title === 'GIF odměna není aktivní' && /Knihovnu vidíš/.test(tip3.lines[0] || '') && !tip3.rows.length, JSON.stringify(tip3));
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: Date.now() + 42_000, cooldownSec: 60, serverNow: Date.now(), rewardUntil: Date.now() + 300_000 });
+await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
+const tip4 = await tipOf(TIPSEL);
+check('T2 tooltip cooldown: „GIF odměna — cooldown“ + „Cooldown 42 s“ + řádek odměny', tip4?.title === 'GIF odměna — cooldown' && /^Cooldown 4\d s$/.test(tip4.cd || '') && tip4.rows.length === 1, JSON.stringify(tip4));
+await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
+
+// ---- test2 bod 4 + 4.1: tiché schválení (mod, cooldownSec 0) → cooldown ze serveru; cooldown notice → bez kolečka ----
+mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now() });
+await ev(`(async () => { window.ucGif.cd().reset(); window.ucGif.out().clear(); await window.ucGif.cd().fetchState(); return true; })()`);
+await ev(`document.getElementById('btn-emotes').click()`);
+const sendT2 = posts.send.length;
+mock.sendId = 't2-own';   // id zprávy z POST /chat/send = klíč průběhu (requestKey) na serveru
+await glClick('.uc-gl-i[data-id$="0d"] .uc-gl-pick');
+check('T2 výběr z knihovny (cooldownSec 0) → odešle se, „Odesílám…“', await waitFor(() => posts.send.length > sendT2, 4000)
+  && await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes(${JSON.stringify(hex(13))}) && m.querySelector('.uc-gif-st--sending'))`, 3000));
+const T2NOW = Date.now();
+pushAcc(['gif-progress', { requestKey: 'twitch:t2-own', channel: 'robdiesalot', platform: 'twitch', messageId: 't2-own', phase: 'detect', pct: 0 }],
+  ['gif-progress', { requestKey: 'twitch:t2-own', channel: 'robdiesalot', platform: 'twitch', messageId: 't2-own', phase: 'done', pct: 100, outcome: 'approved', cooldownUntil: SN + 45_000, serverNow: SN }]);
+check('T2 done approved s cooldownUntil → štítek pryč, klient zná cooldown (≈ 45 s)', await until(`window.ucGif.cd().remainingMs() > 40000`, 8000)
+  && await until(`![...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes(${JSON.stringify(hex(13))}) && m.querySelector('.uc-gif-st'))`, 3000),
+  JSON.stringify({ rem: await ev(`window.ucGif.cd().remainingMs()`), dt: Date.now() - T2NOW }));
+await ev(`document.getElementById('btn-emotes').click()`);
+const sendT2b = posts.send.length;
+await glClick('.uc-gl-i[data-id$="0d"] .uc-gl-pick');
+await sleep(400);
+check('T2 další výběr z knihovny v cooldownu → neodejde, „Můžeš až za:“', posts.send.length === sendT2b && /^Můžeš až za: \d\d s$/.test((await gl())?.msg || ''), JSON.stringify(await gl()));
+await ev(`document.getElementById('btn-emotes').click()`);
+await typeIn(murl(hex(13)));
+await clickSend();
+await sleep(300);
+check('T2 GIF odkaz z pole v cooldownu → neodejde, bublina „Můžeš až za:“', posts.send.length === sendT2b && await ev(`!!document.querySelector('.uc-gif-cd.uc-gif-cd--blocked:not([hidden])')`) === true);
+await typeIn('');
+// 4.1: odkaz přesto odešel (jiný klient / ručně) → server ho nechá jako odkaz a pošle gif-notice cooldown.
+await ev(`(async () => { window.ucGif.cd().reset(); window.ucGif.out().clear(); await window.ucGif.cd().fetchState(); return true; })()`);
+await typeIn(`${murl(hex(13))}`);
+const sendT2c = posts.send.length;
+mock.sendId = 't2-cd';
+await clickSend();
+check('T2 odkaz bez známého cooldownu odejde se štítkem „Odesílám…“', await waitFor(() => posts.send.length > sendT2c, 4000)
+  && await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.uc-gif-st--sending'))`, 3000));
+pushAcc(['gif-notice', { requestKey: 'twitch:t2-cd', channel: 'robdiesalot', platform: 'twitch', messageId: 't2-cd', kind: 'cooldown', until: SN + 30_000, serverNow: SN }]);
+check('T2 4.1 gif-notice cooldown → u zprávy bez kolečka i štítku', await until(`![...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes(${JSON.stringify(hex(13))}) && m.querySelector('.uc-gif-st'))`, 8000)
+  && await ev(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes(${JSON.stringify(hex(13))}))`) === true);
+check('T2 4.1 … hláška „GIF můžeš poslat až za 30 s — odkaz zůstal jako běžná zpráva.“ + cooldown v klientu', await until(`[...document.querySelectorAll('#chat .sys')].some(m => m.textContent === 'GIF můžeš poslat až za 30 s — odkaz zůstal jako běžná zpráva.')`, 3000)
+  && await ev(`window.ucGif.cd().remainingMs() > 25000`) === true);
+await typeIn('');
+await ev(`(() => { window.ucGif.cd().reset(); window.ucGif.out().clear(); return true; })()`);
+mock.sendId = null;
 
 // ---- fáze G2 (mod): GIFy | Zamítnuté GIFy, duplikáty, odebrání z knihovny, token pro zamítnuté ----
 mock.mod = true;
@@ -1076,6 +1159,36 @@ check('G2 karta: dříve zamítnuté médium (tokenRequired) → náhled s token
 check('G2 karta: token jen v src (ne v jiném atributu)', await ev(`(() => { const c = document.querySelector('.uc-gif-card[data-request-id="95"]'); return !!c && ![...c.querySelectorAll('*')].some(e => [...e.attributes].some(a => a.name !== 'src' && /tk-/.test(a.value))); })()`) === true);
 pushAcc(['gif-decided', { requestId: 95, channel: 'robdiesalot', approved: false, status: 'rejected', by: 'twitch:jiny' }]);
 await until(`!document.querySelector('.uc-gif-card[data-request-id="95"]')`, 6000);
+
+// ---- test2 bod 2: streamer (vlastní kanál) — Zamítnuté / Stažené / Ke smazání rozmazané, oko zaostří; mod ostře ----
+check('T2 mod (ne streamer): zamítnuté GIFy ostře, bez oka', await ev(`(async () => { document.getElementById('btn-emotes').click(); await new Promise(r => setTimeout(r, 300)); document.querySelector('[data-gl-tab="rej"]').click(); await new Promise(r => setTimeout(r, 800)); const t = document.querySelectorAll('.uc-gl-grid--rej .uc-gl-i'); const out = t.length > 0 && [...t].every(i => !i.classList.contains('uc-gl-i--blur') && !i.querySelector('.uc-gl-eye')); document.getElementById('btn-emotes').click(); return out; })()`) === true);
+mock.meLogin = 'robdiesalot';
+mock.wd = [DISC(23, 'withdrawn')];
+mock.pg = [DISC(24, 'purging')];
+mock.rejMedia.add(hex(24));
+await boot();
+await until(`document.body.classList.contains('uc-can-moderate')`);
+await ev(`document.getElementById('btn-emotes').click()`);
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
+await until(`!!document.querySelector('[data-gl-tab="rej"]')`, 4000);
+await glClick('[data-gl-tab="rej"]');
+await until(`document.querySelectorAll('.uc-gl-grid--rej .uc-gl-i').length > 0 && document.querySelectorAll('.uc-gl-grid--disc .uc-gl-i').length === 2`, 6000);
+const blurSt = () => ev(`[...document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i[data-sec]')].filter(i => ['rej', 'wd', 'pg'].includes(i.dataset.sec)).map(i => ({ sec: i.dataset.sec, id: i.dataset.id.slice(-2), blur: i.classList.contains('uc-gl-i--blur'), eye: i.querySelector(':scope > .uc-gl-eye')?.getAttribute('aria-label') || null,
+  filter: getComputedStyle(i.querySelector('.uc-gif-media') || i).filter }))`);
+const bz0 = await blurSt();
+check('T2 streamer: Zamítnuté, Stažené i Ke smazání rozmazané (filter blur) s okem „Zobrazit GIF“', bz0?.length >= 3 && ["rej", "wd", "pg"].every(sec => bz0.some(x => x.sec === sec)) && bz0.every(x => x.blur && x.eye === "Zobrazit GIF" && /blur/.test(x.filter)), JSON.stringify(bz0));
+const sendEye = posts.send.length, prevEye = posts.media.length;
+await glClick('.uc-gl-grid--rej .uc-gl-i [data-act="eye"]');
+await sleep(350);   // přechod filtru 0,2 s
+const bz1 = await blurSt();
+check('T2 streamer: oko zaostří jen tu dlaždici (bez náhledu, bez akce)', bz1[0].blur === false && bz1[0].eye === "Rozmazat GIF" && !/blur/.test(bz1[0].filter) && bz1.slice(1).every(x => x.blur) && (await pv())?.open === false && posts.send.length === sendEye && posts.media.length === prevEye, JSON.stringify(bz1));
+await glClick('.uc-gl-grid--rej .uc-gl-i [data-act="eye"]');
+check('T2 streamer: oko znovu rozmaže', (await blurSt())[0].blur === true);
+await glClick('.uc-gl-grid--pg .uc-gl-i [data-act="eye"]');
+check('T2 streamer: Ke smazání — oko zaostří', (await blurSt()).find(x => x.sec === 'pg')?.blur === false);
+await ev(`document.getElementById('btn-emotes').click()`);
+mock.meLogin = null;
+mock.wd = []; mock.pg = [];
 
 // ---- fáze E (mod + Dev mód): schvalování jako divák ----
 mock.mod = true;

@@ -45,6 +45,10 @@
 .uc-sb-tip-active .uc-sb-tip-t { color: var(--accent-light); }
 .uc-sb-tip-locked .uc-sb-tip-t { color: #ff8a8a; }
 .uc-sb-tip-paused .uc-sb-tip-t { color: #9ecbff; }
+/* GIF odměna v cooldownu (ikona emotů / záložka GIFy) a tooltip jen s názvem. */
+.uc-sb-tip-cooldown .uc-sb-tip-t { color: #ffbe98; }
+.uc-sb-tip-plain { min-width: 0; }
+.uc-sb-tip-plain .uc-sb-tip-t { margin-bottom: 0; }
 .uc-sb-tip-l { color: var(--text-secondary); }
 .uc-sb-tip-r { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin-top: 5px; }
 .uc-sb-tip-r b { font-variant-numeric: tabular-nums; }

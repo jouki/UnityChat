@@ -166,6 +166,24 @@ Promise.all([
   const off = new cd.GifCooldown({ doc, host: new El('div'), api: async (p) => { calls.push(p); return state; }, channel: () => 'robdiesalot', platform: () => 'twitch', enabled: () => false, now: () => t, setInterval: () => 1, clearInterval: () => {} });
   const nBefore = calls.length; off.onInput('https://giphy.com/gifs/x-1');
   check('GifCooldown: nepřihlášený → žádný dotaz', calls.length === nBefore && off.checkSend('https://giphy.com/gifs/x-1') === true);
+  // test2 bod 4.1: cooldown ze serveru (done approved u tichého schválení / gif-notice cooldown), i když cooldownSec = 0 (mod).
+  {
+    const OWN = `https://api.jouki.cz/media/gif/${'ab'.repeat(16)}`;
+    let st2 = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: t };
+    const states = [];
+    const S = new cd.GifCooldown({ doc, host: new El('div'), api: async () => st2, channel: () => 'robdiesalot', platform: () => 'twitch', now: () => t, onState: (x) => states.push(x), setInterval: () => 1, clearInterval: () => {} });
+    await S.fetchState();
+    S.onSent(OWN);
+    check('GifCooldown: cooldownSec 0 (mod) → po odeslání cooldown neznámý (dřív tady neblokovalo nic)', S.remainingMs() === 0 && S.checkSend(OWN) === true);
+    S.onServerCooldown(t + 45_000 - 1_000, t - 1_000);   // serverový čas o 1 s pozadu
+    check('GifCooldown.onServerCooldown: konec cooldownu ze serveru (posun hodin přes serverNow)', S.remainingMs() === 45_000 && S.snapshot().until === t + 45_000 && states.length >= 2, String(S.remainingMs()));
+    check('GifCooldown: další GIF (i z knihovny) → zablokováno „Můžeš až za:"', S.checkSend(OWN) === false && S.blocked);
+    S.onServerCooldown(null, t);
+    check('GifCooldown.onServerCooldown(null) → server cooldown nehlásí, lokální stav beze změny', S.remainingMs() === 45_000);
+    const E = new cd.GifCooldown({ doc, host: new El('div'), api: async () => st2, channel: () => 'robdiesalot', platform: () => 'twitch', now: () => t, setInterval: () => 1, clearInterval: () => {} });
+    E.onServerCooldown(t + 30_000, t);
+    check('GifCooldown.onServerCooldown bez načteného stavu → cooldown platí (allowed, zbývá 30 s)', E.remainingMs() === 30_000 && E.snapshot()?.allowed === true && E.checkSend(OWN) === false);
+  }
 
   // --- pojistka GifHoldWatch (zpráva schovaná jako gif_request bez rozhodnutí → GET /gif/held) ---
   {

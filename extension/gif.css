@@ -239,6 +239,9 @@ div.uc-gif-more { cursor: default; }
   line-height: 1.5;
 }
 .uc-gif-st--progress { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); }
+/* Náš odkaz (GIF z knihovny): krátký stav bez procent, kolečko až s fází stahování (test2 bod 4). */
+.uc-gif-st--sending { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); padding-left: 9px; }
+.uc-gif-st--sending .uc-gif-st-txt { animation: uc-gif-st-pulse 1.8s ease-in-out infinite; }
 .uc-gif-st-ring { width: 16px; height: 16px; }
 .uc-gif-st-ring i { -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px); mask: radial-gradient(circle, transparent 5px, #000 5.5px); }
 .uc-gif-st-pct { font-variant-numeric: tabular-nums; min-width: 3.2em; }
@@ -256,7 +259,7 @@ div.uc-gif-more { cursor: default; }
 .uc-gif-st-warn[hidden] { display: none; }
 .uc-gif-st--rejected, .uc-gif-st--expired, .uc-gif-st--not_allowed { background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.55); color: #ff8a8e; padding-left: 9px; }
 @media (prefers-reduced-motion: reduce) {
-  .uc-gif-st-spin, .uc-gif-st--pending .uc-gif-st-txt { animation: none; }
+  .uc-gif-st-spin, .uc-gif-st--pending .uc-gif-st-txt, .uc-gif-st--sending .uc-gif-st-txt { animation: none; }
 }
 
 /* ---- Panel emotů se svislými bočními záložkami (Emoty | GIFy) — core/emote-picker.js tabs ---- */
@@ -328,6 +331,15 @@ div.uc-gif-more { cursor: default; }
   background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s;
 }
 .uc-gl-i:hover .uc-gl-more, .uc-gl-more:focus-visible { opacity: 1; }
+/* Streamer: Zamítnuté / Stažené / Ke smazání rozmazané, oko v rohu zaostří (test2 bod 2; rozmazání jako Profil moda). */
+.uc-gl-i--blurable .uc-gl-media .uc-gif-media { transition: filter .2s; }
+.uc-gl-i--blur .uc-gl-media .uc-gif-media { filter: blur(10px) saturate(.7); }
+.uc-gl-i--blurable .uc-gl-pick { overflow: hidden; }
+.uc-gl-eye {
+  position: absolute; top: 3px; left: 3px; z-index: 2; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px; background: rgba(0, 0, 0, 0.65); color: #fff; cursor: pointer;
+}
+.uc-gl-eye:hover, .uc-gl-eye:focus-visible { background: rgba(0, 0, 0, 0.85); color: var(--accent-light, #ffc800); }
 .uc-gl-menu {
   position: absolute; top: 27px; right: 3px; z-index: 3; display: flex; flex-direction: column; min-width: 150px;
   padding: 4px; border: 1px solid var(--border, #2f2f35); border-radius: 6px; background: var(--bg-tertiary, #1f1f23); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);

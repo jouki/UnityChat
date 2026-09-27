@@ -1217,6 +1217,8 @@ class UnityChat {
       refreshReward: () => (this._account ? this._gifCd().refreshIfStale() : null),
       // Vlastní GIF ještě čeká na moda → výběr z knihovny blokovat (server pustí jednu žádost na uživatele).
       ownPending: () => !!this._gifOutInst?.busy(),
+      // Streamer (vlastní kanál, stejně jako role pro commandy): zamítnuté GIFy rozmazané, oko zaostří (test2 bod 2).
+      isBroadcaster: () => this._myChatRole() === 'broadcaster',
       onPick: (url) => {
         this._emotePicker?.close();
         this._sendMessage({ text: url, gif: true });
@@ -1265,7 +1267,11 @@ class UnityChat {
         api: (path) => this._ucApi(path),
         serverOffset: () => this._gifCdInst?.serverOffset() || 0,
         onChange: (keys) => this._paintGifOwn(keys),
-        onNotice: (kind) => { if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT); },
+        onNotice: (kind, _e, d) => {
+          if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT);
+          // GIF odkaz během cooldownu zůstal běžnou zprávou (test2 bod 4.1); čas ze serveru (until − serverNow).
+          else if (kind === 'cooldown') this._sys(core.gifCooldownNoticeText(Math.max(1000, Number(d?.until) - Number(d?.serverNow)) || 1000));
+        },
       });
     }
     return this._gifOutInst;
@@ -3950,7 +3956,8 @@ class UnityChat {
     if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
     if (this._warnings?.blocked) { this._ucLog('ModMenu', 'send blokováno — nepotvrzené varování'); this._warnings.open(); return; }
     // GIF odkaz během cooldownu odměny: neodeslat, pole zčervená, bublina „Můžeš až za:" (text zůstává v poli).
-    if (!external && !this._gifCd().checkSend(text)) return;
+    // Výběr z knihovny (opts.gif) taky — cooldown ze serveru (i tiché schválení modem) ho musí zastavit (test2 bod 4.1).
+    if ((!external || opts.gif) && !this._gifCd().checkSend(text)) return;
 
     // Send protection (jen stará cesta přes kartu): if the active tab's channel differs from the configured
     // channel for this platform, refuse to send. Auto-switch should normally
@@ -4026,7 +4033,9 @@ class UnityChat {
     const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     // GIF odkaz: kolečko s % u optimistické zprávy hned (jen když odměnu mám / jsem mod), průběh pak ze SSE gif-progress.
     if (hasGif) {
-      this._gifOut().noteOptimistic(optId, platform, { show: gifRv.canSend || gifRv.mode === 'unknown' });
+      // Náš odkaz (výběr z knihovny) server nestahuje → „Odesílám…“ bez procent (test2 bod 4).
+      const ownLink = !!opts.gif || window.UC_CORE.gifCandidate?.(text)?.mode === 'own';
+      this._gifOut().noteOptimistic(optId, platform, { show: gifRv.canSend || gifRv.mode === 'unknown', own: ownLink });
     }
     this._addMessage({
       id: optId,

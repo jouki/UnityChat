@@ -101,6 +101,78 @@ export function formatRemaining(msLeft) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
+/** Čas v řádku tooltipu: odpočet, „bez omezení“, u pozastaveného ⏸. */
+const tipRowTime = (r) => `${r.paused ? '⏸ ' : ''}${r.remainingMs === null || r.remainingMs === undefined ? (r.paused ? 'pozastaveno' : 'bez omezení') : formatRemaining(r.remainingMs)}`;
+
+/**
+ * Obsah vlastního tooltipu ikony (nota soundboardu, ikona emotů / záložka GIFy): stav `s` = { mode, title, lines?,
+ * rows?: [{ name, nameHtml?, remainingMs|null, progress|null, paused? }], cooldownMs? }. Stejná struktura jako minule
+ * → jen texty a pásky (bez přestavění prvků, nebliká, pásek plynule ubývá); jinak nový obsah.
+ */
+export function renderIconTip(tip, s) {
+  const rows = s.rows || [];
+  const lines = s.lines || [];
+  const cdMs = s.cooldownMs > 0 ? s.cooldownMs : 0;
+  const sig = JSON.stringify([s.mode, s.title, lines, rows.map((r) => [r.nameHtml || r.name, r.progress === null || r.progress === undefined, !!r.paused]), cdMs > 0]);
+  tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
+  if (tip._ucTipSig !== sig) {
+    tip._ucTipSig = sig;
+    const l = lines.map((x) => `<div class="uc-sb-tip-l">${esc(x)}</div>`).join('');
+    const r = rows.map((x) => `<div class="uc-sb-tip-r"><span>${x.nameHtml || esc(x.name)}</span><b></b>${x.progress === null || x.progress === undefined ? '' : '<i></i>'}</div>`).join('');
+    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${l}${r}${cdMs ? '<div class="uc-sb-tip-cd"></div>' : ''}`;
+  }
+  const els = tip.querySelectorAll('.uc-sb-tip-r');
+  rows.forEach((x, i) => {
+    const el = els[i];
+    if (!el) return;
+    const b = el.querySelector('b');
+    if (b) b.textContent = tipRowTime(x);
+    const bar = el.querySelector('i');
+    if (bar && x.progress !== null && x.progress !== undefined) bar.style.setProperty('--p', Number(x.progress).toFixed(4));
+  });
+  const cd = tip.querySelector('.uc-sb-tip-cd');
+  if (cd) cd.textContent = `Cooldown ${formatRemaining(cdMs)}`;
+}
+
+/**
+ * Vlastní tooltip ikony (sdílený soundboardem, ikonou emotů a boční záložkou GIFy — test2 body 1 a 3): prvek `.uc-sb-tip`
+ * v `host` (position: relative). `place(anchor)`: 'above' = nad ikonou, zarovnaný na její pravý okraj; 'side' = vedle
+ * ikony vpravo (svislé záložky). Nativní `title` kotvy se nepoužívá (každou sekundu přepsaný title bliká).
+ */
+export function createIconTip({ host, placement = 'above' } = {}) {
+  const doc = host.ownerDocument;
+  const tip = doc.createElement('div');
+  tip.className = 'uc-sb-tip hidden';
+  tip.setAttribute('role', 'tooltip');
+  host.appendChild(tip);
+  let anchor = null;
+  const place = () => {
+    if (!anchor?.getBoundingClientRect || !host.getBoundingClientRect) return;
+    const h = host.getBoundingClientRect();
+    const a = anchor.getBoundingClientRect();
+    if (placement === 'side') {
+      Object.assign(tip.style, { left: `${Math.round(a.right - h.left + 6)}px`, top: `${Math.round(a.top - h.top)}px`, right: 'auto', bottom: 'auto', marginBottom: '0' });
+    } else {
+      tip.style.right = `${Math.max(4, Math.round(h.right - a.right))}px`;
+    }
+  };
+  return {
+    el: tip,
+    get open() { return !tip.classList.contains('hidden'); },
+    /** Ukázat u `anchorEl` se stavem `s` (null = skrýt). */
+    show(anchorEl, s) {
+      anchor = anchorEl;
+      if (!s) { this.hide(); return; }
+      renderIconTip(tip, s);
+      place();
+    },
+    /** Nový stav (tik) — jen když je otevřený. */
+    update(s) { if (!this.open) return; if (!s) { this.hide(); return; } renderIconTip(tip, s); },
+    hide() { tip.classList.add('hidden'); },
+    destroy() { tip.remove(); },
+  };
+}
+
 /**
  * Stav tlačítka noty:
  *   hidden — kanál nemá žádné zvuky;
@@ -287,10 +359,9 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   const foot = panel.querySelector('.uc-sb-foot');
   volInput.value = String(Math.round(vol * 100));
 
-  const tip = doc.createElement('div');
-  tip.className = 'uc-sb-tip hidden';
-  tip.setAttribute('role', 'tooltip');
-  host.appendChild(tip);
+  // Vlastní tooltip (sdílený s ikonou emotů a záložkou GIFy — createIconTip).
+  const iconTip = createIconTip({ host });
+  const tip = iconTip.el;
 
   button.innerHTML = `${SOUNDBOARD_BUTTON_SVG}<span class="uc-sb-bar"></span>`;
   button.classList.add('uc-sb-btn');
@@ -349,14 +420,10 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   }
   function renderTip(s = soundboardIconState(state, now())) {
     if (s.mode === 'hidden') { hideTip(); return; }
-    const lines = (s.lines || []).map((l) => `<div class="uc-sb-tip-l">${esc(l)}</div>`).join('');
-    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${r.nameHtml || esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
-    const cd = s.cooldownMs > 0 ? `<div class="uc-sb-tip-cd">Cooldown ${esc(formatRemaining(s.cooldownMs))}</div>` : '';
-    tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
-    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${lines}${rows}${cd}`;
+    renderIconTip(tip, s);
   }
   function showTip() { if (isOpen()) return; tipOpen = true; renderTip(); }
-  function hideTip() { tipOpen = false; tip.classList.add('hidden'); }
+  function hideTip() { tipOpen = false; iconTip.hide(); }
 
   // ---- panel ----
   const favSet = () => new Set(state?.favorites || []);

@@ -67,6 +67,15 @@ export const GIF_STATUS_TEXT = {
 };
 export const GIF_PREV_REJECTED_TIP = 'tento GIF byl už dříve zamítnut';
 export const GIF_APPROVED_ONLY_TEXT = 'Nové GIFy teď nejdou, vyber z GIFů v panelu';
+/** Náš odkaz (id) na GIF z knihovny: krátký stav bez procent, dokud server nezačne stahovat (test2 bod 4). */
+export const GIF_SENDING_TEXT = 'Odesílám…';
+/** Fáze, od které se u zprávy ukazuje kolečko s procenty. */
+const DOWNLOAD_PHASES = new Set(['download', 'unlock']);
+
+/** Hláška po `gif-notice` cooldown: GIF odkaz během cooldownu zůstal běžnou zprávou (test2 bod 4.1). */
+export function gifCooldownNoticeText(ms) {
+  return `GIF můžeš poslat až za ${formatRemaining(ms)} — odkaz zůstal jako běžná zpráva.`;
+}
 
 const PHASES = new Set(['detect', 'access', 'download', 'unlock', 'verify', 'done']);
 
@@ -209,17 +218,26 @@ export class GifOutbox {
    * Odeslal jsem zprávu s GIF odkazem (optimistická `optId`). `show` = kolečko 0 % hned (odměnu mám / jsem mod);
    * když do GIF_OPTIMISTIC_SILENT_MS nepřijde nic ze serveru (bez účtu, neodemčeno), kolečko zmizí.
    */
-  noteOptimistic(optId, platform, { show = false } = {}) {
+  noteOptimistic(optId, platform, { show = false, own = false } = {}) {
     if (!optId || !platform) return;
     this._opt.push({ optId: String(optId), platform, at: this.now() });
     if (this._opt.length > 20) this._opt.shift();
+    // Náš odkaz (api.jouki.cz/media/gif/<id>, výběr z knihovny): server ho nestahuje → „Odesílám…“ bez procent.
+    if (own) {
+      (this._ownOpt ||= new Set()).add(String(optId));
+      if (this._ownOpt.size > 50) this._ownOpt.delete(this._ownOpt.values().next().value);
+    }
     if (show) {
       const e = this._entry(`${platform}:${optId}`, platform, String(optId));
       e.optimistic = true;
-      this._L(`${optId} odeslán GIF odkaz → kolečko 0 %`);
+      e.ownLink = !!own;
+      this._L(`${optId} odeslán GIF odkaz → ${own ? GIF_SENDING_TEXT : 'kolečko 0 %'}`);
       this._arm();
     }
   }
+
+  /** Klíč patří zprávě s naším odkazem (optimistická označená `own`)? */
+  _isOwnLink(key) { return !!this._ownOpt?.size && this.idsFor(key).some((id) => this._ownOpt.has(id)); }
 
   /** Zpráva neodešla / zmizela → bez štítku. */
   drop(platform, id) {
@@ -271,7 +289,7 @@ export class GifOutbox {
   busy(now = this.now()) {
     for (const e of this._e.values()) {
       const v = this.view(e.platform, e.messageId, now);
-      if (v && (v.kind === 'progress' || v.kind === 'pending')) return true;
+      if (v && (v.kind === 'progress' || v.kind === 'sending' || v.kind === 'pending')) return true;
     }
     return false;
   }
@@ -350,6 +368,8 @@ export class GifOutbox {
     if (e.state === 'none' && p.phase !== 'done') e.state = 'progress';
     // Pozdní průběh po čekání (pending → progress by štítek vrátil zpět) ignorovat.
     if (e.state !== 'progress' && p.phase !== 'done') return e;
+    if (!e.ownLink && this._isOwnLink(p.key)) e.ownLink = true;
+    if (DOWNLOAD_PHASES.has(p.phase)) e.dl = true;
     e.floor = gifProgressPct(e, this.now(), e.floor);
     e.optimistic = false;
     Object.assign(e, { phase: p.phase, pct: p.pct, estimateMs: p.estimateMs, elapsedMs: p.elapsedMs, at: this.now() });
@@ -381,6 +401,8 @@ export class GifOutbox {
     const e = this._entry(key, platform, messageId);
     if (d.kind === 'approved_only') e.state = 'not_allowed';
     else if (d.kind === 'auto_rejected') e.state = 'rejected';
+    // Cooldown: odkaz zůstal běžnou zprávou → bez kolečka i štítku (test2 bod 4.1), hlášku ukáže hostitel.
+    else if (d.kind === 'cooldown') { e.state = 'none'; e.optimistic = false; }
     else { this._L(`gif-notice ${d.kind} neznámý`); return e; }
     e.final = true;
     this._L(`${key} gif-notice ${d.kind}${d.reason ? ` (${d.reason})` : ''}`);
@@ -446,6 +468,8 @@ export class GifOutbox {
     // Kolečko jen z optimistické zprávy a ze serveru nic → po chvíli pryč (GIF nejde přes odměnu / bez účtu).
     if (e.state === 'progress' && e.optimistic && now - e.at > GIF_OPTIMISTIC_SILENT_MS) return null;
     if (e.state === 'progress') {
+      // Náš odkaz: bez procent, dokud server nestahuje (u známého média nestahuje nikdy).
+      if (e.ownLink && !e.dl) return { kind: 'sending', text: GIF_SENDING_TEXT };
       const pct = gifProgressPct(e, now, e.floor);
       return { kind: 'progress', pct, text: formatGifPct(pct) };
     }
@@ -819,6 +843,21 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
   return { mode: cd > 0 ? 'cooldown' : 'active', canSend: cd <= 0, cooldownMs: cd, remainingMs: rem, progress, approvedOnly, text };
 }
 
+/**
+ * Vlastní tooltip (stejný jako u noty soundboardu, core/soundboard.js IconTip) nad ikonou emotů a boční záložkou GIFy
+ * z gifRewardView: { mode, title, lines, rows: [{ name, remainingMs|null, progress|null }], cooldownMs }, nebo null
+ * (stav neznámý → hostitel ukáže jen název). Mod i divák stejně (bez výjimky).
+ */
+export function gifRewardTip(v) {
+  if (!v || v.mode === 'unknown') return null;
+  const lines = v.approvedOnly && v.mode !== 'locked' && v.mode !== 'login' ? ['Teď jdou jen GIFy z knihovny.'] : [];
+  if (v.mode === 'login') return { mode: 'locked', title: 'GIFy', lines: [v.text] };
+  if (v.mode === 'locked') return { mode: 'locked', title: 'GIF odměna není aktivní', lines: ['Knihovnu vidíš, poslat GIF jde s odemčenou odměnou.', ...lines] };
+  const rows = [{ name: 'Posílání GIFů', remainingMs: v.remainingMs ?? null, progress: v.progress ?? null }];
+  if (v.mode === 'cooldown') return { mode: 'cooldown', title: 'GIF odměna — cooldown', lines, rows, cooldownMs: v.cooldownMs };
+  return { mode: 'active', title: 'GIF odměna aktivní', lines, rows, cooldownMs: 0 };
+}
+
 /** Okraj nabídky ⋯ od hrany panelu a od tlačítka (px). */
 export const GIF_MENU_MARGIN = 4;
 /** Nabídka ⋯ pod tlačítkem: posun od horní hrany dlaždice (tlačítko 22 px + 3 px odsazení + 2 px mezera). */
@@ -994,6 +1033,8 @@ export function gifLibraryErrorText(e) {
 // Knihovna — záložka „GIFy“ v panelu emotů
 // ---------------------------------------------------------------------------
 
+const EYE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
 export const GIF_TAB_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10.5 10H8.8c-.8 0-1.3.6-1.3 2s.5 2 1.3 2h1.2v-1.6H9M13 10v4M15.5 14v-4h2.2M15.5 12h1.8" stroke-linecap="round"/></svg>';
 const LIB_THUMB_W = 140;
 const LIB_THUMB_H = 96;
@@ -1016,19 +1057,22 @@ const LIB_THUMB_H = 96;
  * @param {() => object} [o.reward]               gifRewardView(…) — smí poslat? text hlavičky, pásek
  * @param {() => void} [o.refreshReward]           znovu se zeptat na stav odměny (GET /gif/state)
  * @param {(url: string, item: object) => void} o.onPick   poslat odkaz do chatu
- * @param {(v: { progress: number|null, title?: string }|null) => void} [o.onIndicator]  pásek na záložce a tlačítku
+ * @param {(v: { progress: number|null, title?: string, tip?: object|null }|null) => void} [o.onIndicator]  pásek na záložce a tlačítku + stav tooltipu (gifRewardTip)
  * @param {GifAccessToken} [o.tokens]
  * @param {string[]} [o.origins]
  * @param {(tag: string, text: string) => void} [o.log]
  * @param {() => number} [o.now]
  * @param {() => boolean} [o.ownPending]          vlastní GIF ještě čeká / převádí se (GifOutbox.busy) → výběr blokovat
+ * @param {() => boolean} [o.isBroadcaster]       streamer (vlastní kanál) → Zamítnuté / Stažené / Ke smazání rozmazané, oko zaostří
  */
-export function createGifPanel({ pane, api, channel, canModerate, reward, refreshReward, onPick, onIndicator, tokens, origins = null, log, now, ownPending } = {}) {
+export function createGifPanel({ pane, api, channel, canModerate, reward, refreshReward, onPick, onIndicator, tokens, origins = null, log, now, ownPending, isBroadcaster } = {}) {
   const doc = pane.ownerDocument;
   const win = doc.defaultView || globalThis;
   const L = (t) => log?.('Gif', `knihovna: ${t}`);
   const clock = now || (() => Date.now());
   const isMod = () => !!canModerate?.();
+  // Streamer nechce mít zamítnuté GIFy (často nevhodné) ostře na obrazovce streamu — test2 bod 2.
+  const isStreamer = () => { try { return !!isBroadcaster?.(); } catch { return false; } };
   const rv = () => reward?.() || gifRewardView(null, clock());
   const opts = { origins };
   const st = {
@@ -1042,6 +1086,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     menu: null, confirm: null, preview: null, msg: '',
     // Dlaždice / řádky duplikátů s rozběhnutou akcí (klíč dlaždice) → tlačítka vypnutá, po odpovědi zase zapnutá.
     busy: new Set(),
+    // Streamer: zaostřené dlaždice (klíč `<sekce>:<mediaId>`), ostatní rozmazané.
+    sharp: new Set(),
   };
   // Token moda vždy z GifAccessToken (po odhlášení je pryč, panel si ho nedrží — audit F9).
   const tok = () => tokens?.current?.() ?? null;
@@ -1085,7 +1131,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     rewardEl.querySelector('.uc-gl-reward-t').textContent = txt;
     rewardEl.hidden = !txt;
     pane.classList.toggle('uc-gl--locked', !v.canSend);
-    onIndicator?.(v.progress !== null ? { progress: v.progress, title: v.text } : null);
+    // Pásek (jen se známým koncem odměny) + stav pro vlastní tooltip ikony emotů a záložky (test2 body 1 a 3).
+    onIndicator?.({ progress: v.progress, title: v.text, tip: gifRewardTip(v) });
   }
 
   // ---- data ----
@@ -1298,6 +1345,38 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       <div class="uc-gl-menu" role="menu"${st.menu === key ? '' : ' hidden'}>${btns}</div>`);
   }
 
+  /**
+   * Streamer: dlaždice sekce Zamítnuté / Stažené / Ke smazání rozmazaná, oko v rohu ji zaostří a znovu rozmaže
+   * (stav drží st.sharp i přes překreslení). Mod (ne streamer) je vidí ostře.
+   */
+  function blurTile(el, sec, mediaId) {
+    if (!isStreamer()) return;
+    const sharp = st.sharp.has(`${sec}:${mediaId}`);
+    el.classList.add('uc-gl-i--blurable');
+    el.classList.toggle('uc-gl-i--blur', !sharp);
+    const eye = doc.createElement('button');
+    eye.type = 'button';
+    eye.className = 'uc-gl-eye';
+    eye.dataset.act = 'eye';
+    paintEye(eye, sharp);
+    el.appendChild(eye);
+  }
+  function paintEye(eye, sharp) {
+    eye.innerHTML = sharp ? EYE_OFF_SVG : EYE_SVG;
+    eye.setAttribute('aria-pressed', String(sharp));
+    eye.setAttribute('aria-label', sharp ? 'Rozmazat GIF' : 'Zobrazit GIF');
+    eye.title = sharp ? 'Rozmazat' : 'Zobrazit';
+  }
+  function toggleEye(tile) {
+    const key = `${tile.dataset.sec}:${tile.dataset.id}`;
+    const sharp = !st.sharp.has(key);
+    if (sharp) st.sharp.add(key); else st.sharp.delete(key);
+    tile.classList.toggle('uc-gl-i--blur', !sharp);
+    const eye = tile.querySelector(':scope > .uc-gl-eye');
+    if (eye) paintEye(eye, sharp);
+    L(`${key} ${sharp ? 'zaostřen' : 'rozmazán'} (streamer)`);
+  }
+
   /** Náhled dlaždice (Zamítnuté, duplikáty, zahozené): klik otevře náhled. */
   function previewBox(item, withToken) {
     const box = doc.createElement('button');
@@ -1311,13 +1390,14 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   }
 
   function rejItem(item) {
-    return cachedTile(`rej:${item.mediaId}`, `${tokSig()}|${item.vault ? 1 : 0}|${rejectedMetaText(item, clock())}`, () => buildRejItem(item));
+    return cachedTile(`rej:${item.mediaId}`, `${tokSig()}|${item.vault ? 1 : 0}|${rejectedMetaText(item, clock())}|${isStreamer() ? 1 : 0}`, () => buildRejItem(item));
   }
   function buildRejItem(item) {
     const el = doc.createElement('div');
     el.className = `uc-gl-i uc-gl-i--rej${item.vault ? ' uc-gl-i--vault' : ''}`;
     el.appendChild(previewBox(item, true));
     tileMenu(el, 'rej', item.mediaId);
+    blurTile(el, 'rej', item.mediaId);
     const meta = doc.createElement('div');
     meta.className = 'uc-gl-meta';
     meta.textContent = rejectedMetaText(item, clock());
@@ -1333,7 +1413,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   /** Stažený GIF (withdrawn): Odstranit ze serveru. Ke smazání (purging): odpočet + Obnovit (náhled s tokenem). */
   function discItem(item) {
     const wd = item.status === 'withdrawn';
-    return cachedTile(`${wd ? 'wd' : 'pg'}:${item.mediaId}`, `${wd ? 0 : tokSig()}|${item.restoreTo}|${discardedMetaText(item, clock())}`, () => buildDiscItem(item));
+    return cachedTile(`${wd ? 'wd' : 'pg'}:${item.mediaId}`, `${wd ? 0 : tokSig()}|${item.restoreTo}|${discardedMetaText(item, clock())}|${isStreamer() ? 1 : 0}`, () => buildDiscItem(item));
   }
   function buildDiscItem(item) {
     const wd = item.status === 'withdrawn';
@@ -1341,6 +1421,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     el.className = `uc-gl-i uc-gl-i--${item.status}`;
     el.appendChild(previewBox(item, !wd));
     tileMenu(el, wd ? 'wd' : 'pg', item.mediaId);
+    blurTile(el, wd ? 'wd' : 'pg', item.mediaId);
     const meta = doc.createElement('div');
     meta.className = 'uc-gl-meta';
     meta.textContent = discardedMetaText(item, clock());
@@ -1739,6 +1820,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     if (!id) return;
     if (act === 'pick') { const it = st.items.find((x) => x.mediaId === id); if (it) pick(it); return; }
     if (act === 'menu') { const k = tile.dataset.mkey; st.menu = st.menu === k ? null : k; paintMenus(); return; }
+    if (act === 'eye') { toggleEye(tile); return; }
     if (act === 'preview') { openPreview(sec, id); return; }
     if (act === 'unapprove') { st.menu = null; mediaAction(id, 'unapprove', 'lib'); return; }
     if (act === 'purge-ask') { st.menu = null; st.confirm = { kind: 'purge', mediaId: id, from: sec }; L(`potvrzení trvale zahodit ${id} (${sec})`); paintMenus(); paintConfirm(); return; }
