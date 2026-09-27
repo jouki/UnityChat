@@ -809,9 +809,15 @@ v tomto režimu nevolá**; skončí-li přímé stažení `bot_protection` (Clou
 - **Odesílatel bez účtu UnityChatu** (`senderAccount` = null, tj. bez `gif-notice`): bot (vlastní bot workspace,
   jinak sdílený `_shared` JoukiBOT, `lib/botSend.ts sendAsBot`) **odpoví (reply) na jeho zprávu** textem
   „Nové GIFy teď nejsou povolené“ a **teprve potom** se zpráva smaže (reply potřebuje rodičovskou zprávu). Nejvýš
-  1× za 60 s na kanál + uživatele (`GIF_NOT_ALLOWED_REPLY_MS`), smaže se vždy. Bot nedostupný (`bot_unavailable`
-  a jiné chyby) → jen log, smazání proběhne. Uživatel UnityChatu odpověď bota nedostane (vidí štítek). Zpráva
-  smazaná už filtrem odkazů (`link_filter`) odpověď nedostane.
+  1× za 60 s na kanál + uživatele (`GIF_NOT_ALLOWED_REPLY_MS`) a 1× za 10 s na kanál
+  (`GIF_NOT_ALLOWED_REPLY_CHANNEL_MS`), smaže se vždy. Bot nedostupný (`bot_unavailable` a jiné chyby) → jen log,
+  smazání proběhne. Uživatel UnityChatu odpověď bota nedostane (vidí štítek). **Odpovídá se jen, když dotaz na účet
+  prokazatelně vrátil „bez účtu“** — chyba dotazu / chybějící závislost = „nevím“ → jen smazání. **YouTube nikdy**
+  (reply neumí, stojí kvótu). Zpráva smazaná už filtrem odkazů (`link_filter`) odpověď nedostane.
+- **Citace rodiče (↩):** klient (addon, web, OBS) v citaci nikdy nevykreslí živý odkaz (jen text, emoty ano);
+  smazaný rodič = jen „↩ @jméno“ bez textu (i když se smaže až po vykreslení odpovědi). Server odpovědi na zprávu
+  smazanou / schovanou kvůli GIFu (i odpovědi bota) vyprázdní `contentRaw.replyParentBody` (`gifFlow.scrubReplyParent`
+  v `onLive`, paměť 30 min), aby se odkaz nevrátil ani v historii.
 
 **Kanál bez bota (od 2026-09-27, kolo 4 bod 4b):** když mazání zprávy odesílatele na platformě
 (`deletePlatformMessage` s `accountId: null`) vrátí `error:no_actor` a odesílatel je mod / broadcaster kanálu s účtem
