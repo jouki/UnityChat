@@ -240,7 +240,7 @@ test('intercept: převod selže → filtr by smazal = přeznačit na link_filter
 
   const b = setup(fail);
   assert.equal(await b.flow.intercept(params()), 'failed');
-  assert.deepEqual(names(b.calls), ['publishDeleted', 'restore']);
+  assert.deepEqual(names(b.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled']);
   assert.equal(b.mem.reqs.size, 0);
 });
 
@@ -262,7 +262,7 @@ test('A12: neznámý přístup, zpráva schovaná hned (gif_request) → neodem�
   const deny = { access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) };
   const a = setup(deny);
   assert.equal(await a.flow.intercept(params({ needAccess: true })), 'denied');
-  assert.deepEqual(names(a.calls), ['publishDeleted', 'restore'], 'schovaná zpráva se vrátí všem');
+  assert.deepEqual(names(a.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled'], 'schovaná zpráva se vrátí všem');
   assert.equal(a.mem.reqs.size, 0);
   assert.equal(a.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
   let acted = 0;
@@ -505,7 +505,7 @@ test('intercept auto (mod s odemčenou odměnou): schváleno hned, bez karet, co
   assert.equal(await s.flow.intercept(params({ auto: true, query: { workspace: 'rob', platform: 'twitch', userId: '42', login: 'moda', role: 'moderator' } })), 'approved');
   assert.equal(accessCalls, 1);
   const n = names(s.calls);
-  assert.deepEqual(n.filter((x) => x.startsWith('notify:') || x.startsWith('integration:')), [], 'nikdo nic neschvaluje');
+  assert.deepEqual(n.filter((x) => x.startsWith('notify:') || x.startsWith('integration:')), ['integration:chat.held_settled'], 'nikdo nic neschvaluje (jen konec čekání pro Židolištu)');
   assert.equal(n.includes('used'), true, 'mod má cooldown jako ostatní');
   assert.ok(n.indexOf('deletePlatform') > n.indexOf('broadcast:gif-message'), 'původní zpráva pryč i z platformy (až po schválení)');
   const pub = s.calls.find((c) => c[0] === 'broadcast:gif-message')![1] as { message: Record<string, unknown> };
@@ -542,7 +542,7 @@ test('intercept auto + pozdní hlášení Dev módu (gifReview po echu) → bě�
 test('intercept auto: převod selže → původní zpráva se v UC obnoví (mod filtr nemá)', async () => {
   const s = setup({ resolve: async () => { throw new GifError('no_media'); } });
   assert.equal(await s.flow.intercept(params({ auto: true })), 'failed');
-  assert.deepEqual(names(s.calls), ['publishDeleted', 'restore']);
+  assert.deepEqual(names(s.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled']);
 });
 
 test('intercept auto: schválení hned po insertu, před mazáním na platformě; auto žádost není v listPending (jiný mod ji nevidí)', async () => {
@@ -627,7 +627,8 @@ test('převod selže, filtr by smazal → link_filter v paměti i archivu, dedup
 test('zachycení spadne výjimkou (bez žádosti) → schovaná zpráva se i tak obnoví', async () => {
   const s = setup({ sleep: async () => { throw new Error('boom'); } });
   assert.equal(await s.flow.intercept(params()), 'failed');
-  assert.deepEqual(names(s.calls), ['publishDeleted', 'restore']);
+  assert.deepEqual(names(s.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled']);
+  assert.equal(events(s.calls, 'integration:chat.held_settled')[0].reason, 'error');
 });
 
 test('isInFlight: během zachycení true, po něm false', async () => {
@@ -1558,5 +1559,146 @@ test('schválení ruší tresty: obnova zahozeného do schváleného', async () 
   assert.equal(s.mem.rejections.size, 1, 'zahození strike nemaže ani nepřidává');
   assert.equal((await s.flow.mediaAction({ mediaId: MEDIA, action: 'restore', by: 'twitch:moda', accountId: 1 })).status, 200);
   assert.equal(s.mem.rejections.size, 0);
+  await s.flow._idle();
+});
+
+// ---- chat.held_settled (2026-09-27): konec čekání schované zprávy — právě jednou, na všech cestách ----
+
+const settled = (calls: Array<[string, unknown]>) => events(calls, 'integration:chat.held_settled');
+const hs = (messageId: string, outcome: string, extra: Record<string, unknown> = {}) => ({ type: 'chat.held_settled', workspace: 'rob', platform: 'twitch', messageId, outcome, ...extra });
+const denyAccess = async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 });
+
+test('held_settled: rozhodnutí modem — schváleno / zamítnuto (by = mod), jednou', async () => {
+  const a = setup();
+  await a.flow.intercept(from('42', 'm1'));
+  assert.deepEqual(settled(a.calls), [], 'žádost čeká → held trvá');
+  await a.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(settled(a.calls), [hs('m1', 'approved', { requestId: 1, by: 'twitch:moda' })]);
+  await a.flow.decide({ requestId: 1, approve: false, by: 'twitch:modb', accountId: 2 });
+  assert.equal(settled(a.calls).length, 1, '409 nic neposílá');
+
+  const b = setup();
+  await b.flow.intercept(from('42', 'm1'));
+  await b.flow.decide({ requestId: 1, approve: false, by: 'zidolista:7', accountId: null });
+  assert.deepEqual(settled(b.calls), [hs('m1', 'rejected', { requestId: 1, by: 'zidolista:7' })]);
+  await b.flow._idle();
+});
+
+test('held_settled: kaskáda na stejné médium → každá původní zpráva zvlášť', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.intercept(from('43', 'm2'));
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(settled(s.calls).map((e) => [e.messageId, e.outcome, e.requestId]), [['m1', 'approved', 1], ['m2', 'approved', 2]]);
+});
+
+test('held_settled: propadnutí → expired, by filter; další tick nic', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  s.advance(120_000);
+  await s.flow.expireTick();
+  await s.flow.expireTick();
+  assert.deepEqual(settled(s.calls), [hs('m1', 'expired', { requestId: 1, by: 'filter' })]);
+  await s.flow._idle();
+});
+
+test('held_settled: instantní schválení (knihovna = filter, mod = on sám) — až po schování původní zprávy, i bez gif.decided', async () => {
+  const s = setup();
+  await approvedGif(s);
+  assert.equal(await s.flow.intercept(from('43', 'm2')), 'approved');
+  assert.deepEqual(settled(s.calls), [hs('m2', 'approved', { requestId: 2, by: 'filter' })]);
+  assert.equal(events(s.calls, 'integration:gif.decided').length, 0, 'tiché rozhodnutí gif.decided dál neposílá');
+
+  // Zobrazená zpráva (preDeleted null): held začne až publishDeleted gif_request → held_settled až po něm.
+  const m = setup();
+  assert.equal(await m.flow.intercept(params({ auto: true, preDeleted: null })), 'approved');
+  const n = names(m.calls);
+  assert.ok(n.indexOf('publishDeleted') >= 0 && n.indexOf('publishDeleted') < n.indexOf('integration:chat.held_settled'), n.join(','));
+  assert.deepEqual(settled(m.calls), [hs('m1', 'approved', { requestId: 1, by: 'twitch:divak' })]);
+});
+
+test('held_settled: tiché automatické zamítnutí (opakovaně zamítnutý, zákaz, zahozený) → rejected s důvodem, by filter', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  await s.flow.intercept(from('42', 'm2'));
+  await s.flow.decide({ requestId: 2, approve: false, by: 'twitch:moda', accountId: 1 });
+  s.calls.length = 0;
+  assert.equal(await s.flow.intercept(from('42', 'm3')), 'rejected');
+  assert.deepEqual(settled(s.calls), [hs('m3', 'rejected', { by: 'filter', reason: 'repeat' })]);
+  await s.flow.mediaAction({ mediaId: MEDIA, action: 'ban12h', by: 'twitch:moda', accountId: 1 });
+  s.calls.length = 0;
+  assert.equal(await s.flow.intercept(from('44', 'm4')), 'rejected');
+  assert.deepEqual(settled(s.calls), [hs('m4', 'rejected', { by: 'filter', reason: 'ban' })]);
+  await s.flow._idle();
+
+  // Instantní schválení na médium zahozené během zachycení → rejected (purged) s requestId, jednou.
+  let purgeDuring: (() => Promise<unknown>) | null = null;
+  const p = setup({ sleep: async () => { await new Promise((r) => setImmediate(r)); const f = purgeDuring; purgeDuring = null; await f?.(); } });
+  await approvedGif(p);
+  const orig = p.mem.store.findMedia.bind(p.mem.store);
+  p.mem.store.findMedia = async (ch, by) => { const x = await orig(ch, by); return x ? { ...x } : x; };
+  purgeDuring = () => p.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:modb', accountId: 2, keepMessages: true });
+  assert.equal(await p.flow.intercept(from('43', 'm2')), 'rejected');
+  assert.deepEqual(settled(p.calls), [hs('m2', 'rejected', { requestId: 2, by: 'filter', reason: 'purged' })]);
+  await p.flow._idle();
+});
+
+test('held_settled: režim „jen schválené" → not_allowed; zobrazená zpráva (nikdy schovaná) nic', async () => {
+  const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+  const s = setup({ access });
+  assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
+  assert.deepEqual(settled(s.calls), [hs('m1', 'not_allowed', { by: 'filter' })]);
+  const n = setup({ access });
+  assert.equal(await n.flow.intercept(params({ preDeleted: null })), 'not_allowed');
+  assert.deepEqual(settled(n.calls), [], 'held nikdy nezačal');
+  await s.flow._idle();
+});
+
+test('held_settled: převod selže (too_large) → restored / link_filter s důvodem; neodemčeno → restored denied', async () => {
+  const big = { resolve: async () => { throw new GifError('too_large'); } };
+  const a = setup(big);
+  assert.equal(await a.flow.intercept(params()), 'failed');
+  assert.deepEqual(settled(a.calls), [hs('m1', 'restored', { by: 'filter', reason: 'too_large' })]);
+  const b = setup(big);
+  assert.equal(await b.flow.intercept(params({ filterAct: async () => {} })), 'failed');
+  assert.deepEqual(settled(b.calls), [hs('m1', 'link_filter', { by: 'filter', reason: 'too_large' })]);
+  const c = setup({ access: denyAccess });
+  assert.equal(await c.flow.intercept(params({ needAccess: true })), 'denied');
+  assert.deepEqual(settled(c.calls), [hs('m1', 'restored', { by: 'filter', reason: 'denied' })]);
+  // Zobrazená zpráva, neodemčeno → nic (nikdy schovaná).
+  const d = setup({ access: denyAccess });
+  await d.flow.intercept(params({ needAccess: true, preDeleted: null }));
+  assert.deepEqual(settled(d.calls), []);
+  await a.flow._idle(); await b.flow._idle();
+});
+
+test('held_settled: schváleno, ale zpráva se nezapsala → held trvá; dorovnání dopíše (approved) / vzdá (giveUp → rejected, by filter)', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  const insert = s.mem.store.insertApprovedMessage.bind(s.mem.store);
+  s.mem.store.insertApprovedMessage = async () => { throw new Error('db down'); };
+  await s.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  assert.deepEqual(settled(s.calls), [], 'původní zpráva pořád schovaná');
+  s.mem.store.insertApprovedMessage = insert;
+  s.advance(61_000);
+  assert.equal(await s.flow.reconcileTick(), 1);
+  assert.deepEqual(settled(s.calls), [hs('m1', 'approved', { requestId: 1, by: 'twitch:moda' })]);
+
+  const g = setup();
+  await g.flow.intercept(from('42', 'm1'));
+  g.mem.store.insertApprovedMessage = async () => { throw new Error('constraint'); };
+  await g.flow.decide({ requestId: 1, approve: true, by: 'twitch:moda', accountId: 1 });
+  g.advance(61_000);
+  for (let i = 0; i < RECONCILE_MAX_ATTEMPTS; i++) await g.flow.reconcileTick();
+  assert.equal(g.mem.reqs.get(1)!.status, 'rejected');
+  assert.deepEqual(settled(g.calls), [hs('m1', 'rejected', { requestId: 1, by: 'filter', reason: 'reconcile:attempts' })]);
+});
+
+test('held_settled: stejná zpráva zachycená dvakrát (opakování) → neposílá se dvakrát', async () => {
+  const s = setup({ access: denyAccess });
+  await s.flow.intercept(params({ needAccess: true }));
+  await s.flow.intercept(params({ needAccess: true }));
+  assert.equal(settled(s.calls).length, 1);
   await s.flow._idle();
 });

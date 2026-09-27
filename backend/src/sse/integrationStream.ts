@@ -30,7 +30,8 @@ export interface ChatEvent {
   /**
    * Schovaná v UnityChatu kvůli GIFu (`gif_request`: čeká na převod / schválení, i při neznámém přístupu) — NENÍ
    * smazaná, `text` je plný (integrace je důvěryhodná, commandy a log Židolišty ji potřebují). Následuje chat.deleted
-   * `gif_request`, pak buď rozhodnutí o GIFu (gif.*), nebo chat.restored (zpráva zase vidět). Od 2026-09-27.
+   * `gif_request`, pak buď rozhodnutí o GIFu (gif.*), nebo chat.restored (zpráva zase vidět). Konec čekání vždy
+   * ohlásí chat.held_settled (právě jednou). Od 2026-09-27.
    */
   held?: true;
   hiddenReason?: string;
@@ -159,7 +160,24 @@ export type GifIntegrationEvent =
   | { type: 'gif.pending'; workspace: string; requestId: number; platform: string; userId: string; login: string; messageId: string; text: string; media: { url: string; kind: string; width: number | null; height: number | null }; expiresAt: string }
   | { type: 'gif.decided'; workspace: string; requestId: number; platform: string; userId: string; login: string; status: 'approved' | 'rejected' | 'expired' | 'pending' | 'deleted'; by: string | null };
 
-type IntegrationEvent = ChatEvent | ModIntegrationEvent | UserModIntegrationEvent | GifIntegrationEvent;
+/**
+ * Schovaná zpráva (`held`, `gif_request`) přestala čekat — právě jednou za zprávu, na všech cestách (rozhodnutí
+ * modem, tiché auto-schválení / zamítnutí, propadnutí, režim „jen schválené", obnovení, filtr odkazů, dorovnání).
+ * `by`: kdo rozhodl (mod `platforma:login`, `zidolista:<id>`), automatika = `filter`. Od 2026-09-27.
+ */
+export type HeldOutcome = 'approved' | 'rejected' | 'expired' | 'not_allowed' | 'restored' | 'link_filter';
+export interface HeldSettledIntegrationEvent {
+  type: 'chat.held_settled';
+  workspace: string;
+  platform: string;
+  messageId: string;
+  outcome: HeldOutcome;
+  requestId?: number;
+  by?: string | null;
+  reason?: string;
+}
+
+type IntegrationEvent = ChatEvent | ModIntegrationEvent | UserModIntegrationEvent | GifIntegrationEvent | HeldSettledIntegrationEvent;
 
 function frameOf(id: number, ev: IntegrationEvent): string {
   return `id: ${id}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`;

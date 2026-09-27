@@ -41,6 +41,7 @@ import { GifError, normalizeSourceUrl, textWithoutLink } from './gifMedia.js';
 import { gifMediaUrl, gifMessageId, gifMessageState } from './gifIds.js';
 import { clearMediaStrikes, moveMediaInto } from './gifLibrary.js';
 import type { Platform } from './zidolista.js';
+import type { HeldOutcome, HeldSettledIntegrationEvent } from '../sse/integrationStream.js';
 
 type Log = { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
 
@@ -703,7 +704,11 @@ export function createGifNotifier(deps: GifNotifierDeps) {
 /** Událost pro integrační stream Židolišty (sse/integrationStream.ts GifIntegrationEvent). */
 export type GifIntegration =
   | { type: 'gif.pending'; workspace: string; requestId: number; platform: string; userId: string; login: string; messageId: string; text: string; media: GifPendingView['media']; expiresAt: string; previouslyRejected?: PreviouslyRejected }
-  | { type: 'gif.decided'; workspace: string; requestId: number; platform: string; userId: string; login: string; status: GifStatus; by: string | null };
+  | { type: 'gif.decided'; workspace: string; requestId: number; platform: string; userId: string; login: string; status: GifStatus; by: string | null }
+  | HeldSettledIntegrationEvent;
+
+/** Paměť odeslaných chat.held_settled (dedup `platform:messageId`, opakované cesty / later). */
+const HELD_SETTLED_MEMORY = 5000;
 
 export interface GifFlowDeps {
   store: GifStore;
@@ -855,6 +860,23 @@ export function createGifFlow(deps: GifFlowDeps) {
     try { await fn(); } catch (e) { deps.log.warn({ err: (e as Error).message }, `gif: ${what} selhalo`); }
   };
 
+  // chat.held_settled už odeslané (`platform:messageId`) — právě jednou za zprávu i při opakované cestě.
+  const settledKeys = new Set<string>();
+  /** Kdo o konci čekání rozhodl: mod / Židolišta jak jsou, automatika (knihovna, filtr, propadnutí) = `filter`. */
+  const settledActor = (by: string | null | undefined) => (!by || by === 'library' ? 'filter' : by);
+  /** Schovaná zpráva (gif_request) přestala čekat → chat.held_settled Židolištce (integrace je důvěryhodná, `by` skutečný). */
+  const heldSettled = async (p: { workspace: string; platform: string; messageId: string; outcome: HeldOutcome; requestId?: number; by?: string | null; reason?: string }) => {
+    const key = `${p.platform}:${p.messageId}`;
+    if (settledKeys.has(key)) return;
+    settledKeys.add(key);
+    if (settledKeys.size > HELD_SETTLED_MEMORY) settledKeys.delete(settledKeys.values().next().value!);
+    const ev: HeldSettledIntegrationEvent = { type: 'chat.held_settled', workspace: p.workspace, platform: p.platform, messageId: p.messageId, outcome: p.outcome };
+    if (p.requestId !== undefined) ev.requestId = p.requestId;
+    ev.by = settledActor(p.by);
+    if (p.reason) ev.reason = p.reason;
+    await safe('integrace chat.held_settled', async () => deps.integration(ev));
+  };
+
   /** gif-queue modům kanálu (FIFO: počet + id nejstarší čekající). */
   const emitQueue = async (channel: string) => {
     if (!deps.notifyMods) return;
@@ -909,13 +931,22 @@ export function createGifFlow(deps: GifFlowDeps) {
     return { status: 200, body: { ok: true, requestId: r.id, status: 'rejected', reason } };
   };
 
-  const decided = async (r: GifRequest, status: GifStatus, by: string | null, opts: { quiet?: boolean; keepOriginal?: boolean } = {}) => {
+  /**
+   * `settle: false` — původní zpráva dál čeká (schváleno, ale zpráva s GIFem se nezapsala → dorovnání; instantní
+   * schválení ohlásí intercept až po schování původní zprávy). `keepOriginal` = původní zprávu vyřídí intercept
+   * (dropOriginal), ten ohlásí i konec čekání. `settledBy` / `reason` jen pro chat.held_settled.
+   */
+  const decided = async (r: GifRequest, status: GifStatus, by: string | null, opts: { quiet?: boolean; keepOriginal?: boolean; settle?: boolean; settledBy?: string; reason?: string } = {}) => {
     closed.add(r.id);
     if (closed.size > 2000) closed.delete(closed.values().next().value!);
     const k = userKey(r.channel, r.platform, r.userId);
     if (pending.get(k) === r.id) pending.delete(k);
     // Zamítnuto / propadlo: původní zpráva (v UC dosud nevykreslená, gif_request) → běžně smazaná.
     if ((status === 'rejected' || status === 'expired') && !opts.keepOriginal) await rejectOriginal(r);
+    // Konec čekání i u tichého rozhodnutí (Židolišta štítek „čeká na schválení“ jinak neuzavře).
+    if (!opts.keepOriginal && opts.settle !== false && (status === 'approved' || status === 'rejected' || status === 'expired')) {
+      await heldSettled({ workspace: r.workspace, platform: r.platform, messageId: r.messageId, outcome: status, requestId: r.id, by: opts.settledBy ?? by, reason: opts.reason });
+    }
     // Auto-schválení modem / z knihovny: nikdo žádost neviděl (gif-pending ani gif.pending nešlo) → ani rozhodnutí neohlašovat.
     if (opts.quiet) return;
     const ev = { requestId: r.id, channel: r.channel, approved: status === 'approved', status, by };
@@ -939,7 +970,7 @@ export function createGifFlow(deps: GifFlowDeps) {
    * (schovaná gif_request / přeznačená z link_filter → přeznačit + message-deleted; zobrazená → publishDeleted),
    * na platformě botem (když ji nesmazal už filtr).
    */
-  const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON) => {
+  const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON, why: { reason?: string; requestId?: number } = {}) => {
     const { m } = p;
     const pl = m.platform, id = m.platformMessageId;
     if (p.preDeleted === null) {
@@ -951,6 +982,8 @@ export function createGifFlow(deps: GifFlowDeps) {
       deps.forgetDeleted?.(pl, id);
       await safe(`message-deleted ${reason}`, async () => deps.broadcast('message-deleted', { channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', reason, at: deps.now() }));
       later(() => deps.store.retagDeleted(pl, id, 'gif_request', reason));
+      // Schovaná (gif_request, i přeznačená z link_filter) → konec čekání; zobrazená (null) čekat nezačala.
+      await heldSettled({ workspace: p.workspace, platform: pl, messageId: id, outcome: reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : 'rejected', requestId: why.requestId, by: 'filter', reason: why.reason });
     }
     if (p.preDeleted !== 'link_filter') {
       let result = 'error:exception';
@@ -969,14 +1002,16 @@ export function createGifFlow(deps: GifFlowDeps) {
    *    s celou zprávou z `m` i tak.
    * Archiv se po SETTLE_RETRY_MS dorovná ještě jednou (zápis dávky mohl běžet souběžně).
    */
-  const settleHeld = async (p: GifInterceptParams) => {
+  const settleHeld = async (p: GifInterceptParams, why: string) => {
     const { m } = p;
     const pl = m.platform, id = m.platformMessageId;
+    const settle = (outcome: 'link_filter' | 'restored') => heldSettled({ workspace: p.workspace, platform: pl, messageId: id, outcome, by: 'filter', reason: why });
     if (p.filterAct) {
       m.deleted = { by: 'filter', reason: 'link_filter' };
       await safe('přeznačení na link_filter', () => deps.store.retagDeleted(pl, id, 'gif_request', 'link_filter'));
       deps.forgetDeleted?.(pl, id);
       await safe('filtr odkazů', () => p.filterAct!());
+      await settle('link_filter');
       later(() => deps.store.retagDeleted(pl, id, 'gif_request', 'link_filter'));
       return;
     }
@@ -995,6 +1030,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       // Řádek se mohl zapsat se smazáním gif_request (dávka běžela souběžně) → zkusit znovu (další message-restored neškodí).
       later(() => deps.restore(rp));
     }
+    await settle('restored');
   };
 
   /**
@@ -1071,7 +1107,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         deps.mediaChanged?.(r.mediaId!);
       });
     }
-    await decided(r, status, p.by, { quiet: p.quiet ?? p.auto });
+    // Instantní schválení ohlásí konec čekání intercept (až po schování původní zprávy); nezapsaná zpráva → dorovnání.
+    await decided(r, status, p.by, { quiet: p.quiet ?? p.auto, settle: !p.instant && published });
     await safe('moderation_actions', async () => deps.recordAction?.({ channel: r.channel, accountId: p.accountId, actor: p.by, action: p.approve ? 'gif_approve' : 'gif_reject', platform: r.platform, targetLogin: r.login, targetMessageId: r.messageId, params: { requestId: r.id, ...(p.auto ? { auto: true } : {}), ...(p.cascade ? { cascade: true } : {}) }, result: { status } }));
     // Schválený GIF = bez nového schvalování: ostatní čekající žádosti na stejné médium se schválí taky.
     if (p.approve && !p.cascade && r.mediaId) {
@@ -1092,7 +1129,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       await deps.store.setRequestRejected(r.id, r.decidedBy ?? 'filter', new Date(now));
       r.status = 'rejected';
       // Původní zpráva gif_rejected + gif-decided odesílateli a modům (štítek nevisí) + fronta (review A1).
-      await decided(r, 'rejected', r.decidedBy ?? null);
+      await decided(r, 'rejected', r.decidedBy ?? null, { settledBy: 'filter', reason: `reconcile:${why}` });
       deps.log.warn({ requestId: r.id, channel: r.channel, why }, 'gif: schválenou žádost nejde dopsat → zamítnuta');
     };
     let n = 0;
@@ -1117,6 +1154,7 @@ export function createGifFlow(deps: GifFlowDeps) {
             await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
             deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
             await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg));
+            await heldSettled({ workspace: r.workspace, platform: r.platform, messageId: r.messageId, outcome: 'approved', requestId: r.id, by: r.decidedBy });
             deps.log.info({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF bez zprávy → dopsán (dorovnání)');
           }
         }
@@ -1181,7 +1219,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         const access = await deps.access(p.query).catch(() => null);
         if (p.needAccess && !gifUsable(access, deps.now())) {
           // Zpráva schovaná předem (neznámý přístup, audit A12) → rozhodnout: filtr by ji smazal = smazat, jinak obnovit.
-          if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p); }
+          if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p, 'denied'); }
           return finish('denied');
         }
         const mode = access?.mode ?? 'all';
@@ -1254,7 +1292,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Trvale zahozený GIF (withdrawn / purging / unavailable): do chatu se nepustí — bez schvalování, od všech
           // (i od moda: auto-schválení by zahozené médium vrátilo do knihovny).
           if (known && GIF_DISCARDED.has(known.status)) {
-            await dropOriginal(p, GIF_REJECTED_REASON);
+            await dropOriginal(p, GIF_REJECTED_REASON, { reason: 'purged' });
             notice('auto_rejected', { reason: 'purged' });
             await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_auto_reject', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mediaId: known.id, reason: 'purged', status: known.status }, result: {} }));
             deps.log.info({ channel: p.ucChannel, platform: m.platform, status: known.status }, 'gif: zahozený GIF → automaticky zamítnuto');
@@ -1268,8 +1306,8 @@ export function createGifFlow(deps: GifFlowDeps) {
             const count = ban ? 0 : await deps.store.rejectionCount(p.ucChannel, known.id, m.platform, m.platformUserId);
             if (ban || count >= AUTO_REJECT_AFTER) {
               const n = await deps.store.addRejection(p.ucChannel, known.id, m.platform, m.platformUserId, at).catch(() => count + 1);
-              await dropOriginal(p, GIF_REJECTED_REASON);
               const reason = ban ? 'ban' : 'repeat';
+              await dropOriginal(p, GIF_REJECTED_REASON, { reason });
               notice('auto_rejected', { reason });
               await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_auto_reject', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mediaId: known.id, reason, count: n }, result: {} }));
               deps.log.info({ channel: p.ucChannel, platform: m.platform, reason, count: n }, 'gif: dříve zamítnutý GIF → automaticky zamítnuto');
@@ -1321,7 +1359,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Režim „jen schválené": náš odkaz na neznámé médium i odkaz za ochranou proti botům (Bright Data se
           // v tomhle režimu nevolá) je nový GIF (smazaný filtrem už je pryč).
           if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection') && p.preDeleted !== 'link_filter') {
-            await dropOriginal(p, GIF_NOT_ALLOWED_REASON);
+            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: res.code });
             notice('approved_only');
             return finish('not_allowed');
           }
@@ -1331,7 +1369,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Převod selhal → běžný odkaz: filtr ho smaže, jinak se v UC obnoví (smazali jsme ho my).
           if (p.preDeleted === 'gif_request') {
             settled = true;
-            await settleHeld(p);
+            await settleHeld(p, blocked ? 'cooldown' : res.ok ? 'error' : res.code);
           } else if (p.preDeleted === 'link_filter' && res.ok) {
             // Přeznačení na gif_request proběhlo (výš), ale médium/žádost se neuložily → vrátit link_filter,
             // jinak by zpráva zůstala smazaná bez žádosti a permit by ji už neobnovil.
@@ -1352,7 +1390,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           else releaseSlot = null; // GIF zobrazen → slot platí, pozdější výjimka ho už nevrací
           // Médium zahozené během stahování / FLUSH_WAIT (souběh s „Trvale zahodit“) → jako zahozený dedup.
           if (instantOut.body.reason === 'purged' || instantOut.body.reason === 'unapproved') {
-            await dropOriginal(p, GIF_REJECTED_REASON);
+            await dropOriginal(p, GIF_REJECTED_REASON, { reason: instantOut.body.reason, requestId: created.id });
             notice('auto_rejected', { reason: instantOut.body.reason });
             deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id }, 'gif: médium zahozené během zachycení → automaticky zamítnuto');
             return finish('rejected');
@@ -1369,7 +1407,13 @@ export function createGifFlow(deps: GifFlowDeps) {
           catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: smazání původní zprávy na platformě vyhodilo výjimku'); }
           deps.log.info({ channel: p.ucChannel, platform: m.platform, result }, 'gif: původní zpráva smazána');
         }
-        if (instantOut) return finish(instantOut.status === 200 ? 'approved' : 'requested');
+        if (instantOut) {
+          // Konec čekání až teď (původní zpráva je schovaná, gif_request); nezapsaný GIF ohlásí dorovnání.
+          if (instantOut.status === 200 && instantOut.body.status === 'approved' && instantOut.body.published !== false) {
+            await heldSettled({ workspace: created.workspace, platform: created.platform, messageId: created.messageId, outcome: 'approved', requestId: created.id, by: auto ? `${m.platform}:${m.username.toLowerCase()}` : 'filter' });
+          }
+          return finish(instantOut.status === 200 ? 'approved' : 'requested');
+        }
 
         const view = pendingView(created);
         // Rozhodnuto dřív, než jsme stihli ohlásit (mod ji viděl v GET /moderation/gif/pending) → gif-pending neposílat,
@@ -1385,7 +1429,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         deps.log.warn({ err: (e as Error).message }, 'gif: zachycení selhalo');
         freeSlot();
         // Schovaná zpráva bez žádosti nesmí zůstat bez rozhodnutí (s žádostí rozhodne mod / propadnutí).
-        if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', () => settleHeld(p));
+        if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', () => settleHeld(p, 'error'));
         return finish('failed');
       } finally {
         busy.delete(k);
