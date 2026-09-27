@@ -837,6 +837,8 @@ export function createGifFlow(deps: GifFlowDeps) {
   const userKey = (channel: string, platform: string, userId: string) => `${channel}|${platform}|${userId}`;
   // Neúspěšné pokusy dorovnání per žádost (audit A1).
   const reconcileFails = new Map<number, number>();
+  // Běží dorovnání? Dva souběžné běhy by dopsaly a rozeslaly tutéž zprávu dvakrát (review A1).
+  let reconciling = false;
   // Pokusy o Bright Data per uživatel a den (audit L4): klíč userKey → { day, n }.
   const unlocks = new Map<string, { day: number; n: number }>();
   const today = () => Math.floor(deps.now() / 86_400_000);
@@ -1076,6 +1078,60 @@ export function createGifFlow(deps: GifFlowDeps) {
       for (const o of others) await decideCore({ requestId: o.id, approve: true, by: p.by, accountId: p.accountId, cascade: true });
     }
     return { status: 200, body: { ok: true, requestId: r.id, status, ...(published ? {} : { published: false }) } };
+  };
+
+  /** Jeden běh dorovnání schválených žádostí bez zprávy (reconcileTick drží zámek proti souběhu). */
+  const reconcileOnce = async (): Promise<number> => {
+    const now = deps.now();
+    let rows: Awaited<ReturnType<GifStore['unpublishedApproved']>> = [];
+    try { rows = await deps.store.unpublishedApproved(new Date(now - RECONCILE_GRACE_MS), new Date(now - RECONCILE_WINDOW_MS), RECONCILE_BATCH); }
+    catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: dorovnání schválených žádostí selhalo'); return 0; }
+    const giveUp = async (r: GifRequest, why: string) => {
+      await deps.store.setRequestRejected(r.id, r.decidedBy ?? 'filter', new Date(now));
+      r.status = 'rejected';
+      // Původní zpráva gif_rejected + gif-decided odesílateli a modům (štítek nevisí) + fronta (review A1).
+      await decided(r, 'rejected', r.decidedBy ?? null);
+      deps.log.warn({ requestId: r.id, channel: r.channel, why }, 'gif: schválenou žádost nejde dopsat → zamítnuta');
+    };
+    let n = 0;
+    for (const { request: r, mediaStatus, hasMessage } of rows) {
+      const at = r.decidedAt ?? new Date(now);
+      try {
+        let status = mediaStatus;
+        if (r.mediaId && status === 'pending') {
+          const effective = await deps.store.setMediaApproved(r.mediaId, at);
+          if (effective === null) status = 'gone';
+          else {
+            if (effective !== r.mediaId) { await deps.store.mergeMedia(r.mediaId, effective); deps.mediaDeleted?.(r.mediaId); r.mediaId = effective; }
+            await deps.store.markMediaUsed(r.mediaId, at);
+            deps.mediaChanged?.(r.mediaId);
+            status = 'approved';
+          }
+        }
+        if (!hasMessage) {
+          if (!r.mediaId || status !== 'approved') await giveUp(r, `media:${status ?? 'none'}`);
+          else {
+            const msg = await deps.store.insertApprovedMessage(r, at);
+            await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
+            deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
+            await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg));
+            deps.log.info({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF bez zprávy → dopsán (dorovnání)');
+          }
+        }
+        reconcileFails.delete(r.id);
+        n++;
+      } catch (e) {
+        const f = (reconcileFails.get(r.id) ?? 0) + 1;
+        reconcileFails.set(r.id, f);
+        if (reconcileFails.size > 2000) reconcileFails.delete(reconcileFails.keys().next().value!);
+        deps.log.warn({ requestId: r.id, attempt: f, err: (e as Error).message }, 'gif: dorovnání žádosti selhalo');
+        if (f >= RECONCILE_MAX_ATTEMPTS) {
+          reconcileFails.delete(r.id);
+          await safe('zamítnutí nedopsatelné žádosti', () => giveUp(r, 'attempts'));
+        }
+      }
+    }
+    return n;
   };
 
   return {
@@ -1498,55 +1554,9 @@ export function createGifFlow(deps: GifFlowDeps) {
      * žádost zamítnout a původní zprávu ukázat jako smazanou. Vrací počet vyřízených žádostí.
      */
     async reconcileTick(): Promise<number> {
-      const now = deps.now();
-      let rows: Awaited<ReturnType<GifStore['unpublishedApproved']>> = [];
-      try { rows = await deps.store.unpublishedApproved(new Date(now - RECONCILE_GRACE_MS), new Date(now - RECONCILE_WINDOW_MS), RECONCILE_BATCH); }
-      catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: dorovnání schválených žádostí selhalo'); return 0; }
-      const giveUp = async (r: GifRequest, why: string) => {
-        await deps.store.setRequestRejected(r.id, r.decidedBy ?? 'filter', new Date(now));
-        r.status = 'rejected';
-        await rejectOriginal(r);
-        deps.log.warn({ requestId: r.id, channel: r.channel, why }, 'gif: schválenou žádost nejde dopsat → zamítnuta');
-      };
-      let n = 0;
-      for (const { request: r, mediaStatus, hasMessage } of rows) {
-        const at = r.decidedAt ?? new Date(now);
-        try {
-          let status = mediaStatus;
-          if (r.mediaId && status === 'pending') {
-            const effective = await deps.store.setMediaApproved(r.mediaId, at);
-            if (effective === null) status = 'gone';
-            else {
-              if (effective !== r.mediaId) { await deps.store.mergeMedia(r.mediaId, effective); deps.mediaDeleted?.(r.mediaId); r.mediaId = effective; }
-              await deps.store.markMediaUsed(r.mediaId, at);
-              deps.mediaChanged?.(r.mediaId);
-              status = 'approved';
-            }
-          }
-          if (!hasMessage) {
-            if (!r.mediaId || status !== 'approved') await giveUp(r, `media:${status ?? 'none'}`);
-            else {
-              const msg = await deps.store.insertApprovedMessage(r, at);
-              await safe('předehřátí média', async () => deps.mediaApproved?.(r.mediaId!));
-              deps.broadcast('gif-message', { channel: r.channel, requestId: r.id, message: msg });
-              await safe('chat stream', async () => deps.publishChat(r.platformChannel, r.platform, msg));
-              deps.log.info({ requestId: r.id, channel: r.channel }, 'gif: schválený GIF bez zprávy → dopsán (dorovnání)');
-            }
-          }
-          reconcileFails.delete(r.id);
-          n++;
-        } catch (e) {
-          const f = (reconcileFails.get(r.id) ?? 0) + 1;
-          reconcileFails.set(r.id, f);
-          if (reconcileFails.size > 2000) reconcileFails.delete(reconcileFails.keys().next().value!);
-          deps.log.warn({ requestId: r.id, attempt: f, err: (e as Error).message }, 'gif: dorovnání žádosti selhalo');
-          if (f >= RECONCILE_MAX_ATTEMPTS) {
-            reconcileFails.delete(r.id);
-            await safe('zamítnutí nedopsatelné žádosti', () => giveUp(r, 'attempts'));
-          }
-        }
-      }
-      return n;
+      if (reconciling) return 0;
+      reconciling = true;
+      try { return await reconcileOnce(); } finally { reconciling = false; }
     },
 
     /** Po startu: čekající žádosti do paměti (jedna žádost na uživatele). */

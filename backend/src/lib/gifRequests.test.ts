@@ -763,9 +763,24 @@ test('A1: zápis zprávy selhává trvale → po RECONCILE_MAX_ATTEMPTS pokusech
   s.advance(61_000);
   for (let i = 0; i < RECONCILE_MAX_ATTEMPTS - 1; i++) await s.flow.reconcileTick();
   assert.equal(s.mem.reqs.get(1)!.status, 'approved');
+  s.calls.length = 0;
   await s.flow.reconcileTick();
   assert.equal(s.mem.reqs.get(1)!.status, 'rejected');
   assert.ok(s.mem.log.includes('retag:m1:gif_request->gif_rejected'));
+  // Odesílatel dostane gif-decided (štítek nevisí), stav rejected.
+  const dec = events(s.calls, 'notify:gif-decided');
+  assert.equal(dec.length, 1);
+  assert.deepEqual([dec[0].requestId, dec[0].status], [1, 'rejected']);
+});
+
+test('A1 review: dva souběžné běhy dorovnání — druhý nic nedělá (žádná zpráva dvakrát)', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  Object.assign(s.mem.reqs.get(1)!, { status: 'approved', decidedBy: 'twitch:moda', decidedAt: new Date(s.now()) });
+  s.advance(61_000);
+  const [a, b] = await Promise.all([s.flow.reconcileTick(), s.flow.reconcileTick()]);
+  assert.deepEqual([a, b].sort(), [0, 1]);
+  assert.equal(events(s.calls, 'broadcast:gif-message').length, 1);
 });
 
 test('SEC-8 review: slot globálního cooldownu se uvolní, když se GIF nakonec nezobrazí (odebráno z knihovny, chyba zápisu)', async () => {
