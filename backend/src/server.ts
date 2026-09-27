@@ -52,7 +52,7 @@ import { db } from './db/index.js';
 import { moderationActions } from './db/schema.js';
 import gifRoutes, { MediaServer } from './routes/gif.js';
 import integrationGifRoutes from './routes/integrationGif.js';
-import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia } from './lib/gifRequests.js';
+import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta } from './lib/gifRequests.js';
 import { gifAccess, gifAccessSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
@@ -104,7 +104,8 @@ const gifNotifier = createGifNotifier({
   senderAccount: (platform, userId) => senderAccount(platform, userId),
   send: sendToAccount,
 });
-const gifMedia = new MediaServer(servableMedia);
+// Metadata (stav, kanál) se ověří před bajty — bez tokenu se zamítnuté médium z DB vůbec nenačte (audit SEC-2).
+const gifMedia = new MediaServer(servableMedia, undefined, servableMeta);
 // Cloudflare challenge při přímém stažení → Bright Data Web Unlocker (bez klíče vypnuto). Log jen host + kód.
 const gifUnlocker = createUnlocker({
   apiKey: config.BRIGHTDATA_API_KEY,

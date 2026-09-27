@@ -92,7 +92,11 @@ export interface GifPendingView {
   userId: string;
   messageId: string;
   text: string;
-  media: { url: string; kind: string; width: number | null; height: number | null };
+  /**
+   * `tokenRequired`: médium je zamítnuté (nová žádost na dříve zamítnutý GIF) → vydá se jen s tokenem moda
+   * (`?t=`, audit SEC-1); karta moda ho načítá s tokenem.
+   */
+  media: { url: string; kind: string; width: number | null; height: number | null; tokenRequired?: true };
   createdAt: number;
   expiresAt: number;
   /** GIF byl už dříve zamítnut (karta moda: kdy, kým; odesílatel jen ⚠). */
@@ -115,7 +119,10 @@ export function pendingView(r: GifRequest): GifPendingView {
     userId: r.userId,
     messageId: r.messageId,
     text: r.textWithoutLink,
-    media: { url: r.mediaId ? gifMediaUrl(r.mediaId) : '', kind: r.kind, width: r.width, height: r.height },
+    media: {
+      url: r.mediaId ? gifMediaUrl(r.mediaId) : '', kind: r.kind, width: r.width, height: r.height,
+      ...((r.meta as Record<string, unknown> | null)?.tokenRequired ? { tokenRequired: true as const } : {}),
+    },
     createdAt: r.createdAt.getTime(),
     expiresAt: r.expiresAt.getTime(),
     ...(pr ? { previouslyRejected: pr } : {}),
@@ -528,28 +535,38 @@ export async function senderAccount(platform: Platform, userId: string): Promise
 }
 
 /**
- * Stav média pro GET /media/gif/:id (bez `unavailable` — soubor pryč → null). Zamítnuté s čekající žádostí =
- * čekající (veřejné); withdrawn veřejně jako schválené, purging jen s tokenem (náhled v „Ke smazání“).
+ * Stav média pro GET /media/gif/:id (bez `unavailable` — soubor pryč → null). Zamítnuté jen s tokenem i s čekající
+ * novou žádostí (audit SEC-1: jinak by šel zamítnutý GIF znovu zveřejnit vlastním odkazem); withdrawn veřejně jako
+ * schválené, purging jen s tokenem (náhled v „Ke smazání“).
  */
-export function servableStatus(status: string, livePending: boolean): Exclude<GifMediaStatus, 'unavailable'> | null {
+export function servableStatus(status: string): Exclude<GifMediaStatus, 'unavailable'> | null {
   switch (status) {
-    case 'approved': case 'withdrawn': case 'purging': return status;
+    case 'approved': case 'withdrawn': case 'purging': case 'rejected': return status;
     case 'unavailable': return null;
-    case 'rejected': return livePending ? 'pending' : 'rejected';
     default: return 'pending';
   }
 }
 
-/** Médium pro GET /media/gif/:id: stav média (+ kanál kvůli tokenu). */
+/**
+ * Metadata média pro GET /media/gif/:id BEZ bajtů (audit SEC-2): stav a kanál se ověří (token) dřív, než se z DB
+ * načte až 10 MB bytea. Soubor pryč (unavailable / prázdné bajty) → null.
+ */
+export async function servableMeta(id: string): Promise<{ contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel: string | null } | null> {
+  const rows = await db.select({ contentType: gifMedia.contentType, status: gifMedia.status, channel: gifMedia.channel, size: gifMedia.size })
+    .from(gifMedia).where(eq(gifMedia.id, id)).limit(1);
+  const r = rows[0];
+  const st = r ? servableStatus(r.status) : null;
+  if (!r || !st || !(r.size > 0)) return null;
+  return { contentType: r.contentType, status: st, channel: r.channel };
+}
+
+/** Médium pro GET /media/gif/:id: stav média (+ kanál kvůli tokenu). Volá se až po ověření přes servableMeta. */
 export async function servableMedia(id: string): Promise<{ bytes: Buffer; contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel: string | null } | null> {
-  const now = new Date();
-  const rows = await db.select({
-    bytes: gifMedia.bytes, contentType: gifMedia.contentType, status: gifMedia.status, channel: gifMedia.channel,
-    pending: sql<boolean>`${exists(livePendingFor(now))}`,
-  }).from(gifMedia).where(eq(gifMedia.id, id)).limit(1);
+  const rows = await db.select({ bytes: gifMedia.bytes, contentType: gifMedia.contentType, status: gifMedia.status, channel: gifMedia.channel })
+    .from(gifMedia).where(eq(gifMedia.id, id)).limit(1);
   const r = rows[0];
   if (!r) return null;
-  const st = servableStatus(r.status, !!r.pending);
+  const st = servableStatus(r.status);
   if (!st || !r.bytes?.length) return null;
   return { bytes: r.bytes, contentType: r.contentType, status: st, channel: r.channel };
 }
@@ -1130,6 +1147,8 @@ export function createGifFlow(deps: GifFlowDeps) {
               meta: {
                 displayName: m.username, sentAt: m.sentAt.getTime(), ...(raw.color ? { color: raw.color } : {}), ...(raw.badges !== undefined ? { badges: raw.badges } : {}),
                 ...(auto ? { auto: true } : {}), ...(approvedKnown && !auto ? { instant: true } : {}), ...(previouslyRejected ? { previouslyRejected } : {}),
+                // Zamítnuté médium zůstává jen s tokenem i s novou žádostí (audit SEC-1) → karta moda ho načte s tokenem.
+                ...(known?.status === 'rejected' ? { tokenRequired: true } : {}),
               },
               // requestTtlSec z odpovědi Židolišty (z cache, už načtená); chybí → 300 s.
               expiresAt: new Date(deps.now() + (access?.requestTtlSec ?? 300) * 1000),
@@ -1137,8 +1156,6 @@ export function createGifFlow(deps: GifFlowDeps) {
             // Zámek uživatele hned po vzniku žádosti (ne až po mazání na platformě) — a jen když ji mezitím
             // nikdo nerozhodl (rozhodnutí by zámek už nesundalo a visel by do restartu).
             if (!closed.has(created.id)) pending.set(k, created.id);
-            // Zamítnuté médium s novou čekající žádostí je zase veřejné → stav pro /media/gif znovu z DB.
-            if (known) deps.mediaChanged?.(known.id);
           } catch (e) {
             deps.log.warn({ err: (e as Error).message }, 'gif: uložení žádosti selhalo');
             if (savedFresh && mediaId) await safe('úklid média', () => deps.store.deleteMedia(mediaId!));
@@ -1337,9 +1354,11 @@ export function createGifFlow(deps: GifFlowDeps) {
       for (const r of rows) {
         if (r.mediaId) {
           await safe('úklid média', async () => {
-            // Zamítnuté médium bez čekající žádosti je zase jen s tokenem → stav pro /media/gif znovu z DB.
             deps.mediaChanged?.(r.mediaId!);
             const md = await deps.store.getMedia(r.mediaId!);
+            // Propadlá žádost na zamítnuté médium = strike jako zamítnutí modem (audit SEC-1): jinak by šel dříve
+            // zamítnutý GIF posílat ke schválení donekonečna, když mody kartu ignorují.
+            if (md?.status === 'rejected') await deps.store.addRejection(r.channel, md.id, r.platform, r.userId, at);
             if (md?.status !== 'pending') return; // schválené (knihovna) / zamítnuté (retence) zůstávají
             // Čeká na něj jiná žádost, nebo na něj odkazují starší zprávy (čekající alias z backfillu: schválené žádosti).
             if (await deps.store.mediaReferenced(r.mediaId!)) return;

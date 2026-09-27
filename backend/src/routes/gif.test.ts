@@ -85,19 +85,45 @@ test('MediaServer: čekající a zamítnuté se necachují (každé čtení z DB
   assert.equal(loads, 5);
 });
 
-test('GET /media/gif: propadnutí žádosti na dříve zamítnutém médiu → bez tokenu 404 (stav bez zastaralé cache)', async () => {
+test('GET /media/gif: zamítnuté médium i s čekající žádostí jen s tokenem; bez tokenu se bajty z DB nenačtou (audit SEC-1, SEC-2)', async () => {
   const { default: Fastify } = await import('fastify');
   const { default: gifRoutes } = await import('./gif.js');
   const id = 'e'.repeat(32);
-  // Zamítnuté médium s čekající žádostí = veřejné (servableMedia vrací pending); po propadnutí rejected.
-  let status: MediaEntry['status'] = 'pending';
-  const media = new MediaServer(async () => ({ bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status, channel: 'robdiesalot' }));
+  let byteLoads = 0;
+  const media = new MediaServer(
+    async () => { byteLoads++; return { bytes: Buffer.from('GIF89a'), contentType: 'image/gif', status: 'rejected', channel: 'robdiesalot' }; },
+    undefined,
+    async () => ({ contentType: 'image/gif', status: 'rejected', channel: 'robdiesalot' }),
+  );
   const app = Fastify();
-  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media, tokens: { issue: async () => 'x', verify: async () => false } });
-  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 200);
-  status = 'rejected';
-  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 404);
+  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media, tokens: { issue: async () => 'x', verify: async (t) => t === 'dobry' } });
+  for (let i = 0; i < 3; i++) assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).statusCode, 404);
+  assert.equal(byteLoads, 0, 'bez tokenu jen metadata');
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}?t=dobry` })).statusCode, 200);
+  assert.equal(byteLoads, 1);
   await app.close();
+});
+
+test('MediaServer.get(id, gate): metadata před bajty; zamítnuto branou = null bez načtení; schválené z cache bez metadat', async () => {
+  let metas = 0, loads = 0;
+  let status: MediaEntry['status'] = 'rejected';
+  const s = new MediaServer(async () => { loads++; return { ...entry(), status, channel: 'robdiesalot' }; }, undefined, async () => { metas++; return { contentType: 'image/gif', status, channel: 'robdiesalot' }; });
+  const deny = async () => false;
+  const allow = async () => true;
+  assert.equal(await s.get('a', deny), null);
+  assert.deepEqual([metas, loads], [1, 0]);
+  assert.equal((await s.get('a', allow))!.status, 'rejected');
+  assert.deepEqual([metas, loads], [2, 1]);
+  status = 'approved';
+  s.invalidate('a');
+  await s.get('a', allow);
+  assert.deepEqual([metas, loads], [3, 2]);
+  assert.equal((await s.get('a', allow))!.status, 'approved');
+  assert.deepEqual([metas, loads], [3, 2], 'schválené z cache');
+  assert.equal(await s.get('a', deny), null, 'brána platí i pro položku z cache');
+  // Stav se změní mezi metadaty a bajty → brána se ověří znovu nad načteným stavem.
+  const t = new MediaServer(async () => ({ ...entry('rejected'), channel: 'robdiesalot' }), undefined, async () => ({ contentType: 'image/gif', status: 'approved', channel: 'robdiesalot' }));
+  assert.equal(await t.get('b', async (m) => m.status !== 'rejected'), null);
 });
 
 test('MediaServer.invalidate: změna stavu (zamítnuto) → další čtení z DB, bez tombstone', async () => {
@@ -213,12 +239,11 @@ test('média podle stavu: withdrawn veřejně (cache 300 s, cachuje se), purging
   assert.equal(await mediaAllowed(entry('withdrawn'), undefined, verify), true);
   assert.equal(await mediaAllowed(purging, undefined, verify), false);
   assert.equal(await mediaAllowed(purging, 'dobry', verify), true);
-  assert.equal(servableStatus('withdrawn', false), 'withdrawn');
-  assert.equal(servableStatus('purging', true), 'purging');
-  assert.equal(servableStatus('unavailable', false), null);
-  assert.equal(servableStatus('rejected', true), 'pending');
-  assert.equal(servableStatus('rejected', false), 'rejected');
-  assert.equal(servableStatus('pending', false), 'pending');
+  assert.equal(servableStatus('withdrawn'), 'withdrawn');
+  assert.equal(servableStatus('purging'), 'purging');
+  assert.equal(servableStatus('unavailable'), null);
+  assert.equal(servableStatus('rejected'), 'rejected', 'zamítnuté i s čekající žádostí jen s tokenem (audit SEC-1)');
+  assert.equal(servableStatus('pending'), 'pending');
   let loads = 0;
   const s = new MediaServer(async () => { loads++; return entry('withdrawn'); });
   await s.get('a'); await s.get('a');

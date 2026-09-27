@@ -36,6 +36,10 @@ import { channelMatches } from '../lib/messageDeletes.js';
 import { publishRestored } from '../lib/linkRestore.js';
 
 export type MediaEntry = { bytes: Buffer; contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel?: string | null };
+/** Médium bez bajtů (stav + kanál kvůli tokenu) — ověřuje se dřív, než se z DB načtou bajty (audit SEC-2). */
+export type MediaMeta = Omit<MediaEntry, 'bytes'>;
+/** Brána vydání média (token u zamítnutých / purging); volá se nad metadaty i nad načteným médiem. */
+export type MediaGate = (m: MediaMeta) => Promise<boolean>;
 
 export interface GifRouteOpts {
   flow: GifFlow;
@@ -79,7 +83,7 @@ const TOKEN_ONLY: ReadonlySet<string> = new Set(['rejected', 'purging']);
  * a purging jen s tokenem `?t=` platným pro kanál média (mod kanálu / integrace jeho workspace). Jinak 404
  * (neprozradit existenci). Unavailable (soubor smazán) sem vůbec nedojde (servableMedia → null).
  */
-export async function mediaAllowed(m: MediaEntry, token: string | undefined, verify: (t: string | undefined, channel: string) => Promise<boolean>): Promise<boolean> {
+export async function mediaAllowed(m: MediaMeta, token: string | undefined, verify: (t: string | undefined, channel: string) => Promise<boolean>): Promise<boolean> {
   if (!TOKEN_ONLY.has(m.status)) return true;
   if (!m.channel) return false;
   return verify(token, m.channel);
@@ -145,17 +149,38 @@ export class MediaServer {
   private inflight = new Map<string, Promise<MediaEntry | null>>();
   private tombstones = new Set<string>();
   private gen = new Map<string, number>();
-  constructor(private readonly load: (id: string) => Promise<MediaEntry | null>, private readonly maxBytes = 64 * 1024 * 1024) {}
+  /**
+   * `loadMeta` (produkce: servableMeta): stav a kanál bez bajtů. S branou v `get` se nejdřív ověří metadata a bajty
+   * se z DB načtou až po průchodu (audit SEC-2 — jinak každý požadavek bez tokenu na zamítnuté médium tahal až 10 MB).
+   */
+  constructor(
+    private readonly load: (id: string) => Promise<MediaEntry | null>,
+    private readonly maxBytes = 64 * 1024 * 1024,
+    private readonly loadMeta?: (id: string) => Promise<MediaMeta | null>,
+  ) {}
 
   /**
    * Cachuje se JEN veřejné médium se stálým stavem: schválené a stažené (withdrawn). Změnu stavu (odebrání,
    * zahození, odstranění souboru) hlásí flow přes invalidate / forget. Čekající, zamítnuté a purging se čtou vždy
-   * z DB (souběžná čtení sdílí jedno načtení) — stav se mění rozhodnutím, propadnutím, novou žádostí, obnovou.
+   * z DB (souběžná čtení sdílí jedno načtení) — stav se mění rozhodnutím, propadnutím, obnovou.
+   * `gate` (token): false → null; ověřuje se nad metadaty (před bajty) i nad načteným médiem (stav se mohl změnit).
    */
-  async get(id: string): Promise<MediaEntry | null> {
+  async get(id: string, gate?: MediaGate): Promise<MediaEntry | null> {
     if (this.tombstones.has(id)) return null;
     const hit = this.m.get(id);
-    if (hit) { this.m.delete(id); this.m.set(id, hit); return hit; }
+    if (hit) {
+      this.m.delete(id); this.m.set(id, hit);
+      return !gate || (await gate(hit)) ? hit : null;
+    }
+    if (gate && this.loadMeta) {
+      const meta = await this.loadMeta(id);
+      if (!meta || this.tombstones.has(id) || !(await gate(meta))) return null;
+    }
+    const v = await this.loadShared(id);
+    return v && (!gate || (await gate(v))) ? v : null;
+  }
+
+  private loadShared(id: string): Promise<MediaEntry | null> {
     let p = this.inflight.get(id);
     if (!p) {
       const gen = this.gen.get(id) ?? 0;
@@ -372,9 +397,10 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     const id = String(req.params.id || '');
     if (!MEDIA_ID_RE.test(id)) return reply.code(404).send({ ok: false, error: 'not_found' });
     if (!mediaLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
-    const m = await opts.media.get(id);
-    // Zamítnuté bez platného tokenu = 404 (jako neexistující).
-    if (!m || !(await mediaAllowed(m, typeof req.query.t === 'string' ? req.query.t : undefined, tokens.verify))) return reply.code(404).send({ ok: false, error: 'not_found' });
+    const token = typeof req.query.t === 'string' ? req.query.t : undefined;
+    // Zamítnuté bez platného tokenu = 404 (jako neexistující); token se ověří nad metadaty, bajty až potom (SEC-2).
+    const m = await opts.media.get(id, (x) => mediaAllowed(x, token, tokens.verify));
+    if (!m) return reply.code(404).send({ ok: false, error: 'not_found' });
     return reply
       .header('Content-Type', m.contentType)
       .header('Content-Length', String(m.bytes.length))

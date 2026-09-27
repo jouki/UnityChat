@@ -311,6 +311,7 @@ test('expireTick: propadlé → expired, médium pryč, gif-decided (expired) mo
   assert.equal(await s.flow.expireTick(), 1);
   assert.equal(s.mem.reqs.get(1)!.status, 'expired');
   assert.deepEqual(s.mem.log, [`deleteMedia:${MEDIA}`, 'retag:m1:gif_request->gif_rejected']);
+  assert.equal(s.mem.rejections.size, 0, 'propadnutí nového (čekajícího) GIFu strike nepočítá');
   assert.equal((s.calls.find((c) => c[0] === 'broadcast:message-deleted')![1] as { reason: string; by: string }).reason, 'gif_rejected');
   assert.deepEqual(s.calls.find((c) => c[0] === 'notify:gif-decided')![1], { requestId: 1, channel: 'robdiesalot', approved: false, status: 'expired', by: null });
   assert.equal((s.calls.find((c) => c[0] === 'integration:gif.decided')![1] as { status: string }).status, 'expired');
@@ -910,6 +911,26 @@ test('propadnutí: médium čekající jen na tuto žádost pryč; už zamítnut
   s.advance(200_000);
   assert.equal(await s.flow.expireTick(), 1);
   assert.equal(s.mem.media.get(MEDIA)?.status, 'rejected');
+  assert.equal(s.mem.rejections.get(`robdiesalot|${MEDIA}|twitch|43`), 1, 'propadnutí žádosti na zamítnuté médium = strike (audit SEC-1)');
+});
+
+test('SEC-1: nová žádost na zamítnuté médium ho nezveřejní (zůstává rejected, karta tokenRequired); propadnutí = strike → 3. pokus automaticky', async () => {
+  const s = setup();
+  await s.flow.intercept(from('42', 'm1'));
+  await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
+  s.advance(1000);
+  assert.equal(await s.flow.intercept(from('42', 'm2')), 'requested');
+  assert.equal(s.mem.media.get(MEDIA)!.status, 'rejected', 'médium zůstává zamítnuté (jen s tokenem)');
+  assert.equal(pendingView(s.mem.reqs.get(2)!).media.tokenRequired, true);
+  assert.equal(pendingView(s.mem.reqs.get(1)!).media.tokenRequired, undefined);
+  // Mody kartu ignorují → propadne; počítá se jako zamítnutí, takže další pokus už ke schválení nejde.
+  s.advance(200_000);
+  assert.equal(await s.flow.expireTick(), 1);
+  assert.equal(s.mem.rejections.get(`robdiesalot|${MEDIA}|twitch|42`), 2);
+  s.advance(1000);
+  assert.equal(await s.flow.intercept(from('42', 'm3')), 'rejected');
+  assert.equal(s.mem.reqs.size, 2, 'žádná další žádost');
+  await s.flow._idle();
 });
 
 test('souběh dedupu: dvě stažení stejného obsahu → dvě média; schválení druhého přesměruje žádost na už schválené, duplikát pryč', async () => {
@@ -941,10 +962,10 @@ test('mediaChanged: nová žádost na známé médium, propadnutí i rozhodnutí
   await s.flow.decide({ requestId: 1, approve: false, by: 'twitch:moda', accountId: 1 });
   assert.deepEqual(changed, [MEDIA], 'zamítnutí');
   await s.flow.intercept(from('43', 'm2'));
-  assert.deepEqual(changed, [MEDIA, MEDIA], 'nová žádost na zamítnuté médium (zase veřejné)');
+  assert.deepEqual(changed, [MEDIA], 'nová žádost na zamítnuté médium ho nezveřejní (audit SEC-1) → stav se nemění');
   s.advance(200_000);
   await s.flow.expireTick();
-  assert.deepEqual(changed, [MEDIA, MEDIA, MEDIA], 'propadnutí (zase jen s tokenem)');
+  assert.deepEqual(changed, [MEDIA, MEDIA], 'propadnutí');
 });
 
 test('zamítnuté médium: trvale zahodit nejdřív zamítne čekající žádosti; schválit schválí i čekající; ban12h označí médium zamítnuté', async () => {
