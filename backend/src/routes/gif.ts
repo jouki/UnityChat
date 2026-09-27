@@ -435,6 +435,9 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
   const modLimiter = new RateLimiter(20, 4);
   const DEFAULT_CHANNEL = (config.CHAT_INGEST_CHANNELS.split(',').find((c) => c.startsWith('twitch:'))?.split(':')[1] || 'robdiesalot').toLowerCase();
   const session = opts.auth ?? requireWebSession;
+  // Výchozí no-store pro všechny odpovědi pluginu, i 401 z preHandleru a 404 média (audit L12); úspěšné médium si
+  // Cache-Control nastaví podle stavu (schválené public 300 s).
+  app.addHook('onRequest', async (_req, reply) => { reply.header('Cache-Control', 'no-store'); });
   const modsOf = opts.modIdentities ?? ((accountId: number, channel: string) => accountModIdentities(accountId, channel));
 
   const tokens = opts.tokens ?? {

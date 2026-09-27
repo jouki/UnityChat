@@ -191,8 +191,13 @@ test('GET /media/gif/:id: zamítnuté bez tokenu / se špatným 404, s platným 
   assert.equal(ok.headers['cache-control'], 'private, no-store');
   // Bez přihlášení → 401 (route existuje, ne 404).
   for (const a of ['approve', 'vault', 'purge', 'ban12h', 'unapprove', 'restore', 'remove-file', 'decide']) {
-    assert.equal((await app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} })).statusCode, 401, a);
+    const r = await app.inject({ method: 'POST', url: `/moderation/gif/${id}/${a}`, payload: {} });
+    assert.equal(r.statusCode, 401, a);
+    assert.equal(r.headers['cache-control'], 'no-store', `401 bez cache (audit L12): ${a}`);
   }
+  // 404 média bez tokenu i neplatné id → no-store (sdílená cache nesmí držet 404 pro médium, které se schválí).
+  assert.equal((await app.inject({ method: 'GET', url: `/media/gif/${id}` })).headers['cache-control'], 'no-store');
+  assert.equal((await app.inject({ method: 'GET', url: '/media/gif/nesmysl' })).headers['cache-control'], 'no-store');
   assert.equal((await app.inject({ method: 'POST', url: '/moderation/gif/access-token', payload: {} })).statusCode, 401);
   assert.equal((await app.inject({ method: 'GET', url: '/moderation/gif/rejected' })).statusCode, 401);
   await app.close();
