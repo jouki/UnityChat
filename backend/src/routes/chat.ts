@@ -61,6 +61,23 @@ export interface ClientMessage {
    */
   gifHidden?: true;
   gifStatus?: 'rejected' | 'purging' | 'withdrawn';
+  /** Twitch USERNOTICE sub / resub z logu (content_raw.notice) — stejná pole jako core/twitch-irc.js. */
+  isSubEvent?: true;
+  subPlan?: string;
+  subMonths?: number | null;
+  subStreak?: number | null;
+  /** Twitch USERNOTICE modiversary (moderátorské výročí) z logu — stejná pole jako core/twitch-irc.js. */
+  isModiversary?: true;
+  modMonths?: number;
+}
+
+/** content_raw.notice (ingest normalizeTwitchUsernotice) → pole zprávy, která zná klientský renderer. */
+function noticeFields(raw: Record<string, unknown>): Partial<ClientMessage> {
+  const n = raw.notice as { type?: string; months?: number | null; streak?: number | null; plan?: string } | undefined;
+  if (!n || typeof n !== 'object') return {};
+  if (n.type === 'modiversary') return { isModiversary: true, modMonths: Number(n.months) || 0 };
+  if (n.type === 'sub' || n.type === 'resub') return { isSubEvent: true, subPlan: String(n.plan || '1000'), subMonths: n.months ?? null, subStreak: n.streak ?? null };
+  return {};
 }
 
 /** Stav média → zpráva v Profilu moda: rozmazaný GIF (zamítnuté, zahozené), štítek (soubor / médium pryč), jinak normálně. */
@@ -244,6 +261,7 @@ function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage
       replyTo: row.isReply && row.replyToMessageId
         ? { username: (raw.replyParentDisplayName as string) || '', message: (raw.replyParentBody as string) || '', id: row.replyToMessageId, ...(raw.replyParentLogin ? { login: String(raw.replyParentLogin) } : {}) }
         : null,
+      ...noticeFields(raw),
     };
   }
   if (row.platform === 'kick') {

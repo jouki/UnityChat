@@ -36,7 +36,7 @@ import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
 import { disconnectAll as disconnectSSE, clientCount } from './sse/bus.js';
 import { publishChat, chatStreamClientCount, disconnectAllChatStreams } from './sse/chatBus.js';
 import { toClientMessage } from './routes/chat.js';
-import { toRow } from './ingest/normalize.js';
+import { toRow, isTwitchNotice } from './ingest/normalize.js';
 import { parseIngestChannels } from './ingest/channels.js';
 import { createIngest } from './ingest/index.js';
 import { startMailKeepalive } from './lib/mailKeepalive.js';
@@ -204,6 +204,9 @@ const ingest = createIngest({
   log: app.log,
   // GET /chat/stream: rozeslat hned po přijetí (před DB dávkou), stejný tvar jako /chat/history.
   onLive: (m) => {
+    // Výročí z USERNOTICE (sub / resub / modiversary): jen rozeslat klientům. Není to běžná chatová zpráva —
+    // filtr odkazů, hlášení odeslání z UnityChatu ani integrační stream Židolišty (chat.message) se jí netýkají.
+    if (isTwitchNotice(m)) { publishChat(m.channel, m.platform, toClientMessage(toRow(m), false)); return; }
     // Filtr odkazů PŘED rozesláním i zápisem: smazaná zpráva jde dál jen jako `deleted` (bez obsahu).
     linkFilter.check(m);
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).

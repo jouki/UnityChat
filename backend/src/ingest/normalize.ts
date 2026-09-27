@@ -102,6 +102,82 @@ export function normalizeTwitchPrivmsg(line: string, channel: string): IngestMes
   };
 }
 
+/**
+ * USERNOTICE typy, které klienti (core/twitch-irc.js) umí vykreslit. Ukládají se jen ty s textem uživatele
+ * (STORED_NOTICES); ostatní známé jdou jen živě přes IRC klienta. Neznámé se logují (msg-id + názvy tagů).
+ */
+export const KNOWN_USERNOTICES = new Set(['raid', 'sub', 'resub', 'subgift', 'submysterygift', 'viewermilestone', 'announcement', 'modiversary']);
+const STORED_NOTICES = new Set(['sub', 'resub', 'modiversary']);
+
+export type TwitchNotice =
+  | { type: 'modiversary'; months: number }
+  | { type: 'sub' | 'resub'; months: number | null; streak: number | null; plan: string };
+
+const posInt = (v: string | undefined): number | null => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : null; };
+
+/**
+ * USERNOTICE s textem uživatele → zpráva do logu (sub / resub = sdílené výročí předplatného, modiversary =
+ * moderátorské výročí, podklad 2026-09-27-twitch-vyroci-research.md §3). `contentRaw.notice` nese typ a čísla,
+ * chat.ts z něj skládá stejná pole jako core parser (isSubEvent… / isModiversary…). Jiné typy → null.
+ */
+export function normalizeTwitchUsernotice(lineOrParsed: string | IrcLine, channel: string): IngestMessage | null {
+  const p = typeof lineOrParsed === 'string' ? parseIrcLine(lineOrParsed) : lineOrParsed;
+  if (!p || p.command !== 'USERNOTICE') return null;
+  const msgId = p.tags['msg-id'] || '';
+  const id = p.tags['id'];
+  if (!id || !STORED_NOTICES.has(msgId)) return null;
+  let notice: TwitchNotice;
+  if (msgId === 'modiversary') {
+    notice = { type: 'modiversary', months: posInt(p.tags['msg-param-months']) ?? 0 };
+  } else {
+    notice = {
+      type: msgId as 'sub' | 'resub',
+      months: posInt(p.tags['msg-param-cumulative-months']) ?? posInt(p.tags['msg-param-months']),
+      streak: p.tags['msg-param-should-share-streak'] === '1' ? posInt(p.tags['msg-param-streak-months']) : null,
+      plan: p.tags['msg-param-sub-plan'] || '1000',
+    };
+  }
+  const login = p.tags['login'] || '';
+  const ts = Number(p.tags['tmi-sent-ts']);
+  const content = p.trailing;
+  return {
+    platform: 'twitch',
+    platformMessageId: id,
+    platformUserId: p.tags['user-id'] || '',
+    username: p.tags['display-name'] || login || 'Unknown',
+    channel: channel.toLowerCase(),
+    content,
+    contentRaw: {
+      login,
+      displayName: p.tags['display-name'] || null,
+      color: p.tags['color'] || null,
+      badges: p.tags['badges'] || '',
+      emotes: p.tags['emotes'] || null,
+      emotesOffset: 0,
+      firstMsg: false,
+      action: false,
+      notice,
+    },
+    sentAt: Number.isFinite(ts) && ts > 0 ? new Date(ts) : new Date(),
+    isUnitychatUser: content.includes(UC_MARKER),
+    isReply: false,
+    replyToMessageId: null,
+  };
+}
+
+/** Zpráva z USERNOTICE (výročí) — filtr odkazů, commandy a integrační stream Židolišty ji přeskakují. */
+export function isTwitchNotice(m: Pick<IngestMessage, 'contentRaw'>): boolean {
+  return !!(m.contentRaw as { notice?: unknown })?.notice;
+}
+
+/** Neznámý typ USERNOTICE → pro log jen msg-id a názvy tagů (žádné hodnoty, žádný text). Známý → null. */
+export function unknownUsernotice(p: IrcLine): { msgId: string; tags: string[] } | null {
+  if (p.command !== 'USERNOTICE') return null;
+  const msgId = p.tags['msg-id'] || '';
+  if (KNOWN_USERNOTICES.has(msgId)) return null;
+  return { msgId, tags: Object.keys(p.tags).sort() };
+}
+
 // ------------------------------------------------------------------ Kick --
 
 interface KickPayload {

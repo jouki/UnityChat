@@ -1,4 +1,4 @@
-import { normalizeTwitchPrivmsg, parseIrcLine } from './normalize.js';
+import { normalizeTwitchPrivmsg, normalizeTwitchUsernotice, parseIrcLine, unknownUsernotice } from './normalize.js';
 import type { IngestDelete, IngestListener, IngestMessage, IngestUserModeration, PlatformStatus } from './types.js';
 import type { IrcLine } from './normalize.js';
 
@@ -30,9 +30,9 @@ interface Opts {
 
 /**
  * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
- * (sidepanel.js), bez UI: jen PRIVMSG → onMessage. USERNOTICE (raid, sub…)
- * se zatím neukládá — klient je renderuje živě a v historii by potřeboval
- * vlastní render cestu; přidá se, až bude klientská část hotová.
+ * (sidepanel.js), bez UI: PRIVMSG → onMessage. Z USERNOTICE jen výročí s textem
+ * uživatele (sub / resub / modiversary, normalizeTwitchUsernotice); raid a dary
+ * klient renderuje živě z vlastního IRC.
  */
 export class TwitchListener implements IngestListener {
   private ws: WebSocket | null = null;
@@ -46,6 +46,8 @@ export class TwitchListener implements IngestListener {
   private readonly baseMs: number;
   private readonly onDelete?: (d: IngestDelete) => void;
   private readonly onUserModerated?: (d: IngestUserModeration) => void;
+  /** Neznámé typy USERNOTICE už zalogované (každý jednou). */
+  private readonly loggedNotices = new Set<string>();
 
   constructor(
     private readonly channel: string,
@@ -117,6 +119,22 @@ export class TwitchListener implements IngestListener {
           const um = clearchatToUserModeration(clearmsg, this.channel);
           if (um && this.onUserModerated) {
             try { this.onUserModerated(um); } catch (err) { this.log.error({ err }, 'twitch ingest: onUserModerated threw'); }
+          }
+          continue;
+        }
+        // USERNOTICE: výročí (sub / resub / modiversary) s textem uživatele → log + /chat/stream jako zpráva;
+        // raid a dary jen živě u klienta. Neznámý typ → info log (msg-id + názvy tagů), každý typ jednou.
+        if (clearmsg?.command === 'USERNOTICE') {
+          const n = normalizeTwitchUsernotice(clearmsg, this.channel);
+          if (n) {
+            this.last = n.sentAt;
+            try { this.onMessage(n); } catch (err) { this.log.error({ err }, 'twitch ingest: onMessage threw'); }
+            continue;
+          }
+          const unk = unknownUsernotice(clearmsg);
+          if (unk && !this.loggedNotices.has(unk.msgId) && this.loggedNotices.size < 200) {
+            this.loggedNotices.add(unk.msgId);
+            this.log.info({ channel: this.channel, ...unk }, 'twitch ingest: neznámý USERNOTICE');
           }
           continue;
         }
