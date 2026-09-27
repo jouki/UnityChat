@@ -10,7 +10,7 @@ import { db } from '../db/index.js';
 import { messages, type Message } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
 import { chatEventFromRow, publishModIntegration } from '../sse/integrationStream.js';
-import { toClientMessage, type ClientMessage } from '../routes/chat.js';
+import { toRestoredMessage, type ClientMessage } from '../routes/chat.js';
 import { forgetPublished, rememberRestored, type DeleteReason } from './messageDeletes.js';
 import { normPlatformChannel } from './ucChannel.js';
 import type { Platform } from './zidolista.js';
@@ -75,6 +75,8 @@ export interface PublishRestoredDeps {
   remember?: (platform: Platform, messageId: string) => void;
   /** chat.restored; `row` = obnovený řádek (text a celá zpráva pro Židolištu). */
   integration?: (ev: RestoredEvent, row?: Message) => Promise<unknown> | unknown;
+  /** Klientský tvar obnovené zprávy (GIF se stavem média); výchozí toRestoredMessage (kolo 4 bod 3). */
+  message?: (row: Message) => Promise<ClientMessage>;
 }
 
 const defaultDeps: PublishRestoredDeps = {
@@ -93,7 +95,8 @@ export async function publishRestored(p: RestoreParams, deps: PublishRestoredDep
   deps.forget(p.platform, p.messageId);
   // gif_request na platformě nic nesmazal → pozdější smazání z platformy je skutečné, značka ne.
   if (reasonList(p.reason).some((r) => r !== 'gif_request')) deps.remember?.(p.platform, p.messageId);
-  const ev: RestoredEvent = { channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, at: deps.now(), message: toClientMessage(row, true) };
+  const message = await (deps.message ?? ((r: Message) => toRestoredMessage(r)))(row);
+  const ev: RestoredEvent = { channel: p.channel, platform: p.platform, messageId: p.messageId, by: p.by, at: deps.now(), message };
   deps.broadcast('message-restored', ev);
   try { await deps.integration?.(ev, row); } catch { /* integrace nesmí shodit moderaci */ }
   return 'ok';

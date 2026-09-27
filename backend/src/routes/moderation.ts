@@ -45,7 +45,7 @@ import { NicknameField, ColorField, upsertNickname, deleteNickname } from './nic
 import type { Ingest } from '../ingest/index.js';
 import { missingModScopes } from '../lib/modScopes.js';
 import type { Platform } from '../lib/zidolista.js';
-import { RateLimiter, toModeratedContent, toClientMessage, type ClientRow, type ClientMessage } from './chat.js';
+import { RateLimiter, toModeratedContent, toRestoredMessage, type ClientRow, type ClientMessage } from './chat.js';
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
 import { userSearchRoutes } from './userSearch.js';
@@ -288,6 +288,8 @@ export interface RestoreDeps {
   publishUnhidden: (p: HideParams) => Promise<HideResult>;
   recordAction: (v: NewModerationAction) => Promise<void>;
   log: { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
+  /** Tvar odkryté zprávy v odpovědi (GIF se stavem média, kolo 4 bod 3); výchozí toRestoredMessage. */
+  restoredMessage?: (row: RestoreState) => Promise<ClientMessage>;
 }
 
 export type RestoreOutcome = 'ok' | 'not_deleted' | 'not_found';
@@ -335,7 +337,7 @@ export async function runRestore(
   }
   const result: RestoreOutcome = done ? 'ok' : 'not_deleted';
   const body: Record<string, unknown> = { ok: true, result };
-  if (done && whole) body.message = toClientMessage({ ...state, deletedAt: null, deletedReason: null, hiddenAt: null }, true);
+  if (done && whole) body.message = await (deps.restoredMessage ?? ((r: RestoreState) => toRestoredMessage(r)))({ ...state, deletedAt: null, deletedReason: null, hiddenAt: null });
   return { status: 200, body };
 }
 

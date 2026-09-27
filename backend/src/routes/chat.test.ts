@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toClientMessage, toModeratedContent, RateLimiter, gifMediaGone, parseMessageKeys, messagesByKeys, MESSAGES_BY_ID_MAX } from './chat.js';
+import { toClientMessage, toRestoredMessage, toModeratedContent, RateLimiter, gifMediaGone, parseMessageKeys, messagesByKeys, MESSAGES_BY_ID_MAX } from './chat.js';
 import type { Message } from '../db/schema.js';
 
 const base: Message = {
@@ -173,4 +173,27 @@ test('gifMediaGone: zahozené GIFy v historii — withdrawn normálně, purging 
   const onlyU = await gifMediaGone([rows[2]], async () => new Map([[U, 'unavailable']]));
   assert.equal(onlyU.size, 0);
   assert.equal(toClientMessage(rows[2], true, onlyU).gif?.unavailable, true);
+});
+
+test('toRestoredMessage (kolo 4 bod 3): odkrytá zpráva s GIFem nese stav média — odebraný `removed`, soubor smazaný `unavailable`, jinak beze změny', async () => {
+  const A = 'a'.repeat(32), R = 'b'.repeat(32), U = 'c'.repeat(32);
+  const gifRow = (n: number, mediaId: string): Message => ({ ...base, id: n, platformMessageId: `gif-${n}`, content: 'hele lol', isReply: false, replyToMessageId: null, contentRaw: { gif: { mediaId, kind: 'gif', width: 10, height: 10 } } });
+  const lookup = async () => new Map([[A, 'approved'], [R, 'rejected'], [U, 'unavailable']]);
+  const ok = await toRestoredMessage(gifRow(1, A), lookup);
+  assert.equal(ok.gif?.removed, undefined);
+  assert.equal(ok.gif?.unavailable, undefined);
+  assert.equal(ok.message, 'hele lol');
+  const rem = await toRestoredMessage(gifRow(2, R), lookup);
+  assert.equal(rem.deleted, undefined, 'odkrytá zpráva se neposílá jako smazaná');
+  assert.equal(rem.message, 'hele lol');
+  assert.equal(rem.gif?.removed, true);
+  const gone = await toRestoredMessage(gifRow(3, 'd'.repeat(32)), lookup);
+  assert.equal(gone.gif?.removed, true, 'médium neexistuje = odebrané');
+  const un = await toRestoredMessage(gifRow(4, U), lookup);
+  assert.equal(un.gif?.unavailable, true);
+  assert.equal(un.gif?.removed, undefined);
+  // Bez GIFu se DB nevolá.
+  assert.equal((await toRestoredMessage(base, async () => { throw new Error('nevolat'); })).message, 'hi LUL');
+  // Chyba DB → GIF jako dosud.
+  assert.equal((await toRestoredMessage(gifRow(5, R), async () => { throw new Error('db'); })).gif?.removed, undefined);
 });

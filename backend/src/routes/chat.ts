@@ -203,6 +203,23 @@ export async function gifMediaGone(rows: ReadonlyArray<Pick<ClientRow, 'contentR
   return gone;
 }
 
+/**
+ * Odkrytá / obnovená zpráva (message-restored, message-unhidden, odpověď POST /moderation/restore): jako
+ * toClientMessage, ale GIF nese stav média, aby ho klient vykreslil stejně jako čerstvý stav (test 2026-09-27
+ * kolo 4 bod 3; dřív šel holý GIF → 404 → neostylovaný „GIF odebrán“): soubor smazán → `unavailable`
+ * („[GIF nedostupný]“), odebrané z knihovny / zahozené / neexistující → `removed` („GIF odebrán“). Zpráva se
+ * neposílá jako smazaná (mod ji právě odkryl). Bez GIFu se DB nevolá; chyba DB → GIF jako dosud.
+ */
+export async function toRestoredMessage(row: ClientRow, lookup: GifMediaStatusLookup = dbGifMediaStatus): Promise<ClientMessage> {
+  const out = toClientMessage(row, true);
+  const id = out.gif ? gifMediaIdFromRaw(row.contentRaw) : null;
+  if (!id) return out;
+  const gone = await gifMediaGone([row], lookup);
+  if (gone.unavailable?.has(id)) out.gif = { ...out.gif!, unavailable: true };
+  else if (gone.has(id)) out.gif = { ...out.gif!, removed: true };
+  return out;
+}
+
 function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage {
   const raw = (row.contentRaw || {}) as Record<string, unknown>;
   const base = {

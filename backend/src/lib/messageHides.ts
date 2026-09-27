@@ -8,7 +8,7 @@ import { db } from '../db/index.js';
 import { messages, type Message } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
 import { publishModIntegration } from '../sse/integrationStream.js';
-import { toClientMessage, type ClientMessage } from '../routes/chat.js';
+import { toRestoredMessage, type ClientMessage } from '../routes/chat.js';
 import type { Platform } from './zidolista.js';
 
 export type HideResult = 'ok' | 'not_found';
@@ -68,6 +68,8 @@ export interface PublishUnhiddenDeps {
   broadcast: (event: string, data: object) => void;
   now: () => number;
   integration?: (ev: HiddenEvent) => Promise<unknown> | unknown;
+  /** Klientský tvar odkryté zprávy (GIF se stavem média); výchozí toRestoredMessage (kolo 4 bod 3). */
+  message?: (row: Message) => Promise<ClientMessage>;
 }
 
 const hiddenDeps: PublishHiddenDeps = { markHidden, broadcast, now: Date.now, integration: (ev) => defaultIntegration('chat.hidden', ev) };
@@ -87,7 +89,7 @@ export async function publishUnhidden(p: HideParams, deps: PublishUnhiddenDeps =
   const row = await deps.markUnhidden({ platform: p.platform, messageId: p.messageId });
   if (!row) return 'not_found';
   const ev = hiddenEvent({ ...p, at: deps.now() });
-  deps.broadcast('message-unhidden', unhiddenEvent({ ...ev, message: toClientMessage(row, true) }));
+  deps.broadcast('message-unhidden', unhiddenEvent({ ...ev, message: await (deps.message ?? ((r) => toRestoredMessage(r)))(row) }));
   try { await deps.integration?.(ev); } catch { /* integrace nesmí shodit moderaci */ }
   return 'ok';
 }

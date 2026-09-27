@@ -17,7 +17,14 @@ export function gifMediaUrl(mediaId: string, base: string = config.PUBLIC_BASE_U
  * `unavailable`: soubor média byl smazán ze serveru („Odstranit ze serveru“ u staženého GIFu) — zpráva zůstává,
  * klient místo GIFu ukáže štítek „[GIF nedostupný]“ (URL zůstává kvůli starším klientům: 404 → „GIF odebrán“).
  */
-export interface GifMediaView { url: string; kind: string; width: number | null; height: number | null; unavailable?: true }
+export interface GifMediaView {
+  url: string; kind: string; width: number | null; height: number | null; unavailable?: true;
+  /**
+   * Médium odebrané z knihovny / zahozené / neexistující u ODKRYTÉ zprávy (routes/chat.ts toRestoredMessage):
+   * zpráva zůstává vidět, klient místo GIFu ukáže štítek „GIF odebrán“ (stejně nastylovaný jako „[GIF nedostupný]“).
+   */
+  removed?: true;
+}
 
 /**
  * Stav média → jak se ukáže zpráva se schváleným GIFem (spec 2026-09-27-gif-nahled-zahozeni-design.md):
