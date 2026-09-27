@@ -322,6 +322,21 @@ Promise.all([
     && L.GIF_CONFIRM_TEXT['remove-file'].lines[0] === 'Staré zprávy ukážou [GIF nedostupný]. Nejde vrátit.');
   check('gifLibraryErrorText: nové chyby', L.gifLibraryErrorText({ error: 'already_purged' }) === 'GIF už je zahozený.' && L.gifLibraryErrorText({ error: 'not_purging' }) === 'GIF už není ke smazání.' && L.gifLibraryErrorText({ error: 'not_withdrawn' }) === 'GIF už není mezi staženými.');
 
+  // --- nabídka ⋯ uvnitř panelu (spec 2026-09-27-gif-review-upravy §4) ---
+  const R = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height });
+  const BOX = R(0, 100, 320, 400);          // .uc-gl-body
+  const MENU = R(0, 0, 150, 90);
+  const mid = L.gifMenuPlacement(R(200, 150, 110, 100), MENU, BOX);
+  check('gifMenuPlacement: místo vlevo → zarovnat k pravé hraně dlaždice, pod ⋯', mid.left === 110 - 3 - 150 && mid.top === 27 && !mid.up, JSON.stringify(mid));
+  const leftTile = L.gifMenuPlacement(R(4, 150, 104, 100), MENU, BOX);
+  check('gifMenuPlacement: levý sloupec → nabídka nevyleze vlevo z panelu', 4 + leftTile.left >= BOX.left + 4 && 4 + leftTile.left + 150 <= BOX.right - 4, JSON.stringify(leftTile));
+  const narrow = L.gifMenuPlacement(R(4, 150, 104, 100), MENU, R(0, 100, 120, 400));
+  check('gifMenuPlacement: panel užší než nabídka → aspoň od levého okraje', 4 + narrow.left === 4, JSON.stringify(narrow));
+  const low = L.gifMenuPlacement(R(200, 440, 110, 100), MENU, BOX);
+  check('gifMenuPlacement: dole se nevejde → nad dlaždici', low.up && low.top === -90 - 2, JSON.stringify(low));
+  const tight = L.gifMenuPlacement(R(200, 120, 110, 360), MENU, BOX);
+  check('gifMenuPlacement: nevejde se ani nahoru → zůstane pod ⋯', !tight.up && tight.top === 27, JSON.stringify(tight));
+
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');
   process.exit(fails ? 1 : 0);
 }).catch((e) => { console.error(e); process.exit(1); });

@@ -632,6 +632,28 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
   return { mode: cd > 0 ? 'cooldown' : 'active', canSend: cd <= 0, cooldownMs: cd, remainingMs: rem, progress, approvedOnly, text };
 }
 
+/** Okraj nabídky ⋯ od hrany panelu a od tlačítka (px). */
+export const GIF_MENU_MARGIN = 4;
+/** Nabídka ⋯ pod tlačítkem: posun od horní hrany dlaždice (tlačítko 22 px + 3 px odsazení + 2 px mezera). */
+export const GIF_MENU_BELOW = 27;
+
+/**
+ * Poloha nabídky ⋯ dlaždice uvnitř panelu (čistá funkce nad obdélníky getBoundingClientRect):
+ * vodorovně zarovnat k pravé hraně dlaždice, a když se tam nevejde, posunout tak, aby celá byla v `box`
+ * (u levého okraje panelu tedy zarovnání vlevo); svisle pod ⋯, a když se dolů nevejde a nad dlaždici ano, nad ni.
+ * Vrací { left, top } relativně k dlaždici (px) a `up`.
+ */
+export function gifMenuPlacement(tile, menu, box, { margin = GIF_MENU_MARGIN, below = GIF_MENU_BELOW } = {}) {
+  const w = menu.width || 0, h = menu.height || 0;
+  const minX = box.left + margin, maxX = box.right - margin - w;
+  const x = Math.max(minX, Math.min(tile.right - 3 - w, maxX));
+  const downTop = tile.top + below;
+  const fitsDown = downTop + h <= box.bottom - margin;
+  const upTop = tile.top - h - 2;
+  const up = !fitsDown && upTop >= box.top + margin;
+  return { left: x - tile.left, top: (up ? upTop : downTop) - tile.top, up };
+}
+
 // ---------------------------------------------------------------------------
 // Knihovna — data
 // ---------------------------------------------------------------------------
@@ -1184,8 +1206,23 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       }
     }
     body.scrollTop = top;
+    placeMenu();
     paintConfirm();
     paintPreview();
+  }
+
+  /** Otevřená nabídka ⋯ uvnitř panelu (neusekne se o okraj — spec 2026-09-27-gif-review-upravy §4). */
+  function placeMenu() {
+    const menu = st.menu ? body.querySelector('.uc-gl-menu:not([hidden])') : null;
+    const tile = menu?.parentElement;
+    if (!menu || !tile) return;
+    menu.style.left = ''; menu.style.right = ''; menu.style.top = '';
+    const p = gifMenuPlacement(tile.getBoundingClientRect(), menu.getBoundingClientRect(), body.getBoundingClientRect());
+    menu.style.right = 'auto';
+    menu.style.left = `${p.left}px`;
+    menu.style.top = `${p.top}px`;
+    menu.dataset.place = p.up ? 'up' : 'down';
+    L(`nabídka ${st.menu}: ${p.up ? 'nad' : 'pod'} ⋯, left ${Math.round(p.left)} px`);
   }
 
   /**

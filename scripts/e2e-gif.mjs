@@ -828,6 +828,10 @@ const pv = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data
     src: m?.getAttribute('src') || '', w: Math.round(r?.width || 0), fits: !!r && r.width <= pr.width && r.height <= pr.height, overPane: pr.width > 100 && pr.height > 100 }; })()`);
 await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="menu"]');
 check('G divák: nabídka ⋯ u GIFu v knihovně = jen „Náhled“', await ev(`[...document.querySelectorAll('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Náhled');
+const menuInside = (sel) => ev(`(() => { const m = document.querySelector('${sel} .uc-gl-menu:not([hidden])'); if (!m) return null; const b = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-body').getBoundingClientRect(); const r = m.getBoundingClientRect();
+  return { inside: r.left >= b.left && r.right <= b.right && r.top >= b.top - 1, left: Math.round(r.left - b.left), right: Math.round(b.right - r.right), place: m.dataset.place }; })()`);
+const mi0 = await menuInside('.uc-gl-i[data-sec="lib"][data-id$="0b"]');
+check('G nabídka ⋯ první (levé) dlaždice se neusekne o levý okraj panelu', mi0?.inside === true, JSON.stringify(mi0));
 await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu [data-act="preview"]');
 const pvG = await pv();
 check('G náhled: překryv nad panelem — větší GIF (fit), rozměry, tagy, použití', pvG?.open && pvG.dim === '200 × 100 px · GIF' && pvG.tags === 'cat,dance' && pvG.meta === 'Použito 9×' && pvG.w > 100 && pvG.fits && pvG.overPane && pvG.src === murl(hex(11)), JSON.stringify(pvG));
@@ -962,6 +966,8 @@ mock.dupAct = null;
 // Odebrat z knihovny (unapprove) přes menu
 await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="menu"]');
 check('G2 menu GIFu: Náhled / Odebrat z knihovny / Trvale zahodit…', await ev(`[...document.querySelectorAll('.uc-gl-i[data-sec="lib"][data-id$="0b"] .uc-gl-menu:not([hidden]) button')].map(b => b.textContent).join('|')`) === 'Náhled|Odebrat z knihovny|Trvale zahodit…');
+const mi2 = await menuInside('.uc-gl-i[data-sec="lib"][data-id$="0b"]');
+check('G2 nabídka moda (3 položky) uvnitř panelu', mi2?.inside === true, JSON.stringify(mi2));
 await glClick('.uc-gl-i[data-sec="lib"][data-id$="0b"] [data-act="unapprove"]');
 check('G2 Odebrat z knihovny → POST unapprove, GIF z knihovny pryč', await until(`!document.querySelector('.uc-gl-i[data-sec="lib"][data-id$="0b"]')`, 4000) && posts.media.some((x) => x.id === hex(11) && x.action === 'unapprove'), JSON.stringify(posts.media));
 // Trvale zahodit schválený: dialog se dvěma variantami + Zrušit a vysvětlením (2026-09-27)
