@@ -1163,7 +1163,7 @@ class UnityChat {
     try { window.ucGifHold = () => this._gifHold(); } catch {}
     // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))) }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o) }; } catch {}
 
     this._init();
   }
@@ -4834,7 +4834,10 @@ class UnityChat {
     const nextReason = hidden ? null : window.UC_CORE.gifHeldAfter(msg?.deletedReason ?? (msg ? null : this._heldReasons?.get(String(id))), reason);
     if (!hidden) {
       if (!this._heldReasons) this._heldReasons = new Map();
-      if (window.UC_CORE.isGifHeldReason(nextReason)) this._heldReasons.set(String(id), nextReason); else this._heldReasons.delete(String(id));
+      // Schovaná (gif_request) i nepovolený nový GIF (gif_not_allowed): zpráva, která dorazí až po události, se
+      // vykreslí rovnou schovaně (core gifEarlyReason).
+      const early = window.UC_CORE.gifEarlyReason(this._heldReasons.get(String(id)), nextReason);
+      if (early) this._heldReasons.set(String(id), early); else this._heldReasons.delete(String(id));
       if (this._heldReasons.size > 300) this._heldReasons.delete(this._heldReasons.keys().next().value);
     }
     if (msg) {

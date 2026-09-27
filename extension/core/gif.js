@@ -66,7 +66,24 @@ export const isGifMessageId = (id) => /^gif-\d+$/.test(String(id ?? ''));
  */
 export const GIF_HELD_REASON = 'gif_request';
 export const GIF_REJECTED_REASON = 'gif_rejected';
+/**
+ * Nový GIF v režimu odměny „jen schválené“ (backend GIF_NOT_ALLOWED_REASON): odesílatel vidí svou zprávu se štítkem
+ * „Nové GIFy teď nejsou povolené“ (bez vzhledu smazané), ostatním (divák, mod, OBS) se nevykresluje vůbec.
+ */
+export const GIF_NOT_ALLOWED_REASON = 'gif_not_allowed';
 export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;
+
+/**
+ * Důvod, který si hostitel pamatuje pro zprávu podle id, i když ji ještě nemá (SSE message-deleted předběhlo zprávu
+ * z IRC / echo): schovaná (gif_request) i nový nepovolený GIF (gif_not_allowed) se pak vykreslí rovnou schovaně.
+ * `prev` = zapamatovaný důvod, `next` = nový důvod (gifHeldAfter). null = nepamatovat. Ozvěna smazání z platformy
+ * (`next` prázdné) zapamatovaný gif_not_allowed nechá.
+ */
+export function gifEarlyReason(prev, next) {
+  if (isGifHeldReason(next) || next === GIF_NOT_ALLOWED_REASON) return next;
+  if (!next && prev === GIF_NOT_ALLOWED_REASON) return prev;
+  return null;
+}
 
 /**
  * Nový důvod smazání u zprávy, která je zrovna schovaná jako gif_request: `platform` (bot ji smazal i na

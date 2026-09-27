@@ -11,9 +11,9 @@
 //  - odeslání: watchYoutubeSend (YouTube bez echa), pairGifEcho (echo vlastní GIF zprávy přes id).
 //
 // Bez chrome.*. DOM jen přes předané uzly / `doc`, síť přes injektované `api`.
-import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason } from './gif.js';
+import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason, GIF_NOT_ALLOWED_REASON } from './gif.js';
 import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, isGifOwnFinal, gifOwnFinalReason, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
-import { clearDeleted } from './moderation.js';
+import { clearDeleted, disableTextLinks } from './moderation.js';
 
 const isGifReason = (reason) => String(reason || '').startsWith('gif_');
 const noop = () => {};
@@ -216,7 +216,7 @@ export function gifOwnView(outbox, el, msg, identity = null) {
 }
 
 /**
- * Konečný stav vlastního GIFu (zamítnuto / vypršelo / nové GIFy nejdou) i v datech zprávy (review kola 4 M2):
+ * Konečný stav vlastního GIFu (zamítnuto / vypršelo / nové GIFy nejsou povolené) i v datech zprávy (review kola 4 M2):
  * `_gifOwnFinal` + `_deleted` + důvod, takže překreslení `.tx`, kopírování i citace (hostitel `_isModerated`,
  * `textSuppressed`) berou zprávu jako smazanou. Když se štítek později vrátí z konečného stavu (soft „Vypršelo“ →
  * resync → čeká), předchozí stav smazání se obnoví. Vrací true, když je zpráva v konečném stavu.
@@ -250,10 +250,12 @@ export function syncGifOwnFinal(msg, view) {
  * nemaluje), false = běžná smazaná zpráva (hostitel pokračuje; médium smazaného GIFu už je pryč).
  *
  *  - vlastní GIF (`own` = gifOwnView): rozpracovaný / čekající zůstává vidět s textem a štítkem (kolečko %,
- *    „Schvalování moderátorem“); konečný červený stav („Zamítnuto moderátorem“, „Vypršelo“, „Nové GIFy teď nejdou“)
- *    = štítek + false → hostitel zprávu vykreslí jako smazanou (kolo 4 bod 4a, odkaz není živý); schválení = štítek
- *    pryč, zpráva se schová jako u ostatních,
+ *    „Schvalování moderátorem“); konečný červený stav „Zamítnuto moderátorem“ / „Vypršelo“ = štítek + false →
+ *    hostitel zprávu vykreslí jako smazanou (kolo 4 bod 4a, odkaz není živý); „Nové GIFy teď nejsou povolené“
+ *    (gif_not_allowed) = text mírně ztlumený, odkaz neživý, jen štítek — bez vzhledu smazané zprávy a bez „Smazáno“,
+ *    i pro moda (user 2026-09-27); schválení = štítek pryč, zpráva se schová jako u ostatních,
  *  - gif_request (čeká): ostatním schovaná úplně (`uc-gif-held`) + pojistka `hold` (GET /gif/held),
+ *  - gif_not_allowed cizí zprávy: schovaná úplně všem (divák, mod, OBS; živě i z historie) — ani „Zpráva smazána“,
  *  - OBS (`raw`): zamítnutý / nepovolený GIF se neukáže ani jako „Smazáno“ (čekající GIF v OBS nikdy),
  *  - smazaný GIF: server médium přestane servírovat → pryč z dat i z DOM.
  *
@@ -272,9 +274,20 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
   if (own && own.kind !== 'approved' && (held || (deleted && isGifReason(msg.deletedReason)))) {
     el.classList.remove('uc-gif-held');
     if (isGifOwnFinal(own)) {
-      // Rozhodnuto (zamítnuto / vypršelo / nové GIFy nejdou): hostitel dál maluje běžně smazanou zprávu, štítek zůstává.
       syncGifOwnFinal(msg, own);
       release(pl, id);
+      if (own.kind === 'not_allowed') {
+        // Nové GIFy nejsou povolené: vlastní text (bez obsahu z historie prázdný) + štítek, bez vzhledu smazané zprávy.
+        clearDeleted(el);
+        const tx = el.querySelector('.tx');
+        if (tx && tx.querySelector('.uc-deleted-label')) {
+          if (hasContent(msg)) rerender(el, tx, msg); else tx.replaceChildren();
+        }
+        paintGifStatus(doc, el, own);
+        disableTextLinks(el);
+        return true;
+      }
+      // Rozhodnuto (zamítnuto / vypršelo): hostitel dál maluje běžně smazanou zprávu, štítek zůstává.
       paintGifStatus(doc, el, own);
       return false;
     }
@@ -286,7 +299,7 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
     return true;
   }
   paintGifStatus(doc, el, null);
-  if (raw && deleted && !held && isGifReason(msg.deletedReason)) {
+  if (deleted && !held && (msg.deletedReason === GIF_NOT_ALLOWED_REASON || (raw && isGifReason(msg.deletedReason)))) {
     el.classList.add('uc-gif-held');
     release(pl, id);
     return true;

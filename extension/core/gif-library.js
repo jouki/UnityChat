@@ -11,7 +11,7 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON } from './gif.js';
+import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining, shakeLock, rewardStatusHtml, REWARD_STATUS_CLASS } from './soundboard.js';
@@ -65,17 +65,19 @@ export const GIF_STATUS_TEXT = {
   pending: 'Schvalování moderátorem',
   rejected: 'Zamítnuto moderátorem',
   expired: 'Vypršelo',
-  not_allowed: 'Nové GIFy teď nejdou',
+  not_allowed: 'Nové GIFy teď nejsou povolené',
 };
 /**
- * Konečné (červené) stavy vlastního GIFu → důvod smazání: odesílatel takovou zprávu vidí jako SMAZANOU (ztlumené
- * „Zpráva smazána“, mod podle svého stylu) se štítkem a bez živého odkazu (test 2026-09-27 kolo 4 bod 4a).
+ * Konečné (červené) stavy vlastního GIFu → důvod smazání. Zamítnuto / vypršelo: odesílatel zprávu vidí jako SMAZANOU
+ * (ztlumené „Zpráva smazána“, mod podle svého stylu) se štítkem a bez živého odkazu (test 2026-09-27 kolo 4 bod 4a).
+ * Nové GIFy nejsou povolené (gif_not_allowed): odesílatel vidí svůj text mírně ztlumený, bez živého odkazu, jen se
+ * štítkem — bez „SMAZÁNO“ / „Zpráva smazána“ (i mod); ostatní zprávu nevidí vůbec (core gif-host paintGifDeleted).
  */
-const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: 'gif_not_allowed' };
+const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: GIF_NOT_ALLOWED_REASON };
 export const isGifOwnFinal = (view) => !!view && Object.prototype.hasOwnProperty.call(GIF_OWN_FINAL_REASON, view.kind);
 export const gifOwnFinalReason = (view) => (isGifOwnFinal(view) ? GIF_OWN_FINAL_REASON[view.kind] : null);
 export const GIF_PREV_REJECTED_TIP = 'tento GIF byl už dříve zamítnut';
-export const GIF_APPROVED_ONLY_TEXT = 'Nové GIFy teď nejdou, vyber z GIFů v panelu';
+export const GIF_APPROVED_ONLY_TEXT = 'Nové GIFy teď nejsou povolené, vyber z GIFů v panelu.';
 /** Náš odkaz (id) na GIF z knihovny: krátký stav bez procent, dokud server nezačne stahovat (test2 bod 4). */
 export const GIF_SENDING_TEXT = 'Odesílám…';
 /** Fáze, od které se u zprávy ukazuje kolečko s procenty. */
@@ -309,14 +311,14 @@ export class GifOutbox {
   /**
    * Vlastní zpráva z historie (po reloadu panelu), kterou server smazal kvůli GIFu → štítek jako živě (audit A10):
    * gif_rejected = „Zamítnuto moderátorem“ (dotaz /gif/held ho upřesní na „Vypršelo“), gif_not_allowed = „Nové GIFy
-   * teď nejdou“, gif_request = „Schvalování moderátorem“ (stav se hned doptá). Známý záznam se nemění.
+   * teď nejsou povolené“, gif_request = „Schvalování moderátorem“ (stav se hned doptá). Známý záznam se nemění.
    */
   adoptHistory(platform, messageId, reason) {
     const id = String(messageId ?? '');
     if (!platform || !id || /^sent-/.test(id)) return null;
     const key = `${platform}:${id}`;
     if (this._e.has(key)) return this._e.get(key);
-    const state = reason === GIF_REJECTED_REASON ? 'rejected' : reason === 'gif_not_allowed' ? 'not_allowed' : isGifHeldReason(reason) ? 'pending' : null;
+    const state = reason === GIF_REJECTED_REASON ? 'rejected' : reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : isGifHeldReason(reason) ? 'pending' : null;
     if (!state) return null;
     const e = this._entry(key, platform, id);
     e.state = state;
@@ -643,7 +645,7 @@ export function isOwnGifMsg(msg, identity) {
   return norm(msg.username) === me || norm(msg.login) === me;
 }
 
-const HISTORY_REASONS = new Set([GIF_REJECTED_REASON, 'gif_not_allowed', 'gif_request']);
+const HISTORY_REASONS = new Set([GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, 'gif_request']);
 
 /**
  * Štítek vlastní GIF zprávy, kterou GifOutbox nezná (reload panelu, jiné zařízení): zpráva smazaná serverem kvůli
@@ -666,8 +668,10 @@ const WARN_SVG ='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="tr
 export function paintGifStatus(doc, msgEl, view) {
   if (!msgEl) return null;
   let st = msgEl.querySelector(':scope > .uc-gif-st');
-  // uc-gif-own-final: odkaz ve smazané vlastní zprávě není živý (gif.css).
+  // uc-gif-own-final: odkaz ve smazané vlastní zprávě není živý (gif.css); uc-gif-own-na: nové GIFy nejsou povolené
+  // → text jen mírně ztlumený, bez vzhledu smazané zprávy.
   msgEl.classList.toggle('uc-gif-own-final', isGifOwnFinal(view));
+  msgEl.classList.toggle('uc-gif-own-na', view?.kind === 'not_allowed');
   if (!view || view.kind === 'approved') { st?.remove(); msgEl.classList.remove('uc-gif-own'); return null; }
   msgEl.classList.add('uc-gif-own');
   if (!st) {

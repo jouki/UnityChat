@@ -100,10 +100,11 @@ Promise.all([
   check('Outbox: failed → běžná zpráva (null)', box.view('twitch', 'm4') === null);
   // gif-notice
   box.onNotice({ requestKey: 'twitch:m5', channel: 'robdiesalot', platform: 'twitch', messageId: 'm5', kind: 'approved_only' });
-  check('Outbox: gif-notice approved_only → hláška + štítek', notices.includes('approved_only') && box.view('twitch', 'm5')?.text === 'Nové GIFy teď nejdou');
+  check('Outbox: gif-notice approved_only → hláška + štítek', notices.includes('approved_only') && box.view('twitch', 'm5')?.text === 'Nové GIFy teď nejsou povolené');
   box.onNotice({ requestKey: 'twitch:m6', channel: 'robdiesalot', platform: 'twitch', messageId: 'm6', kind: 'auto_rejected', reason: 'repeat' });
   check('Outbox: gif-notice auto_rejected → „Zamítnuto moderátorem“', box.view('twitch', 'm6')?.text === 'Zamítnuto moderátorem');
-  check('GIF_APPROVED_ONLY_TEXT', L.GIF_APPROVED_ONLY_TEXT === 'Nové GIFy teď nejdou, vyber z GIFů v panelu');
+  check('GIF_APPROVED_ONLY_TEXT', L.GIF_APPROVED_ONLY_TEXT === 'Nové GIFy teď nejsou povolené, vyber z GIFů v panelu.');
+  check('GIF_NOT_ALLOWED_REASON (gif.js, re-export v gif-library importu)', g.GIF_NOT_ALLOWED_REASON === 'gif_not_allowed');
   // Kolo 4 bod 4a: konečné červené stavy = odesílatel vidí zprávu smazanou (důvod pro vzhled smazané zprávy).
   check('isGifOwnFinal / gifOwnFinalReason: rejected, expired, not_allowed ano; progress, pending, approved ne',
     ['rejected', 'expired', 'not_allowed'].every((k) => L.isGifOwnFinal({ kind: k })) && !['progress', 'pending', 'approved'].some((k) => L.isGifOwnFinal({ kind: k })) && !L.isGifOwnFinal(null)

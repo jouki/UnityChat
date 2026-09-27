@@ -152,14 +152,7 @@ export function applyDeleted(el, opts = {}) {
 
   // Vlastní GIF v konečném stavu (core gif-library paintGifStatus → uc-gif-own-final): odkaz v textu není živý ani
   // pro klávesnici — <a> nahradit prostým textem (review kola 4 M2). Po překreslení `.tx` z dat znovu tady.
-  if (el.classList.contains('uc-gif-own-final') && typeof el.querySelectorAll === 'function' && doc) {
-    for (const a of el.querySelectorAll('.tx a[href]')) {
-      const span = doc.createElement('span');
-      span.className = 'uc-link-off';
-      span.textContent = a.textContent;
-      a.replaceWith(span);
-    }
-  }
+  if (el.classList.contains('uc-gif-own-final')) disableTextLinks(el);
 
   let tagEl = q('.uc-deleted-tag');
   if (!showTag) {
@@ -173,6 +166,25 @@ export function applyDeleted(el, opts = {}) {
     }
     if (tagEl) tagEl.textContent = hidden ? 'Skryto v UnityChatu' : 'Smazáno';
   }
+}
+
+/**
+ * Odkazy v textu zprávy (`.tx a[href]`) nahradí prostým textem (`.uc-link-off`) — nejsou živé ani pro klávesnici.
+ * Idempotentní. Vrací počet nahrazených odkazů.
+ */
+export function disableTextLinks(el) {
+  if (!el || typeof el.querySelectorAll !== 'function') return 0;
+  const doc = el.ownerDocument || (typeof document !== 'undefined' ? document : null);
+  if (!doc) return 0;
+  let n = 0;
+  for (const a of el.querySelectorAll('.tx a[href]')) {
+    const span = doc.createElement('span');
+    span.className = 'uc-link-off';
+    span.textContent = a.textContent;
+    a.replaceWith(span);
+    n++;
+  }
+  return n;
 }
 
 /**
