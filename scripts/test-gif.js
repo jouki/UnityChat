@@ -207,6 +207,20 @@ Promise.all([
     check('gif-access-change: dotaz i přes čerstvý stav → odemčeno, onState (pásek / tooltip hned)', n === 2 && A.snapshot()?.allowed === true && states.at(-1)?.allowed === true && Number.isFinite(states.at(-1)?.rewardUntil));
     A.onAccessChange({ channel: 'robdiesalot' });
     check('gif-access-change: výchozí zpoždění v rozsahu 0–2 s', timers.length === 2 && timers[1].ms >= 0 && timers[1].ms <= cd.GIF_ACCESS_REFETCH_SPREAD_MS && cd.GIF_ACCESS_REFETCH_SPREAD_MS === 2000);
+    // Review 4: událost během běžícího dotazu → po jeho doběhnutí ještě jeden (starý výsledek nezůstane).
+    {
+      let release; let calls = 0;
+      const timers2 = [];
+      const C = mk({ api: async () => { calls++; if (calls === 1) await new Promise((r) => { release = r; }); return st3; },
+        setTimeout: (fn) => { timers2.push(fn); return timers2.length; } });
+      const first = C.fetchState();
+      await new Promise((r) => setTimeout(r, 0));   // api se volá v mikroúloze
+      C.onAccessChange({ channel: 'robdiesalot' }, { delayMs: 0 });
+      timers2[0]();
+      check('review 4: SSE během dotazu → nový dotaz se nespustí hned (sdílí rozběhnutý)', calls === 1);
+      release(); await first; await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+      check('review 4: … po doběhnutí právě jeden dotaz navíc', calls === 2, String(calls));
+    }
     const off2 = mk({ enabled: () => false });
     off2.onAccessChange({ channel: 'robdiesalot' });
     check('gif-access-change: nepřihlášený → nic', timers.length === 2);

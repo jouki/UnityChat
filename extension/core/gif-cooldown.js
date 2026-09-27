@@ -191,7 +191,13 @@ export class GifCooldown {
     if (!ch || ch !== String(this.channel() || '').toLowerCase() || !this.enabled()) return false;
     if (this._accessT) return true;
     this._L(`gif-access-change → stav znovu za ${Math.round(delayMs)} ms`);
-    this._accessT = this._sto(() => { this._accessT = null; void this.fetchState(); }, Math.max(0, delayMs));
+    this._accessT = this._sto(() => {
+      this._accessT = null;
+      // Rozběhnutý dotaz mohl odejít před změnou → po jeho doběhnutí ještě jednou (nejvýš jeden dotaz navíc).
+      const running = this._inflight;
+      if (running) { this._L('gif-access-change během dotazu → po něm ještě jednou'); void running.finally(() => this.fetchState()); }
+      else void this.fetchState();
+    }, Math.max(0, delayMs));
     return true;
   }
 
