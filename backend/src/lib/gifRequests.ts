@@ -648,6 +648,8 @@ export function createGifNotifier(deps: GifNotifierDeps) {
     isMod,
     /** Rozešle událost modům kanálu + odesílateli; vrací id účtů, kterým šla. */
     async notify(r: Pick<GifRequest, 'channel' | 'platform' | 'userId'>, event: string, data: object): Promise<number[]> {
+      // Čekající žádost nese čas serveru → klient přepočte expiresAt na své hodiny (audit F1).
+      if (event === 'gif-pending') data = { ...data, serverNow: now() };
       let sender: number | null = null;
       try { sender = await deps.senderAccount(r.platform as Platform, r.userId); } catch { sender = null; }
       const out: number[] = [];
@@ -673,13 +675,13 @@ export function createGifNotifier(deps: GifNotifierDeps) {
       return (event, data) => { deps.send(a, event, data); };
     },
     /** Čekající žádosti, které účet smí vidět (po připojení /account/stream). */
-    async visibleTo(accountId: number, rows: GifRequest[]): Promise<Array<GifPendingView & { own?: true }>> {
-      const out: Array<GifPendingView & { own?: true }> = [];
+    async visibleTo(accountId: number, rows: GifRequest[]): Promise<Array<GifPendingView & { own?: true; serverNow?: number }>> {
+      const out: Array<GifPendingView & { own?: true; serverNow?: number }> = [];
       for (const r of rows) {
         let own = false;
         try { own = (await deps.senderAccount(r.platform as Platform, r.userId)) === accountId; } catch { own = false; }
-        if (own) out.push({ ...(forSender(pendingView(r)) as GifPendingView), own: true });
-        else if (await isMod(accountId, r.channel)) out.push(pendingView(r));
+        if (own) out.push({ ...(forSender(pendingView(r)) as GifPendingView), own: true, serverNow: now() });
+        else if (await isMod(accountId, r.channel)) out.push({ ...pendingView(r), serverNow: now() });
       }
       return out;
     },
@@ -1166,6 +1168,10 @@ export function createGifFlow(deps: GifFlowDeps) {
       const done = (outcome: GifInterceptResult) => { if (tell) progress('done', 100, { outcome: outcome === 'requested' ? 'pending' : outcome }); };
       const notice = (kind: string, extra: object = {}) => { if (tell) { try { tell('gif-notice', { ...base, kind, ...extra }); } catch { /* ignore */ } } };
       const finish = (outcome: GifInterceptResult): GifInterceptResult => { done(outcome); return outcome; };
+      // Slot globálního cooldownu vzatý okamžitým schválením; uvolní se, když se GIF nezobrazí (review SEC-8),
+      // i při neočekávané výjimce (vnější catch).
+      let releaseSlot: (() => void) | null = null;
+      const freeSlot = () => { const r = releaseSlot; releaseSlot = null; try { r?.(); } catch { /* nic */ } };
       try {
         // Addon čte Twitch IRC napřímo → původní zprávu schovat hned, ne až po stažení média.
         if (p.preDeleted === 'gif_request') await safe('publishDeleted', () => deps.publishDeleted({ channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId, by: 'filter', reason: 'gif_request' }));
@@ -1234,9 +1240,6 @@ export function createGifFlow(deps: GifFlowDeps) {
         let instant = false;
         // Globální cooldown chatu běží (okamžité schválení by GIF pustilo hned, audit SEC-8) → jako neodemčeno.
         let blocked = false;
-        // Slot globálního cooldownu vzatý okamžitým schválením; uvolní se, když se GIF nezobrazí (review SEC-8).
-        let releaseSlot: (() => void) | null = null;
-        const freeSlot = () => { const r = releaseSlot; releaseSlot = null; try { r?.(); } catch { /* nic */ } };
         if (res.ok) {
           const known = res.known;
           const approvedKnown = known?.status === 'approved';
@@ -1346,6 +1349,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           instantOut = await decideCore({ requestId: created.id, approve: true, by, accountId: null, auto, quiet: true, instant: true });
           // GIF se nezobrazil (odebráno z knihovny / zahozeno / zpráva se nezapsala) → slot globálního cooldownu vrátit.
           if (instantOut.status !== 200 || instantOut.body.status !== 'approved' || instantOut.body.published === false) freeSlot();
+          else releaseSlot = null; // GIF zobrazen → slot platí, pozdější výjimka ho už nevrací
           // Médium zahozené během stahování / FLUSH_WAIT (souběh s „Trvale zahodit“) → jako zahozený dedup.
           if (instantOut.body.reason === 'purged' || instantOut.body.reason === 'unapproved') {
             await dropOriginal(p, GIF_REJECTED_REASON);
@@ -1379,6 +1383,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         return finish('requested');
       } catch (e) {
         deps.log.warn({ err: (e as Error).message }, 'gif: zachycení selhalo');
+        freeSlot();
         // Schovaná zpráva bez žádosti nesmí zůstat bez rozhodnutí (s žádostí rozhodne mod / propadnutí).
         if (!created && !settled && p.preDeleted === 'gif_request') await safe('rozhodnutí po chybě', () => settleHeld(p));
         return finish('failed');

@@ -493,7 +493,8 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     if (!(await modsOf(accountId, channel)).length) return reply.code(403).send({ ok: false, error: 'not_mod' });
     // FIFO (created_at, id): klient ukazuje jen nejstarší kartu + „+N čeká".
     const rows = await opts.store.listPending(new Date(), channel);
-    return { ok: true, requests: rows.map(pendingView) };
+    const serverNow = Date.now();
+    return { ok: true, requests: rows.map((r) => ({ ...pendingView(r), serverNow })) };
   });
 
   // Token pro zamítnutá média (`/media/gif/:id?t=`): vydá / obnoví vlastní token účtu moda, vrací ho jen jednou.

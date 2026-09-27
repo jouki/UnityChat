@@ -371,6 +371,8 @@ test('notifier: odesílatel (own) + jen mody kanálu mezi připojenými účty, 
   });
   const r = { channel: 'robdiesalot', platform: 'twitch', userId: '42' };
   assert.deepEqual(await n.notify(r, 'gif-pending', { requestId: 1 }), [7, 2]);
+  // gif-pending nese čas serveru (audit F1) — klient přepočte expiresAt na své hodiny.
+  for (const s of sent) { assert.equal(typeof (s[2] as { serverNow?: unknown }).serverNow, 'number'); delete (s[2] as { serverNow?: unknown }).serverNow; }
   assert.deepEqual(sent, [[7, 'gif-pending', { requestId: 1, own: true }], [2, 'gif-pending', { requestId: 1 }]]);
   await n.notify(r, 'gif-decided', { requestId: 1 });
   assert.equal(modChecks, 3, 'mod stav z cache (účty 1, 2, 3)');
