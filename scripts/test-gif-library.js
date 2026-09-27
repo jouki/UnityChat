@@ -256,8 +256,10 @@ Promise.all([
   // Hláška v hlavičce GIF panelu (bod 4 testu 2026-09-27): v cooldownu jen cooldown, v aktivním stavu tečka mezi větami.
   const HL = L.gifRewardHeadline;
   check('gifRewardHeadline: cooldown + jen schválené → jen „Další GIF můžeš poslat za 35 s.“', HL(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0)) === 'Další GIF můžeš poslat za 35 s.', HL(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0)));
-  check('gifRewardHeadline: aktivní + jen schválené → „Odměna ještě 3:46. Teď jdou jen GIFy z knihovny.“', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)) === 'Odměna ještě 3:46. Teď jdou jen GIFy z knihovny.', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)));
-  check('gifRewardHeadline: aktivní bez konce + jen schválené → „… je aktivní. Teď jdou …“', HL(RV({ allowed: true, until: null, mode: 'approved' }, 0)) === 'Odměna „Posílání GIFů“ je aktivní. Teď jdou jen GIFy z knihovny.');
+  // Kolo 4 bod 2: v aktivním stavu nahoře žádný text (jen pásek), ani s režimem „jen schválené“.
+  check('gifRewardHeadline: aktivní + jen schválené → prázdné (žádné „Odměna ještě …“ ani „Teď jdou jen …“)', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)) === '', HL(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0)));
+  check('gifRewardHeadline: aktivní bez konce → prázdné', HL(RV({ allowed: true, until: null, mode: 'approved' }, 0)) === '' && HL(RV({ allowed: true, until: null }, 0)) === '');
+  check('gifRewardTip: aktivní + jen schválené → tooltip beze změny (věta o knihovně zůstává)', JSON.stringify(L.gifRewardTip(RV({ allowed: true, until: null, mode: 'approved', rewardUntil: 226_000 }, 0))?.lines) === JSON.stringify([L.GIF_APPROVED_ONLY_LINE]));
   check('gifRewardHeadline: zamčeno (i jen schválené) → jen „Odměna není aktivována“', HL(RV({ allowed: false, mode: 'approved' }, 0)) === 'Odměna není aktivována');
   check('gifRewardHeadline: neznámý stav → prázdné', HL(RV(null, 0)) === '');
 

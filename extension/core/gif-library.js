@@ -855,12 +855,13 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
 export const GIF_APPROVED_ONLY_LINE = 'Teď jdou jen GIFy z knihovny.';
 
 /**
- * Hláška v hlavičce GIF panelu z gifRewardView: věta o režimu „jen schválené“ jen v aktivním stavu — v cooldownu
- * by mátla (bod 4 testu 2026-09-27), zamčeno má jen „Odměna není aktivována“.
+ * Hláška v hlavičce GIF panelu z gifRewardView. V aktivním stavu žádný text (test 2026-09-27 kolo 4 bod 2: pryč
+ * „Odměna ještě 3:56. Teď jdou jen GIFy z knihovny.“) — zbývající čas ukazuje jen pásek pod hlavičkou a podrobnosti
+ * tooltip ikony emotů (gifRewardTip). Cooldown: „Další GIF můžeš poslat za N s.“, zamčeno: „Odměna není aktivována“.
  */
 export function gifRewardHeadline(v) {
-  if (!v) return '';
-  return [v.text, v.approvedOnly && v.mode === 'active' ? GIF_APPROVED_ONLY_LINE : ''].filter(Boolean).join(' ');
+  if (!v || v.mode === 'active') return '';
+  return v.text || '';
 }
 
 /**
@@ -1117,8 +1118,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   pane.classList.add('uc-gl');
   pane.innerHTML = `
     <div class="uc-gl-tabs" role="tablist" hidden>
-      <button type="button" class="uc-gl-tab on" data-gl-tab="lib" role="tab">GIFy</button>
-      <button type="button" class="uc-gl-tab" data-gl-tab="rej" role="tab">Zamítnuté GIFy</button>
+      <button type="button" class="uc-gl-tab on" data-gl-tab="lib" role="tab"><span>GIFy</span></button>
+      <button type="button" class="uc-gl-tab" data-gl-tab="rej" role="tab"><span>Zamítnuté GIFy</span></button>
     </div>
     <div class="uc-gl-reward" role="status"></div>
     <div class="uc-gl-search"><input type="search" placeholder="Hledat GIF podle tagů…" autocomplete="off" spellcheck="false" aria-label="Hledat GIF"></div>
@@ -1166,7 +1167,9 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     }
     rewardEl.querySelector('.uc-gl-reward-bar')?.style.setProperty('--p', v.progress?.toFixed(4) ?? '1');
     rewardEl.querySelector('.uc-gl-reward-t').textContent = txt;
-    rewardEl.hidden = !txt;
+    // Aktivní odměna bez textu: zůstane jen tenký řádek s páskem (bez pásku nic).
+    rewardEl.classList.toggle('uc-gl-reward--bare', !txt && bar);
+    rewardEl.hidden = !txt && !bar;
     pane.classList.toggle('uc-gl--locked', !v.canSend);
     // Pásek (jen se známým koncem odměny) + stav pro vlastní tooltip ikony emotů a záložky (test2 body 1 a 3).
     onIndicator?.({ progress: v.progress, title: v.text, tip: gifRewardTip(v) });

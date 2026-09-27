@@ -916,8 +916,9 @@ check('G souběh kanálu: kanál se změnil během dotazu → po doběhnutí zno
 // Odemčená odměna → výběr pošle náš odkaz do chatu
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
-check('G odměna aktivní → hlavička „Odměna „Posílání GIFů“ je aktivní.“, odemčeno', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"]').classList.contains('uc-gl--locked')`, 3000)
-  && (await gl())?.reward === 'Odměna „Posílání GIFů“ je aktivní.', JSON.stringify(await gl()));
+// Kolo 4 bod 2: aktivní odměna bez konce = nahoře žádný text (ani pásek) → hlavička schovaná.
+check('G odměna aktivní → hlavička bez textu (schovaná), odemčeno', await until(`!document.querySelector('.uc-ep-pane[data-pane="gif"]').classList.contains('uc-gl--locked')`, 3000)
+  && (await gl())?.reward === '' && await ev(`document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward').hidden`) === true, JSON.stringify(await gl()));
 // X1 (audit 2026-09-27): vlastní GIF ještě čeká → výběr z knihovny se nepošle, hláška „Počkej …“.
 await ev(`(() => { const o = window.ucGif.out(); o.clear(); o.onOwnPending({ requestId: 991, channel: 'robdiesalot', platform: 'twitch', messageId: 'x1-own', login: 'divak', media: { url: '${murl(hex(12))}', kind: 'gif' }, expiresAt: Date.now() + 300000, own: true }); return o.busy(); })()`);
 const sendX1 = posts.send.length;
@@ -941,7 +942,9 @@ const ind = await ev(`(() => { const b = document.getElementById('btn-emotes'); 
   return { timed: b.classList.contains('uc-ep-timed'), bar: !!bar && !bar.hidden && getComputedStyle(bar).display !== 'none', p: Number(b.style.getPropertyValue('--uc-ep-p')), tab: !!tb && !tb.hidden, tabP: Number(tb?.style.getPropertyValue('--p')) }; })()`);
 check('G indikátor: pásek pod tlačítkem emotů i na záložce GIFy (≈ 50 %)', ind?.timed && ind.bar && ind.tab && Math.abs(ind.p - 0.5) < 0.02 && Math.abs(ind.tabP - 0.5) < 0.02, JSON.stringify(ind));
 await ev(`document.getElementById('btn-emotes').click()`);
-check('G odpočet odměny nahoře v záložce', await until(`/^Odměna ještě (5:00|4:5\\d)\\.$/.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
+// Kolo 4 bod 2: aktivní odměna = nahoře žádný text („Odměna ještě …“ pryč), jen pásek pod hlavičkou.
+check('G aktivní odměna: hlavička bez textu, pásek pod ní zůstává', await until(`(() => { const r = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward'); const b = r?.querySelector('.uc-gl-reward-bar');
+  return !!r && !r.hidden && getComputedStyle(r).display !== 'none' && !r.innerText.trim() && !!b && b.getBoundingClientRect().width > 0; })()`, 3000), JSON.stringify(await gl()));
 await sleep(1200);
 const ind2 = await ev(`Number(document.getElementById('btn-emotes').style.getPropertyValue('--uc-ep-p'))`);
 check('G pásek ubývá s časem', ind2 < ind.p, `${ind.p} → ${ind2}`);
@@ -1062,7 +1065,7 @@ await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
 check('G2 mod: taby GIFy | Zamítnuté GIFy + „Možné duplikáty (1)“', await until(`!!document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-dups')`, 6000)
   && (await gl())?.tabs && (await gl()).dups === 'Možné duplikáty (1)', JSON.stringify(await gl()));
 const g2r = await gl();
-check('G2 mod bez výjimky: hlavička ukazuje stav odměny („Odměna ještě …“), ne „Jako mod posíláš GIFy bez odměny.“', /^Odměna ještě \d/.test(g2r?.reward || '') && !/bez odměny/.test(g2r.reward) && !g2r.locked, JSON.stringify(g2r));
+check('G2 mod bez výjimky: hlavička jako u diváka (aktivní = bez textu), ne „Jako mod posíláš GIFy bez odměny.“', g2r?.reward === '' && !g2r.locked, JSON.stringify(g2r));
 check('G2 náhled zamítnutého: 404 s prvním tokenem → nový token (POST access-token) → načteno', await until(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.src.includes(${JSON.stringify(`t=${goodTok}`)}) && i.complete && i.naturalWidth > 0)`, 8000),
   JSON.stringify({ token: posts.token, tok: posts.mediaTok }));
 check('G2 schválený GIF v duplikátu bez tokenu', await ev(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.getAttribute('src') === ${JSON.stringify(murl(hex(11)))})`) === true);

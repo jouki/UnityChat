@@ -15,12 +15,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const EXT = path.resolve(here, '../extension').replace(/\\/g, '/');
 const CHROME = process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Barva jediného pixelu z PNG 1×1 (Page.captureScreenshot s clipem): u jednoho pixelu jsou všechny filtry PNG identita. */
+function pngPixel(buf) {
+  let o = 8, type = 6; const idat = [];
+  while (o < buf.length) {
+    const len = buf.readUInt32BE(o), t = buf.toString('ascii', o + 4, o + 8), d = buf.subarray(o + 8, o + 8 + len);
+    if (t === 'IHDR') type = d[9]; else if (t === 'IDAT') idat.push(d); else if (t === 'IEND') break;
+    o += 12 + len;
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat));
+  return type === 2 || type === 6 ? [raw[1], raw[2], raw[3]] : null;
+}
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 const port = await freePort();
@@ -227,6 +239,33 @@ check('§1 GIF taby: indikátor přejede na „Zamítnuté GIFy“', fg.some((f)
 await ev(`(() => { document.getElementById('e2e-gl').style.width = '300px'; return true; })()`); await sleep(250);
 const rb2 = await ev(`__box(document.querySelector('#e2e-gl .uc-gl-tab[data-gl-tab="rej"]'))`), gi2 = await ev(`__ind('${IND_GL}')`);
 check('§1 GIF taby: po zúžení panelu indikátor pořád přesně na aktivním tabu', gi2.x === rb2[0] && gi2.w === rb2[2], JSON.stringify({ gi2, rb2 }));
+// Test 2026-09-27 kolo 4 bod 1: uprostřed přejezdu je indikátor NAD pozadím neaktivního tabu (dřív pod ním zmizel).
+// Přejezd zastavený v polovině (Web Animations), pixel horní hrany indikátoru nad starým (teď neaktivním) tabem
+// musí mít oranžový rámeček indikátoru, ne šedý rámeček tabu; text tabu je nad indikátorem.
+{
+  await realClick('#e2e-gl .uc-gl-tab[data-gl-tab="lib"]');
+  const midG = await ev(`(() => {
+    const ind = document.querySelector('${IND_GL}');
+    const an = ind.getAnimations();
+    for (const a of an) { a.pause(); a.currentTime = 30; }
+    const ir = ind.getBoundingClientRect(), old = document.querySelector('#e2e-gl .uc-gl-tab[data-gl-tab="rej"]'), orr = old.getBoundingClientRect();
+    const lab = old.firstElementChild;
+    return { anims: an.length, ix: ir.left, iw: ir.width, iy: ir.top, ox: orr.left, or: orr.right, oy: orr.top,
+      oldBg: getComputedStyle(old).backgroundColor, indZ: Number(getComputedStyle(ind).zIndex) || 0,
+      labZ: lab ? Number(getComputedStyle(lab).zIndex) || 0 : null, labPos: lab ? getComputedStyle(lab).position : null, tabZ: getComputedStyle(old).zIndex };
+  })()`);
+  const x0 = Math.max(midG.ix, midG.ox) + 3, x1 = Math.min(midG.ix + midG.iw, midG.or) - 3;
+  let px = null;
+  if (midG.anims && x1 > x0) {
+    const shot = await call('Page.captureScreenshot', { format: 'png', clip: { x: Math.round((x0 + x1) / 2), y: Math.ceil(midG.iy), width: 1, height: 1, scale: 1 } }, sessionId);
+    px = pngPixel(Buffer.from(shot.result.data, 'base64'));
+  }
+  check('§1 GIF taby: uprostřed přejezdu je rámeček indikátoru vidět i nad neaktivním tabem (ne pod jeho pozadím)',
+    !!px && px[0] > px[1] + 40 && px[0] > px[2] + 80, JSON.stringify({ midG, px }));
+  check('§1 GIF taby: vrstvy — tab bez vlastní vrstvy (z-index auto), indikátor nad ním, text tabu nad indikátorem',
+    midG.tabZ === 'auto' && midG.indZ >= 1 && midG.labPos === 'relative' && midG.labZ > midG.indZ, JSON.stringify(midG));
+  await ev(`(() => { for (const a of document.querySelector('${IND_GL}').getAnimations()) a.finish(); return true; })()`);
+}
 await ev(`(() => { window.__gl.destroy(); document.getElementById('e2e-gl').remove(); return true; })()`);
 
 // ---- §3 QR ustoupí psaní: jen úzké pole (< 330 px) + text ----
