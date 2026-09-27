@@ -81,8 +81,8 @@ type Log = { warn: (o: object, m: string) => void };
 export interface GifAccessDeps { fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; log?: Log; sleep?: (ms: number) => Promise<void>; /** Podpisový klíč v2 — testy. */ signingKey?: string }
 
 /**
- * Lokální cooldown (uživatel bez role): od schválení GIFu, dokud Židolišta `gif-used` nepotvrdí (a když ho
- * nepotvrdí vůbec, po dobu cooldownSec). Jinak by mezi schválením a odpovědí Židolišty prošel další GIF.
+ * Lokální cooldown (každý uživatel včetně modů, od 2026-09-27): od schválení GIFu, dokud Židolišta `gif-used`
+ * nepotvrdí (a když ho nepotvrdí vůbec, po dobu cooldownSec). Jinak by mezi schválením a odpovědí Židolišty prošel další GIF.
  */
 const localCooldown = new Map<string, number>();
 const userPrefix = (workspace: string, platform: string, userId: string) => `${workspace.toLowerCase()}|${platform}|${userId}|`;
