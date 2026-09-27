@@ -164,7 +164,8 @@ export function toClientContent(row: ClientRow, historical = true): ClientMessag
 
 /**
  * Smazaná / skrytá zpráva i s obsahem — JEN pro moda kanálu (`GET /moderation/deleted-content`).
- * GIF se neposílá: smazaný GIF server přestane servírovat a mod ho v chatu stejně nevidí.
+ * GIF se neposílá: mod smazanou zprávu v chatu stejně nevidí. Médium tím z knihovny NEzmizí a dál se servíruje
+ * (stejné médium nese víc zpráv) — z knihovny ho mod odebere zvlášť (unapprove / purge, audit L8).
  */
 export function toModeratedContent(row: ClientRow): ClientMessage {
   const out = toClientContent(row, true);
