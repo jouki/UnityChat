@@ -54,6 +54,45 @@ export interface ClientMessage {
   replaces?: string;
   /** Schválený GIF: původní zpráva s odkazem (`<platform>:<messageId>`) — klient jen páruje (optimistická zpráva odesílatele), nic nenahrazuje. */
   gifOrigin?: string;
+  /**
+   * JEN Profil moda (lib/userHistory.ts buildMessages, spec 2026-09-27-gif-review-upravy §3): médium GIFu už není
+   * v knihovně (zamítnuté / odebrané, purging, withdrawn) → klient ho vykreslí rozmazaně (klik = zaostřit);
+   * `gifStatus` říká, jestli náhled potřebuje token moda (rejected / purging).
+   */
+  gifHidden?: true;
+  gifStatus?: 'rejected' | 'purging' | 'withdrawn';
+}
+
+/** Stav média → zpráva v Profilu moda: rozmazaný GIF (zamítnuté, zahozené), štítek (soubor / médium pryč), jinak normálně. */
+export type ProfileGifView = 'visible' | 'hidden' | 'unavailable';
+export function profileGifView(status: string | undefined): ProfileGifView {
+  if (status === 'approved' || status === 'pending') return 'visible';
+  if (status === 'rejected' || status === 'purging' || status === 'withdrawn') return 'hidden';
+  return 'unavailable';
+}
+
+/**
+ * Zpráva pro Profil moda: jako toClientMessage, ale zpráva s GIFem, jehož médium už veřejné není, se NEposílá jako
+ * smazaná (`gif_removed`) — mod ji vidí s textem a rozmazaným GIFem (`gifHidden`), soubor / médium pryč = štítek.
+ * Smazané a skryté zprávy (mod, platforma, filtr) jdou jako dosud. `statuses` = id média → stav (gifMediaStatuses).
+ */
+export function toProfileMessage(row: ClientRow, statuses: ReadonlyMap<string, string> | null): ClientMessage {
+  const out = toClientMessage(row, true);
+  // Stav médií se nepodařilo načíst → GIF jako dosud (klient při 404 napíše „GIF odebrán“).
+  const id = statuses && !row.deletedAt && !row.hiddenAt && out.gif ? gifMediaIdFromRaw(row.contentRaw) : null;
+  if (!id) return out;
+  const st = statuses!.get(id);
+  const view = profileGifView(st);
+  if (view === 'unavailable') out.gif = { ...out.gif!, unavailable: true };
+  else if (view === 'hidden') { out.gifHidden = true; out.gifStatus = st as ClientMessage['gifStatus']; }
+  return out;
+}
+
+/** Stav médií GIFů v `rows` (id → status; chybějící = médium neexistuje). Bez GIFů se DB nevolá; chyba DB → null. */
+export async function gifMediaStatuses(rows: ReadonlyArray<Pick<ClientRow, 'contentRaw'>>, lookup: GifMediaStatusLookup = dbGifMediaStatus): Promise<Map<string, string> | null> {
+  const ids = [...new Set(rows.map((r) => gifMediaIdFromRaw(r.contentRaw)).filter((x): x is string => !!x))];
+  if (!ids.length) return new Map();
+  try { return await lookup(ids); } catch { return null; }
 }
 
 /**

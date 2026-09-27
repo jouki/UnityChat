@@ -271,15 +271,32 @@ test('DB: skupiny kanálů, stránka zpráv a moderace přes identity (platform,
   }
 });
 
-test('I2 buildMessages: GIF odebraný z knihovny → smazaná bez média (gifGone), stejně jako /chat/history', async () => {
-  const M = 'e'.repeat(32);
+test('Profil moda: GIF zamítnutý / purging / withdrawn → GIF s gifHidden (rozmazaný), unavailable i pryč → štítek; smazané modem beze změny', async () => {
+  const id = (c: string) => c.repeat(32);
+  const st = new Map<string, string>([[id('a'), 'approved'], [id('b'), 'rejected'], [id('c'), 'purging'], [id('d'), 'withdrawn'], [id('e'), 'unavailable'], [id('f'), 'pending']]);
+  const g = (n: number, c: string, extra: Partial<Message> = {}) => row(n, 'twitch', '1', 'robdiesalot', `2026-09-25T10:0${n}:00Z`, { platformMessageId: `gif-${n}`, content: `text ${n}`, contentRaw: { gif: { mediaId: id(c), kind: 'gif', width: 100, height: 50 } }, ...extra });
+  const rows = [g(1, 'a'), g(2, 'b'), g(3, 'c'), g(4, 'd'), g(5, 'e'), g(6, '9'), g(7, 'f'), g(8, 'b', { deletedAt: new Date(), deletedReason: 'mod' })];
   const dd = deps({
-    messagesPage: async () => [row(9, 'twitch', '1', 'robdiesalot', '2026-09-25T10:00:00Z', { platformMessageId: 'gif-9', contentRaw: { gif: { mediaId: M, kind: 'gif' } } })],
-    gifGone: async (rows) => { assert.equal(rows.length, 1); return new Set([M]); },
+    messagesPage: async () => rows.slice().reverse(),
+    gifStatus: async (r) => { assert.equal(r.length, rows.length); return st; },
   });
   const out = await buildMessages({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1', inChannel: 'robdiesalot', cursor: null, limit: 50 }, dd);
-  const [m] = (out.body as { messages: Array<Record<string, unknown>> }).messages;
-  assert.equal(m.deleted, true);
-  assert.equal(m.deletedReason, 'gif_removed');
-  assert.equal(m.gif, undefined);
+  const ms = (out.body as { messages: Array<Record<string, any>> }).messages;
+  const by = (n: number) => ms.find((m) => m.id === `gif-${n}`)!;
+  assert.equal(by(1).gifHidden, undefined, 'schválený normálně');
+  assert.equal(by(1).gif.url.endsWith(id('a')), true);
+  for (const [n, s] of [[2, 'rejected'], [3, 'purging'], [4, 'withdrawn']] as const) {
+    assert.equal(by(n).gifHidden, true, `${s}: rozmazaný`);
+    assert.equal(by(n).gifStatus, s);
+    assert.equal(by(n).message, `text ${n}`, 'text zprávy zůstává');
+    assert.equal(by(n).deleted, undefined);
+    assert.equal(by(n).gif.url.includes('?'), false, 'URL bez tokenu (token přidá klient)');
+  }
+  assert.equal(by(5).gif.unavailable, true, 'soubor pryč → štítek');
+  assert.equal(by(6).gif.unavailable, true, 'médium neexistuje → štítek');
+  assert.equal(by(5).gifHidden, undefined);
+  assert.equal(by(7).gifHidden, undefined, 'čekající alias normálně');
+  assert.equal(by(8).deleted, true, 'smazaná modem jako dosud');
+  assert.equal(by(8).gif, undefined);
+  assert.equal(by(8).gifHidden, undefined);
 });
