@@ -1733,7 +1733,7 @@ test('zahozený GIF poslaný znovu = jako nikdy neviděný: odměna všechny →
     assert.equal(await s.flow.intercept(from('43', 'm2')), 'requested', `${variant}: URL → nová žádost`);
     const req = [...s.mem.reqs.values()].at(-1)!;
     assert.notEqual(req.mediaId, MEDIA, `${variant}: nové médium, ne zahozené`);
-    assert.equal(s.mem.media.get(req.mediaId)!.status, 'pending');
+    assert.equal(s.mem.media.get(req.mediaId!)!.status, 'pending');
     assert.equal((req.meta as Record<string, unknown>).previouslyRejected, undefined, `${variant}: bez ⚠`);
     assert.ok(!events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'), `${variant}: bez gif_rejected`);
     assert.equal(await s.flow.intercept(from('46', 'm5', TENOR, { auto: true })), 'approved', `${variant}: mod schválí sám`);
