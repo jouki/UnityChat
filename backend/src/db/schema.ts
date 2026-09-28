@@ -518,6 +518,10 @@ export const botChannelGrants = pgTable(
 export const rawProfiles = pgTable('raw_profiles', {
   id: text('id').primaryKey(),
   settings: jsonb('settings').notNull().$type<Record<string, unknown>>(),
+  // Kanál, ke kterému je instance připojená (seznam pro streamera a mody, úpravy jen s rolí); NULL = jen odkaz s id.
+  // SQL backend/sql/2026-09-28-raw-profiles-channel.sql
+  channel: text('channel'),
+  claimedBy: integer('claimed_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
