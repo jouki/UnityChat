@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { streamers } from '../db/schema.js';
+import { messages, streamers } from '../db/schema.js';
 import { config } from '../config.js';
 import { signState, type StateInput } from '../lib/session.js';
 import { isCryptoReady } from '../lib/crypto.js';
@@ -18,6 +18,7 @@ import { outgoingText, SendError } from '../lib/webSend.js';
 import { sendAsAccount, sendUcReply } from '../lib/accountSend.js';
 import { pendingWarnings } from '../lib/accountWarnings.js';
 import { runBroadcast } from '../lib/chatBroadcast.js';
+import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } from '../lib/twitchFirstMessage.js';
 import { accountModIdentities } from '../lib/chatRole.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
 import { platformChannel } from './chat.js';
@@ -81,6 +82,28 @@ export async function completeWebCallback(
 export function webErrorRedirect(reply: FastifyReply, returnTo: string | undefined, message: string) {
   const target = returnTo && isAllowedReturnTo(returnTo) ? returnTo : `${allowedOrigins()[0]}/chat/`;
   return reply.redirect(`${target}#uc_error=${encodeURIComponent(message)}`, 302);
+}
+
+/**
+ * Twitch `msg_rejected` u nejspíš první zprávy účtu v kanálu (lib/twitchFirstMessage.ts) → česká rada místo „try again
+ * later“. Jinak (nebo když se to nedá zjistit) null = původní hláška.
+ */
+async function twitchFirstMessageHint(accountId: number, channel: string, err: string, log: { info: (o: object, m: string) => void }): Promise<string | null> {
+  if (!isTwitchRejected(err)) return null;
+  const userId = (await listIdentities(accountId).catch(() => [])).find((i) => i.platform === 'twitch')?.platformUserId || '';
+  const first = await looksLikeFirstMessage({ channel, userId }, {
+    hasMessage: async (ch, uid) => (await db.select({ id: messages.id }).from(messages)
+      .where(and(eq(messages.platform, 'twitch'), eq(messages.channel, ch.toLowerCase()), eq(messages.platformUserId, uid))).limit(1)).length > 0,
+    createdAt: async (uid) => {
+      const r = await fetch(`https://api.ivr.fi/v2/twitch/user?id=${encodeURIComponent(uid)}`, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) return null;
+      const d = await r.json() as Array<{ createdAt?: string }> | { createdAt?: string };
+      const t = Date.parse((Array.isArray(d) ? d[0] : d)?.createdAt || '');
+      return Number.isFinite(t) ? t : null;
+    },
+  });
+  log.info({ accountId, channel, first }, 'twitch msg_rejected: první zpráva v kanálu?');
+  return first ? TWITCH_FIRST_MESSAGE_TEXT : null;
 }
 
 export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest?: Ingest }) {
@@ -219,7 +242,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       const status = err instanceof SendError ? err.status : 502;
       req.log.warn({ accountId, platform, channel, status, err: err.message }, 'web chat send failed');
       reply.code(status >= 400 && status < 600 ? status : 502);
-      return { ok: false, error: err.message };
+      const hint = platform === 'twitch' ? await twitchFirstMessageHint(accountId, channel, err.message, req.log).catch(() => null) : null;
+      return { ok: false, error: hint || err.message, ...(hint ? { code: 'twitch_first_message' } : {}) };
     }
   });
 
@@ -236,8 +260,15 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       modIdentities: (id, ch) => accountModIdentities(id, ch),
       listIdentities,
       send: async (platform, text) => {
-        const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
-        return { id: res.id ?? null, sentText: res.sentText ?? null };
+        try {
+          const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
+          return { id: res.id ?? null, sentText: res.sentText ?? null };
+        } catch (e) {
+          // Twitch odmítl nejspíš první zprávu v kanálu → česká rada (jako /chat/send).
+          const hint = platform === 'twitch' && e instanceof SendError ? await twitchFirstMessageHint(accountId, channel, e.message, req.log).catch(() => null) : null;
+          if (hint) throw new SendError(hint, (e as SendError).status);
+          throw e;
+        }
       },
       log: req.log,
     });
