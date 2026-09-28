@@ -140,6 +140,8 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-28 (rich text v Židolištce)
+- Memory `project_zidolista_rich_text.md` + řádek v MEMORY.md: jeden renderer `server/static/richText.js` (commandy + lišty + kopie na webu hlídaná testem), escape `\`, proměnné doslova; core `richTextToHtml` (v3.41.89) escape umí. Deploy serveru Židolišty potřebuje `static/` i v build stage Dockerfile.
 ### 2026-09-27 (výročí na Twitchi)
 - CLAUDE.md: milestone v3.41.63–65 (výročí; review: bez DOM zálohy, výročí se nepočítají jako zprávy), ingest ukládá USERNOTICE výročí, UC_LOG tagy `Anniversary` + `UserNotice`.
 
