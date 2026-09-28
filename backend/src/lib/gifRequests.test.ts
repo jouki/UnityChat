@@ -35,8 +35,9 @@ function memStore(now: () => number) {
     async deleteMedia(id) { media.delete(id); log.push(`deleteMedia:${id}`); },
     async getMedia(id) { return media.get(id) ?? null; },
     async findMedia(channel, by) {
-      const order = ['approved', 'withdrawn', 'purging', 'unavailable', 'rejected', 'pending'];
-      return [...media.values()].filter((x) => x.channel === channel && (by.url ? x.urlNorm === by.url : x.sha256 === by.sha256))
+      const order = ['approved', 'rejected', 'pending'];
+      // Zahozené médium dedup nevidí (jako dbGifStore, pokyn usera 2026-09-28).
+      return [...media.values()].filter((x) => x.channel === channel && !['withdrawn', 'purging', 'unavailable'].includes(x.status) && (by.url ? x.urlNorm === by.url : x.sha256 === by.sha256))
         .sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0] ?? null;
     },
     async setMediaApproved(id, at, opts) {
@@ -1720,23 +1721,39 @@ test('purge bez keepMessages (dnešní Židolišta) = i se zprávami; obnova se 
   assert.deepEqual(gone, [MEDIA]);
 });
 
-test('dedup zahozeného: stejný odkaz / stejný obsah / náš odkaz na withdrawn, purging i unavailable → automaticky zamítnuto (i od moda)', async () => {
+test('zahozený GIF poslaný znovu = jako nikdy neviděný: odměna všechny → nová žádost (mod schválí sám), jen schválené → nepovolený; náš odkaz na zahozené = neznámý', async () => {
   for (const variant of ['withdrawn', 'purging', 'unavailable'] as const) {
+    // Odměna „všechny“: nová žádost s novým médiem (zahozené zůstává zahozené), mod ho schválí rovnou.
     const s = setup();
     await approvedGif(s);
     await s.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1, keepMessages: variant !== 'purging' });
     if (variant === 'unavailable') await s.flow.mediaAction({ mediaId: MEDIA, action: 'remove-file', by: 'twitch:moda', accountId: 1 });
     assert.equal(s.mem.media.get(MEDIA)!.status, variant);
     s.calls.length = 0;
-    const own = `http://localhost:3000/media/gif/${MEDIA}`;
-    assert.equal(await s.flow.intercept(from('43', 'm2')), 'rejected', `${variant}: URL`);
-    assert.ok(events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'));
-    assert.equal(await s.flow.intercept(from('44', 'm3', 'https://jina.cz/x.gif')), 'rejected', `${variant}: sha`);
-    assert.equal(await s.flow.intercept(from('45', 'm4', own, { candidate: { url: own, mode: 'own' as const, mediaId: MEDIA, token: own } })), 'rejected', `${variant}: náš odkaz`);
-    assert.equal(await s.flow.intercept(from('46', 'm5', TENOR, { auto: true })), 'rejected', `${variant}: mod`);
-    assert.equal(s.mem.media.get(MEDIA)!.status, variant);
-    assert.equal(s.mem.reqs.size, 1, 'žádná nová žádost');
+    assert.equal(await s.flow.intercept(from('43', 'm2')), 'requested', `${variant}: URL → nová žádost`);
+    const req = [...s.mem.reqs.values()].at(-1)!;
+    assert.notEqual(req.mediaId, MEDIA, `${variant}: nové médium, ne zahozené`);
+    assert.equal(s.mem.media.get(req.mediaId)!.status, 'pending');
+    assert.equal((req.meta as Record<string, unknown>).previouslyRejected, undefined, `${variant}: bez ⚠`);
+    assert.ok(!events(s.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm2' && e.reason === 'gif_rejected'), `${variant}: bez gif_rejected`);
+    assert.equal(await s.flow.intercept(from('46', 'm5', TENOR, { auto: true })), 'approved', `${variant}: mod schválí sám`);
+    assert.equal(s.mem.media.get(MEDIA)!.status, variant, `${variant}: zahozené médium se nevzkřísí`);
     await s.flow._idle();
+
+    // Odměna „jen schválené“: zahozený GIF je nový → nepovolený (i od moda), i náš odkaz na zahozené médium.
+    const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
+    const a = setup({ access });
+    await approvedGif(a);
+    await a.flow.mediaAction({ mediaId: MEDIA, action: 'purge', by: 'twitch:moda', accountId: 1, keepMessages: variant !== 'purging' });
+    if (variant === 'unavailable') await a.flow.mediaAction({ mediaId: MEDIA, action: 'remove-file', by: 'twitch:moda', accountId: 1 });
+    a.calls.length = 0;
+    const own = `http://localhost:3000/media/gif/${MEDIA}`;
+    assert.equal(await a.flow.intercept(from('43', 'm2')), 'not_allowed', `${variant}: jen schválené → URL nepovolená`);
+    assert.equal(await a.flow.intercept(from('46', 'm5', TENOR, { auto: true })), 'not_allowed', `${variant}: jen schválené → i mod`);
+    assert.equal(await a.flow.intercept(from('45', 'm4', own, { candidate: { url: own, mode: 'own' as const, mediaId: MEDIA, token: own } })), 'not_allowed', `${variant}: náš odkaz na zahozené`);
+    assert.ok(events(a.calls, 'broadcast:message-deleted').filter((e) => e.reason === 'gif_not_allowed').length >= 3, JSON.stringify(events(a.calls, 'broadcast:message-deleted')));
+    assert.ok(!events(a.calls, 'broadcast:message-deleted').some((e) => e.reason === 'gif_rejected'));
+    await a.flow._idle();
   }
 });
 

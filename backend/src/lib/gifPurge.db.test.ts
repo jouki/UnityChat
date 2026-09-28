@@ -44,7 +44,7 @@ test('dbGifStore: purge / restore / remove-file / listDiscarded / purgeDue / mes
     assert.equal(md.statusBeforePurge, 'approved', 'SET status_before_purge = starý stav');
     assert.equal(md.purgedBy, 'twitch:moda');
     assert.equal((await s.purgeMedia(ids[0], 'purging', 'x', new Date(), new Date())).ok, false, 'už zahozené');
-    assert.equal((await s.findMedia(CH, { url: 'https://tenor.com/view/__test_gifpurge_1' }))!.id, ids[0], 'dedup pozná stažený');
+    assert.equal(await s.findMedia(CH, { url: 'https://tenor.com/view/__test_gifpurge_1' }), null, 'dedup zahozené nevidí (jako nikdy neviděný GIF)');
     assert.deepEqual((await s.listDiscarded(CH, 'withdrawn', null, 10)).map((m) => m.id), [ids[0]]);
     let gone = await gifMediaGone([{ contentRaw: { gif: { mediaId: ids[0] } } }]);
     assert.equal(gone.size, 0, 'stažený = zprávy vidět');

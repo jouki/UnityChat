@@ -28,7 +28,7 @@
 //   Převod selže → zpráva se bere jako běžný odkaz (filtr ji smaže, nebo se v UC obnoví, když by ji filtr pustil).
 // Nic tady nesmí shodit ingest. NIKDY nelogovat tokeny.
 import { randomBytes, createHash } from 'node:crypto';
-import { and, asc, desc, eq, exists, gt, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, gt, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { gifBans, gifMedia, gifRejections, gifRequests, messages, webIdentities, type GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
@@ -302,8 +302,8 @@ const mediaCols = {
   sha256: gifMedia.sha256, approvedAt: gifMedia.approvedAt, rejectedAt: gifMedia.rejectedAt, rejectedBy: gifMedia.rejectedBy, vault: gifMedia.vault,
   tags: gifMedia.tags, purgedAt: gifMedia.purgedAt, purgedBy: gifMedia.purgedBy, purgeAt: gifMedia.purgeAt, statusBeforePurge: gifMedia.statusBeforePurge,
 };
-/** findMedia: schválené (knihovna) > zahozené (auto zamítnout) > zamítnuté > čekající. */
-const FIND_ORDER = sql`case ${gifMedia.status} when 'approved' then 0 when 'withdrawn' then 1 when 'purging' then 1 when 'unavailable' then 1 when 'rejected' then 2 else 3 end`;
+/** findMedia: schválené (knihovna) > zamítnuté > čekající. */
+const FIND_ORDER = sql`case ${gifMedia.status} when 'approved' then 0 when 'rejected' then 2 else 3 end`;
 const asInfo = (r: Record<string, unknown>): GifMediaInfo => r as unknown as GifMediaInfo;
 const isUniqueViolation = (e: unknown): boolean => (e as { code?: string })?.code === '23505' || /duplicate key/i.test(String((e as Error)?.message));
 /** Čekající nepropadlá žádost na médium (retence / propadnutí nesmí médium smazat). */
@@ -329,7 +329,9 @@ export const dbGifStore: GifStore = {
   async findMedia(channel, by) {
     const cond = by.url ? eq(gifMedia.sourceUrlNorm, by.url) : by.sha256 ? eq(gifMedia.sha256, by.sha256) : null;
     if (!cond) return null;
-    const rows = await db.select(mediaCols).from(gifMedia).where(and(eq(gifMedia.channel, channel), cond))
+    // Trvale zahozené médium (withdrawn / purging / unavailable) dedup nevidí: GIF poslaný znovu je jako nikdy
+    // neviděný — podle odměny „jen schválené“ = nepovolený, jinak nová žádost (pokyn usera 2026-09-28).
+    const rows = await db.select(mediaCols).from(gifMedia).where(and(eq(gifMedia.channel, channel), cond, notInArray(gifMedia.status, [...GIF_DISCARDED])))
       .orderBy(FIND_ORDER, asc(gifMedia.createdAt)).limit(1);
     return rows[0] ? asInfo(rows[0]) : null;
   },
@@ -1373,7 +1375,8 @@ export function createGifFlow(deps: GifFlowDeps) {
         const obtain = async (): Promise<{ ok: true; known: GifMediaInfo | null; fresh: ResolvedGif | null; sha256: string } | { ok: false; code: string }> => {
           if (p.candidate.mode === 'own') {
             const own = p.candidate.mediaId ? await deps.store.getMedia(p.candidate.mediaId) : null;
-            return own && own.channel === p.ucChannel ? { ok: true, known: own, fresh: null, sha256: own.sha256 } : { ok: false, code: 'own_unknown' };
+            // Náš odkaz na zahozené médium = neznámý (jako by nikdy nebylo; soubor může být smazaný).
+            return own && own.channel === p.ucChannel && !GIF_DISCARDED.has(own.status) ? { ok: true, known: own, fresh: null, sha256: own.sha256 } : { ok: false, code: 'own_unknown' };
           }
           const byUrl = urlNorm ? await deps.store.findMedia(p.ucChannel, { url: urlNorm }) : null;
           if (byUrl) return { ok: true, known: byUrl, fresh: null, sha256: byUrl.sha256 };
@@ -1433,15 +1436,6 @@ export function createGifFlow(deps: GifFlowDeps) {
             await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_not_allowed', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mode, known: known?.status ?? null }, result: {} }));
             deps.log.info({ channel: p.ucChannel, platform: m.platform, known: known?.status ?? null }, 'gif: režim jen schválené → nový GIF smazán');
             return finish('not_allowed');
-          }
-          // Trvale zahozený GIF (withdrawn / purging / unavailable): do chatu se nepustí — bez schvalování, od všech
-          // (i od moda: auto-schválení by zahozené médium vrátilo do knihovny).
-          if (known && GIF_DISCARDED.has(known.status)) {
-            await dropOriginal(p, GIF_REJECTED_REASON, { reason: 'purged' });
-            notice('auto_rejected', { reason: 'purged' });
-            await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_auto_reject', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mediaId: known.id, reason: 'purged', status: known.status }, result: {} }));
-            deps.log.info({ channel: p.ucChannel, platform: m.platform, status: known.status }, 'gif: zahozený GIF → automaticky zamítnuto');
-            return finish('rejected');
           }
           // Známý zamítnutý (divák): zákaz 12 h / 3.+ pokus téhož uživatele = automaticky; jinak ke schválení s ⚠.
           let previouslyRejected: PreviouslyRejected | undefined;
