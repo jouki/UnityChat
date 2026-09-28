@@ -25,6 +25,11 @@ export interface ChatEvent {
   isVip: boolean;
   isBroadcaster: boolean;
   isBot: boolean;
+  /**
+   * Poslaná z UnityChatu (marker v textu). Commandy (`!…`, bez markeru) server označí až po spárování s hlášením
+   * klienta — v živém eventu pak může být false, archiv (`/integrations/:slug/chat-log` → viaUnityChat) už true.
+   */
+  viaUnityChat: boolean;
   /** Smazaná filtrem odkazů už při příjmu → `text` je prázdný (obsah jen v archivu), následuje chat.deleted. */
   deleted?: true;
   /**
@@ -83,6 +88,7 @@ export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
       : { text: m.deleted ? '' : m.content, ...(m.deleted ? { deleted: true as const } : {}) }),
     ...roles,
     isBot: isBotAuthor(m.platform, m.username, workspace, m.platformUserId),
+    viaUnityChat: !!m.isUnitychatUser,
     replyTo: m.replyToMessageId ? { messageId: m.replyToMessageId, user: replyUser } : null,
     timestamp: m.sentAt.toISOString(),
   };
