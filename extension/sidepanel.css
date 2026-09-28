@@ -3106,13 +3106,15 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
 }
 .uc-ep-h span { font-weight: 400; opacity: 0.7; margin-left: 4px; }
-.uc-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 2px; }
+/* Řádky místo čtvercové mřížky: každý emote má výšku 28 px, šířku podle poměru stran — široký emote se nezmenší
+   (dřív se vtěsnal do čtverce), 1:1 zůstává v buňce 36 × 36 (pokyn usera 2026-09-28). */
+.uc-ep-grid { display: flex; flex-wrap: wrap; gap: 2px; }
 .uc-ep-e {
-  height: 36px; padding: 3px; border: none; border-radius: 5px; background: transparent;
+  flex: 0 0 auto; min-width: 36px; height: 36px; padding: 3px; box-sizing: border-box; border: none; border-radius: 5px; background: transparent;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
 .uc-ep-e:hover { background: var(--bg-hover); }
-.uc-ep-e img { max-width: 100%; max-height: 28px; object-fit: contain; }
+.uc-ep-e img { height: 28px; width: auto; max-width: 220px; object-fit: contain; }
 .uc-ep-e.zw img { opacity: 0.85; }
 .uc-ep-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary, #9a9aa6); font-size: 12px; }
 .uc-ep-foot {
