@@ -39,7 +39,7 @@ test('toChatEvent: tvar chat.message podle kontraktu', () => {
     isUnitychatUser: false, isReply: true, replyToMessageId: 'p1',
   };
   assert.deepEqual(toChatEvent(m, 'jouki'), {
-    type: 'chat.message', workspace: 'jouki', messageId: 'abc', platform: 'twitch', user: 'Jouki728', userId: '30645675', text: '!brohemians',
+    type: 'chat.message', workspace: 'jouki', messageId: 'abc', platform: 'twitch', user: 'Jouki728', login: 'jouki728', userId: '30645675', text: '!brohemians',
     isSub: true, isMod: false, isVip: false, isBroadcaster: false, isBot: false, viaUnityChat: false, replyTo: { messageId: 'p1', user: 'Rob' }, timestamp: '2026-09-22T14:00:00.000Z',
   });
 });

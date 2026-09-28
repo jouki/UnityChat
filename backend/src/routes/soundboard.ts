@@ -131,11 +131,11 @@ async function getCatalog(slug: string, log: FastifyInstance['log']): Promise<Ca
 const STATE_CACHE_MS = 2000;
 const states = new Map<string, { at: number; p: Promise<Record<string, unknown> | null> }>();
 
-function cachedState(slug: string, platform: Platform, userId: string, role: string) {
-  const key = `${slug}|${platform}|${userId}|${role}`;
+function cachedState(slug: string, platform: Platform, userId: string, role: string, login: string) {
+  const key = `${slug}|${platform}|${userId}|${role}|${login}`;
   const hit = states.get(key);
   if (hit && Date.now() - hit.at < STATE_CACHE_MS) return hit.p;
-  const p = fetchState(slug, platform, userId, role);
+  const p = fetchState(slug, platform, userId, role, login);
   states.set(key, { at: Date.now(), p });
   p.catch(() => states.delete(key));
   if (states.size > 5000) for (const [k, v] of states) if (Date.now() - v.at >= STATE_CACHE_MS) states.delete(k);
@@ -146,8 +146,9 @@ function dropStates(slug: string): void {
   for (const k of states.keys()) if (k.startsWith(`${slug}|`)) states.delete(k);
 }
 
-async function fetchState(slug: string, platform: Platform, userId: string, role: string) {
-  const q = new URLSearchParams({ platform, userId, role });
+async function fetchState(slug: string, platform: Platform, userId: string, role: string, login: string) {
+  // login: Židolišta podle něj páruje dárce (role donor) i s donatem jen s přezdívkou (2026-09-28).
+  const q = new URLSearchParams({ platform, userId, role, ...(login ? { login } : {}) });
   const r = await zidolistaFetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, { signal: AbortSignal.timeout(8000) });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`zidolista HTTP ${r.status}`);
@@ -238,7 +239,7 @@ export default async function soundboardRoutes(app: FastifyInstance) {
     // ne null: null klient bere jako „nepřipojený účet" a nabízel přihlášení (2026-09-24).
     const noState = { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState({}), role };
     try {
-      const st = await cachedState(slug, platform, ident.platformUserId, role);
+      const st = await cachedState(slug, platform, ident.platformUserId, role, String(ident.login || '').toLowerCase());
       if (!st) return { ...res, me: noState };
       return { ...res, serverNow: iso(st.serverNow) ?? res.serverNow, me: { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState(st), role } };
     } catch (e) {

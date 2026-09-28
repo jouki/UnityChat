@@ -18,6 +18,8 @@ export interface ChatEvent {
   messageId: string;
   platform: Platform;
   user: string;
+  /** Login (malými písmeny) — Židolišta páruje `!se` / dárce (role donor) podle loginu (2026-09-28). */
+  login: string;
   userId: string;
   text: string;
   isSub: boolean;
@@ -82,6 +84,7 @@ export function toChatEvent(m: IngestMessage, workspace: string): ChatEvent {
     messageId: m.platformMessageId,
     platform: m.platform,
     user: m.username,
+    login: String(raw.login ?? raw.senderSlug ?? m.username).replace(/^@/, '').toLowerCase(),
     userId: m.platformUserId,
     ...(held
       ? { text: m.content, held: true as const, hiddenReason: m.deleted!.reason }
