@@ -1954,3 +1954,31 @@ test('held_settled: stejná zpráva zachycená dvakrát (opakování) → nepos�
   assert.equal(settled(s.calls).length, 1);
   await s.flow._idle();
 });
+
+test('nový GIF v knihovně (auto-schválení moda) → gif-media library pro panely; znovu stejný (už schválený) → bez signálu', async () => {
+  const s = setup();
+  assert.equal(await s.flow.intercept(from('46', 'm1', TENOR, { auto: true })), 'approved');
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media').map((e) => [e.mediaId, e.state]), [[MEDIA, 'library']]);
+  s.calls.length = 0;
+  s.advance(120_000);
+  assert.equal(await s.flow.intercept(from('46', 'm2', TENOR, { auto: true })), 'approved');
+  assert.deepEqual(events(s.calls, 'broadcast:gif-media'), [], 'už schválené médium knihovnu nemění');
+  await s.flow._idle();
+});
+
+test('zpráva s GIFem z UnityChatu drží zlaté logo i v archivu (meta.uc → isUnitychatUser / uc)', async () => {
+  const s = setup();
+  const p = from('46', 'm1', TENOR, { auto: true });
+  p.m = { ...p.m, isUnitychatUser: true, content: `${p.m.content} \u2800` };
+  assert.equal(await s.flow.intercept(p), 'approved');
+  const r = s.mem.reqs.get(1)!;
+  assert.equal((r.meta as Record<string, unknown>).uc, true);
+  assert.equal(approvedMessageRow(r).isUnitychatUser, true);
+  const gm = events(s.calls, 'broadcast:gif-message')[0]?.message as Record<string, unknown>;
+  assert.equal(gm?.uc, true, 'klient dostane uc: true');
+  // Bez markeru (vanilla chat) zůstává bez zlatého loga.
+  const v = setup();
+  assert.equal(await v.flow.intercept(from('47', 'm2', TENOR, { auto: true })), 'approved');
+  assert.equal(approvedMessageRow(v.mem.reqs.get(1)!).isUnitychatUser, false);
+  await s.flow._idle(); await v.flow._idle();
+});

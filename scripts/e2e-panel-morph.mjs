@@ -97,7 +97,7 @@ await call('Page.addScriptToEvaluateOnNewDocument', { source: `
       const ps = [...document.querySelectorAll(${JSON.stringify(PANELS)})].filter(vis);
       const real = ps.filter((e) => !e.classList.contains('uc-morph-ghost'));
       const ghosts = ps.filter((e) => e.classList.contains('uc-morph-ghost'));
-      window.__morph.frames.push({ n: real.length, g: ghosts.length, cls: real.map((e) => e.className.split(' ')[0]).join(','), w: real[0] ? Math.round(real[0].getBoundingClientRect().width) : 0, go: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null });
+      window.__morph.frames.push({ n: real.length, g: ghosts.length, cls: real.map((e) => e.className.split(' ')[0]).join(','), w: real[0] ? Math.round(real[0].getBoundingClientRect().width) : 0, tr: real[0] ? getComputedStyle(real[0]).transform : 'none', an: real[0] ? real[0].getAnimations().length : 0, go: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null });
     }
     requestAnimationFrame(tick);
   };
@@ -146,7 +146,8 @@ await startRec();
 await realClick('#btn-sfx');
 await sleep(450);
 { const fr = await stopRec();
-  check('emoty → nota: pořád jeden panel emotů, bez ducha (jen přepnutí záložky)', fr.length > 5 && fr.every((f) => f.n === 1 && f.g === 0 && f.cls === 'uc-ep'), JSON.stringify(fr.filter((f) => f.n !== 1 || f.g || f.cls !== 'uc-ep').slice(0, 4))); }
+  check('emoty → nota: pořád jeden panel emotů, bez ducha (jen přepnutí záložky)', fr.length > 5 && fr.every((f) => f.n === 1 && f.g === 0 && f.cls === 'uc-ep'), JSON.stringify(fr.filter((f) => f.n !== 1 || f.g || f.cls !== 'uc-ep').slice(0, 4)));
+  check('emoty → nota: panel se znovu neotevírá (žádné měřítko ani animace otevření)', fr.every((f) => f.tr === 'none' && f.an === 0), JSON.stringify(fr.filter((f) => f.tr !== 'none' || f.an).slice(0, 3))); }
 check('soundboard: záložka SFX s obsahem (zvuky), nota aktivní, smajlík ne', await ev(`${SFX_PANE} && document.querySelectorAll('.uc-sb .uc-sb-s').length > 0 && document.getElementById('btn-sfx').classList.contains('active') && !document.getElementById('btn-emotes').classList.contains('active')`) === true);
 await switchTo('#btn-qrdono', 'uc-qd', 'SFX → QR dono');
 check('QR dono: formulář vidět, soundboard zavřený', await ev(`!!document.querySelector('.uc-qd form') && document.getElementById('btn-qrdono').classList.contains('active') && !document.getElementById('btn-sfx').classList.contains('active')`) === true);

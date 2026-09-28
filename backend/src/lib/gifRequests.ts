@@ -181,7 +181,8 @@ export function approvedMessageRow(r: GifRequest, at?: Date) {
     content: text,
     contentRaw,
     channel: r.platformChannel,
-    isUnitychatUser: false,
+    // Z UnityChatu podle původní zprávy (meta.uc), jinak by zpráva po reloadu ztratila zlaté logo (pokyn usera 2026-09-28).
+    isUnitychatUser: meta.uc === true,
     isReply: false,
     replyToMessageId: null,
     sentAt: at ?? r.decidedAt ?? r.createdAt,
@@ -1141,9 +1142,12 @@ export function createGifFlow(deps: GifFlowDeps) {
     // Médium do knihovny (approved = veřejné) PŘED čímkoli dalším: zahozené mezitím (souběh s Trvale zahodit) →
     // žádost zamítnout jako zahozený dedup, žádná zpráva, žádný gif-message ani cooldown.
     let effective: string | null | undefined = r.mediaId ?? undefined;
+    // Médium bylo schválené už předtím (výběr z knihovny) → knihovna se nemění; jinak nové v knihovně → signál panelům.
+    let wasApproved = true;
     if (p.approve && r.mediaId) {
       // GIF z knihovny (instant, ne mod): médium musí být pořád schválené — odebrané z knihovny mezitím se nevzkřísí (A2).
       const library = !!p.instant && !p.auto;
+      if (!library) wasApproved = (await deps.store.getMedia(r.mediaId).catch(() => null))?.status === 'approved';
       try { effective = await deps.store.setMediaApproved(r.mediaId, at, library ? { onlyApproved: true } : undefined); }
       catch (e) { deps.log.warn({ err: (e as Error).message }, 'gif: schválení média selhalo'); effective = undefined; }
       if (effective === null) {
@@ -1170,6 +1174,9 @@ export function createGifFlow(deps: GifFlowDeps) {
           }
           await deps.store.markMediaUsed(r.mediaId!, at);
           deps.mediaChanged?.(r.mediaId!);
+          // Nový GIF v knihovně (i auto-schválení moda v režimu „všechny“) → otevřené panely knihovny se načtou znovu
+          // (lehký signál jako u akcí nad knihovnou; pokyn usera 2026-09-28).
+          if (!wasApproved) deps.broadcast('gif-media', { channel: r.channel, mediaId: r.mediaId!, state: 'library' });
         });
       }
       // Zpráva jde ven jen když je v archivu (jinak by po reloadu zmizela) — jeden opakovaný pokus.
@@ -1480,6 +1487,8 @@ export function createGifFlow(deps: GifFlowDeps) {
                 displayName: m.username, sentAt: m.sentAt.getTime(), ...(raw.color ? { color: raw.color } : {}), ...(raw.badges !== undefined ? { badges: raw.badges } : {}),
                 // Role jako v gif-access → gif-used po schválení (i modem později) ji pošle Židolištce (bod 5 testu 2026-09-27).
                 role: p.query.role,
+                // Původní zpráva z UnityChatu (marker) → syntetická zpráva s GIFem drží zlaté logo i po reloadu.
+                ...(m.isUnitychatUser ? { uc: true } : {}),
                 ...(auto ? { auto: true } : {}), ...(approvedKnown && !auto ? { instant: true } : {}), ...(previouslyRejected ? { previouslyRejected } : {}),
                 // Zamítnuté médium zůstává jen s tokenem i s novou žádostí (audit SEC-1) → karta moda ho načte s tokenem.
                 ...(known?.status === 'rejected' ? { tokenRequired: true } : {}),

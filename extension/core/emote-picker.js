@@ -168,6 +168,11 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   function open(tab) {
     // Rozběhnuté zavírání (duch) dokončit, ať ho doběhnutí neschová po otevření.
     morph.settle();
+    // Už otevřený (nota při otevřených Emotech) → jen přepnout záložku, žádná animace otevření z nuly.
+    if (isOpen()) {
+      if (tab && tab !== active) { selectTab(tab); if (active === 'emotes') render(); }
+      return;
+    }
     if (tab) selectTab(tab);
     if (active === 'emotes') render();
     panel.classList.remove('hidden');
