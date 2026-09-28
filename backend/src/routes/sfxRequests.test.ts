@@ -96,11 +96,11 @@ test('normalizePrepared: režim server (mp3/YouTube stažený) a embed (YouTube 
   assert.equal(normalizePrepared({ previewId: 'p2', mode: 'embed', videoId: 'dQw4w9WgXcQ', durationMs: 212000 })?.durationMs, 212000);
 });
 
-test('normalizeCatalog: gainDb se propíše (0 = beze změny, ořez ±20 dB)', () => {
+test('normalizeCatalog: gainDb se propíše (0 = beze změny, ořez ±30 dB (výsledná hlasitost zvuku + tieru ze Židolišty))', () => {
   const c = normalizeCatalog({ sounds: [
     { id: 1, name: 'a', tier: 1, url: 'https://z/a.mp3', gainDb: -3.46 },
     { id: 2, name: 'b', tier: 1, url: 'https://z/b.mp3' },
     { id: 3, name: 'c', tier: 1, url: 'https://z/c.mp3', gainDb: 99 },
   ] });
-  assert.deepEqual(c.sounds.map((s) => s.gainDb), [-3.5, 0, 20]);
+  assert.deepEqual(c.sounds.map((s) => s.gainDb), [-3.5, 0, 30]);
 });

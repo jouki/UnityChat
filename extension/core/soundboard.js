@@ -269,10 +269,10 @@ export function soundIconHtml(s) {
   return emoji ? `<span class="uc-sb-em">${esc(emoji)}</span>` : '';
 }
 
-/** Zesílení v dB → násobek amplitudy (0 dB = 1; neplatné = 1). Rozsah ±20 dB jako Židolišta. */
+/** Zesílení v dB → násobek amplitudy (0 dB = 1; neplatné = 1). Rozsah ±30 dB jako Židolišta (výsledná hlasitost zvuku + tieru). */
 export function gainFactor(gainDb) {
   const g = Number(gainDb);
-  return Number.isFinite(g) ? 10 ** (Math.max(-20, Math.min(20, g)) / 20) : 1;
+  return Number.isFinite(g) ? 10 ** (Math.max(-30, Math.min(30, g)) / 20) : 1;
 }
 
 /** Hledání: bez diakritiky a velikosti písmen, začátek jména má přednost. */

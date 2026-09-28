@@ -58,8 +58,8 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
     const emoji = typeof o.emoji === 'string' && o.emoji.trim() && o.emoji.length <= 16 ? o.emoji.trim() : null;
     const durationMs = Number.isFinite(o.durationMs) && (o.durationMs as number) > 0 ? Math.round(o.durationMs as number) : null;
     const displayName = typeof o.displayName === 'string' && o.displayName.trim() ? o.displayName.trim().slice(0, 40) : null;
-    // Zesílení v dB proti originálu (normalizace hlasitosti + úprava moda), přehrávač ho aplikuje za běhu.
-    const gainDb = Number.isFinite(o.gainDb) ? Math.round(Math.max(-20, Math.min(20, o.gainDb as number)) * 10) / 10 : 0;
+    // Zesílení v dB proti originálu: výsledná hlasitost zvuku + tieru ze Židolišty (tier NEPŘIČÍTAT znovu), strop ±30 dB.
+    const gainDb = Number.isFinite(o.gainDb) ? Math.round(Math.max(-30, Math.min(30, o.gainDb as number)) * 10) / 10 : 0;
     sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs, gainDb });
   }
   const tiers = new Map<number, Tier>();
