@@ -428,3 +428,21 @@ body.uc-raw .uc-gif--failed:not(.uc-gif--unavailable) { display: none; }
 /* Kolo 4 bod 4c: zpráva s GIFem, který je pryč (unavailable / odebraný / 404), se v OBS nevykreslí vůbec — jinak z ní
    zbylo jen „jméno:“ (core GIF_GONE_CLASS). Stejně jako smazané zprávy. */
 body.uc-raw .msg.uc-gif-gone { display: none; }
+
+/* ---- Streamer: karta ke schválení zabalená do záložky ⌃⌃ (core/gif.js streamer), GIF rozmazaný ---- */
+.uc-gif-toggle {
+  align-self: center; display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 12px 3px; border: 1px solid var(--border, #2f2f35); border-bottom: none; border-radius: 8px 8px 0 0;
+  background: var(--bg-tertiary, #1c1c21); color: var(--accent-light, #ffb347); font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.35);
+}
+.uc-gif-toggle[hidden] { display: none; }
+.uc-gif-toggle:hover { background: var(--bg-hover, #26262c); }
+.uc-gif-toggle-ico { transition: transform 180ms ease; }
+.uc-gif-toggle.open .uc-gif-toggle-ico { transform: rotate(180deg); }
+.uc-gif-stack.uc-gif-stack--collapsed { bottom: 0; }
+.uc-gif-stack--collapsed > :not(.uc-gif-toggle) { display: none; }
+.uc-gif-card--blur .uc-gif-card-media { cursor: pointer; }
+.uc-gif-card--blur .uc-gif-card-media :is(img, video) { filter: blur(14px); transition: filter 160ms ease; }
+.uc-gif-card--blur.uc-gif-focused .uc-gif-card-media :is(img, video) { filter: none; }
+@media (prefers-reduced-motion: reduce) { .uc-gif-toggle-ico, .uc-gif-card--blur .uc-gif-card-media :is(img, video) { transition: none; } }

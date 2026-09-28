@@ -5259,6 +5259,8 @@ class UnityChat {
         api: (path, opts) => this._ucApi(path, opts),
         channel: () => (this.config.channel || '').toLowerCase(),
         canModerate: () => !!this._canModerate,
+        // Streamer (vlastní kanál): karta zabalená do záložky ⌃⌃ a GIF rozmazaný (pokyn usera 2026-09-28).
+        streamer: () => this._myChatRole() === 'broadcaster',
         origins: UC_GIF_ORIGINS,
         // Posun hodin klienta vůči serveru (GET /gif/state) pro expiresAt karet (audit F1).
         serverOffset: () => this._gifCdInst?.serverOffset() || 0,

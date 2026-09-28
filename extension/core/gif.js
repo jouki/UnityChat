@@ -640,6 +640,9 @@ const fifoCmp = (a, b) => ((a.createdAt ?? 0) - (b.createdAt ?? 0)) || (Number(a
  *   accountStream: 'gif-pending' → gifs.onPending(d), 'gif-decided' → gifs.onDecided(d), 'gif-queue' → gifs.onQueue(d)
  *   mod na kanálu / přepnutí kanálu → gifs.clear(); gifs.loadPending()
  */
+/** Dvojitá šipka nahoru (záložka karty ke schválení u streamera; rozbalená = otočená dolů). */
+const GIF_TOGGLE_SVG = '<svg class="uc-gif-toggle-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 12.5l6-6 6 6"/><path d="M6 18.5l6-6 6 6"/></svg>';
+
 export class GifRequests {
   /**
    * @param {object} o
@@ -653,9 +656,11 @@ export class GifRequests {
    * @param {() => number} [o.now]
    * @param {(n: number) => void} [o.onChange]  počet čekajících (hostitel může přizpůsobit layout)
    * @param {string[]} [o.origins]  povolené originy médií
+   * @param {() => boolean} [o.streamer]  jsem streamer kanálu → karta zabalená do záložky ⌃⌃ (rozbalí si ji sám) a GIF
+   *        v kartě rozmazaný (klik zaostří / znovu rozmaže); modi mají kartu jako dosud (pokyn usera 2026-09-28)
    * @param {number} [o.lockOtherMs] / [o.lockOwnMs] / [o.noticeMs]  (testy)
    */
-  constructor({ doc = globalThis.document, container, api, channel, canModerate, platformIcon, log, now, onChange, origins = null, serverOffset, tokens = null, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
+  constructor({ doc = globalThis.document, container, api, channel, canModerate, streamer, platformIcon, log, now, onChange, origins = null, serverOffset, tokens = null, lockOtherMs = GIF_LOCK_OTHER_MS, lockOwnMs = GIF_LOCK_OWN_MS, noticeMs = GIF_NOTICE_MS, setInterval: si, clearInterval: ci, setTimeout: st, clearTimeout: ctm } = {}) {
     this.doc = doc;
     /** Posun hodin (lokální − serverový) z GET /gif/state, když událost nenese `serverNow` (audit F1). */
     this.serverOffset = serverOffset || (() => 0);
@@ -665,6 +670,9 @@ export class GifRequests {
     this.api = api;
     this.channel = channel || (() => '');
     this.canModerate = canModerate || (() => false);
+    this.streamer = streamer || (() => false);
+    /** Streamer rozbalil kartu (záložka ⌃⌃); když fronta dojde, zase zabaleno. */
+    this._expanded = false;
     this.platformIcon = platformIcon || (() => null);
     this.log = log || (() => {});
     this.now = now || (() => Date.now());
@@ -1052,10 +1060,12 @@ export class GifRequests {
     el.className = 'uc-gif-stack';
     el.setAttribute('role', 'region');
     el.setAttribute('aria-label', 'GIFy ke schválení');
-    el.innerHTML = '<div class="uc-gif-notice" role="status" hidden></div><div class="uc-gif-slot"></div><div class="uc-gif-more" hidden></div>';
+    el.innerHTML = `<button type="button" class="uc-gif-toggle" data-act="toggle" aria-expanded="false" hidden>${GIF_TOGGLE_SVG}<span class="uc-gif-toggle-n"></span></button>`
+      + '<div class="uc-gif-notice" role="status" hidden></div><div class="uc-gif-slot"></div><div class="uc-gif-more" hidden></div>';
     el.addEventListener('click', (e) => {
       const b = e.target.closest?.('[data-act]');
       if (!b || !el.contains(b)) return;
+      if (b.dataset.act === 'toggle') { e.stopPropagation(); this.setExpanded(!this._expanded); return; }
       const card = b.closest('.uc-gif-card');
       if (!card) return;
       e.stopPropagation();
@@ -1067,6 +1077,12 @@ export class GifRequests {
       else if (act === 'unit') {
         for (const u of card.querySelectorAll('.uc-gif-rmenu .uc-mm-unit')) u.setAttribute('aria-pressed', String(u === b));
       } else if (act === 'reject-timeout') this.rejectWithTimeout(card.dataset.requestId);
+      else if (act === 'focus') {
+        // Streamer: rozmazaný GIF klikem zaostří, dalším klikem zase rozmaže.
+        const on = card.classList.toggle('uc-gif-focused');
+        b.setAttribute('aria-pressed', String(on));
+        this._L(`karta ${card.dataset.requestId}: GIF ${on ? 'zaostřen' : 'rozmazán'}`);
+      }
       else if (act === 'reject-ban') this.confirmRejectBan(card.dataset.requestId);
     });
     // Esc v nabídce ▾ ji zavře (ne celý panel).
@@ -1096,6 +1112,32 @@ export class GifRequests {
     if (show) cardEl.querySelector('.uc-gif-rmenu-num')?.focus();
   }
 
+  /** Streamer: rozbalit / zabalit kartu ke schválení (záložka ⌃⌃). */
+  setExpanded(on) {
+    this._expanded = !!on;
+    this._L(`karta ke schválení ${this._expanded ? 'rozbalena' : 'zabalena'} (streamer)`);
+    this._render();
+  }
+
+  /** Streamer se zabalenou kartou: vidí jen záložku ⌃⌃ s počtem (karta, hlášky i „+N čeká“ schované). */
+  _paintCollapse(headId) {
+    const root = this.el;
+    if (!root) return;
+    const streamer = !!headId && this.streamer();
+    const collapsed = streamer && !this._expanded;
+    root.classList.toggle('uc-gif-stack--collapsed', collapsed);
+    const t = root.querySelector('.uc-gif-toggle');
+    if (!t) return;
+    t.hidden = !streamer;
+    t.setAttribute('aria-expanded', String(streamer && this._expanded));
+    t.classList.toggle('open', streamer && this._expanded);
+    // Server (gif-queue) může být o krok pozadu za novou žádostí → aspoň lokálně známé.
+    const n = Math.max(this.pendingCount(), this._cards.size);
+    t.querySelector('.uc-gif-toggle-n').textContent = n > 0 ? String(n) : '';
+    t.title = collapsed ? `GIFy ke schválení (${n}) — rozbalit` : 'Zabalit';
+    t.setAttribute('aria-label', t.title);
+  }
+
   /** Karta = nejstarší čekající; při změně karty zámek (0,3 s po mém rozhodnutí, jinak 1 s). */
   _render() {
     const head = this._head();
@@ -1114,6 +1156,8 @@ export class GifRequests {
       }
       this._ownDecidedId = null;
     }
+    // Fronta došla → příště zase zabaleno (streamer).
+    if (!headId) this._expanded = false;
     if (!headId && !this._notice) {
       if (this.el) { removeGifMedia(this.el); this.el.remove(); this.el = null; }
       this._stopTimer();
@@ -1129,6 +1173,7 @@ export class GifRequests {
       slot.appendChild(this._build(head));
     }
     this._paint();
+    this._paintCollapse(headId);
     if (headId) this._startTimer(); else this._stopTimer();
     this.onChange(this._cards.size);
   }
@@ -1166,7 +1211,7 @@ export class GifRequests {
     const doc = this.doc;
     const { req } = card;
     const el = doc.createElement('div');
-    el.className = 'uc-gif-card uc-gif-card--pending';
+    el.className = `uc-gif-card uc-gif-card--pending${this.streamer() ? ' uc-gif-card--blur' : ''}`;
     el.dataset.requestId = req.requestId;
     el.innerHTML = `
       <div class="uc-gif-card-head">
@@ -1221,7 +1266,16 @@ export class GifRequests {
     el.querySelector('.uc-gif-card-who').textContent = req.login || 'neznámý';
     el.querySelector('.uc-gif-card-text').textContent = req.text;
     el.querySelector('.uc-gif-card-text').hidden = !req.text;
-    this._cardMedia(el.querySelector('.uc-gif-card-media'), req);
+    const media = el.querySelector('.uc-gif-card-media');
+    this._cardMedia(media, req);
+    if (this.streamer()) {
+      // Streamer: GIF rozmazaný, klik zaostří / znovu rozmaže (data-act focus v obsluze kořene).
+      media.dataset.act = 'focus';
+      media.setAttribute('role', 'button');
+      media.setAttribute('tabindex', '0');
+      media.setAttribute('aria-pressed', 'false');
+      media.title = 'Klikni pro zaostření / rozmazání';
+    }
     el.querySelector('.uc-gif-timer').textContent = formatCountdown(req.expiresAt - this.now());
     return el;
   }

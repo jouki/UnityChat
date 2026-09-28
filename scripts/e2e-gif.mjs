@@ -674,6 +674,36 @@ check('C SSE gif-decided před HTTP → další karta 0,3 s, bez hlášky, pozdn
 check('C SSE gif-queue před HTTP → taky 0,3 s', coreSse?.head2 === '3' && coreSse.lock2 === 300 && coreSse.res2 === 'rejected', JSON.stringify(coreSse));
 check('C 409 po SSE → hláška „Už rozhodl jiny (Twitch)“', coreSse?.res3 === 'approved' && coreSse.notice3 === 'Už rozhodl jiny (Twitch)' && coreSse.head3 === '4', JSON.stringify(coreSse));
 
+// Streamer (2026-09-28): karta zabalená do záložky ⌃⌃ jen při čekajících GIFech, rozbalení / zabalení, GIF rozmazaný, klik zaostří.
+const coreStreamer = await ev(`(async () => {
+  let T = 1000; let streamer = true; const box = document.createElement('div'); document.body.appendChild(box);
+  const g = new window.UC_CORE.GifRequests({ doc: document, container: box, now: () => T, channel: () => 'robdiesalot', canModerate: () => true, streamer: () => streamer,
+    api: async () => ({ ok: true, status: 'approved' }), setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} });
+  const P = (id, c) => ({ requestId: id, channel: 'robdiesalot', platform: 'twitch', login: 'x', userId: 'u', messageId: 'm' + id, text: '', media: { url: ${JSON.stringify(murl(MEDIA.card))}, kind: 'gif' }, createdAt: c, expiresAt: T + 600000 });
+  const vis = (el) => !!el && el.getClientRects().length > 0;
+  const settle = () => new Promise((r) => setTimeout(r, 260));   // přechod rozmazání 160 ms
+  const st = () => { const t = box.querySelector('.uc-gif-toggle'); const card = box.querySelector('.uc-gif-card'); const img = card?.querySelector('.uc-gif-card-media :is(img, video)');
+    return { toggle: vis(t), n: t?.querySelector('.uc-gif-toggle-n')?.textContent || '', open: t?.classList.contains('open') || false, card: vis(card), blur: img ? getComputedStyle(img).filter : null }; };
+  const r = { empty: st() };
+  g.onPending(P(1, 10)); g.onPending(P(2, 20));
+  r.collapsed = st();
+  box.querySelector('.uc-gif-toggle').click(); r.expanded = st();
+  box.querySelector('.uc-gif-card-media').click(); await settle(); r.focused = st();
+  box.querySelector('.uc-gif-card-media').click(); await settle(); r.reblur = st();
+  T += 1000; await g.decide('1', true); r.afterDecide = st();
+  g.onQueue({ channel: 'robdiesalot', pendingCount: 0, headId: null }); r.drained = st();
+  g.onPending(P(3, 30)); r.again = st();
+  g.onQueue({ channel: 'robdiesalot', pendingCount: 0, headId: null }); streamer = false; g.onPending(P(4, 40)); r.mod = st();
+  g.clear(); box.remove(); return r;
+})()`);
+check('S bez čekajících GIFů žádná záložka', coreStreamer?.empty.toggle === false, JSON.stringify(coreStreamer?.empty));
+check('S streamer: čekající GIFy → jen záložka ⌃⌃ s počtem, karta schovaná', coreStreamer?.collapsed.toggle && coreStreamer.collapsed.n === '2' && !coreStreamer.collapsed.card && !coreStreamer.collapsed.open, JSON.stringify(coreStreamer?.collapsed));
+check('S klik na záložku → karta vidět, šipky otočené (zabalit), GIF rozmazaný', coreStreamer?.expanded.card && coreStreamer.expanded.open && /blur/.test(coreStreamer.expanded.blur || ''), JSON.stringify(coreStreamer?.expanded));
+check('S klik na GIF zaostří, další klik znovu rozmaže', coreStreamer?.focused.blur === 'none' && /blur/.test(coreStreamer.reblur.blur || ''), JSON.stringify([coreStreamer?.focused, coreStreamer?.reblur]));
+check('S po rozhodnutí zůstane rozbaleno (další GIF, zase rozmazaný)', coreStreamer?.afterDecide.card && coreStreamer.afterDecide.open && /blur/.test(coreStreamer.afterDecide.blur || ''), JSON.stringify(coreStreamer?.afterDecide));
+check('S fronta došla → záložka zmizí; další GIF zase zabalený (počet 1)', coreStreamer?.drained.toggle === false && coreStreamer.again.toggle && !coreStreamer.again.card && coreStreamer.again.n === '1', JSON.stringify([coreStreamer?.drained, coreStreamer?.again]));
+check('S mod (ne streamer): karta rovnou, bez záložky a bez rozmazání', coreStreamer?.mod.card && !coreStreamer.mod.toggle && !/blur/.test(coreStreamer.mod.blur || ''), JSON.stringify(coreStreamer?.mod));
+
 // ---- fáze B: divák = odesílatel (štítky u vlastní zprávy místo karty) ----
 mock.mod = false;
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
@@ -923,7 +953,7 @@ const gl = () => ev(`(() => { const p = document.querySelector('.uc-ep-pane[data
     confirm: vis(p?.querySelector('.uc-gl-confirm')) ? p.querySelector('.uc-gl-confirm p').textContent : null }; })()`);
 const glClick = (sel) => ev(`(() => { const b = document.querySelector('.uc-ep-pane[data-pane="gif"] ${sel}'); if (!b) return false; b.click(); return true; })()`);
 await ev(`document.getElementById('btn-emotes').click()`);
-check('G panel emotů má svislé záložky Emoty | GIFy', await until(`[...document.querySelectorAll('.uc-ep-side .uc-ep-tab')].map(b => b.textContent.trim()).join('|') === 'Emoty|GIFy'`, 3000));
+check('G panel emotů má svislé záložky Emoty | GIFy (+ SFX, když kanál má zvuky)', await until(`['Emoty|GIFy', 'Emoty|GIFy|SFX'].includes([...document.querySelectorAll('.uc-ep-side .uc-ep-tab')].filter(b => !b.hidden).map(b => b.textContent.trim()).join('|'))`, 3000), await ev(`[...document.querySelectorAll('.uc-ep-side .uc-ep-tab')].filter(b => !b.hidden).map(b => b.textContent.trim()).join('|')`));
 await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
 check('G záložka GIFy → knihovna (GET /gifs/library s kanálem), pořadí podle použití', await until(`document.querySelectorAll('.uc-ep-pane[data-pane="gif"] .uc-gl-i').length === 3`, 5000)
   && posts.library.some((u) => /channel=robdiesalot/.test(u)) && (await gl())?.items === '0b,0c,0d', JSON.stringify(await gl()));
