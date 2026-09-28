@@ -18,7 +18,7 @@ import { buildModRequest, createDurationNumber, CUSTOM_UNITS, customDurationSec,
 
 export const GIF_MAX_W = 400;
 export const GIF_MAX_H = 250;
-/** GIF užší než tenhle poměr (šířka / výška) dostane ve zprávě čtvercový rám s ambientem (rozmazaná kopie po stranách). */
+/** GIF užší než tenhle poměr (šířka / výška) dostane ve zprávě rám 4:3 s ambientem (rozmazaná kopie po stranách). */
 export const GIF_AMBIENT_RATIO = 0.8;
 /** Jak dlouho zůstane rozhodnutá / propadlá karta vidět (zelená / červená + kdo rozhodl). */
 export const GIF_DECIDED_LINGER_MS = 4000;
@@ -402,6 +402,7 @@ function gifFallback(doc, wrap, text, extraClass = '', { gone = true } = {}) {
   a.className = 'uc-gif-fallback';
   a.textContent = text;
   wrap.replaceChildren(a);
+  wrap.classList.remove('uc-gif--card');
   wrap.classList.add('uc-gif--failed');
   if (extraClass) wrap.classList.add(extraClass);
   wrap.classList.remove('uc-gif--nosize');
@@ -472,6 +473,8 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
   const video = isGifVideo(g);
   const m = doc.createElement(video ? 'video' : 'img');
   m.className = 'uc-gif-media';
+  // Karta s rámečkem ve zprávě (gif.css) — třída místo :has(), OBS má starší Chromium bez :has() (2026-09-28).
+  wrap.classList.add('uc-gif--card');
   // Rozměry originálu (náhled v plné velikosti, core/gif-lightbox.js).
   if (g.width && g.height) { m.setAttribute('data-w', String(g.width)); m.setAttribute('data-h', String(g.height)); }
   if (fit) {
@@ -529,12 +532,12 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     if (lazy) m.loading = 'lazy';
     m.src = src;
   }
-  // GIF na výšku ve zprávě (pokyn usera 2026-09-28): čtvercový rám, po stranách rozmazaná ztmavená kopie (ambient).
+  // GIF na výšku ve zprávě (pokyn usera 2026-09-28): rám 4:3, po stranách rozmazaná ztmavená kopie (ambient).
   // Video v pozadí jen stojí na prvním snímku (druhé dekódování naplno by stálo výkon, hlavně v OBS).
   if (ambient && fit && g.width && g.height && g.width / g.height < GIF_AMBIENT_RATIO) {
     const stage = doc.createElement('div');
     stage.className = 'uc-gif-stage';
-    stage.style.setProperty('--uc-gif-sq', `${fit.height}px`);
+    stage.style.setProperty('--uc-gif-stage-w', `${Math.round(fit.height * 4 / 3)}px`);
     const bg = doc.createElement(video ? 'video' : 'img');
     bg.className = 'uc-gif-amb';
     bg.setAttribute('aria-hidden', 'true');
