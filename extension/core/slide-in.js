@@ -5,6 +5,22 @@
 
 export const SLIDE_IN_MS = 160;
 
+/** Aktuální posun běžící animace v px (0 mimo animaci). Přesně o tolik je scrollHeight větší — transform potomků rozšiřuje overflow. */
+export function slideOffset(chatEl) {
+  if (!chatEl?.classList.contains('uc-sliding')) return 0;
+  const win = chatEl.ownerDocument.defaultView;
+  return parseFloat(win.getComputedStyle(chatEl).getPropertyValue('--uc-slide')) || 0;
+}
+
+/**
+ * Posun na skutečný konec chatu. Během animace odečte běžící posun — holé `scrollTop = scrollHeight` by skočilo
+ * na konec animace (dočtení badge / emotu nové zprávy, další zpráva v řadě) a z příjezdu zbylo jen bliknutí
+ * (OBS chat, měřeno 2026-09-28). Používat všude místo `scrollTop = scrollHeight`.
+ */
+export function scrollToBottom(chatEl) {
+  chatEl.scrollTop = chatEl.scrollHeight - slideOffset(chatEl);
+}
+
 /**
  * Zavolat hned po nastavení scrollTop na konec (ve stejném snímku), jinak by obsah
  * na jeden snímek poskočil.

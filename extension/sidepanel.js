@@ -8738,7 +8738,7 @@ class UnityChat {
       if (!reconcile) this.store.oldestCursor = data.nextBefore || null;
       this._historyFetches++;
       this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
-      if (!before && !reconcile) { this.autoScroll = true; this.chatEl.scrollTop = this.chatEl.scrollHeight; this._clearUnread(); }
+      if (!before && !reconcile) { this.autoScroll = true; this._scrollEnd(); this._clearUnread(); }
     } catch (err) {
       this._sys(`Historie nedostupná (${err.name === 'AbortError' ? 'timeout' : err.message})`);
       this._historyCooldownUntil = performance.now() + 3000;
@@ -8886,7 +8886,7 @@ class UnityChat {
     this._unloadTop();
     this._clearUnread();
     this._programmaticScrollUntil = performance.now() + 200;
-    this.chatEl.scrollTop = this.chatEl.scrollHeight;
+    this._scrollEnd();
   }
 
   _contentKey(username, message) {
@@ -9158,10 +9158,16 @@ ${contextMessage}` : rest.message });
         // (which can fire after more messages have appended in a busy
         // chat) doesn't get re-interpreted as the user scrolling away.
         this._programmaticScrollUntil = performance.now() + 200;
-        this.chatEl.scrollTop = this.chatEl.scrollHeight;
+        this._scrollEnd();
         if (slideEl) window.UC_CORE?.slideInMessage?.(this.chatEl, slideEl);
       });
     }
+  }
+
+  /** Na konec chatu i během příjezdu zprávy (core scrollToBottom odečte běžící posun, jinak by animace skočila na konec). */
+  _scrollEnd() {
+    if (window.UC_CORE?.scrollToBottom) window.UC_CORE.scrollToBottom(this.chatEl);
+    else this.chatEl.scrollTop = this.chatEl.scrollHeight;
   }
 }
 
