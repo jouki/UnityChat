@@ -130,9 +130,27 @@ export function classifyGifUrl(raw: string, ownHosts: string[] = defaultOwnHosts
   if (/^(media\d*|c)\.tenor\.com$/.test(host) || /^(media\d*|i)\.giphy\.com$/.test(host)) return path.length > 1 ? { url: href, mode: 'direct' } : null;
   if (bare === 'tenor.com' && /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?view\/[^/]+/.test(path)) return { url: href, mode: 'page' };
   if (bare === 'giphy.com' && /^\/gifs\/[^/]+/.test(path)) return { url: href, mode: 'page' };
-  if ((bare === 'imgur.com' || bare === 'm.imgur.com') && /^\/(?:(?:a|gallery|t\/[^/]+)\/)?[a-z0-9]{5,10}\/?$/i.test(u.pathname)) return { url: href, mode: 'page' };
+  if (imgurRef(u)) return { url: href, mode: 'page' };
   return null;
 }
+
+/** Odkaz na stránku Imgur → { kind, id }: /a/<ID>, /gallery/<ID>, /t/<tag>/<ID>, /<ID>; i novější tvar <slug>-<ID>. */
+export interface ImgurRef { kind: 'album' | 'gallery' | 'image'; id: string }
+export function imgurRef(input: URL | string): ImgurRef | null {
+  let u: URL;
+  try { u = typeof input === 'string' ? new URL(input) : input; } catch { return null; }
+  const bare = u.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+  if (bare !== 'imgur.com' && bare !== 'm.imgur.com') return null;
+  const m = /^\/(?:(a|gallery|t\/[^/]+)\/)?([a-z0-9-]*?)\/?$/i.exec(u.pathname);
+  if (!m) return null;
+  const id = m[2].split('-').pop() || '';
+  if (!/^[a-z0-9]{5,10}$/i.test(id)) return null;
+  const kind = m[1] === 'a' ? 'album' : m[1] ? 'gallery' : 'image';
+  // Holé /<slovo> = sekce webu (imgur.com/gallery, /upload…), ne obrázek.
+  if (kind === 'image' && IMGUR_SECTIONS.has(id.toLowerCase())) return null;
+  return { kind, id };
+}
+const IMGUR_SECTIONS = new Set(['gallery', 'upload', 'signin', 'search', 'about', 'user', 'account', 'vidgif', 'memegen', 'apps', 'blog', 'emerald', 'privacy', 'random', 'hot', 'new', 'top']);
 
 /** Token zprávy → URL (od schématu, jinak od hostu), bez koncové interpunkce. */
 function tokenUrl(token: string, host: string): string | null {
@@ -312,6 +330,9 @@ export interface FetchDeps {
   onProgress?: (e: GifFetchProgress) => void;
   /** Sonda rozměrů a počtu snímků bez dekódování (lib/gifPhash.ts probeMedia); chybí = jen rozměry z hlavičky. */
   probe?: MediaProber;
+  /** Imgur API Client-ID (config IMGUR_CLIENT_ID): stránky Imgur se čtou přes api.imgur.com, protože HTML stránky
+   *  vracejí IP serveru 429 „over capacity“ (2026-09-28). Prázdné = jen HTML stránka (og tagy). */
+  imgurClientId?: string;
 }
 
 /**
@@ -358,7 +379,7 @@ export async function isCloudflareChallenge(res: TransportResponse, signal: Abor
 }
 
 /** GET s ručními přesměrováními (max 3, každé znovu ověřené) → odpověď se statusem 2xx. */
-async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps): Promise<{ res: TransportResponse; url: URL }> {
+async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps, extra: Record<string, string> = {}): Promise<{ res: TransportResponse; url: URL }> {
   const transport = deps.transport ?? nodeTransport;
   const signal = ctx.signal;
   let url: URL;
@@ -367,7 +388,7 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
     // Veřejná adresa se ověří VŽDY před jakýmkoli stažením — i před předáním URL do Bright Data.
     await assertPublicUrl(url, deps.lookupAll);
     let res: TransportResponse;
-    try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
+    try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity', ...extra }, signal); }
     catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
     // Ochrana proti botům (Cloudflare challenge) = jediný případ pro Bright Data; jiné chyby (404, HTML místo
     // média, velikost…) jdou rovnou ven bez placeného pokusu. Bez možnosti obejít → vlastní kód bot_protection.
@@ -638,6 +659,40 @@ export async function resolveGif(src: GifSource, deps: FetchDeps & { timeoutMs?:
 }
 
 /**
+ * Imgur API: album / galerie (`/3/album/<id>`, u galerie s obrázkem pak `/3/image/<id>`) / obrázek → první položka;
+ * animovaná → MP4 (`mp4`), jinak `link` jen když je .gif / .webp. Null = API neodpovědělo použitelně (volající zkusí
+ * HTML stránku); položka bez animace = GifError('no_media').
+ */
+async function resolveImgurApi(ref: ImgurRef, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif | null> {
+  const endpoints = ref.kind === 'image' ? ['image'] : ref.kind === 'album' ? ['album'] : ['album', 'image'];
+  const auth = { Authorization: `Client-ID ${deps.imgurClientId}` };
+  for (const ep of endpoints) {
+    let data: Record<string, unknown> | null = null;
+    try {
+      const { res } = await safeGet(`https://api.imgur.com/3/${ep}/${ref.id}`, 'application/json', ctx, deps, auth);
+      const raw = (await readLimited(res, PAGE_MAX_BYTES, ctx.signal, true)).toString('utf8');
+      const j = JSON.parse(raw) as { success?: boolean; data?: Record<string, unknown> };
+      data = j?.success && j.data && typeof j.data === 'object' ? j.data : null;
+    } catch (e) {
+      if (ctx.signal.aborted) throw e instanceof GifError ? e : new GifError('timeout');
+      data = null;
+    }
+    if (!data) continue;
+    const images = Array.isArray(data.images) ? (data.images as Array<Record<string, unknown>>) : null;
+    const item = images ? images[0] : data;
+    if (!item) throw new GifError('no_media');
+    const mp4 = typeof item.mp4 === 'string' ? item.mp4 : '';
+    const link = typeof item.link === 'string' ? item.link : '';
+    const media = item.animated && mp4 ? mp4 : (/\.(gif|webp|mp4)(\?|$)/i.test(link) ? link : mp4);
+    if (!media) throw new GifError('no_media');
+    const tags = Array.isArray(data.tags) ? normalizeTags((data.tags as Array<Record<string, unknown>>).map((t) => t?.display_name ?? t?.name)) : [];
+    const r = await fetchChecked(media, ctx, deps);
+    return tags.length ? { ...r, tags } : r;
+  }
+  return null;
+}
+
+/**
  * Limity média (audit SEC-7) ještě před uložením: rozměr z hlavičky, pak sonda (sharp metadata / ffprobe — snímky
  * se nedekódují). Sonda bez nástroje → jen hlavička; poškozené médium → bad_media.
  */
@@ -675,6 +730,12 @@ async function fetchChecked(url: string, ctx: Ctx, deps: FetchDeps): Promise<Res
 async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
   const signal = ctx.signal;
   if (src.mode === 'direct') return fetchChecked(src.url, ctx, deps);
+  // Imgur s Client-ID → API (HTML stránka z IP serveru = 429); bez odpovědi API dál běžnou cestou přes stránku.
+  const ref = deps.imgurClientId ? imgurRef(src.url) : null;
+  if (ref) {
+    const viaApi = await resolveImgurApi(ref, ctx, deps);
+    if (viaApi) return viaApi;
+  }
   const { res, url } = await safeGet(src.url, 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', ctx, deps);
   const ct = String(res.headers['content-type'] || (ctx.unlocked.length ? 'application/octet-stream' : ''));
   if (!/html/i.test(ct)) {

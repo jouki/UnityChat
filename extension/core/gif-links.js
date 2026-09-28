@@ -41,8 +41,19 @@ export function classifyGifUrl(raw, ownHosts = GIF_OWN_HOSTS) {
   if (/^(media\d*|c)\.tenor\.com$/.test(host) || /^(media\d*|i)\.giphy\.com$/.test(host)) return path.length > 1 ? { url: href, mode: 'direct' } : null;
   if (bare === 'tenor.com' && /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?view\/[^/]+/.test(path)) return { url: href, mode: 'page' };
   if (bare === 'giphy.com' && /^\/gifs\/[^/]+/.test(path)) return { url: href, mode: 'page' };
-  if ((bare === 'imgur.com' || bare === 'm.imgur.com') && /^\/(?:(?:a|gallery|t\/[^/]+)\/)?[a-z0-9]{5,10}\/?$/i.test(u.pathname)) return { url: href, mode: 'page' };
+  if ((bare === 'imgur.com' || bare === 'm.imgur.com') && isImgurPage(u.pathname)) return { url: href, mode: 'page' };
   return null;
+}
+
+/** Imgur stránka: /a/<ID>, /gallery/<ID>, /t/<tag>/<ID>, /<ID>; i novější tvar <slug>-<ID> (ID = poslední část za
+ *  pomlčkou, 5–10 znaků). Holé /<slovo> = sekce webu (gallery, upload…), ne obrázek. Stejně backend gifMedia imgurRef. */
+const IMGUR_SECTIONS = new Set(['gallery', 'upload', 'signin', 'search', 'about', 'user', 'account', 'vidgif', 'memegen', 'apps', 'blog', 'emerald', 'privacy', 'random', 'hot', 'new', 'top']);
+function isImgurPage(pathname) {
+  const m = /^\/(?:(a|gallery|t\/[^/]+)\/)?([a-z0-9-]*?)\/?$/i.exec(pathname);
+  if (!m) return false;
+  const id = m[2].split('-').pop() || '';
+  if (!/^[a-z0-9]{5,10}$/i.test(id)) return false;
+  return !!m[1] || !IMGUR_SECTIONS.has(id.toLowerCase());
 }
 
 /** Token zprávy → URL (od schématu, jinak od hostu), bez koncové interpunkce. */

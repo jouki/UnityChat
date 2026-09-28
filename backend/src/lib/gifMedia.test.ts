@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
-import {
-  classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia,
-  resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll,
-} from './gifMedia.js';
+import { classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia, resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll, imgurRef } from './gifMedia.js';
 
 // ---- vzorky médií ----
 const gif = (w = 320, h = 240): Buffer => { const b = Buffer.alloc(32); b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return b; };
@@ -30,6 +27,14 @@ test('classifyGifUrl: stránky Tenor/Giphy/Imgur/7TV, média CDN, přímé soubo
   assert.equal(classifyGifUrl('https://i.giphy.com/abc.webp')?.mode, 'direct');
   assert.deepEqual(classifyGifUrl('https://i.imgur.com/AbCdE12.gifv'), { url: 'https://i.imgur.com/AbCdE12.mp4', mode: 'direct' });
   assert.equal(classifyGifUrl('https://imgur.com/gallery/AbCdE12')?.mode, 'page');
+  // Novější adresy Imgur <slug>-<ID> (galerie i album), fragment se ignoruje (2026-09-28).
+  assert.equal(classifyGifUrl('https://imgur.com/gallery/hold-breath-jVjKCJJ#/t/joke')?.mode, 'page');
+  assert.equal(classifyGifUrl('https://imgur.com/a/nazev-alba-8as1KiG')?.mode, 'page');
+  assert.deepEqual(imgurRef('https://imgur.com/gallery/hold-breath-jVjKCJJ#/t/joke'), { kind: 'gallery', id: 'jVjKCJJ' });
+  assert.deepEqual(imgurRef('https://imgur.com/a/8as1KiG'), { kind: 'album', id: '8as1KiG' });
+  assert.deepEqual(imgurRef('https://m.imgur.com/AbCdE12'), { kind: 'image', id: 'AbCdE12' });
+  assert.equal(imgurRef('https://imgur.com/gallery/'), null);
+  assert.equal(imgurRef('https://imgur.com/a/x'), null);
   assert.equal(classifyGifUrl('https://i.imgur.com/AbCdE12.png'), null);
   assert.deepEqual(classifyGifUrl('https://7tv.app/emotes/01F7JCJ0D80007RBBSW6MHGEVC'), { url: 'https://cdn.7tv.app/emote/01F7JCJ0D80007RBBSW6MHGEVC/4x.webp', mode: 'direct' });
   assert.equal(classifyGifUrl('https://neco.cz/obrazek.GIF?x=1')?.mode, 'direct');
@@ -308,4 +313,34 @@ test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez
   assert.equal(b.kind, 'mp4');
   const c = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: { headers: { 'content-type': 'image/gif' }, body: gif(10, 10) } }), lookupAll: publicDns });
   assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
+});
+
+test('resolveGif: Imgur s Client-ID → api.imgur.com (album → první položka MP4), bez Client-ID HTML stránka', async () => {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+  const transport = fakeTransport({
+    'https://api.imgur.com/3/album/8as1KiG': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { images: [{ animated: true, link: 'https://i.imgur.com/auBmmCk.gif', mp4: 'https://i.imgur.com/auBmmCk.mp4' }], tags: [{ display_name: 'Reaction' }] } })) },
+    'https://i.imgur.com/auBmmCk.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(640, 360) },
+    'https://imgur.com/a/8as1KiG': { status: 429, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"success":false}') },
+  }, seen);
+  const r = await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' });
+  assert.equal(r.kind, 'mp4');
+  assert.deepEqual([r.width, r.height], [640, 360]);
+  assert.deepEqual(r.tags, ['reaction']);
+  assert.equal(seen[0].url, 'https://api.imgur.com/3/album/8as1KiG');
+  assert.equal(seen[0].headers.Authorization, 'Client-ID abc123');
+  assert.ok(!seen.some((x) => x.url === 'https://imgur.com/a/8as1KiG'), 'HTML stránka se s API nestahuje');
+  // Bez Client-ID: běžná cesta přes stránku (tady 429 → chyba převodu).
+  await assert.rejects(resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns }), (e: GifError) => e.code === 'http_429');
+});
+
+test('resolveGif: Imgur galerie s obrázkem → /3/album selže, /3/image dá GIF; neanimovaná položka = no_media', async () => {
+  const transport = fakeTransport({
+    'https://api.imgur.com/3/album/jVjKCJJ': { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"success":false}') },
+    'https://api.imgur.com/3/image/jVjKCJJ': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { animated: true, link: 'https://i.imgur.com/b1Fyunv.gif', mp4: 'https://i.imgur.com/b1Fyunv.mp4' } })) },
+    'https://i.imgur.com/b1Fyunv.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(320, 200) },
+    'https://api.imgur.com/3/image/StaTic1': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { animated: false, link: 'https://i.imgur.com/StaTic1.jpg' } })) },
+  });
+  const r = await resolveGif({ url: 'https://imgur.com/gallery/hold-breath-jVjKCJJ', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' });
+  assert.equal(r.kind, 'mp4');
+  await assert.rejects(resolveGif({ url: 'https://imgur.com/StaTic1', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' }), (e: GifError) => e.code === 'no_media');
 });

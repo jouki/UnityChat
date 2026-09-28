@@ -120,7 +120,7 @@ const gifUnlockEstimator = createUnlockEstimator();
 const gifFlow = createGifFlow({
   store: dbGifStore,
   // probe: rozměr a počet snímků bez dekódování (sharp / ffprobe) → nad 2048 px / 600 snímků too_large (audit SEC-7).
-  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k) }),
+  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k), imgurClientId: config.IMGUR_CLIENT_ID || undefined }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   claim: (workspace) => claimGifSlot(workspace),

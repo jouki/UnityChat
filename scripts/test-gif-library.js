@@ -21,6 +21,7 @@ Promise.all([
   check('gifCandidate / hasGifLink: náš odkaz ve zprávě', links.gifCandidate(`hele ${OUR}`)?.mediaId === ID && links.hasGifLink(`${OUR} ⠀`));
   check('classifyGifUrl: vlastní seznam hostů', links.classifyGifUrl(`https://localhost/media/gif/${ID}`, ['localhost'])?.mode === 'own');
   check('classifyGifUrl: ostatní beze změny (Tenor stránka)', links.classifyGifUrl('https://tenor.com/view/cat-gif-1')?.mode === 'page');
+  check('classifyGifUrl: Imgur <slug>-<ID> (galerie i album, fragment se ignoruje; 2026-09-28)', links.classifyGifUrl('https://imgur.com/gallery/hold-breath-jVjKCJJ#/t/joke')?.mode === 'page' && links.classifyGifUrl('https://imgur.com/a/nazev-alba-8as1KiG')?.mode === 'page' && links.classifyGifUrl('https://imgur.com/a/8as1KiG')?.mode === 'page' && links.classifyGifUrl('https://imgur.com/gallery/') === null);
 
   // --- množná čísla, texty ---
   check('gifCountText: 1 GIF / 2 GIFy / 4 GIFy / 5 GIFů / 0 GIFů', ['1 GIF', '2 GIFy', '4 GIFy', '5 GIFů', '0 GIFů'].join('|') === [1, 2, 4, 5, 0].map(g.gifCountText).join('|'));
