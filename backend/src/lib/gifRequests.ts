@@ -1450,7 +1450,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           const approvedKnown = known?.status === 'approved';
           // Režim „jen schválené": nový / nerozhodnutý / zamítnutý GIF neprojde (i od moda).
           if (mode === 'approved' && !approvedKnown) {
-            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { botReply: senderNoAccount });
+            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: 'approved_only', botReply: senderNoAccount });
             notice('approved_only');
             await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_not_allowed', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { mode, known: known?.status ?? null }, result: {} }));
             deps.log.info({ channel: p.ucChannel, platform: m.platform, known: known?.status ?? null }, 'gif: režim jen schválené → nový GIF smazán');
@@ -1521,7 +1521,7 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Režim „jen schválené": náš odkaz na neznámé médium i odkaz za ochranou proti botům (Bright Data se
           // v tomhle režimu nevolá) je nový GIF (smazaný filtrem už je pryč).
           if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection') && p.preDeleted !== 'link_filter') {
-            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: res.code, botReply: senderNoAccount });
+            await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: 'approved_only', botReply: senderNoAccount });   // technický kód (res.code) je v logu výš
             notice('approved_only');
             return finish('not_allowed');
           }

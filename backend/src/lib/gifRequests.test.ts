@@ -1924,7 +1924,7 @@ test('held_settled: režim „jen schválené" → not_allowed; zobrazená zprá
   const access = async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' as const });
   const s = setup({ access });
   assert.equal(await s.flow.intercept(from('42', 'm1')), 'not_allowed');
-  assert.deepEqual(settled(s.calls), [hs('m1', 'not_allowed', { by: 'filter' })]);
+  assert.deepEqual(settled(s.calls), [hs('m1', 'not_allowed', { by: 'filter', reason: 'approved_only' })]);
   const n = setup({ access });
   assert.equal(await n.flow.intercept(params({ preDeleted: null })), 'not_allowed');
   assert.deepEqual(settled(n.calls), [], 'held nikdy nezačal');

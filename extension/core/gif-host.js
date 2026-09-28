@@ -35,6 +35,8 @@ const noop = () => {};
 export function appendGifMedia(doc, el, gif, { log, onSized } = {}) {
   removeGifMedia(el);
   el.classList.add('has-gif');
+  // Jen GIF bez textu (schválený GIF = syntetická zpráva s markerem) → OBS s vypnutými GIFy schová celou zprávu.
+  el.classList.toggle('uc-gif-only', !String(el.querySelector(':scope > .tx')?.textContent || '').replace(/[\s\u2800]/g, ''));
   const media = createGifMedia(doc, gif, { lazy: true, log });
   if (onSized && media.classList.contains('uc-gif--nosize')) {
     media.firstChild?.addEventListener?.(gif.kind === 'mp4' ? 'loadedmetadata' : 'load', () => onSized(), { once: true });
