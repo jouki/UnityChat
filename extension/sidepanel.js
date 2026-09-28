@@ -1490,7 +1490,7 @@ class UnityChat {
         else this._openLoginModal();
       },
       volume: {
-        load: () => { try { return Number(localStorage.getItem('uc_sfx_volume') ?? 0.6); } catch { return 0.6; } },
+        load: () => { try { return localStorage.getItem('uc_sfx_volume'); } catch { return null; } },   // null → výchozí (core SFX_DEFAULT_VOLUME)
         save: (v) => { try { localStorage.setItem('uc_sfx_volume', String(v)); } catch {} },
       },
       log: (tag, text) => this._ucLog(tag, text),

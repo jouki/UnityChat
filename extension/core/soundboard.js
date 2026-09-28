@@ -318,6 +318,8 @@ const DENIED_SHOW_MS = 8000;
 // viewBox posunutý o střed tvaru noty (bbox 8–19 × 2,2–20 → střed 13,5 / 11,1), ať je v tlačítku vycentrovaná.
 export const SOUNDBOARD_BUTTON_SVG = '<svg viewBox="1.5 -0.9 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M13 3.2a1 1 0 0 1 1.45-.9c2.9 1.45 4.55 3.4 4.55 6.2 0 1.02-.23 2.03-.66 2.93a1 1 0 1 1-1.8-.86c.3-.63.46-1.36.46-2.07 0-1.53-.72-2.73-2-3.73V16.5a3.5 3.5 0 1 1-2-3.16V3.2Z"/></svg>';
 /** Ikona boční záložky SFX v panelu emotů (stejná nota, menší). */
+/** Výchozí hlasitost náhledu zvuků (než si ji uživatel nastaví). */
+export const SFX_DEFAULT_VOLUME = 0.5;
 export const SFX_TAB_SVG = SOUNDBOARD_BUTTON_SVG.replace('width="18" height="18"', 'width="16" height="16"');
 const SPEAKER_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M11 5 6.5 8.5H3v7h3.5L11 19V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.3 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const STAR_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
@@ -391,8 +393,10 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
   const doc = host.ownerDocument;
   const win = doc.defaultView;
   let state = null;
-  let vol = 0.6;
-  try { const v = Number(volume?.load?.()); if (v >= 0 && v <= 1) vol = v; } catch { /* ignore */ }
+  // Výchozí hlasitost náhledu 50 % (pokyn usera 2026-09-28); uložená hodnota jen když opravdu existuje —
+  // web vrací null (Number(null) = 0 → dřív začínal na nule).
+  let vol = SFX_DEFAULT_VOLUME;
+  try { const raw = volume?.load?.(); const v = Number(raw); if (raw !== null && raw !== undefined && raw !== '' && v >= 0 && v <= 1) vol = v; } catch { /* ignore */ }
 
   const panel = doc.createElement('div');
   panel.className = 'uc-sb uc-sb--pane';
