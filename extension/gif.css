@@ -53,6 +53,21 @@
   box-sizing: border-box;
 }
 .msg .uc-gif .uc-gif-media { border-radius: 8px; margin: 0 auto; }
+/* GIF na výšku: čtvercový rám (strana = výška GIFu, v úzkém chatu menší), GIF uprostřed, po stranách ambient. */
+.uc-gif-stage {
+  position: relative; overflow: hidden; border-radius: 8px;
+  width: var(--uc-gif-sq, 250px); max-width: 100%; aspect-ratio: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: #0b0b0e;
+}
+.uc-gif-amb {
+  position: absolute; inset: -12%; width: 124%; height: 124%; object-fit: cover;
+  filter: blur(18px) brightness(0.5) saturate(1.25); pointer-events: none;
+}
+.uc-gif-stage .uc-gif-media {
+  position: relative; height: 100% !important; width: auto !important; max-width: 100%;
+  border-radius: 0; box-shadow: 0 0 18px rgba(0, 0, 0, 0.55);
+}
 body:not(.uc-raw) .msg .uc-gif .uc-gif-media { cursor: zoom-in; transition: filter 120ms ease; }
 body:not(.uc-raw) .msg .uc-gif .uc-gif-media:hover { filter: brightness(1.08); }
 /* Náhled v plné velikosti přes celé okno / panel. */

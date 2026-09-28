@@ -37,7 +37,8 @@ export function appendGifMedia(doc, el, gif, { log, onSized } = {}) {
   el.classList.add('has-gif');
   // Jen GIF bez textu (schválený GIF = syntetická zpráva s markerem) → OBS s vypnutými GIFy schová celou zprávu.
   el.classList.toggle('uc-gif-only', !String(el.querySelector(':scope > .tx')?.textContent || '').replace(/[\s\u2800]/g, ''));
-  const media = createGifMedia(doc, gif, { lazy: true, log });
+  // Ve zprávě: GIF na výšku ve čtvercovém rámu s ambientem (karty ke schválení / knihovna bez něj).
+  const media = createGifMedia(doc, gif, { lazy: true, log, ambient: true });
   if (onSized && media.classList.contains('uc-gif--nosize')) {
     media.firstChild?.addEventListener?.(gif.kind === 'mp4' ? 'loadedmetadata' : 'load', () => onSized(), { once: true });
   }

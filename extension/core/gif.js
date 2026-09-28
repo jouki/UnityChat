@@ -18,6 +18,8 @@ import { buildModRequest, createDurationNumber, CUSTOM_UNITS, customDurationSec,
 
 export const GIF_MAX_W = 400;
 export const GIF_MAX_H = 250;
+/** GIF užší než tenhle poměr (šířka / výška) dostane ve zprávě čtvercový rám s ambientem (rozmazaná kopie po stranách). */
+export const GIF_AMBIENT_RATIO = 0.8;
 /** Jak dlouho zůstane rozhodnutá / propadlá karta vidět (zelená / červená + kdo rozhodl). */
 export const GIF_DECIDED_LINGER_MS = 4000;
 /** Náhled v kartě ke schválení je nižší než GIF v chatu. */
@@ -454,7 +456,7 @@ export function setGifUnavailable(doc, el) {
  * Chyba načtení → štítek „GIF odebrán“ (médium je vždy z našeho serveru a 404 znamená odebráno z knihovny / zahozeno;
  * odkaz „otevřít“ by vedl jen na tutéž 404 — závěrečná review 2026-09-26, I2).
  */
-export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H, token = null, onError = null } = {}) {
+export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, maxH = GIF_MAX_H, token = null, onError = null, ambient = false } = {}) {
   const g = gif && gif.url && isGifMediaUrl(gif.url) ? gif : null;
   // Zamítnuté médium jen s tokenem moda (`?t=`); URL se ověřuje BEZ tokenu, token se do logu nepíše.
   const src = g && token ? `${g.url}?t=${encodeURIComponent(token)}` : g?.url;
@@ -526,6 +528,22 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
     m.decoding = 'async';
     if (lazy) m.loading = 'lazy';
     m.src = src;
+  }
+  // GIF na výšku ve zprávě (pokyn usera 2026-09-28): čtvercový rám, po stranách rozmazaná ztmavená kopie (ambient).
+  // Video v pozadí jen stojí na prvním snímku (druhé dekódování naplno by stálo výkon, hlavně v OBS).
+  if (ambient && fit && g.width && g.height && g.width / g.height < GIF_AMBIENT_RATIO) {
+    const stage = doc.createElement('div');
+    stage.className = 'uc-gif-stage';
+    stage.style.setProperty('--uc-gif-sq', `${fit.height}px`);
+    const bg = doc.createElement(video ? 'video' : 'img');
+    bg.className = 'uc-gif-amb';
+    bg.setAttribute('aria-hidden', 'true');
+    if (video) { bg.muted = true; bg.setAttribute('muted', ''); bg.preload = 'metadata'; bg.src = `${src}#t=0.1`; }
+    else { bg.alt = ''; bg.decoding = 'async'; if (lazy) bg.loading = 'lazy'; bg.src = src; }
+    wrap.classList.add('uc-gif--ambient');
+    stage.append(bg, m);
+    wrap.appendChild(stage);
+    return wrap;
   }
   wrap.appendChild(m);
   return wrap;

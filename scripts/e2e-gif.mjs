@@ -711,6 +711,20 @@ check('S po rozhodnutí zůstane rozbaleno (další GIF, zase rozmazaný)', core
 check('S fronta došla → záložka zmizí; další GIF zase zabalený (počet 1)', coreStreamer?.drained.toggle === false && coreStreamer.again.toggle && !coreStreamer.again.card && coreStreamer.again.n === '1', JSON.stringify([coreStreamer?.drained, coreStreamer?.again]));
 check('S mod (ne streamer): karta rovnou, bez záložky a bez rozmazání', coreStreamer?.mod.card && !coreStreamer.mod.toggle && !/blur/.test(coreStreamer.mod.blur || ''), JSON.stringify(coreStreamer?.mod));
 
+// GIF na výšku ve zprávě (2026-09-28): čtvercový rám s ambientem; na šířku beze změny.
+const amb = await ev(`(() => {
+  const chat = document.getElementById('chat');
+  const mk = (w, h) => { const msg = document.createElement('div'); msg.className = 'msg'; const tx = document.createElement('span'); tx.className = 'tx'; msg.appendChild(tx); chat.appendChild(msg);
+    const g = window.UC_CORE.createGifMedia(document, { url: ${JSON.stringify(murl(MEDIA.card))}, kind: 'gif', width: w, height: h }, { lazy: false, ambient: true }); msg.appendChild(g); return { msg, g }; };
+  const tall = mk(212, 375), wide = mk(498, 280);
+  const R = (el) => { const r = el?.getBoundingClientRect(); return r ? [Math.round(r.width), Math.round(r.height)] : null; };
+  const st = tall.g.querySelector('.uc-gif-stage'), m = tall.g.querySelector('.uc-gif-media'), bg = tall.g.querySelector('.uc-gif-amb');
+  const sr = st?.getBoundingClientRect(), mr = m?.getBoundingClientRect();
+  const out = { stage: R(st), media: R(m), center: sr && mr ? Math.abs((mr.left - sr.left) - (sr.right - mr.right)) <= 1 : false, bg: !!bg && /blur/.test(getComputedStyle(bg).filter), wideStage: !!wide.g.querySelector('.uc-gif-stage'), wideMedia: R(wide.g.querySelector('.uc-gif-media')) };
+  tall.msg.remove(); wide.msg.remove(); return out; })()`);
+check('GIF na výšku: čtvercový rám 250×250, GIF 141×250 uprostřed, ambient rozmazaný', JSON.stringify(amb?.stage) === '[250,250]' && JSON.stringify(amb.media) === '[141,250]' && amb.center && amb.bg, JSON.stringify(amb));
+check('GIF na šířku: bez rámu, beze změny (400×225)', amb && !amb.wideStage && JSON.stringify(amb.wideMedia) === '[400,225]', JSON.stringify(amb));
+
 // ---- fáze B: divák = odesílatel (štítky u vlastní zprávy místo karty) ----
 mock.mod = false;
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: Date.now() });
