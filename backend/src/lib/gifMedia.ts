@@ -66,6 +66,35 @@ export function defaultOwnHosts(): string[] {
 
 const OWN_PATH = /^\/media\/gif\/([a-f0-9]{32})\/?$/;
 
+const GIPHY_ID = /^[A-Za-z0-9]{6,40}$/;
+/**
+ * ID GIFu z libovolného odkazu Giphy (2026-09-28): media*.giphy.com/media/[v1.<token>/]<ID>/<soubor>,
+ * i.giphy.com/<ID>.<ext>, i.giphy.com/media/<ID>/…, giphy.com/gifs|stickers/<nazev>-<ID>, giphy.com/embed/<ID>.
+ * Jinak null. Stahuje se pak kanonická (menší) varianta místo původního .gif (ten bývá přes limit 10 MB).
+ */
+export function giphyId(raw: string): string | null {
+  let u: URL;
+  try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return null; }
+  const host = u.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+  const segs = u.pathname.split('/').filter(Boolean);
+  if (/^(media\d*|i)\.giphy\.com$/.test(host)) {
+    if (segs[0] === 'media') {
+      const i = segs[1]?.startsWith('v1.') ? 2 : 1;
+      return GIPHY_ID.test(segs[i] || '') ? segs[i] : null;
+    }
+    const m = segs.length === 1 && /^([A-Za-z0-9]{6,40})\.(gif|webp|mp4)$/.exec(segs[0]);
+    return m ? m[1] : null;
+  }
+  if (host === 'giphy.com') {
+    if ((segs[0] === 'gifs' || segs[0] === 'stickers') && segs[1]) { const last = segs[1].split('-').pop() || ''; return GIPHY_ID.test(last) ? last : null; }
+    if (segs[0] === 'embed' && GIPHY_ID.test(segs[1] || '')) return segs[1];
+  }
+  return null;
+}
+
+/** Kanonické varianty média Giphy v pořadí zkoušení: WebP (animace i průhlednost), MP4 (nejmenší). */
+export const giphyVariants = (id: string): string[] => [`https://i.giphy.com/${id}.webp`, `https://i.giphy.com/${id}.mp4`];
+
 /**
  * Odkaz (URL z textu, i bez schématu) → zdroj GIFu, nebo null. Stránky Tenor / Giphy / Imgur / 7TV, přímé
  * soubory .gif/.webp/.mp4 z libovolného hostu (každý GIF schvaluje mod), Imgur .gifv → .mp4, odkaz na naše
@@ -94,6 +123,9 @@ export function classifyGifUrl(raw: string, ownHosts: string[] = defaultOwnHosts
     u.pathname = u.pathname.replace(/\.gifv$/i, '.mp4');
     return { url: u.toString(), mode: 'direct' };
   }
+  // Médium Giphy (i s tokenem v1.…) → kanonická adresa podle ID: všechny varianty téhož GIFu = jedna URL (dedup).
+  const gid = /^(media\d*|i)\.giphy\.com$/.test(host) ? giphyId(href) : null;
+  if (gid) return { url: giphyVariants(gid)[0], mode: 'direct' };
   if (/\.(gif|webp|mp4)$/.test(path)) return { url: href, mode: 'direct' };
   if (/^(media\d*|c)\.tenor\.com$/.test(host) || /^(media\d*|i)\.giphy\.com$/.test(host)) return path.length > 1 ? { url: href, mode: 'direct' } : null;
   if (bare === 'tenor.com' && /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?view\/[^/]+/.test(path)) return { url: href, mode: 'page' };
@@ -119,9 +151,13 @@ export interface GifCandidate extends GifSource {
 /** První odkaz ve zprávě, který vede na GIF; null = žádný. Detekce odkazů = sdílený detektor (lib/links.ts). */
 export function gifCandidate(text: string, ownHosts: string[] = defaultOwnHosts()): GifCandidate | null {
   for (const l of findLinks(text)) {
-    const raw = tokenUrl(l.text, l.host);
-    const src = raw ? classifyGifUrl(raw, ownHosts) : null;
-    if (src) return { ...src, token: l.text };
+    // Slepené odkazy bez mezery („…/giphy.gifhttps://…“) = víc odkazů v jednom tokenu → zkusit každý zvlášť.
+    const parts = l.text.split(/(?=https?:\/\/)/i).filter(Boolean);
+    for (const part of parts.length > 1 ? parts : [l.text]) {
+      const raw = tokenUrl(part, l.host);
+      const src = raw ? classifyGifUrl(raw, ownHosts) : null;
+      if (src) return { ...src, token: l.text };
+    }
   }
   return null;
 }
@@ -617,9 +653,28 @@ export async function withinLimits(r: ResolvedGif, deps: Pick<FetchDeps, 'probe'
   return { ...r, width: r.width ?? p.width, height: r.height ?? p.height };
 }
 
+/**
+ * Médium + limity. Giphy: kanonické varianty (WebP, pak MP4) místo původního souboru — .gif bývá přes limit 10 MB,
+ * stejný obsah jako WebP / MP4 je zlomek (2026-09-28); když žádná neprojde, původní adresa.
+ */
+async function fetchChecked(url: string, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
+  const gid = giphyId(url);
+  const tries = gid ? [...new Set([...giphyVariants(gid), url])] : [url];
+  let last: unknown = null;
+  for (const t of tries) {
+    try { return await withinLimits(await fetchMedia(t, ctx, deps), deps); }
+    catch (e) {
+      last = e;
+      // Zrušení / časový limit celého převodu → dál nezkoušet.
+      if (!(e instanceof GifError) || ctx.signal.aborted) throw e;
+    }
+  }
+  throw last;
+}
+
 async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<ResolvedGif> {
   const signal = ctx.signal;
-  if (src.mode === 'direct') return withinLimits(await fetchMedia(src.url, ctx, deps), deps);
+  if (src.mode === 'direct') return fetchChecked(src.url, ctx, deps);
   const { res, url } = await safeGet(src.url, 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5', ctx, deps);
   const ct = String(res.headers['content-type'] || (ctx.unlocked.length ? 'application/octet-stream' : ''));
   if (!/html/i.test(ct)) {
@@ -633,6 +688,6 @@ async function resolveWith(src: GifSource, ctx: Ctx, deps: FetchDeps): Promise<R
   const media = pickOgMedia(html, url);
   if (!media) throw new GifError('no_media');
   const tags = pageTags(html);
-  const r = await withinLimits(await fetchMedia(media, ctx, deps), deps);
+  const r = await fetchChecked(media, ctx, deps);
   return tags.length ? { ...r, tags } : r;
 }

@@ -279,3 +279,33 @@ test('gifCandidate / classifyGifUrl: core/gif-links.js = backend (vědomá kopie
     assert.equal(core.hasGifLink(t), gifCandidate(t) !== null, t);
   }
 });
+
+test('giphyId: ID z každého tvaru odkazu Giphy; kanonická URL přímého média (dedup)', async () => {
+  const { giphyId, classifyGifUrl, gifCandidate } = await import('./gifMedia.js');
+  const V1 = 'https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3VrZzJwMTNsZm12aGltODZ6bGVxZHh6dTYxaDZ5c2dzdmkzYXp1NCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QOcpXsHPGpvax1E6FH/giphy.gif';
+  for (const u of [V1, 'https://media.giphy.com/media/QOcpXsHPGpvax1E6FH/giphy.gif', 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp', 'https://i.giphy.com/media/QOcpXsHPGpvax1E6FH/200w.gif',
+    'https://giphy.com/gifs/cat-happy-QOcpXsHPGpvax1E6FH', 'https://giphy.com/stickers/dog-QOcpXsHPGpvax1E6FH', 'https://giphy.com/embed/QOcpXsHPGpvax1E6FH']) {
+    assert.equal(giphyId(u), 'QOcpXsHPGpvax1E6FH', u);
+  }
+  assert.equal(giphyId('https://giphy.com/explore/cat'), null);
+  assert.equal(giphyId('https://tenor.com/view/cat-gif-1'), null);
+  assert.deepEqual(classifyGifUrl(V1), { url: 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp', mode: 'direct' });
+  // Slepené odkazy bez mezery → první GIF zvlášť, token = celý slepený text.
+  const glued = `${V1}https://i.4pcdn.org/pol/1562850136932.gif`;
+  const c = gifCandidate(`koukej ${glued}`, []);
+  assert.equal(c?.url, 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp');
+  assert.equal(c?.token, glued);
+});
+
+test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez kanonických variant původní adresa', async () => {
+  const big = { headers: { 'content-type': 'image/gif', 'content-length': String(20 * 1024 * 1024) }, body: gif(10, 10) };
+  const V = 'https://media.giphy.com/media/QOcpXsHPGpvax1E6FH/giphy.gif';
+  const a = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: big, 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp': { headers: { 'content-type': 'image/webp' }, body: webpX(480, 270) } }), lookupAll: publicDns });
+  assert.equal(a.kind, 'webp');
+  const b = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: big,
+    'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp': { headers: { 'content-type': 'image/webp', 'content-length': String(20 * 1024 * 1024) }, body: webpX(480, 270) },
+    'https://i.giphy.com/QOcpXsHPGpvax1E6FH.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(480, 270) } }), lookupAll: publicDns });
+  assert.equal(b.kind, 'mp4');
+  const c = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: { headers: { 'content-type': 'image/gif' }, body: gif(10, 10) } }), lookupAll: publicDns });
+  assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
+});
