@@ -5012,7 +5012,8 @@ class UnityChat {
     const els = this._msgEls(id, platform);
     const key = hidden ? '_hidden' : '_deleted';
     const srv = hidden ? '_srvHidden' : '_srvDeleted';
-    for (const el of els) this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' });
+    // Živé smazání / schování: změna výšky zprávy plynule (core/height-anim.js), ne skokem.
+    for (const el of els) window.UC_CORE.animateHeightChange(el, () => this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' }));
     // Citace smazané zprávy v odpovědích jen „↩ @jméno“ (odkaz smazaného GIFu se nesmí vrátit, review I2).
     if (!hidden) window.UC_CORE.dropReplyBodies([this.chatEl, ...(this._parkedTop || []), ...(this._parkedBottom || [])], id);
     return els.length;

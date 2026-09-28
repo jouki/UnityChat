@@ -482,8 +482,17 @@ mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch',
 check('A odkrytá zpráva s odebraným GIFem (removed) → štítek „GIF odebrán“ jako čerstvý, nic se nenačítá', await until(`document.querySelector('.msg[data-msg-id="gif-9"] .uc-gif--removed .uc-gif-fallback')?.textContent === 'GIF odebrán'`, 6000)
   && await (async () => { const p = await pill('gif-9'); return !p.deleted && !p.img && p.border === p10.border && p.italic === p10.italic && p.radius === p10.radius; })()
   && await ev(`![...performance.getEntriesByType('resource')].some(e => e.name.includes(${JSON.stringify(hex(22))}))`) === true, JSON.stringify(await pill('gif-9')));
+// Smazání zprávy s GIFem: výška se mění plynule (core/height-anim.js), ne skokem — vzorkování výšky po snímcích.
+await ev(`(() => { const el = document.querySelector('.msg[data-msg-id="gif-10"]'); window._hs = []; const tick = () => { if (el.isConnected) window._hs.push(Math.round(el.getBoundingClientRect().height)); if (window._hs.length < 400) requestAnimationFrame(tick); }; requestAnimationFrame(tick); return true; })()`);
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-10', by: 'twitch:jinymod' }]);
 await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); return !!m && m.classList.contains('uc-deleted') && !m.querySelector('.uc-gif'); })()`, 6000);
+await sleep(400);
+{
+  const hs = await ev(`(() => { const a = window._hs; window._hs = { length: 9999 }; return a; })()`);
+  const h0 = hs?.[0] ?? 0, h1 = hs?.[hs.length - 1] ?? 0;
+  let maxDrop = 0; for (let i = 1; i < (hs?.length || 0); i++) maxDrop = Math.max(maxDrop, hs[i - 1] - hs[i]);
+  check('A message-deleted gif-10 → zpráva se zmenší plynule (největší skok < 1/3 výšky), ne naráz', hs && h0 > h1 + 20 && maxDrop < h0 / 3, JSON.stringify({ h0, h1, maxDrop, n: hs?.length }));
+}
 mock.sse.push(['message-restored', { channel: 'robdiesalot', platform: 'twitch', messageId: 'gif-10', by: 'twitch:modik', message: { platform: 'twitch', id: 'gif-10', username: 'Divak', userId: 'u9', message: 'text nad nedostupným', timestamp: Date.now(), color: '#1e90ff', gif: { url: murl(hex(20)), kind: 'gif', width: 100, height: 50, unavailable: true } } }]);
 check('A odkrytá zpráva s nedostupným GIFem (unavailable) → štítek „[GIF nedostupný]“ jako čerstvý', await until(`(() => { const m = document.querySelector('.msg[data-msg-id="gif-10"]'); return !!m && !m.classList.contains('uc-deleted') && m.querySelector('.uc-gif--unavailable .uc-gif-fallback')?.textContent === '[GIF nedostupný]'; })()`, 6000), JSON.stringify(await pill('gif-10')));
 

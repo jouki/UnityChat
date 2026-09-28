@@ -17,6 +17,8 @@
 //
 // Žádné chrome.*, žádný globální DOM — vše se předává přes parametry.
 
+import { cancelHeightAnim } from './height-anim.js';
+
 export const DELETED_STYLES = ['label', 'dim', 'strike', 'hide'];
 export const DEFAULT_DELETED_STYLE = 'label';
 /**
@@ -225,6 +227,8 @@ function unwrapStrikeEmotes(tx) {
  */
 export function clearDeleted(el) {
   if (!el) return;
+  // Odkrytí během sbalování (core/height-anim.js) → animaci zrušit, ať zpráva neskončí schovaná.
+  cancelHeightAnim(el);
   // uc-gif-held (původní zpráva s GIFem čeká, gif.css display:none) taky — jinak by obnovená zpráva
   // (message-restored po selhání převodu) zůstala v DOM neviditelná (živě 2026-09-26).
   el.classList.remove('uc-deleted', 'uc-deleted--dimmed', 'uc-deleted--restorable', 'uc-gif-held');

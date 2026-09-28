@@ -63,6 +63,10 @@
 .uc-deleted--hide {
   display: none !important;
 }
+/* Plynulá změna výšky (core/height-anim.js): po dobu animace zobrazená i schovaná zpráva (hidden / uc-deleted--hide /
+   uc-gif-held), obsah se ořezává; po animaci třída pryč a platí skrytí. Specifičtější než skrývací pravidla. */
+.msg.uc-h-anim, .msg.uc-h-anim[hidden], .msg.uc-h-anim.uc-deleted--hide, .msg.uc-h-anim.uc-gif-held { display: block !important; }
+.uc-h-anim { overflow: hidden !important; }
 
 /* Tlačítko „Smazat zprávu" (koš) jen pro mody (body.uc-can-moderate z GET /moderation/me). */
 .msg-action-btn[data-act="delete"] { display: none; }
