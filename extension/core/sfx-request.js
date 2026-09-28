@@ -191,7 +191,7 @@ export function createSfxRequest({ host, button, api, log, onChange, onBack }) {
           <input name="url" type="url" placeholder="Odkaz na YouTube nebo .mp3" autocomplete="off" spellcheck="false" maxlength="2000" aria-label="Odkaz na YouTube nebo mp3">
           <button type="submit" class="uc-sr-load">Načíst</button>
         </div>
-        <div class="uc-sr-hint">Mod nebo streamer návrh v Židolištce schválí, nebo zamítne. Úsek nejvýš 30 s.</div>
+        <div class="uc-sr-hint">Max 30 s.</div>
       </form>
       <div class="uc-sr-loading" hidden><i class="uc-sr-spin"></i><span>Stahuji a připravuji náhled…</span></div>
       <form class="uc-sr-edit" novalidate hidden>
