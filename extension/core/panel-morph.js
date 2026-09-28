@@ -71,11 +71,13 @@ export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASI
   const saved = [from, to].map((el) => el.style.cssText);
   const aFrom = rectInParent(from, ra), aTo = rectInParent(from, rb);
   const bFrom = rectInParent(to, ra), bTo = rectInParent(to, rb);
-  Object.assign(from.style, PIN, px(aFrom), { zIndex: '60', pointerEvents: 'none' });
+  // overflow: hidden obou: rozměr se animuje pod obsah (QR dono má overflow-y: auto) → jinak na chvíli naskočí
+  // systémový posuvník (hlášeno 2026-09-28). Po doběhnutí se styl vrátí (cssText).
+  Object.assign(from.style, PIN, px(aFrom), { zIndex: '60', pointerEvents: 'none', overflow: 'hidden' });
   // Odcházející panel je jen „duch“ nad novým (rozplývá se) — pro čtečky i testy už není panel.
   from.classList.add('uc-morph-ghost');
   from.setAttribute('aria-hidden', 'true');
-  Object.assign(to.style, PIN, px(bTo));
+  Object.assign(to.style, PIN, px(bTo), { overflow: 'hidden' });
   log?.(`morph ${Math.round(ra.width)}×${Math.round(ra.height)} → ${Math.round(rb.width)}×${Math.round(rb.height)}`);
   const opts = { duration, easing, fill: 'forwards' };
   const anims = [

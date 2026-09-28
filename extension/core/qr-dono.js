@@ -78,7 +78,7 @@ export function donoErrorText(err, cur) {
     case 'platform_not_linked': return 'Na téhle platformě nejsi přihlášený.';
     case 'email_required': return 'Vyplň platný e-mail.';
     case 'rate_limited': return 'Moc pokusů za sebou, zkus to za chvíli.';
-    case 'zidolista_unavailable': return 'Server donací je teď nedostupný, zkus to znovu.';
+    case 'zidolista_unavailable': return 'Server donatů je teď nedostupný, zkus to znovu.';
     default: return err?.error || err?.message || 'Něco se nepovedlo.';
   }
 }
@@ -242,7 +242,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   // ---- stav formuláře ----
   function setError(msg) { const e = $('.uc-qd-err'); e.textContent = msg || ''; e.hidden = !msg; }
-  const CFG_CHANGED = 'Nastavení donací se změnilo — zkontroluj částku a hlas.';
+  const CFG_CHANGED = 'Nastavení donatů se změnilo — zkontroluj částku a hlas.';
+  const CFG_UNAVAILABLE = 'Server donatů je nedostupný, zkouším znovu…';
   /** Upozornění na změnu nastavení platí jen pro rozpracovaný formulář — po otevření / návratu pryč. */
   function clearConfigNotice() { if ($('.uc-qd-err').textContent === CFG_CHANGED) setError(''); }
   function setNotice(c) {
@@ -328,13 +329,15 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       const sig = configSignature(c);
       const changed = cfgSig !== null && sig !== cfgSig;
       cfg = c; cfgSig = sig;
+      // Opakované načtení po výpadku se povedlo → hláška o nedostupném serveru pryč (dřív visela, hlášeno 2026-09-28).
+      if ($('.uc-qd-err').textContent === CFG_UNAVAILABLE) setError('');
       renderVoices(); renderCurrency();
       // Změna nastavení (dashboard / !mindono) během otevřeného formuláře: data zůstanou,
       // jen se přepočítá minimum a hlasy (web tu ukazuje overlay s reloadem, tady netřeba).
       if (changed) { L('config změněn'); setError(CFG_CHANGED); }
     } catch (e) {
       L(`config fail ${e?.error || e?.message || e}`);
-      setError('Server donací je nedostupný, zkouším znovu…');
+      setError(CFG_UNAVAILABLE);
       win.setTimeout(() => { if (isOpen()) loadConfig(); }, 5000);
     }
   }

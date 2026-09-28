@@ -135,7 +135,7 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
-      // Změna nastavení donací v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
+      // Změna nastavení donatů v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
       this._eventSource.addEventListener('donate-config-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonateConfigChange) this.onDonateConfigChange(d); } catch {}
       });

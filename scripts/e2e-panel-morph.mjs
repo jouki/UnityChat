@@ -97,7 +97,7 @@ await call('Page.addScriptToEvaluateOnNewDocument', { source: `
       const ps = [...document.querySelectorAll(${JSON.stringify(PANELS)})].filter(vis);
       const real = ps.filter((e) => !e.classList.contains('uc-morph-ghost'));
       const ghosts = ps.filter((e) => e.classList.contains('uc-morph-ghost'));
-      window.__morph.frames.push({ n: real.length, g: ghosts.length, cls: real.map((e) => e.className.split(' ')[0]).join(','), w: real[0] ? Math.round(real[0].getBoundingClientRect().width) : 0, tr: real[0] ? getComputedStyle(real[0]).transform : 'none', an: real[0] ? real[0].getAnimations().length : 0, go: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null });
+      window.__morph.frames.push({ n: real.length, g: ghosts.length, cls: real.map((e) => e.className.split(' ')[0]).join(','), w: real[0] ? Math.round(real[0].getBoundingClientRect().width) : 0, tr: real[0] ? getComputedStyle(real[0]).transform : 'none', an: real[0] ? real[0].getAnimations().length : 0, ov: ps.some((e) => getComputedStyle(e).overflowY !== 'hidden' && getComputedStyle(e).overflowY !== 'visible' && e.scrollHeight > e.clientHeight + 1), go: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null });
     }
     requestAnimationFrame(tick);
   };
@@ -138,6 +138,7 @@ async function switchTo(btn, cls, label) {
   const mids = fr.filter((f) => f.cls === cls && f.w > Math.min(wFrom, wTo) + 2 && f.w < Math.max(wFrom, wTo) - 2);
   check(`${label}: rámeček plynule mění šířku (${wFrom} → ${wTo} px)`, wFrom === wTo || mids.length > 0, JSON.stringify(fr.map((f) => f.w)));
   check(`${label}: na konci jen ${cls}`, final === cls, final);
+  check(`${label}: během přetvoření žádný panel s posuvníkem`, fr.filter((f) => f.g).every((f) => !f.ov), JSON.stringify(fr.filter((f) => f.g && f.ov).length));
   return fr;
 }
 

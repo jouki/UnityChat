@@ -153,7 +153,7 @@ export default async function commandRoutes(app: FastifyInstance) {
       if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
       return { ok: true, channels };
     }
-    // Změna nastavení donací (minimum, hlasy, účty…) → otevřené QR dono formuláře si config načtou hned.
+    // Změna nastavení donatů (minimum, hlasy, účty…) → otevřené QR dono formuláře si config načtou hned.
     if (reason === 'donate') {
       const channels = await twitchChannelsOf(slug);
       if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });

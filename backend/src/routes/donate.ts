@@ -1,5 +1,5 @@
 // QR dono v UnityChatu (spec docs/superpowers/specs/2026-09-25-qr-dono-v-unitychatu-design.md):
-// proxy na veřejné API donací Židolišty (RobJewsALot docs/fio-donations/04-public-api.md, 13-czk).
+// proxy na veřejné API donatů Židolišty (RobJewsALot docs/fio-donations/04-public-api.md, 13-czk).
 // Addon ani web nevolají Židolištu přímo (CORS z chrome-extension:// neprojde, nové oprávnění
 // addonu user nechce). Přezdívku posílá klient (předvyplněná), e-mail ověřený k účtu doplní server.
 //
