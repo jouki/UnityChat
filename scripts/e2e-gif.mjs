@@ -598,6 +598,13 @@ check('A gif_not_allowed cizí živě → mod: zašedlý text (výchozí „Zaš
   && naDel(await naView('e2e-na-live'), { text: true }), JSON.stringify(await naView('e2e-na-live')));
 await sleep(300);
 check('A … i po ozvěně smazání z platformy (CLEARMSG bez důvodu, message-deleted platform) pořád se štítkem', await (async () => { await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-live')`); await ev(`window.ucGif.applyDeleted('twitch', 'e2e-na-live', { reason: 'platform' })`); return naDel(await naView('e2e-na-live'), { text: true }); })(), JSON.stringify(await naView('e2e-na-live')));
+// GIF bez odměny (gif_denied, 2026-09-28): všem smazaná zpráva se štítkem „GIF teď není možné poslat“, odkaz neživý.
+mock.sse.push(NAMSG('e2e-den-live', 'Divak2', 'u10', 'bez odmeny https://tenor.com/view/den-gif-1'));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-den-live"]')`, 8000);
+mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-den-live', by: 'filter', reason: 'gif_denied' }]);
+check('A gif_denied cizí živě → smazaná + štítek „GIF teď není možné poslat“, bez odkazu a bez „Smazáno“', await until(`document.querySelector('.msg[data-msg-id="e2e-den-live"] .uc-gif-st')?.dataset.kind === 'denied'`, 8000)
+  && await (async () => { const o = await naView('e2e-den-live'); return !!o && o.shown && o.deleted && !o.tag && o.label === 'GIF teď není možné poslat' && !o.link && /rgb\(255, 138, 142\)/.test(o.color); })(), JSON.stringify(await naView('e2e-den-live')));
+check('A gif_denied i po ozvěně smazání z platformy pořád se štítkem', await (async () => { await ev(`window.ucGif.applyDeleted('twitch', 'e2e-den-live', { reason: 'platform' })`); const o = await naView('e2e-den-live'); return !!o && o.kind === 'denied' && !o.link; })(), JSON.stringify(await naView('e2e-den-live')));
 // Vlastní zpráva moda: gif-notice approved_only + message-deleted gif_not_allowed → smazaná podle stylu + štítek.
 mock.sse.push(NAMSG('e2e-na-mown', 'ModUser', 'u7', 'moje https://tenor.com/view/na-gif-2'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-na-mown"]')`, 8000);

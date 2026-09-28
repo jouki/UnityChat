@@ -247,8 +247,9 @@ test('intercept: převod selže → filtr by smazal = přeznačit na link_filter
 
 test('A12 oprava: obnovení ze zprávy (řádek ještě není v archivu) pošle Židolištce chat.restored s textem', async () => {
   const restoredInt: Array<Record<string, unknown>> = [];
+  // Neznámý přístup (Židolišta neodpověděla) → zprávu obnovit; potvrzené „bez odměny“ je gif_denied (test níž).
   const s = setup({
-    access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }),
+    access: async () => null,
     restore: async () => 'not_found',
     restoredIntegration: (p) => { restoredInt.push(p as unknown as Record<string, unknown>); },
   });
@@ -259,28 +260,47 @@ test('A12 oprava: obnovení ze zprávy (řádek ještě není v archivu) pošle 
   await s.flow._idle();
 });
 
-test('A12: neznámý přístup, zpráva schovaná hned (gif_request) → neodemčeno = obnovit (filtr ji pouští) / smazat filtrem', async () => {
+test('A12: zpráva schovaná hned (gif_request) → bez odměny = gif_denied všem (štítek, na platformě smazaná); neznámý přístup = obnovit / filtr', async () => {
   const deny = { access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) };
   const a = setup(deny);
   assert.equal(await a.flow.intercept(params({ needAccess: true })), 'denied');
-  assert.deepEqual(names(a.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled'], 'schovaná zpráva se vrátí všem');
+  assert.ok(events(a.calls, 'broadcast:message-deleted').some((e) => e.messageId === 'm1' && e.reason === 'gif_denied'), JSON.stringify(names(a.calls)));
+  assert.ok(names(a.calls).includes('deletePlatform'), 'na platformě smazaná');
+  assert.equal(names(a.calls).includes('restore'), false, 'odkaz se nevrátí');
+  assert.deepEqual(settled(a.calls), [hs('m1', 'not_allowed', { by: 'filter', reason: 'no_reward' })]);
+  assert.ok(a.mem.log.includes('retag:m1:gif_request->gif_denied'), JSON.stringify(a.mem.log));
   assert.equal(a.mem.reqs.size, 0);
   assert.equal(a.flow.tryReserve('robdiesalot', 'twitch', '42'), true);
   let acted = 0;
   const b = setup(deny);
   assert.equal(await b.flow.intercept(params({ needAccess: true, filterAct: async () => { acted++; } })), 'denied');
-  assert.equal(acted, 1, 'filtr by ji smazal → smaže');
-  assert.deepEqual(b.mem.log, ['retag:m1:gif_request->link_filter']);
+  assert.equal(acted, 0, 'bez odměny štítek, ne filtr odkazů');
+  assert.ok(b.mem.log.includes('retag:m1:gif_request->gif_denied'));
+  // Neznámý přístup (výpadek Židolišty) → dřívější cesta: obnovit / smazat filtrem.
+  const u = setup({ access: async () => null });
+  assert.equal(await u.flow.intercept(params({ needAccess: true })), 'denied');
+  assert.deepEqual(names(u.calls), ['publishDeleted', 'restore', 'integration:chat.held_settled']);
+  const uf = setup({ access: async () => null });
+  let actedU = 0;
+  assert.equal(await uf.flow.intercept(params({ needAccess: true, filterAct: async () => { actedU++; } })), 'denied');
+  assert.equal(actedU, 1);
+  assert.deepEqual(uf.mem.log, ['retag:m1:gif_request->link_filter']);
+  await u.flow._idle(); await uf.flow._idle();
   // Odemčeno → běžná žádost (zpráva už je schovaná).
   const c = setup();
   assert.equal(await c.flow.intercept(params({ needAccess: true })), 'requested');
   await a.flow._idle(); await b.flow._idle();
 });
 
-test('intercept: neznámý přístup → ověřit; neodemčeno = nic se nestane; zobrazená zpráva se po úspěchu smaže zpětně', async () => {
+test('intercept: neznámý přístup → ověřit; bez odměny = zobrazená zpráva smazaná (gif_denied); po úspěchu se smaže zpětně', async () => {
   const denied = setup({ access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 0, requestTtlSec: 300 }) });
   assert.equal(await denied.flow.intercept(params({ preDeleted: null, needAccess: true })), 'denied');
-  assert.deepEqual(denied.calls, []);
+  assert.deepEqual(names(denied.calls).slice(0, 2), ['publishDeleted', 'deletePlatform']);
+  assert.equal((denied.calls.find((c) => c[0] === 'publishDeleted')![1] as { reason: string }).reason, 'gif_denied');
+  // Neznámý přístup → nic (zpráva zůstane).
+  const unknown = setup({ access: async () => null });
+  assert.equal(await unknown.flow.intercept(params({ preDeleted: null, needAccess: true })), 'denied');
+  assert.deepEqual(unknown.calls, []);
 
   const ok = setup();
   assert.equal(await ok.flow.intercept(params({ preDeleted: null, needAccess: true })), 'requested');
@@ -522,12 +542,16 @@ test('intercept auto (mod s odemčenou odměnou): schváleno hned, bez karet, co
 });
 
 test('intercept auto (mod) s neznámým přístupem: ověří se u Židolišty; neodemčeno / cooldown → denied jako u diváka', async () => {
-  for (const a of [null, { allowed: false, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120 }, { allowed: true, until: null, cooldownUntil: 2_000_000, cooldownSec: 60, requestTtlSec: 120 }]) {
+  for (const a of [null, { allowed: true, until: null, cooldownUntil: 2_000_000, cooldownSec: 60, requestTtlSec: 120 }]) {
     const s = setup({ access: async () => a });
     assert.equal(await s.flow.intercept(params({ auto: true, needAccess: true, preDeleted: null })), 'denied');
     assert.equal(s.mem.reqs.size, 0);
-    assert.equal(names(s.calls).includes('publishDeleted'), false, 'zpráva zůstane');
+    assert.equal(names(s.calls).includes('publishDeleted'), false, 'neznámý přístup / cooldown: zpráva zůstane');
   }
+  // Mod bez odměny → jako divák: smazaná všem se štítkem (gif_denied).
+  const no = setup({ access: async () => ({ allowed: false, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120 }) });
+  assert.equal(await no.flow.intercept(params({ auto: true, needAccess: true, preDeleted: null })), 'denied');
+  assert.equal((no.calls.find((c) => c[0] === 'publishDeleted')![1] as { reason: string }).reason, 'gif_denied');
   const ok = setup();
   assert.equal(await ok.flow.intercept(params({ auto: true, needAccess: true, preDeleted: null })), 'approved');
 });
@@ -1917,7 +1941,7 @@ test('held_settled: převod selže (too_large) → restored / link_filter s dův
   assert.deepEqual(settled(b.calls), [hs('m1', 'link_filter', { by: 'filter', reason: 'too_large' })]);
   const c = setup({ access: denyAccess });
   assert.equal(await c.flow.intercept(params({ needAccess: true })), 'denied');
-  assert.deepEqual(settled(c.calls), [hs('m1', 'restored', { by: 'filter', reason: 'denied' })]);
+  assert.deepEqual(settled(c.calls), [hs('m1', 'not_allowed', { by: 'filter', reason: 'no_reward' })], 'bez odměny = smazaná se štítkem');
   // Zobrazená zpráva, neodemčeno → nic (nikdy schovaná).
   const d = setup({ access: denyAccess });
   await d.flow.intercept(params({ needAccess: true, preDeleted: null }));

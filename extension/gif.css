@@ -263,7 +263,7 @@ div.uc-gif-more { cursor: default; }
 @keyframes uc-gif-st-pulse { 50% { opacity: .6; } }
 .uc-gif-st-warn { display: inline-flex; cursor: help; }
 .uc-gif-st-warn[hidden] { display: none; }
-.uc-gif-st--rejected, .uc-gif-st--expired, .uc-gif-st--not_allowed { background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.55); color: #ff8a8e; padding-left: 9px; }
+.uc-gif-st--rejected, .uc-gif-st--expired, .uc-gif-st--not_allowed, .uc-gif-st--denied { background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.55); color: #ff8a8e; padding-left: 9px; }
 @media (prefers-reduced-motion: reduce) {
   .uc-gif-st-spin, .uc-gif-st--pending .uc-gif-st-txt, .uc-gif-st--sending .uc-gif-st-txt { animation: none; }
 }

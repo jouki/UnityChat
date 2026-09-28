@@ -11,13 +11,16 @@
 //  - odeslání: watchYoutubeSend (YouTube bez echa), pairGifEcho (echo vlastní GIF zprávy přes id).
 //
 // Bez chrome.*. DOM jen přes předané uzly / `doc`, síť přes injektované `api`.
-import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason, GIF_NOT_ALLOWED_REASON } from './gif.js';
+import { GIF_GONE_CLASS, createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifMediaEvent, gifMessagesPath, gifMessageFromEvent, gifMsgMediaId, setGifUnavailable, gifReplacedTarget, isGifHeldReason, isGifBlockedReason } from './gif.js';
 import { paintGifStatus, gifEchoPatch, gifOwnHistoryView, isGifOwnFinal, gifOwnFinalReason, GIF_STATUS_TEXT, MEDIA_REFETCH_SPREAD_MS } from './gif-library.js';
 import { clearDeleted, disableTextLinks } from './moderation.js';
 
 const isGifReason = (reason) => String(reason || '').startsWith('gif_');
-/** Štítek „Nové GIFy teď nejsou povolené“ u smazané zprávy (gif_not_allowed) pro všechny v UnityChatu. */
-const GIF_NA_VIEW = Object.freeze({ kind: 'not_allowed', text: GIF_STATUS_TEXT.not_allowed });
+/** Štítek zablokovaného GIFu u smazané zprávy pro všechny v UnityChatu: gif_not_allowed / gif_denied. */
+const GIF_BLOCKED_VIEW = Object.freeze({
+  gif_not_allowed: Object.freeze({ kind: 'not_allowed', text: GIF_STATUS_TEXT.not_allowed }),
+  gif_denied: Object.freeze({ kind: 'denied', text: GIF_STATUS_TEXT.denied }),
+});
 const noop = () => {};
 
 // ---------------------------------------------------------------------------
@@ -282,7 +285,7 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
       release(pl, id);
     }
     // Nové GIFy nejsou povolené: odesílatel vidí totéž co ostatní (smazaná + štítek) — pokračuje společnou cestou.
-    if (own.kind === 'not_allowed') {
+    if (own.kind === 'not_allowed' || own.kind === 'denied') {
       ownNa = true;
       deleted = !!(msg._deleted || msg.deleted);
       held = deleted && isGifHeldReason(msg.deletedReason);
@@ -309,8 +312,8 @@ export function paintGifDeleted(doc, el, msg, { own = null, raw = false, hasCont
     return true;
   }
   // Nové GIFy nejsou povolené: všem v UnityChatu štítek místo „Smazáno“ (hostitel dál maluje smazanou zprávu).
-  const na = deleted && msg.deletedReason === GIF_NOT_ALLOWED_REASON && !raw;
-  paintGifStatus(doc, el, na ? (ownNa ? own : GIF_NA_VIEW) : null);
+  const na = deleted && isGifBlockedReason(msg.deletedReason) && !raw;
+  paintGifStatus(doc, el, na ? (ownNa ? own : GIF_BLOCKED_VIEW[msg.deletedReason]) : null);
   el.classList.toggle('uc-gif-na', na);
   if (deleted && !held && raw && isGifReason(msg.deletedReason)) {
     el.classList.add('uc-gif-held');

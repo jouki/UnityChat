@@ -143,6 +143,8 @@ export function pendingView(r: GifRequest): GifPendingView {
 export const GIF_REJECTED_REASON = 'gif_rejected' as const;
 /** Nový GIF v režimu odměny „jen schválené" (gif-access.mode = approved). */
 export const GIF_NOT_ALLOWED_REASON = 'gif_not_allowed' as const;
+/** GIF od někoho bez odemčené odměny (Židolišta potvrdila) → všem smazaná se štítkem, na platformě smazaná (2026-09-28). */
+export const GIF_DENIED_REASON = 'gif_denied' as const;
 /** Text odpovědi bota odesílateli bez účtu UnityChatu (= štítek u zprávy v UnityChatu). */
 export const GIF_NOT_ALLOWED_TEXT = 'Nové GIFy teď nejsou povolené';
 /** Odpověď bota na nepovolený GIF nejvýš 1× za tuto dobu na kanál + uživatele (smaže se vždy). */
@@ -734,7 +736,7 @@ export interface GifFlowDeps {
   access: (q: GifAccessQuery) => Promise<GifAccess | null>;
   used: (p: { workspace: string; platform: Platform; userId: string; role?: GifRole }) => Promise<unknown>;
   /** publishDeleted (SSE message-deleted + chat.deleted). */
-  publishDeleted: (p: { channel: string; platform: Platform; messageId: string; by: string; reason: 'gif_request' | 'gif_rejected' | 'gif_not_allowed' }) => Promise<void>;
+  publishDeleted: (p: { channel: string; platform: Platform; messageId: string; by: string; reason: 'gif_request' | 'gif_rejected' | 'gif_not_allowed' | 'gif_denied' }) => Promise<void>;
   /** deletePlatformMessage botem workspace (accountId null). */
   deletePlatform: (p: { accountId: null; channel: string; platform: Platform; messageId: string }) => Promise<string>;
   /**
@@ -1059,7 +1061,7 @@ export function createGifFlow(deps: GifFlowDeps) {
     return `sender:${own}`;
   };
 
-  const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON, why: { reason?: string; requestId?: number; botReply?: boolean } = {}) => {
+  const dropOriginal = async (p: GifInterceptParams, reason: typeof GIF_REJECTED_REASON | typeof GIF_NOT_ALLOWED_REASON | typeof GIF_DENIED_REASON, why: { reason?: string; requestId?: number; botReply?: boolean } = {}) => {
     const { m } = p;
     const pl = m.platform, id = m.platformMessageId;
     markGone(pl, id);
@@ -1073,7 +1075,7 @@ export function createGifFlow(deps: GifFlowDeps) {
       await safe(`message-deleted ${reason}`, async () => deps.broadcast('message-deleted', { channel: p.ucChannel, platform: pl, messageId: id, by: 'filter', reason, at: deps.now() }));
       later(() => deps.store.retagDeleted(pl, id, 'gif_request', reason));
       // Schovaná (gif_request, i přeznačená z link_filter) → konec čekání; zobrazená (null) čekat nezačala.
-      await heldSettled({ workspace: p.workspace, platform: pl, messageId: id, outcome: reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : 'rejected', requestId: why.requestId, by: 'filter', reason: why.reason });
+      await heldSettled({ workspace: p.workspace, platform: pl, messageId: id, outcome: reason === GIF_REJECTED_REASON ? 'rejected' : 'not_allowed', requestId: why.requestId, by: 'filter', reason: why.reason });
     }
     if (p.preDeleted !== 'link_filter') {
       // Odesílatel bez účtu UnityChatu štítek nevidí → odpověď bota na jeho zprávu, dokud ještě existuje (pořadí).
@@ -1369,7 +1371,17 @@ export function createGifFlow(deps: GifFlowDeps) {
           // Odemčeno, ale běží cooldown → hláška odesílateli (jinak mu zůstane kolečko u odkazu).
           // Jen cooldown odemčené odměny; vypršelá odměna (until) = zamčeno, ne cooldown (review M1, jako gifCooldownUntilSync).
           const nowMs = deps.now();
-          if (access?.allowed && (access.until === null || access.until > nowMs) && access.cooldownUntil !== null && access.cooldownUntil > nowMs) cooldownDenied(access.cooldownUntil);
+          const inCooldown = !!access?.allowed && (access.until === null || access.until > nowMs) && access.cooldownUntil !== null && access.cooldownUntil > nowMs;
+          if (inCooldown) cooldownDenied(access!.cooldownUntil!);
+          // Odměnu nemá (Židolišta odpověděla) → všem smazaná se štítkem „GIF teď není možné poslat“, na platformě smazaná,
+          // v OBS nic (pokyn usera 2026-09-28). Cooldown a neznámý přístup (výpadek Židolišty) = dřívější cesta.
+          if (access && !inCooldown && p.preDeleted !== 'link_filter') {
+            await dropOriginal(p, GIF_DENIED_REASON, { reason: 'no_reward' });
+            await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_denied', platform: m.platform, targetLogin: m.username.toLowerCase(), targetMessageId: m.platformMessageId, params: { allowed: access.allowed, until: access.until }, result: {} }));
+            deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: bez odměny → smazáno všem (gif_denied)');
+            settled = true;
+            return finish('denied');
+          }
           // Zpráva schovaná předem (neznámý přístup, audit A12) → rozhodnout: filtr by ji smazal = smazat, jinak obnovit.
           if (p.preDeleted === 'gif_request') { settled = true; await settleHeld(p, 'denied'); }
           return finish('denied');

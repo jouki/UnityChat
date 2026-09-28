@@ -11,7 +11,7 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON } from './gif.js';
+import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, GIF_DENIED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining, shakeLock, rewardStatusHtml, REWARD_STATUS_CLASS } from './soundboard.js';
@@ -66,13 +66,14 @@ export const GIF_STATUS_TEXT = {
   rejected: 'Zamítnuto moderátorem',
   expired: 'Vypršelo',
   not_allowed: 'Nové GIFy teď nejsou povolené',
+  denied: 'GIF teď není možné poslat',
 };
 /**
  * Konečné (červené) stavy vlastního GIFu → důvod smazání. Zamítnuto / vypršelo: odesílatel (divák i mod) vidí svůj
  * text mírně ztlumený, bez živého odkazu, jen se štítkem — bez „SMAZÁNO“ / „Zpráva smazána“; ostatní smazanou zprávu.
  * Nové GIFy nejsou povolené (gif_not_allowed): všem smazaná zpráva se štítkem (user 2026-09-27, core gif-host).
  */
-const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: GIF_NOT_ALLOWED_REASON };
+const GIF_OWN_FINAL_REASON = { rejected: GIF_REJECTED_REASON, expired: GIF_REJECTED_REASON, not_allowed: GIF_NOT_ALLOWED_REASON, denied: GIF_DENIED_REASON };
 export const isGifOwnFinal = (view) => !!view && Object.prototype.hasOwnProperty.call(GIF_OWN_FINAL_REASON, view.kind);
 export const gifOwnFinalReason = (view) => (isGifOwnFinal(view) ? GIF_OWN_FINAL_REASON[view.kind] : null);
 export const GIF_PREV_REJECTED_TIP = 'tento GIF byl už dříve zamítnut';
@@ -139,6 +140,7 @@ export function gifOutcomeState(outcome) {
     case 'approved': return 'approved';
     case 'rejected': return 'rejected';
     case 'not_allowed': return 'not_allowed';
+    case 'denied_reward': return 'denied';
     default: return 'none';   // failed / denied / cancelled = běžná zpráva
   }
 }
@@ -317,7 +319,7 @@ export class GifOutbox {
     if (!platform || !id || /^sent-/.test(id)) return null;
     const key = `${platform}:${id}`;
     if (this._e.has(key)) return this._e.get(key);
-    const state = reason === GIF_REJECTED_REASON ? 'rejected' : reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : isGifHeldReason(reason) ? 'pending' : null;
+    const state = reason === GIF_REJECTED_REASON ? 'rejected' : reason === GIF_NOT_ALLOWED_REASON ? 'not_allowed' : reason === GIF_DENIED_REASON ? 'denied' : isGifHeldReason(reason) ? 'pending' : null;
     if (!state) return null;
     const e = this._entry(key, platform, id);
     e.state = state;
@@ -389,7 +391,7 @@ export class GifOutbox {
     if (p.phase === 'done') {
       e.state = gifOutcomeState(p.outcome);
       e.outcome = p.outcome;
-      e.final = ['approved', 'rejected', 'not_allowed'].includes(e.state);
+      e.final = ['approved', 'rejected', 'not_allowed', 'denied'].includes(e.state);
       if (e.state === 'pending') e.pendingAt = e.pendingAt ?? this.now();
       this._L(`${p.key} hotovo → ${p.outcome}`);
     } else if (p.phase === 'unlock') {
@@ -644,7 +646,7 @@ export function isOwnGifMsg(msg, identity) {
   return norm(msg.username) === me || norm(msg.login) === me;
 }
 
-const HISTORY_REASONS = new Set([GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, 'gif_request']);
+const HISTORY_REASONS = new Set([GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, GIF_DENIED_REASON, 'gif_request']);
 
 /**
  * Štítek vlastní GIF zprávy, kterou GifOutbox nezná (reload panelu, jiné zařízení): zpráva smazaná serverem kvůli

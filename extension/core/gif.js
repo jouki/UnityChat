@@ -71,6 +71,13 @@ export const GIF_REJECTED_REASON = 'gif_rejected';
  * mod) smazaná zpráva se štítkem „Nové GIFy teď nejsou povolené“ místo „Smazáno“, v OBS nic (core gif-host).
  */
 export const GIF_NOT_ALLOWED_REASON = 'gif_not_allowed';
+/**
+ * GIF od někoho bez odemčené odměny (backend GIF_DENIED_REASON, pokyn usera 2026-09-28): stejně jako gif_not_allowed
+ * — všem smazaná zpráva se štítkem „GIF teď není možné poslat“, bez odkazu, v OBS nic, na platformě smazaná.
+ */
+export const GIF_DENIED_REASON = 'gif_denied';
+/** Zablokovaný GIF (nepovolený nový / bez odměny): všem smazaná zpráva se štítkem. */
+export const isGifBlockedReason = (reason) => reason === GIF_NOT_ALLOWED_REASON || reason === GIF_DENIED_REASON;
 export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;
 
 /**
@@ -80,8 +87,8 @@ export const isGifHeldReason = (reason) => reason === GIF_HELD_REASON;
  * (`next` prázdné / `platform`) zapamatovaný gif_not_allowed nechá.
  */
 export function gifEarlyReason(prev, next) {
-  if (isGifHeldReason(next) || next === GIF_NOT_ALLOWED_REASON) return next;
-  if ((!next || next === 'platform') && prev === GIF_NOT_ALLOWED_REASON) return prev;
+  if (isGifHeldReason(next) || isGifBlockedReason(next)) return next;
+  if ((!next || next === 'platform') && isGifBlockedReason(prev)) return prev;
   return null;
 }
 
@@ -91,7 +98,7 @@ export function gifEarlyReason(prev, next) {
  * Stejně u gif_not_allowed (nový GIF nepovolený, bot ho smazal na platformě): ozvěna `platform` / bez důvodu ho nechá.
  */
 export function gifHeldAfter(prevReason, nextReason) {
-  if (prevReason === GIF_NOT_ALLOWED_REASON && (!nextReason || nextReason === 'platform')) return GIF_NOT_ALLOWED_REASON;
+  if (isGifBlockedReason(prevReason) && (!nextReason || nextReason === 'platform')) return prevReason;
   if (!isGifHeldReason(prevReason)) return isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason ?? null;
   return !nextReason || nextReason === 'platform' || isGifHeldReason(nextReason) ? GIF_HELD_REASON : nextReason;
 }
