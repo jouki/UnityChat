@@ -94,13 +94,18 @@ export function sanitizeAnnouncementHtml(html) {
 }
 
 /**
- * Markdown-podmnožina Židolišty → HTML (stejná pravidla jako jejich server):
- * **tučný**, *kurzíva*, __podtržený__, [text](https://…), #/##/### na začátku
- * řádku, Enter = <br>. Fallback, když payload nenese `textHtml` (starší
- * server, mock). Vstup se nejdřív escapuje, výsledek ještě prochází sanitizerem.
+ * Markdown-podmnožina Židolišty → HTML (stejná pravidla jako jejich server,
+ * RobJewsALot server/static/richText.js): **tučný**, *kurzíva*, __podtržený__,
+ * [text](https://…), #/##/### na začátku řádku, Enter = <br>, `\*` `\_` `\[`
+ * `\]` `\(` `\)` `\#` `\\` = znak doslova (od 2026-09-28). Fallback, když
+ * payload nenese `textHtml` (starší server, mock). Vstup se nejdřív escapuje,
+ * výsledek ještě prochází sanitizerem.
  */
+const RT_ESCAPABLE = '\\*_[]()#';
+const RT_PH = 0xe000; // zástupné znaky ze soukromé oblasti Unicode, stejně jako u Židolišty
 export function richTextToHtml(md) {
-  const src = String(md || '');
+  const src = String(md || '').replace(/[-]/g, '')
+    .replace(/\\([\\*_\[\]()#])/g, (_m, ch) => String.fromCharCode(RT_PH + RT_ESCAPABLE.indexOf(ch)));
   if (!src.trim()) return '';
   const lines = src.split(/\r?\n/).map((line) => {
     let l = escapeHtml(line);
@@ -108,7 +113,7 @@ export function richTextToHtml(md) {
     if (h) return `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
     return inline(l);
   });
-  return sanitizeAnnouncementHtml(lines.join('<br>'));
+  return sanitizeAnnouncementHtml(lines.join('<br>')).replace(/[-]/g, (ch) => RT_ESCAPABLE[ch.charCodeAt(0) - RT_PH]);
   function inline(l) {
     l = l.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, t, u) => `<a href="${u.replace(/&amp;/g, '&')}">${t}</a>`);
     l = l.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');

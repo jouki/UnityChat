@@ -60,6 +60,8 @@ const assert = require('node:assert/strict');
   assert.equal(richTextToHtml('# Brohemians\nOdebírej **__Brohemians__** kanál [TADY](https://youtu.be/x?si=a&b=1)! *i* <b>ne</b>'),
     '<h1>Brohemians</h1><br>Odebírej <b><u>Brohemians</u></b> kanál <a href="https://youtu.be/x?si=a&amp;b=1" target="_blank" rel="noopener noreferrer nofollow">TADY</a>! <i>i</i> &lt;b&gt;ne&lt;/b&gt;');
   assert.equal(normalizeAnnouncement({ id: 'x8', channel: 'c', text: '**b**' }).textHtml, '<b>b</b>', 'bez textHtml se převede text');
+  assert.equal(richTextToHtml('\\*\\*ne\\*\\* **ano** \\# x \\\\ C:\\tmp \\[a\\](https://a.cz) \ue000'), '**ne** <b>ano</b> # x \\ C:\\tmp [a](https://a.cz) ', 'escape zpětným lomítkem jako u Židolišty');
+  ok('richTextToHtml escape');
   const run = { text: 'https://youtu.be/cISb60sXpFU?si=5kVik...', navigationEndpoint: { urlEndpoint: { url: 'https://www.youtube.com/redirect?event=live_chat&redir_token=abc&q=https%3A%2F%2Fyoutu.be%2FcISb60sXpFU%3Fsi%3D5kVikD3t4w50MliE' } } };
   assert.equal(ytRunFullText(run), 'https://youtu.be/cISb60sXpFU?si=5kVikD3t4w50MliE');
   assert.equal(ytRunFullText({ text: 'ahoj' }), 'ahoj');
