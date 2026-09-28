@@ -94,13 +94,6 @@ async function twitchFirstMessageHint(accountId: number, channel: string, err: s
   const first = await looksLikeFirstMessage({ channel, userId }, {
     hasMessage: async (ch, uid) => (await db.select({ id: messages.id }).from(messages)
       .where(and(eq(messages.platform, 'twitch'), eq(messages.channel, ch.toLowerCase()), eq(messages.platformUserId, uid))).limit(1)).length > 0,
-    createdAt: async (uid) => {
-      const r = await fetch(`https://api.ivr.fi/v2/twitch/user?id=${encodeURIComponent(uid)}`, { signal: AbortSignal.timeout(4000) });
-      if (!r.ok) return null;
-      const d = await r.json() as Array<{ createdAt?: string }> | { createdAt?: string };
-      const t = Date.parse((Array.isArray(d) ? d[0] : d)?.createdAt || '');
-      return Number.isFinite(t) ? t : null;
-    },
   });
   log.info({ accountId, channel, first }, 'twitch msg_rejected: první zpráva v kanálu?');
   return first ? TWITCH_FIRST_MESSAGE_TEXT : null;
