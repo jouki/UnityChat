@@ -1145,6 +1145,8 @@ class UnityChat {
     this._initEmotePicker();
     // Emote, který se nenačetl (výpadek sítě/CDN), zkusit znovu — jinak zůstane rozbitý do reloadu.
     window.UC_CORE?.installEmoteRetry?.(document, { log: (t) => this._ucLog('EmoteRetry', t) });
+    // Klik na GIF ve zprávě = náhled v plné velikosti přes panel (core/gif-lightbox.js).
+    window.UC_CORE?.installGifLightbox?.(document, this.chatEl, { log: (tag, t) => this._ucLog(tag, t) });
     this._initQrDono();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,

@@ -39,6 +39,41 @@
   opacity: .75;
 }
 
+/* ---- GIF ve zprávě chatu jako karta (pokyn usera 2026-09-28): vycentrovaný, zaoblený rámeček, jemný stín;
+   nejvýš 400 × 250 px (createGifMedia). Kliknutím náhled v plné velikosti (core/gif-lightbox.js, v OBS ne). ---- */
+.msg .uc-gif:has(.uc-gif-media) {
+  width: fit-content;
+  max-width: min(100%, 412px);
+  margin: 6px auto 3px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
+  box-sizing: border-box;
+}
+.msg .uc-gif .uc-gif-media { border-radius: 8px; margin: 0 auto; }
+body:not(.uc-raw) .msg .uc-gif .uc-gif-media { cursor: zoom-in; transition: filter 120ms ease; }
+body:not(.uc-raw) .msg .uc-gif .uc-gif-media:hover { filter: brightness(1.08); }
+/* Náhled v plné velikosti přes celé okno / panel. */
+.uc-gif-lb {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(6, 6, 9, 0.86); backdrop-filter: blur(2px);
+  cursor: zoom-out; outline: none;
+  animation: uc-gif-lb-in 160ms ease both;
+}
+.uc-gif-lb--out { animation: uc-gif-lb-out 160ms ease both; }
+.uc-gif-lb-media {
+  max-width: min(92vw, 100%); max-height: 88vh; width: auto; height: auto;
+  border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  animation: uc-gif-lb-zoom 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes uc-gif-lb-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes uc-gif-lb-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes uc-gif-lb-zoom { from { transform: scale(0.92); } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .uc-gif-lb, .uc-gif-lb--out, .uc-gif-lb-media { animation: none; } }
+
 /* Smazaná / skrytá zpráva: GIF se neukazuje (text nahrazuje štítek), u dim/strike jen ztlumený. */
 .uc-deleted--label .uc-gif,
 .uc-deleted--hide .uc-gif { display: none; }

@@ -470,6 +470,8 @@ export function createGifMedia(doc, gif, { lazy = true, log, maxW = GIF_MAX_W, m
   const video = isGifVideo(g);
   const m = doc.createElement(video ? 'video' : 'img');
   m.className = 'uc-gif-media';
+  // Rozměry originálu (náhled v plné velikosti, core/gif-lightbox.js).
+  if (g.width && g.height) { m.setAttribute('data-w', String(g.width)); m.setAttribute('data-h', String(g.height)); }
   if (fit) {
     m.setAttribute('width', String(fit.width));
     m.setAttribute('height', String(fit.height));
