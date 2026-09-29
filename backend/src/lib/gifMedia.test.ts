@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
-import { classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia, resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, type Transport, type TransportResponse, type LookupAll, imgurRef } from './gifMedia.js';
+import { classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia, resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, createBlockedHosts, pickOgDescriptor, sameSite, describeGifSource, type Transport, type TransportResponse, type LookupAll, imgurRef } from './gifMedia.js';
 
 // ---- vzorky médií ----
 const gif = (w = 320, h = 240): Buffer => { const b = Buffer.alloc(32); b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return b; };
@@ -313,4 +313,49 @@ test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez
   assert.equal(b.kind, 'mp4');
   const c = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: { headers: { 'content-type': 'image/gif' }, body: gif(10, 10) } }), lookupAll: publicDns });
   assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
+});
+
+test('blockedHosts: 429 mimo challenge → host si zapamatuje, kód host_blocked; bez registru zůstává http_429', async () => {
+  const transport = fakeTransport({ 'https://i.imgur.com/a.mp4': { status: 429, headers: {}, body: Buffer.from('') } });
+  await assert.rejects(resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport, lookupAll: publicDns }), (e: GifError) => e.code === 'http_429');
+  const blocked = createBlockedHosts({ now: () => 1000 });
+  await assert.rejects(resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: blocked }), (e: GifError) => e.code === 'host_blocked');
+  assert.equal(blocked.isBlocked('i.imgur.com'), true);
+  assert.equal(blocked.isBlocked('IMGUR.com.'), true, 'subdomény i kořen téhož místa');
+  assert.equal(blocked.isBlocked('tenor.com'), false);
+});
+
+test('blockedHosts: známý host → přímé stažení se přeskočí (transport se nevolá) a jde se přes unlocker; TTL 24 h', async () => {
+  let t = 1000;
+  const blocked = createBlockedHosts({ now: () => t });
+  blocked.mark('imgur.com');
+  const direct: string[] = [];
+  const transport: Transport = async (url) => { direct.push(url.toString()); return { status: 429, headers: {}, body: (async function* () {})(), dispose() {} }; };
+  const page = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">');
+  const unlocker = { timeoutMs: 25_000, fetch: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield page; })(), dispose() {} }), report() {} };
+  const d = await describeGifSource({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker });
+  assert.deepEqual(d, { url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com' });
+  assert.deepEqual(direct, [], 'blokovaný host se přímo nevolá');
+  t += 24 * 3_600_000 + 1;
+  assert.equal(blocked.isBlocked('imgur.com'), false, 'po TTL znovu naostro');
+});
+
+test('describeGifSource: direct = adresa + typ z přípony bez rozměrů; médium na cizím místě než stránka → null; bez og → null', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  const d = await describeGifSource({ url: 'https://i.imgur.com/x.gif', mode: 'direct' }, { lookupAll: publicDns, blockedHosts: blocked });
+  assert.deepEqual(d, { url: 'https://i.imgur.com/x.gif', kind: 'gif', width: null, height: null, host: 'i.imgur.com' });
+  const mk = (html: string) => ({ timeoutMs: 25_000, fetch: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield Buffer.from(html); })(), dispose() {} }), report() {} });
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked, unlocker: mk('<meta property="og:video" content="https://evil.example/a.mp4">') }), null);
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked, unlocker: mk('<title>nic</title>') }), null);
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked }), null, 'bez unlockeru stránku nepřečte');
+});
+
+test('pickOgDescriptor: og:video přednostně s rozměry, jinak og:image; sameSite', () => {
+  const base = new URL('https://imgur.com/a/x');
+  assert.deepEqual(pickOgDescriptor('<meta property="og:image" content="https://i.imgur.com/a.gif"><meta property="og:image:width" content="10"><meta property="og:image:height" content="20">', base), { url: 'https://i.imgur.com/a.gif', kind: 'gif', width: 10, height: 20, host: 'i.imgur.com' });
+  assert.deepEqual(pickOgDescriptor('<meta property="og:video" content="https://i.imgur.com/a.mp4">', base), { url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: null, height: null, host: 'i.imgur.com' });
+  assert.equal(sameSite(new URL('https://imgur.com/a'), new URL('https://i.imgur.com/b.mp4')), true);
+  assert.equal(sameSite(new URL('https://tenor.com/v'), new URL('https://media.tenor.com/x.gif')), true);
+  assert.equal(sameSite(new URL('https://imgur.com/a'), new URL('https://evil.example/a.mp4')), false);
 });

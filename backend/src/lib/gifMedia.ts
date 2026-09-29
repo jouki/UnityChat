@@ -37,6 +37,36 @@ export class GifError extends Error {
   constructor(public code: string) { super(code); }
 }
 
+/** Hosty, které blokují IP serveru (429/403 mimo Cloudflare challenge): 24 h se přímé stažení přeskakuje. */
+export const BLOCKED_HOST_TTL_MS = 24 * 3_600_000;
+export interface BlockedHosts { isBlocked(host: string): boolean; mark(host: string): void; readonly size: number }
+/** Registrované jméno (poslední dva popisky): imgur.com ↔ i.imgur.com. Vědomé zjednodušení (co.uk apod. se nečeká). */
+export function siteOf(host: string): string {
+  const h = host.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+  const p = h.split('.');
+  return p.length > 2 ? p.slice(-2).join('.') : h;
+}
+export const sameSite = (a: URL, b: URL): boolean => siteOf(a.hostname) === siteOf(b.hostname);
+export function createBlockedHosts({ ttlMs = BLOCKED_HOST_TTL_MS, max = 200, now = Date.now }: { ttlMs?: number; max?: number; now?: () => number } = {}): BlockedHosts {
+  const m = new Map<string, number>();
+  return {
+    isBlocked(host) {
+      const k = siteOf(host);
+      const until = m.get(k);
+      if (until === undefined) return false;
+      if (until <= now()) { m.delete(k); return false; }
+      return true;
+    },
+    mark(host) {
+      const k = siteOf(host);
+      m.delete(k);
+      m.set(k, now() + ttlMs);
+      if (m.size > max) m.delete(m.keys().next().value!);
+    },
+    get size() { return m.size; },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Detekce
 // ---------------------------------------------------------------------------
@@ -330,6 +360,11 @@ export interface FetchDeps {
   onProgress?: (e: GifFetchProgress) => void;
   /** Sonda rozměrů a počtu snímků bez dekódování (lib/gifPhash.ts probeMedia); chybí = jen rozměry z hlavičky. */
   probe?: MediaProber;
+  /**
+   * Registr hostů blokujících IP serveru; 429/403 → GifError('host_blocked') + zápis; známý host jde rovnou
+   * přes unlocker (jen HTML stránky, médium neumí).
+   */
+  blockedHosts?: BlockedHosts | null;
 }
 
 /**
@@ -384,9 +419,21 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
   for (let hop = 0; ; hop++) {
     // Veřejná adresa se ověří VŽDY před jakýmkoli stažením — i před předáním URL do Bright Data.
     await assertPublicUrl(url, deps.lookupAll);
+    const blockedKnown = !!deps.blockedHosts?.isBlocked(url.hostname);
     let res: TransportResponse;
-    try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
-    catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
+    if (blockedKnown) {
+      // Známý blokující host: přímé stažení by jen spálilo čas → rovnou unlocker (jen když je; jinak host_blocked).
+      if (!deps.unlocker) throw new GifError('host_blocked');
+      ctx.extend(deps.unlocker.timeoutMs);
+      ctx.unlocked.push(url);
+      ctx.unlockStart = Date.now();
+      const via = await deps.unlocker.fetch(url, signal);
+      if (!via) { ctx.unlocked.pop(); throw new GifError('host_blocked'); }
+      res = via;
+    } else {
+      try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
+      catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
+    }
     // Ochrana proti botům (Cloudflare challenge) = jediný případ pro Bright Data; jiné chyby (404, HTML místo
     // média, velikost…) jdou rovnou ven bez placeného pokusu. Bez možnosti obejít → vlastní kód bot_protection.
     if ((res.status === 403 || res.status === 503) && await isCloudflareChallenge(res, signal)) {
@@ -409,6 +456,12 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
         try { fin = new URL(v, url); } catch { res.dispose(); throw new GifError('bad_url'); }
         try { await assertPublicUrl(fin, deps.lookupAll); } catch (e) { res.dispose(); throw e; }
       }
+    }
+    // Host blokuje IP serveru (429 / 403 bez challenge): zapamatovat, kód host_blocked (flow nabídne stažení prohlížečem).
+    if (!blockedKnown && deps.blockedHosts && (res.status === 429 || res.status === 403)) {
+      res.dispose();
+      deps.blockedHosts.mark(url.hostname);
+      throw new GifError('host_blocked');
     }
     if (res.status >= 300 && res.status < 400 && res.headers.location) {
       res.dispose();
@@ -583,6 +636,44 @@ export function pickOgMedia(html: string, base: URL): string | null {
   const pick = video ?? first(['og:image:secure_url', 'og:image:url', 'og:image']);
   if (!pick) return null;
   try { return new URL(pick, base).toString(); } catch { return null; }
+}
+
+export interface GifDescriptor { url: string; kind: GifKind | null; width: number | null; height: number | null; host: string }
+const kindFromUrl = (u: string): GifKind | null => { const m = /\.(gif|webp|mp4)(\?|$)/i.exec(u); return m ? (m[1].toLowerCase() as GifKind) : null; };
+/** og:video (MP4) přednostně, jinak og:image; rozměry z og:*:width/height. null = bez média. */
+export function pickOgDescriptor(html: string, base: URL): GifDescriptor | null {
+  const url = pickOgMedia(html, base);
+  if (!url) return null;
+  const meta = metaTags(html);
+  const num = (k: string): number | null => { const v = Number((meta[k] ?? [])[0]); return Number.isInteger(v) && v > 0 ? v : null; };
+  const video = /\.mp4(\?|$)/i.test(url);
+  const kind = kindFromUrl(url) ?? (video ? 'mp4' : null);
+  return { url, kind, width: num(video ? 'og:video:width' : 'og:image:width'), height: num(video ? 'og:video:height' : 'og:image:height'), host: new URL(url).hostname };
+}
+/**
+ * Popis média pro stažení prohlížečem odesílatele (spec 2026-09-29 §2): direct = odkaz sám; page = stránka přes
+ * unlocker (host blokuje server) → og. Médium musí být na stejném místě jako stránka a veřejné. null = není co nabídnout.
+ */
+export async function describeGifSource(src: GifSource, deps: FetchDeps & { timeoutMs?: number }): Promise<GifDescriptor | null> {
+  if (src.mode === 'own') return null;
+  let base: URL;
+  try { base = new URL(src.url); await assertPublicUrl(base, deps.lookupAll); } catch { return null; }
+  if (src.mode === 'direct') return { url: base.toString(), kind: kindFromUrl(base.toString()), width: null, height: null, host: base.hostname };
+  if (!deps.unlocker) return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), deps.timeoutMs ?? deps.unlocker.timeoutMs); timer.unref?.();
+  try {
+    const res = await deps.unlocker.fetch(base, ctl.signal);
+    if (!res) return null;
+    if (res.status < 200 || res.status >= 300) { res.dispose(); return null; }
+    const html = (await readLimited(res, PAGE_MAX_BYTES, ctl.signal, true)).toString('utf8');
+    const d = pickOgDescriptor(html, base);
+    if (!d) return null;
+    const mu = new URL(d.url);
+    if (!sameSite(base, mu)) return null;
+    await assertPublicUrl(mu, deps.lookupAll);
+    return d;
+  } catch { return null; } finally { clearTimeout(timer); }
 }
 
 export interface ResolvedGif {
