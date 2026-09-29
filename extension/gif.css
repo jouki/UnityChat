@@ -110,11 +110,8 @@ body:not(.uc-raw) .msg .uc-gif .uc-gif-media:hover { filter: brightness(1.08); }
   max-height: 70%;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* Zásobník je jen tak vysoký jako karty → klikatelný celý (i posuvník při rozbalení). */
-  scrollbar-width: thin;
+  /* Zásobník je jen tak vysoký jako karty → klikatelný celý (i posuvník při rozbalení). Vzhled posuvníku: sidepanel.css. */
 }
-.uc-gif-stack::-webkit-scrollbar { width: 6px; }
-.uc-gif-stack::-webkit-scrollbar-thumb { background: var(--border, #2f2f35); border-radius: 3px; }
 .uc-gif-card[hidden], .uc-gif-more[hidden] { display: none; }
 .uc-gif-more {
   align-self: center;

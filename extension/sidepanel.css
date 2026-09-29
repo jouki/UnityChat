@@ -673,14 +673,17 @@ body.uc-dev .dev-only { display: block; }
   overflow-anchor: none;
 }
 
-/* Tenký scrollbar bez šipek — chat, menu emotů (core/emote-picker.js) i pole pro psaní stejně. */
-#chat::-webkit-scrollbar, .uc-ep-body::-webkit-scrollbar, #msg-input::-webkit-scrollbar { width: 5px; }
-#chat::-webkit-scrollbar-track, .uc-ep-body::-webkit-scrollbar-track, #msg-input::-webkit-scrollbar-track { background: transparent; }
-#chat::-webkit-scrollbar-thumb, .uc-ep-body::-webkit-scrollbar-thumb, #msg-input::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-#chat::-webkit-scrollbar-thumb:hover, .uc-ep-body::-webkit-scrollbar-thumb:hover, #msg-input::-webkit-scrollbar-thumb:hover { background: #555; }
-#chat::-webkit-scrollbar-button, .uc-ep-body::-webkit-scrollbar-button, #msg-input::-webkit-scrollbar-button { display: none; }
+/* Tenký scrollbar bez šipek — JEDINÉ místo pro celý UnityChat (addon i web; audit 2026-09-29). Platí pro každý
+   posuvný prvek, nový panel ho dostane sám. Na jednotlivých prvcích NEPSAT `scrollbar-width` / `scrollbar-color`:
+   Chrome pak ::-webkit-scrollbar ignoruje a vykreslí systémový posuvník se šipkami (Profil, záložky kanálů). */
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border, #2f2f35); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #555; }
+*::-webkit-scrollbar-button { display: none; }
+*::-webkit-scrollbar-corner { background: transparent; }
 /* Firefox nezná ::-webkit-scrollbar. */
-@supports not selector(::-webkit-scrollbar) { #msg-input { scrollbar-width: thin; scrollbar-color: var(--border) transparent; } }
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: var(--border, #2f2f35) transparent; } }
 
 /* Timeout / ban / smazání: .uc-deleted* + .uc-mod-tag v moderation.css (core/moderation.js). */
 

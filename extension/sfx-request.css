@@ -16,8 +16,6 @@
 .uc-sr-title { font-weight: 700; color: var(--accent-light); white-space: nowrap; }
 .uc-sr-limits { margin-left: auto; font-size: 11px; color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
 .uc-sr-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 9px; }
-.uc-sr-scroll::-webkit-scrollbar { width: 5px; }
-.uc-sr-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 .uc-sr input, .uc-sr textarea {
   width: 100%; box-sizing: border-box; padding: 7px 9px;
