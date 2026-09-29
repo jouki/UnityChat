@@ -5677,6 +5677,7 @@ class UnityChat {
     this._updateQrAvailability();
     this._emailSettings?.refresh?.();
     this._loadModState();
+    this._refreshMentionHighlights();
     // Varování účtu: SSE jen pro tento účet (ticket); bez přihlášení pryč.
     if (this._signedIn) this._startAccountStream();
     else { this._stopAccountStream(); this._warnings?.clear(); this._gifInst?.clear(); this._gifOutInst?.clear(); this._gifTokensInst?.clear(); }
@@ -8107,6 +8108,7 @@ class UnityChat {
   // Returns {ids, content} — callers mutate them directly. Returns null if
   // the platform/channel can't be resolved (let the caller skip dedup).
   _addMessage(msg) {
+    msg = window.UC_CORE.withTwitchDefaultColor(msg);
     // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
     // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.
     if (msg && !msg.replyTo && msg.id && this._ucReplies?.has(String(msg.id))) msg = { ...msg, replyTo: this._ucReplies.get(String(msg.id)) };
@@ -9115,6 +9117,25 @@ class UnityChat {
       add(this.nicknames.getNickname(p, login));
     }
     return names;
+  }
+
+  /**
+   * Doplnit „Replying to you“ / „Mentions you“ na už vykreslené zprávy: historie se po obnovení vykreslí dřív,
+   * než se načte účet (moje jména), a zvýraznění by chybělo až do další zprávy (hlášení usera 2026-09-30).
+   */
+  _refreshMentionHighlights() {
+    const core = window.UC_CORE;
+    const myNames = this._myMentionNames();
+    if (!myNames.size || !this.store) return 0;
+    let n = 0;
+    for (const m of this.store.slice()) {
+      if (!m?.id || m.deleted || m._deleted) continue;
+      const kind = core.highlightKind({ text: m.message || '', replyTarget: m.replyTo?.username, myNames, own: this._isOwnMsg(m), hasBare: core.hasBareMention });
+      if (!kind) continue;
+      for (const el of this._msgEls(m.id, m.platform)) if (core.applyMentionTag(el, kind)) n++;
+    }
+    if (n) this._ucLog('Mention', `zvýraznění doplněno po načtení účtu: ${n} zpráv`);
+    return n;
   }
 
   /** „@jméno“ jako celé slovo (ne @joukibot pro jouki), text i jméno malými písmeny. */

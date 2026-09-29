@@ -159,3 +159,45 @@ export function createMentionNotifier({ emit, intervalMs = 5000, maxSeen = 500, 
     get pending() { return queued; },
   };
 }
+
+// ---- Zvýraznění dodatečně (2026-09-30) ----
+// Historie se po obnovení vykreslí dřív, než se načte přihlášený účet (moje jména). Zprávy vykreslené bez jmen
+// by zůstaly bez „Replying to you“ / „Mentions you“, dokud nepřijde nová. Host po načtení jmen projde zprávy
+// a zvýraznění doplní. Jen přidává — odhlášení už vykreslené zvýraznění nebere.
+
+const TAGS = { reply: ['tag-reply', 'Replying to you'], mention: ['tag-mention', 'Mentions you'] };
+
+/**
+ * Druh zvýraznění zprávy pro vykreslení: odpověď > @zmínka > jméno bez zavináče (ne ve vlastní zprávě).
+ * @param {{ text?: string, replyTarget?: string|null, myNames: Set<string>|string[], own?: boolean, hasBare?: (text: string, name: string) => boolean }} p
+ */
+export function highlightKind({ text, replyTarget, myNames, own = false, hasBare = null }) {
+  const kind = mentionKind({ text, replyTarget, myNames });
+  if (kind || own || !hasBare) return kind;
+  const lower = String(text || '').toLowerCase();
+  for (const n of myNames) if (hasBare(lower, n)) return 'mention';
+  return null;
+}
+
+/** Doplnit zvýraznění a štítek na už vykreslenou zprávu. Vrací true, když se něco změnilo. */
+export function applyMentionTag(el, kind) {
+  const tag = TAGS[kind];
+  if (!el || !tag) return false;
+  const line = el.querySelector(':scope > .msg-tag-line');
+  const cur = line?.querySelector('.msg-tag');
+  if (el.classList.contains('mentioned') && cur?.classList.contains(tag[0])) return false;
+  // „Mentions you“ nepřepíše „Replying to you“ (vyšší priorita).
+  if (kind === 'mention' && cur?.classList.contains('tag-reply')) { el.classList.add('mentioned'); return false; }
+  el.classList.add('mentioned');
+  const doc = el.ownerDocument;
+  const span = doc.createElement('span');
+  span.className = `msg-tag ${tag[0]}`;
+  span.textContent = tag[1];
+  if (line) { line.replaceChildren(span); return true; }
+  const nl = doc.createElement('div');
+  nl.className = 'msg-tag-line';
+  nl.appendChild(span);
+  const after = el.querySelector(':scope > .reply-ctx');
+  if (after) after.after(nl); else el.insertBefore(nl, el.firstChild);
+  return true;
+}

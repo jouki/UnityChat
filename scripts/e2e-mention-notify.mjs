@@ -124,5 +124,20 @@ check('jméno uvnitř adresy se nebarví', b4 && !b4.spans.some((t) => /robdiesa
 const b5 = await bare('e2e-b5', 'mrkni na notifyme.cz/profil');
 check('moje jméno uvnitř adresy zprávu nezvýrazní', b5?.hl === false, JSON.stringify(b5));
 
+// ---- Zvýraznění doplněné po načtení účtu + výchozí barva Twitche (hlášení usera 2026-09-30) ----
+const late = await ev(`(() => { const uc = window.__uc; const keepCfg = uc.config.username; const keepNames = { ...uc._platformUsernames };
+  uc.config.username = ''; uc._platformUsernames = {};
+  uc._addMessage({ platform: 'twitch', id: 'e2e-late1', username: 'JoukiBOT', message: 'Top D resetováno', color: null, timestamp: Date.now(), historical: true, replyTo: { username: 'NotifyMe', message: '!topd reset', id: 'x1' } });
+  uc._addMessage({ platform: 'twitch', id: 'e2e-late2', username: 'Pepa', message: 'čau @NotifyMe', color: '#00ff00', timestamp: Date.now(), historical: true });
+  uc._addMessage({ platform: 'twitch', id: 'e2e-late3', username: 'Pepa', message: 'nic pro tebe', color: '#00ff00', timestamp: Date.now(), historical: true });
+  const st = (id) => { const el = document.querySelector('.msg[data-msg-id="' + id + '"]'); return { hl: el.classList.contains('mentioned'), tag: el.querySelector('.msg-tag')?.textContent || '', color: el.querySelector('.un')?.style.color || '' }; };
+  const before = [st('e2e-late1'), st('e2e-late2')];
+  uc.config.username = keepCfg; uc._platformUsernames = keepNames;
+  const n = uc._refreshMentionHighlights();
+  return { before, n, after: [st('e2e-late1'), st('e2e-late2'), st('e2e-late3')] }; })()`);
+check('historie vykreslená bez jmen je bez zvýraznění', late && late.before.every((x) => !x.hl && !x.tag), JSON.stringify(late?.before));
+check('po načtení jmen se doplní „Replying to you“ a „Mentions you“', late && late.after[0].hl && late.after[0].tag === 'Replying to you' && late.after[1].hl && late.after[1].tag === 'Mentions you' && !late.after[2].hl, JSON.stringify(late?.after));
+check('zpráva z Twitche bez barvy má výchozí barvu podle jména (ne bílou)', late && /rgb|#/.test(late.after[0].color), JSON.stringify(late?.after?.[0]));
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

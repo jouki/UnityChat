@@ -17,6 +17,15 @@ export function twitchDefaultColor(username) {
   return TWITCH_DEFAULT_COLORS[sum % TWITCH_DEFAULT_COLORS.length];
 }
 
+/**
+ * Zpráva z Twitche bez barvy (účet si ji nikdy nenastavil — např. bot) → výchozí barva podle jména, stejná jako
+ * u živé zprávy z IRC. Historie ze serveru barvu nemá (null), takže jméno po obnovení zbělalo (hlášení 2026-09-30).
+ */
+export function withTwitchDefaultColor(msg) {
+  if (!msg || msg.platform !== 'twitch' || msg.color || !msg.username) return msg;
+  return { ...msg, color: twitchDefaultColor(String(msg.username).replace(/^@/, '')) };
+}
+
 // Twitch's "Global Emotes" panel ships these legacy face emotes at a tiny
 // native resolution — upscaling makes them blurry. We render them smaller
 // to match vanilla chat. Stable across ID renumbering (e.g. <3 = 555555584).
