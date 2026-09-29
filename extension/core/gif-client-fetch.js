@@ -9,7 +9,7 @@ export const CLIENT_FETCH_TIMEOUT_MS = 20_000;
 /**
  * Stáhne `url` v prohlížeči odesílatele (CORS, bez cookies, jen adresa poslaná serverem), ohlídá velikost před i po
  * stažení a nahraje bajty přes `upload(bytes, token, remember)`. Nikdy nic neloguje s tokenem uvnitř (volající loguje
- * jen host / kód chyby). Vrací `{ ok: true } | { ok: false, code }`.
+ * jen host / kód chyby). Vrací `{ ok: true } | { ok: false, code, upload? }` (upload: true = chyba vrácená serverem).
  */
 export async function runClientFetch({ url, token, maxBytes = GIF_MAX_BYTES, remember = false, fetchImpl, upload, onProgress = () => {} }) {
   const doFetch = fetchImpl ?? globalThis.fetch;
@@ -27,10 +27,11 @@ export async function runClientFetch({ url, token, maxBytes = GIF_MAX_BYTES, rem
   if (buf.byteLength > maxBytes) return { ok: false, code: 'too_large' };
   if (!buf.byteLength) return { ok: false, code: 'bad_type' };
   onProgress(75);
+  // `upload: true` = odpověď serveru na upload (grant tam už je pryč); bez něj selhal prohlížeč (review I1).
   try {
     const r = await upload(buf, token, remember);
-    return r?.ok ? { ok: true } : { ok: false, code: r?.error || (r?.status === 429 ? 'rate_limited' : 'upload') };
-  } catch (e) { return { ok: false, code: e?.error || (e?.status === 429 ? 'rate_limited' : 'upload') }; }
+    return r?.ok ? { ok: true } : { ok: false, code: r?.error || (r?.status === 429 ? 'rate_limited' : 'upload'), upload: true };
+  } catch (e) { return { ok: false, code: e?.error || (e?.status === 429 ? 'rate_limited' : 'upload'), upload: true }; }
 }
 
 /**
@@ -43,14 +44,21 @@ export async function runClientFetch({ url, token, maxBytes = GIF_MAX_BYTES, rem
 export function installGifClientFetch(doc, chatEl, { outbox, upload, decline, fetchImpl, log = () => {}, pref = () => 'ask' } = {}) {
   if (!chatEl || !outbox) return () => {};
   const keyOf = (st) => { const m = st.closest('.msg'); return m ? { platform: m.dataset.platform, id: m.dataset.msgId } : null; };
-  const go = async (platform, id, remember) => {
+  // Chyby z prohlížeče (ne odpověď serveru na upload) — grant by na serveru jinak visel do TTL se schovanou zprávou.
+  const CLIENT_SIDE = new Set(['network', 'too_large', 'bad_type']);
+  const go = async (platform, id, remember, auto = false) => {
     const v = outbox.view(platform, id);
     // Ochrana proti dvojkliku / dvojí automatice: jakmile stahování začne, view().kind už není 'client_fetch'.
     if (!v || v.kind !== 'client_fetch') return;
-    outbox.clientFetchStarted(platform, id);
-    log('Gif', `stahuji z ${v.host} prohlížečem${remember ? ' (zapamatovat)' : ''}`);
+    outbox.clientFetchStarted(platform, id, { note: auto });
+    log('Gif', `stahuji z ${v.host} prohlížečem${remember ? ' (zapamatovat)' : ''}${auto ? ' (předvolba)' : ''}`);
     const r = await runClientFetch({ url: v.url, token: v.token, remember, fetchImpl, upload });
-    if (!r.ok) { outbox.clientFetchFailed(platform, id, r.code); log('Gif', `stažení prohlížečem selhalo: ${r.code}`); }
+    if (!r.ok) {
+      // Selhání v prohlížeči → grant hned zrušit (review I1); na výsledek se nečeká, chyba se ignoruje.
+      if (r.upload !== true && CLIENT_SIDE.has(r.code)) { try { Promise.resolve(decline(v.token, false)).catch(() => {}); } catch { /* ignore */ } }
+      outbox.clientFetchFailed(platform, id, r.code);
+      log('Gif', `stažení prohlížečem selhalo: ${r.code}`);
+    }
   };
   const no = async (platform, id, remember) => {
     const v = outbox.view(platform, id);

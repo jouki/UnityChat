@@ -196,6 +196,46 @@ Promise.all([
     bx.onNotice({ requestKey: 'twitch:c4', channel: 'robdiesalot', platform: 'twitch', messageId: 'c4', kind: 'client_declined' });
     check('Outbox: gif-notice client_declined → „Odkaz zůstal běžnou zprávou“', bx.view('twitch', 'c4')?.kind === 'client_declined');
     check('normalizeGifProgress: client_fetch propouští popis', eq(Object.keys(L.normalizeGifProgress(CF)).filter((k) => ['token', 'url', 'host', 'kind', 'width', 'height', 'expiresAt', 'pref'].includes(k)).sort(), ['expiresAt', 'height', 'host', 'kind', 'pref', 'token', 'url', 'width']));
+    // Review M3: registrované jméno v textu výzvy a „Stahuji z …“ u automatiky (always) do prvního průběhu ze serveru.
+    check('siteOfHost: i.imgur.com → imgur.com, www. pryč, dvoupopiskové beze změny', L.siteOfHost('i.imgur.com') === 'imgur.com' && L.siteOfHost('WWW.Tenor.com.') === 'tenor.com' && L.siteOfHost('imgur.com') === 'imgur.com' && L.siteOfHost('media1.tenor.co') === 'tenor.co');
+    bx.onProgress({ ...CF, messageId: 'c5', requestKey: 'twitch:c5', expiresAt: t + 90_000, serverNow: t });
+    check('M3: text výzvy s registrovaným jménem (imgur.com, ne i.imgur.com)', bx.view('twitch', 'c5').text === 'Server nemůže GIF z imgur.com stáhnout. Stáhnout ho tvým prohlížečem a poslat?' && bx.view('twitch', 'c5').host === 'i.imgur.com', bx.view('twitch', 'c5').text);
+    check('M2: tooltip s místem', L.GIF_CLIENT_FETCH_TIP('imgur.com') === 'Stáhne se z tvého prohlížeče (imgur.com uvidí tvou IP)');
+    bx.clientFetchStarted('twitch', 'c5', { note: true });
+    check('M3: automatika → „Stahuji z imgur.com…“ místo procent', bx.view('twitch', 'c5').kind === 'progress' && bx.view('twitch', 'c5').text === 'Stahuji z imgur.com…', JSON.stringify(bx.view('twitch', 'c5')));
+    bx.onProgress({ ...CF, messageId: 'c5', requestKey: 'twitch:c5', phase: 'verify', pct: 95, token: undefined });
+    check('M3: první průběh ze serveru → zase procenta', bx.view('twitch', 'c5').text === '95 %', JSON.stringify(bx.view('twitch', 'c5')));
+  }
+
+  // Review M1: tooltip výzvy jen u client_fetch — po změně stavu title / data-tooltip pryč (falešný DOM).
+  {
+    const mkEl = (cls = '') => {
+      const attrs = {}; const kids = [];
+      const el = {
+        className: cls, dataset: {}, style: { setProperty() {} }, textContent: '', hidden: false, _html: '',
+        classList: { toggle() {}, add() {}, remove() {} },
+        get title() { return attrs.title; }, set title(v) { attrs.title = v; },
+        setAttribute(k, v) { attrs[k] = String(v); }, getAttribute(k) { return k in attrs ? attrs[k] : null }, removeAttribute(k) { delete attrs[k]; },
+        hasAttribute(k) { return k in attrs; },
+        set innerHTML(v) { el._html = v; el._parts = {}; }, get innerHTML() { return el._html; },
+        querySelector(sel) {
+          if (sel === ':scope > .uc-gif-st') return kids[0] || null;
+          if (sel === ':scope > .tx') return null;
+          if (!el._html.includes(sel.replace(/^\./, '').split(' ')[0])) return null;
+          el._parts ??= {};
+          return (el._parts[sel] ??= { textContent: '', hidden: false, style: { setProperty() {} } });
+        },
+        appendChild(c) { kids.push(c); },
+        remove() {},
+      };
+      return el;
+    };
+    const doc = { createElement: () => mkEl() };
+    const msgEl = mkEl('msg');
+    const st1 = L.paintGifStatus(doc, msgEl, { kind: 'client_fetch', text: 'x', host: 'i.imgur.com', remaining: 1000 });
+    check('M1: výzva má tooltip s imgur.com', st1.getAttribute('data-tooltip') === 'Stáhne se z tvého prohlížeče (imgur.com uvidí tvou IP)' && st1.title === st1.getAttribute('data-tooltip'), st1.getAttribute('data-tooltip'));
+    const st2 = L.paintGifStatus(doc, msgEl, { kind: 'progress', pct: 50, text: '50 %' });
+    check('M1: po změně stavu tooltip pryč', st2 === st1 && !st2.hasAttribute('data-tooltip') && !st2.hasAttribute('title'));
   }
 
   // --- závěrečná review I1: štítek řídí stav zprávy, echo schovaného GIFu bez textu se páruje přes id ---
@@ -701,9 +741,9 @@ Promise.all([
     const r3 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => { throw new TypeError('Failed to fetch'); }, upload });
     check('runClientFetch: chyba sítě / CORS → network', eq(r3, { ok: false, code: 'network' }));
     const r4 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => mkRes(bytes), upload: async () => ({ ok: false, error: 'size_mismatch', status: 400 }) });
-    check('runClientFetch: server odmítl → jeho kód', eq(r4, { ok: false, code: 'size_mismatch' }));
+    check('runClientFetch: server odmítl → jeho kód (upload: true)', eq(r4, { ok: false, code: 'size_mismatch', upload: true }));
     const r5 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => mkRes(bytes), upload: async () => { throw { error: 'rate_limited', status: 429 }; } });
-    check('runClientFetch: upload zamítl (throw) → jeho kód', eq(r5, { ok: false, code: 'rate_limited' }));
+    check('runClientFetch: upload zamítl (throw) → jeho kód (upload: true)', eq(r5, { ok: false, code: 'rate_limited', upload: true }));
     const r6 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => ({ ok: false, status: 404, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) }), upload });
     check('runClientFetch: HTTP chyba stažení (ok:false) → network, bez uploadu', eq(r6, { ok: false, code: 'network' }) && calls.length === 2);
   }
@@ -731,6 +771,30 @@ Promise.all([
     check('installGifClientFetch: předvolba "ask" → beze změny, výzva čeká na klik', bx9.view('twitch', 'ask1')?.kind === 'client_fetch' && uploadCalls.length === 1 && declineCalls.length === 1);
     uninstall9();
     check('installGifClientFetch: uninstall vrátí outbox.onClientFetch (žádný předchozí hák → null)', bx9.onClientFetch === null);
+  }
+
+  // --- Review I1: selhání v prohlížeči ruší grant (decline s tokenem); chyba serveru na upload ne ---
+  {
+    const bx = new L.GifOutbox({ channel: () => 'rob', now: () => 0, hasMessage: () => true, setInterval: () => 1, clearInterval: () => {} });
+    const declines = [];
+    const uploads = [];
+    let serverErr = false;
+    const un = CF.installGifClientFetch({}, { addEventListener() {}, removeEventListener() {}, contains: () => true }, {
+      outbox: bx,
+      upload: async (b, token) => { uploads.push(token); return serverErr ? { ok: false, error: 'bad_type', status: 400 } : { ok: true }; },
+      decline: async (token, remember) => { declines.push([token, remember]); throw new Error('síť'); },
+      fetchImpl: async () => { if (!serverErr) throw new TypeError('Failed to fetch'); return { ok: true, status: 200, headers: { get: () => '4' }, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer }; },
+      pref: () => 'always',
+    });
+    const ev = (id, token) => ({ requestKey: `twitch:${id}`, channel: 'rob', platform: 'twitch', messageId: id, phase: 'client_fetch', pct: 50, token, url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: 90_000, serverNow: 0, pref: 'ask' });
+    bx.onProgress(ev('f1', 'tokF'));
+    await new Promise((r) => setTimeout(r, 0));
+    check('I1: fetch v prohlížeči selhal → decline(token, false), štítek chyby', eq(declines, [['tokF', false]]) && bx.view('twitch', 'f1')?.kind === 'client_failed', JSON.stringify(declines));
+    serverErr = true;
+    bx.onProgress(ev('f2', 'tokG'));
+    await new Promise((r) => setTimeout(r, 0));
+    check('I1: chyba vrácená serverem na upload → bez decline (grant je na serveru pryč)', declines.length === 1 && eq(uploads, ['tokG']) && bx.view('twitch', 'f2')?.kind === 'client_failed', JSON.stringify({ declines, uploads }));
+    un();
   }
 
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');

@@ -72,9 +72,17 @@ export const GIF_STATUS_TEXT = {
 };
 /** Jak dlouho po odmítnutí / vypršení / chybě stažení prohlížečem se výzva/text ke stažení GIFu schová. */
 export const GIF_CLIENT_NOTE_MS = 5_000;
-/** Výzva „Server nemůže GIF stáhnout, stáhnout ho prohlížečem?“ (host = doména odkazu). */
+/** Registrované jméno hostu (poslední dva popisky): i.imgur.com → imgur.com (review M3; co.uk apod. se nečeká). */
+export function siteOfHost(host) {
+  const h = String(host || '').toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+  const p = h.split('.');
+  return p.length > 2 ? p.slice(-2).join('.') : h;
+}
+/** Výzva „Server nemůže GIF stáhnout, stáhnout ho prohlížečem?“ (host = registrované jméno, siteOfHost). */
 export const GIF_CLIENT_FETCH_TEXT = (host) => `Server nemůže GIF z ${host} stáhnout. Stáhnout ho tvým prohlížečem a poslat?`;
-export const GIF_CLIENT_FETCH_TIP = 'Stáhne se z tvého prohlížeče (host uvidí tvou IP)';
+export const GIF_CLIENT_FETCH_TIP = (host) => `Stáhne se z tvého prohlížeče (${host} uvidí tvou IP)`;
+/** Kolečko po automatickém stažení (předvolba always), dokud nepřijde první průběh ze serveru (review M3). */
+export const GIF_CLIENT_FETCH_NOTE = (host) => `Stahuji z ${host}…`;
 /** Chyba stažení GIFu prohlížečem (`gif-progress` outcome / `clientFetchFailed`) → text štítku. */
 export const gifClientFailText = (code) => ({
   too_large: 'GIF je moc velký (max 10 MB)',
@@ -425,6 +433,8 @@ export class GifOutbox {
     if (e.state === 'none' && p.phase !== 'done') e.state = 'progress';
     // Pozdní průběh po čekání (pending → progress by štítek vrátil zpět) ignorovat.
     if (e.state !== 'progress' && p.phase !== 'done') return e;
+    // První průběh ze serveru po automatickém stažení prohlížečem → zpět procenta místo „Stahuji z …“ (review M3).
+    e.cfNote = null;
     if (!e.ownLink && this._isOwnLink(p.key)) e.ownLink = true;
     if (DOWNLOAD_PHASES.has(p.phase)) e.dl = true;
     e.floor = gifProgressPct(e, this.now(), e.floor);
@@ -520,8 +530,18 @@ export class GifOutbox {
     return e;
   }
 
-  /** Uživatel odsouhlasil stažení GIFu prohlížečem (Task 9) → kolečko 50 % (fáze `client_download`) do dalšího `gif-progress`. */
-  clientFetchStarted(platform, id) { const e = this.get(platform, id); if (!e || e.state !== 'client_fetch') return null; e.state = 'progress'; e.phase = 'client_download'; e.pct = 50; e.floor = 50; e.dl = true; e.at = this.now(); this._arm(); this.onChange([e.key]); return e; }
+  /**
+   * Uživatel odsouhlasil stažení GIFu prohlížečem (Task 9) → kolečko 50 % (fáze `client_download`) do dalšího `gif-progress`.
+   * `{ note: true }` (automatika podle předvolby always — výzvu nikdo neviděl): místo procent „Stahuji z <místo>…“.
+   */
+  clientFetchStarted(platform, id, { note = false } = {}) {
+    const e = this.get(platform, id);
+    if (!e || e.state !== 'client_fetch') return null;
+    e.cfNote = note && e.cf ? GIF_CLIENT_FETCH_NOTE(siteOfHost(e.cf.host)) : null;
+    e.state = 'progress'; e.phase = 'client_download'; e.pct = 50; e.floor = 50; e.dl = true; e.at = this.now();
+    this._arm(); this.onChange([e.key]);
+    return e;
+  }
 
   /** Stažení / odeslání prohlížečem selhalo (moc velký, špatný typ, síť, …) → červený text, po `GIF_CLIENT_NOTE_MS` pryč. */
   clientFetchFailed(platform, id, code) { const e = this.get(platform, id); if (!e) return null; e.state = 'client_failed'; e.failCode = String(code || ''); e.final = true; e.clearAt = this.now() + GIF_CLIENT_NOTE_MS; this._arm(); this.onChange([e.key]); return e; }
@@ -536,10 +556,10 @@ export class GifOutbox {
       // Náš odkaz: bez procent, dokud server nestahuje (u známého média nestahuje nikdy).
       if (e.ownLink && !e.dl) return { kind: 'sending', text: GIF_SENDING_TEXT };
       const pct = gifProgressPct(e, now, e.floor);
-      return { kind: 'progress', pct, text: formatGifPct(pct) };
+      return { kind: 'progress', pct, text: e.cfNote || formatGifPct(pct) };
     }
     // Výzva ke stažení prohlížečem (client_fetch) a chyba stažení (client_failed): vlastní stav (tlačítka / důvod).
-    if (e.state === 'client_fetch' && e.cf) return { kind: 'client_fetch', text: GIF_CLIENT_FETCH_TEXT(e.cf.host), host: e.cf.host, url: e.cf.url, token: e.cf.token, expiresAt: e.cf.expiresAt, pref: e.cf.pref, remaining: Math.max(0, e.cf.expiresAt - now) };
+    if (e.state === 'client_fetch' && e.cf) return { kind: 'client_fetch', text: GIF_CLIENT_FETCH_TEXT(siteOfHost(e.cf.host)), host: e.cf.host, url: e.cf.url, token: e.cf.token, expiresAt: e.cf.expiresAt, pref: e.cf.pref, remaining: Math.max(0, e.cf.expiresAt - now) };
     if (e.state === 'client_failed') return { kind: 'client_failed', text: gifClientFailText(e.failCode) };
     if (e.state === 'approved') return { kind: 'approved' };
     return { kind: e.state, text: GIF_STATUS_TEXT[e.state] || '', warn: e.state === 'pending' && e.warn };
@@ -761,10 +781,17 @@ export function paintGifStatus(doc, msgEl, view) {
     } else if (kind === 'client_fetch') {
       // Výzva ke stažení prohlížečem: tlačítka Task 9 čte přes `[data-cf]`; token nikdy do DOM (jen outbox.view()).
       st.innerHTML = '<span class="uc-gif-st-txt"></span><span class="uc-gif-cf-actions"><button type="button" class="uc-gif-cf-btn" data-cf="yes">Stáhnout a poslat</button><button type="button" class="uc-gif-cf-btn uc-gif-cf-no" data-cf="no">Ne</button><label class="uc-gif-cf-rem"><input type="checkbox" data-cf="remember"> Zapamatovat volbu</label></span><span class="uc-gif-st-wait uc-gif-cf-left" aria-hidden="true"></span>';
-      st.title = GIF_CLIENT_FETCH_TIP;
-      st.setAttribute('data-tooltip', GIF_CLIENT_FETCH_TIP);
     } else {
       st.innerHTML = '<span class="uc-gif-st-txt"></span>';
+    }
+    // Tooltip jen u výzvy; po změně stavu (stahování, chyba…) pryč, jinak by na štítku zůstal (review M1).
+    if (kind === 'client_fetch') {
+      const tip = GIF_CLIENT_FETCH_TIP(siteOfHost(view.host));
+      st.title = tip;
+      st.setAttribute('data-tooltip', tip);
+    } else {
+      st.removeAttribute('title');
+      st.removeAttribute('data-tooltip');
     }
   }
   if (kind === 'progress') {
