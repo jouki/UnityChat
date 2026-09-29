@@ -486,5 +486,21 @@ const glow = await ev(`(() => { const cs = getComputedStyle(document.getElementB
 check('Update: animovaný glow (pulzuje stále, box-shadow)', glow.anim === 'uc-update-glow' && glow.iter === 'infinite' && /rgba?\(/.test(glow.shadow), JSON.stringify(glow));
 await ev(`chrome.storage.session.remove('uc_update_ready').then(() => true)`);
 
+// ---- Přepínač měny v QR donatu: zvýraznění přejede (pokyn usera 2026-09-30) ----
+await ev(`(() => { const p = document.querySelector('.uc-qd'); if (!p || p.hidden || !p.classList.contains('open')) document.getElementById('btn-qrdono').click(); return true; })()`);
+await sleep(600);
+const curGeom = () => ev(`(() => { const g = document.querySelector('.uc-qd-cur'); const i = g?.querySelector('.uc-slide-ind'); const on = g?.querySelector('button.on'); if (!g || !i || !on) return null;
+  const gi = i.getBoundingClientRect(), go = on.getBoundingClientRect(); return { cur: on.dataset.cur, ix: Math.round(gi.left), ox: Math.round(go.left), iw: Math.round(gi.width), ow: Math.round(go.width), bg: getComputedStyle(on).backgroundImage }; })()`);
+const c0 = await curGeom();
+check('měna: indikátor sedí na vybrané měně, tlačítko samo pozadí nekreslí', c0 && Math.abs(c0.ix - c0.ox) <= 1 && Math.abs(c0.iw - c0.ow) <= 1 && c0.bg === 'none', JSON.stringify(c0));
+const other = c0?.cur === 'CZK' ? 'EUR' : 'CZK';
+const curMove = await ev(`(async () => { const g = document.querySelector('.uc-qd-cur'); const i = g.querySelector('.uc-slide-ind'); const from = i.getBoundingClientRect().left;
+  g.querySelector('button[data-cur="${other}"]').click();
+  const xs = []; for (let k = 0; k < 20; k++) { await new Promise((r) => requestAnimationFrame(r)); xs.push(Math.round(i.getBoundingClientRect().left * 10) / 10); }
+  const to = g.querySelector('button.on').getBoundingClientRect().left;
+  return { from: Math.round(from), to: Math.round(to), between: xs.filter((x) => x > Math.min(from, to) + 1 && x < Math.max(from, to) - 1).length, end: xs[xs.length - 1], cur: g.querySelector('button.on').dataset.cur }; })()`);
+check('měna: přepnutí = plynulý přejezd (mezipolohy), konec na nové měně', curMove && curMove.cur === other && curMove.between >= 3 && Math.abs(curMove.end - curMove.to) <= 1, JSON.stringify(curMove));
+await ev(`document.querySelector('.uc-qd-cur button[data-cur="${c0?.cur || 'CZK'}"]').click()`);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

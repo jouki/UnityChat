@@ -24,6 +24,12 @@
 }
 .uc-qd-cur button small { font-weight: 400; opacity: 0.7; }
 .uc-qd-cur button.on { background: var(--accent-gradient); color: #1a1000; }
+/* Posuvné zvýraznění vybrané měny (core/slide-indicator.js): pozadí kreslí indikátor, tlačítko jen barvu textu. */
+.uc-qd-cur.uc-slide-host { isolation: isolate; }
+.uc-qd-cur.uc-slide-host > button { position: relative; z-index: 1; transition: color 0.18s ease; }
+.uc-qd-cur.uc-slide-host > button.on { background: transparent; }
+.uc-qd-cur > .uc-slide-ind--cur { border: none; border-radius: 0; background: var(--accent-gradient); }
+@media (prefers-reduced-motion: reduce) { .uc-qd-cur.uc-slide-host > button { transition: none; } }
 /* Obrazovka s QR: měna zamčená (core lockCurrency). */
 .uc-qd-cur.locked { opacity: 0.55; }
 .uc-qd-cur.locked button { cursor: not-allowed; }

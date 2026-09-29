@@ -6,6 +6,7 @@
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
 import { registerPanel, panelShown, refocusField } from './panel-morph.js';
+import { createSlideIndicator } from './slide-indicator.js';
 
 export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
@@ -281,9 +282,14 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     f.amount.focus();
     L(`min ${cc.minAmount} ${cur}`);
   }
+  // Přepínač měny: zvýraznění přejede z jedné měny na druhou (core/slide-indicator.js), ne skokem.
+  let curSlide = null;
   function renderCurrency() {
     const c = CURRENCIES[cur];
-    for (const b of panel.querySelectorAll('.uc-qd-cur button')) { const on = b.dataset.cur === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+    const group = panel.querySelector('.uc-qd-cur');
+    for (const b of group.querySelectorAll('button')) { const on = b.dataset.cur === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+    if (!curSlide) curSlide = createSlideIndicator({ container: group, getActive: () => group.querySelector('button.on'), className: 'uc-slide-ind--cur' });
+    curSlide.update();
     $('.uc-qd-sym').textContent = c.sym;
     f.amount.step = String(c.step);
     const cc = currencyConfig(cfg, cur);
