@@ -320,7 +320,7 @@ div.uc-gif-more { cursor: default; }
 }
 
 /* ---- Výzva ke stažení GIFu prohlížečem (spec 2026-09-29, core gif-library.js fáze client_fetch) ---- */
-.uc-gif-st--client_fetch { flex-wrap: wrap; background: rgba(255, 140, 0, 0.12); color: var(--text, #efeff1); font-weight: 600; max-width: 100%; }
+.uc-gif-st--client_fetch { border-radius: 10px; padding: 5px 9px; flex-wrap: wrap; background: rgba(255, 140, 0, 0.12); color: var(--text, #efeff1); font-weight: 600; max-width: 100%; }
 .uc-gif-cf-actions { display: inline-flex; gap: 6px; align-items: center; }
 .uc-gif-cf-btn { border: 1px solid rgba(255, 140, 0, 0.6); background: rgba(255, 140, 0, 0.18); color: inherit; border-radius: 999px; padding: 1px 9px; font: inherit; cursor: pointer; }
 .uc-gif-cf-btn:hover { background: rgba(255, 140, 0, 0.32); }

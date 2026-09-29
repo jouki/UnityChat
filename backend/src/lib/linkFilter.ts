@@ -366,8 +366,15 @@ export function createLinkFilter(deps: LinkFilterDeps) {
       let until: number | null = null;
       try { until = gif.cooldownUntil?.(query) ?? null; } catch { until = null; }
       // `removed`: filtr odkazů zprávu hned potom smaže (host) → hláška to řekne, ne „odkaz zůstal“ (review M2).
-      if (until !== null) { try { gif.onCooldown?.({ m, ucChannel, until, removed: !!host }); } catch { /* nic */ } }
-      return null;
+      if (until !== null) { try { gif.onCooldown?.({ m, ucChannel, until, removed: !!host }); } catch { /* nic */ } return null; }
+      // Bez odměny (Židolišta odpověděla, cooldown neběží): stejně jako u neznámého přístupu se zpráva hned schová
+      // a intercept ji všem smaže se štítkem „GIF teď není možné poslat“ (gif_denied), na platformě smazat, v OBS nic
+      // (pokyn usera 2026-09-28; z cache to dřív končilo běžným odkazem — hlášení 2026-09-29). Filtr odkazů se
+      // u ní nepouští (štítek místo „Zpráva smazána“). Bez auto schválení: intercept skončí na kontrole přístupu.
+      if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
+      m.deleted = { by: 'filter', reason: 'gif_request' };
+      void gif.intercept({ m, ucChannel, workspace: ws.slug, candidate, query, preDeleted: 'gif_request', needAccess: true, filterAct: null, linkBlocked }).catch(() => {});
+      return { host: host ?? new URL(candidate.url).hostname, channel: ucChannel, gif: true };
     }
     if (!gif.tryReserve(ucChannel, m.platform, m.platformUserId)) return null;
     const filterAct = host ? () => act(m, ucChannel, host) : null;
