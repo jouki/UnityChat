@@ -92,12 +92,12 @@ export function fmtAmount(n, currency = 'CZK') {
   return `${fmtNumber(n)}${NBSP}${CURRENCY_SIGN[c] || c}`;
 }
 
-/** { czk, byCurrency: { CZK: 1250, EUR: 20 } } → „1 250 Kč + 20 €“ (Kč první; bez měn → czk). */
+/**
+ * Suma donatů vždy jen v korunách: { czk: 36950, byCurrency: { CZK: 33669, USD: 160.97 } } → „36 950 Kč“. Cizí měny
+ * přepočítává Židolišta (`amountCzk`), stejně jako Síň slávy; rozpad po měnách se neukazuje (pokyn usera 2026-09-29).
+ */
 export function fmtMoney(total) {
-  const by = Object.entries(total?.byCurrency || {}).filter(([, v]) => Number(v) > 0)
-    .sort(([a], [b]) => (a === 'CZK' ? -1 : b === 'CZK' ? 1 : a.localeCompare(b)));
-  if (!by.length) return fmtAmount(total?.czk || 0, 'CZK');
-  return by.map(([c, v]) => fmtAmount(v, c)).join(' + ');
+  return fmtAmount(Math.round(Number(total?.czk) || 0), 'CZK');
 }
 
 /**

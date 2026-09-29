@@ -132,11 +132,12 @@ Promise.all([
     // --- Profil: formáty, požadavky, dona ---
     const NB = '\u00a0';
     check('fmtNumber / fmtAmount / fmtMoney', uh.fmtNumber(1250) === `1${NB}250` && uh.fmtNumber(12.5) === '12,5' && uh.fmtAmount(1250, 'CZK') === `1${NB}250${NB}Kč`
-      && uh.fmtMoney({ czk: 1750, byCurrency: { EUR: 20, CZK: 1250 } }) === `1${NB}250${NB}Kč + 20${NB}€` && uh.fmtMoney({ czk: 150, byCurrency: {} }) === `150${NB}Kč`);
+      // Suma vždy jen v korunách (cizí měny přepočtené Židolištou, jako Síň slávy) — pokyn usera 2026-09-29.
+      && uh.fmtMoney({ czk: 1750, byCurrency: { EUR: 20, CZK: 1250 } }) === `1${NB}750${NB}Kč` && uh.fmtMoney({ czk: 36949.6, byCurrency: { CZK: 33669, USD: 160.97 } }) === `36${NB}950${NB}Kč` && uh.fmtMoney({ czk: 150, byCurrency: {} }) === `150${NB}Kč`);
     check('fmtDay / fmtTime (oddělovač dnů + čas u zprávy)', uh.fmtDay(new Date(2026, 8, 24, 10, 0).getTime()) === 'čtvrtek 24. 9. 2026' && uh.fmtTime(at) === '14:05');
     check('dayKey stejný den / jiný den', uh.dayKey(new Date(2026, 8, 24, 0, 1).getTime()) === uh.dayKey(new Date(2026, 8, 24, 23, 59).getTime()) && uh.dayKey(new Date(2026, 8, 24).getTime()) !== uh.dayKey(new Date(2026, 8, 25).getTime()));
     const dm = uh.donationsSummary({ total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } });
-    check('donationsSummary: celková částka ze všech zdrojů, bez hvězdičky', dm.amount === `1${NB}250${NB}Kč + 20${NB}€` && !dm.guess && dm.title === `Celkem darováno 1${NB}250${NB}Kč + 20${NB}€`, JSON.stringify(dm));
+    check('donationsSummary: celková částka ze všech zdrojů, bez hvězdičky', dm.amount === `1${NB}750${NB}Kč` && !dm.guess && dm.title === `Celkem darováno 1${NB}750${NB}Kč`, JSON.stringify(dm));
     check('donationsSummary divák: celková suma (count 0 → nic)', uh.donationsSummary({ total: { czk: 1000, byCurrency: { CZK: 1000 } }, count: 2 }).amount === `1${NB}000${NB}Kč` && uh.donationsSummary(undefined) === null && uh.donationsSummary({ count: 0, total: { czk: 0 } }) === null);
     check('donationLine', uh.donationLine({ amount: 150, currency: 'CZK', via: 'qr' }) === `poslal QR dono 150${NB}Kč` && uh.donationLine({ amount: 20, currency: 'EUR', via: 'fourthwall' }) === `poslal dono přes Fourthwall 20${NB}€`);
     check('statsText jen aktuální kanál (veřejný Profil)', uh.statsText({ firstSeen: at, lastSeen: at, total: 1 }, { channelOnly: true }) === 'V tomto kanálu: poprvé viděn 25. 9. 2026 · naposledy 25. 9. 2026 14:05 · celkem 1 zpráva');
