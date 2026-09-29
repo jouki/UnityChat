@@ -76,6 +76,8 @@ export function donoErrorText(err, cur) {
     case 'czk_not_configured': return 'Platby v Kč zatím nejsou nastavené.';
     case 'donate_not_configured': return 'Donate zatím není nastavený.';
     case 'invalid_test_token': return 'Neplatný testovací token.';
+    case 'not_mod': return 'Test bez tokenu je jen pro moderátory kanálu. Zadej testovací token.';
+    case 'mod_test_not_allowed': return 'Test bez tokenu se nepovedl. Zadej testovací token.';
     case 'platform_not_linked': return 'Na téhle platformě nejsi přihlášený.';
     case 'email_required': return 'Vyplň platný e-mail.';
     case 'rate_limited': return 'Moc pokusů za sebou, zkus to za chvíli.';
@@ -107,6 +109,7 @@ export const QR_DONO_BUTTON_SVG = QR_SVG_ICON;
  * @param {HTMLElement} o.host
  * @param {HTMLElement} o.button
  * @param {{ config(): Promise<object>, testToken(t: string): Promise<{valid:boolean}>,
+ *           modTest?(): Promise<{allowed:boolean, role:string|null}>,   test bez tokenu pro moda (server ověří roli)
  *           createIntent(body: object): Promise<object>, intentStatus(id: string): Promise<object>,
  *           profile(): Promise<object>, emailStart(email: string): Promise<object>, emailVerify(code: string): Promise<object> }} o.api
  *        Chyby hází s `.error` / `.minAmount` z odpovědi serveru.
@@ -122,6 +125,9 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   let cfg = null, cfgSig = null, cur = 'CZK';
   try { const c = currency?.load?.(); if (c === 'CZK' || c === 'EUR') cur = c; } catch { /* ignore */ }
   let testMode = false, testValid = false, tokenTimer = null, tokenSeq = 0;
+  // Mod / streamer kanálu: test bez tokenu. Token se do klienta neposílá — server jen potvrdí roli a při
+  // odeslání ji ověří znovu. Ruční token (test z účtu, který mod není) má přednost.
+  let modTestOk = false;
   let publicId = null, pollTimer = null, versionTimer = null, sampleAudio = null, paidShown = false;
   let ringRaf = null, ringStart = 0, ringPeriod = 0;
   let profile = null, verifier = null;
@@ -355,6 +361,18 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     $('.uc-qd-test').hidden = false;
     f.ttoken.focus();
     L('testmode odkryt');
+    void checkModTest();
+  }
+  async function checkModTest() {
+    if (!api.modTest || !identity?.()) return;
+    try {
+      const r = await api.modTest();
+      modTestOk = r?.allowed === true;
+      L(`modTest allowed=${modTestOk} role=${r?.role || '-'}`);
+    } catch (e) { modTestOk = false; L(`modTest fail ${e?.error || e?.message || e}`); }
+    $('.uc-qd-test').classList.toggle('uc-qd-test--mod', modTestOk);
+    f.ttoken.placeholder = modTestOk ? 'ověřeno jako moderátor — token není potřeba' : 'testovací token';
+    if (modTestOk && !f.ttoken.value.trim()) setTestValid(true);
   }
   function setTestValid(v) {
     testValid = v;
@@ -414,7 +432,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       nickname: values.nickname.trim(), ...(profile?.verified ? {} : { email: values.email.trim() }),
       currency: cur, amount: parseAmount(values.amount), message: values.message.trim(), ttsVoice: values.voice,
       ttsLanguage: cfg?.languages?.[0]?.code || 'cs',
-      ...(testMode && testValid ? { testToken: f.ttoken.value.trim(), markTest: f.marktest.checked, markPaid: f.markpaid.checked } : {}),
+      ...(testMode && testValid ? {
+        ...(f.ttoken.value.trim() ? { testToken: f.ttoken.value.trim() } : { modTest: true }),
+        markTest: f.marktest.checked, markPaid: f.markpaid.checked,
+      } : {}),
     };
     try {
       const res = await api.createIntent(body);
@@ -572,7 +593,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   f.ttoken.addEventListener('input', () => {
     win.clearTimeout(tokenTimer);
     const t = f.ttoken.value.trim();
-    if (!t) { tokenSeq++; setTestValid(false); return; }
+    if (!t) { tokenSeq++; setTestValid(modTestOk); return; }
     tokenTimer = win.setTimeout(() => checkToken(t), 500);   // debounce jako web
   });
   panel.addEventListener('click', (e) => {

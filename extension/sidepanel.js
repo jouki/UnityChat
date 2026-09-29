@@ -1370,6 +1370,7 @@ class UnityChat {
     return {
       config: () => this._ucApi(`/donate/config?channel=${encodeURIComponent(channel())}`),
       testToken: (token) => this._ucApi('/donate/test-token', { method: 'POST', body: { channel: channel(), token } }),
+      modTest: () => this._ucApi(`/donate/mod-test?channel=${encodeURIComponent(channel())}`),
       createIntent: (b) => this._ucApi('/donate/intents', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform } }),
       intentStatus: (id) => this._ucApi(`/donate/intents/${encodeURIComponent(id)}`),
       profile: () => this._ucApi('/account/profile'),

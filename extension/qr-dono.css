@@ -70,6 +70,7 @@
 
 .uc-qd-test { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px; border: 1px dashed var(--border); border-radius: 6px; }
 .uc-qd-test[hidden] { display: none; }
+.uc-qd-test--mod input[name="ttoken"]::placeholder { color: #9fdfa9; opacity: 1; }
 .uc-qd-test input[name="ttoken"] { flex: 1 1 100%; }
 .uc-qd-test label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; }
 .uc-qd-test input[type="checkbox"] { width: auto; accent-color: var(--accent); }
