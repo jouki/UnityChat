@@ -773,6 +773,26 @@ Promise.all([
     check('installGifClientFetch: uninstall vrátí outbox.onClientFetch (žádný předchozí hák → null)', bx9.onClientFetch === null);
   }
 
+  // --- Re-review M3: automatika (pref always) přes installGifClientFetch → „Stahuji z imgur.com…“ během stahování ---
+  {
+    const bx = new L.GifOutbox({ channel: () => 'rob', now: () => 0, hasMessage: () => true, setInterval: () => 1, clearInterval: () => {} });
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const un = CF.installGifClientFetch({}, { addEventListener() {}, removeEventListener() {}, contains: () => true }, {
+      outbox: bx,
+      upload: async () => ({ ok: true }),
+      decline: async () => {},
+      fetchImpl: async () => { await gate; return { ok: true, status: 200, headers: { get: () => '4' }, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer }; },
+      pref: () => 'always',
+    });
+    bx.onProgress({ requestKey: 'twitch:a1', channel: 'rob', platform: 'twitch', messageId: 'a1', phase: 'client_fetch', pct: 50, token: 'tokM', url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: 90_000, serverNow: 0, pref: 'ask' });
+    const v = bx.view('twitch', 'a1');
+    check('M3 (re-review): předvolba always → hned „Stahuji z imgur.com…“', v?.kind === 'progress' && /^Stahuji z imgur\.com/.test(v.text || ''), JSON.stringify(v));
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    un();
+  }
+
   // --- Review I1: selhání v prohlížeči ruší grant (decline s tokenem); chyba serveru na upload ne ---
   {
     const bx = new L.GifOutbox({ channel: () => 'rob', now: () => 0, hasMessage: () => true, setInterval: () => 1, clearInterval: () => {} });

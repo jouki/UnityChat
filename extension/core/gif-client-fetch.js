@@ -82,7 +82,7 @@ export function installGifClientFetch(doc, chatEl, { outbox, upload, decline, fe
   outbox.onClientFetch = (entry, p) => {
     prev?.(entry, p);
     const eff = p.pref !== 'ask' ? p.pref : pref();
-    if (eff === 'always') void go(entry.platform, entry.messageId, false);
+    if (eff === 'always') void go(entry.platform, entry.messageId, false, true);
     else if (eff === 'never') void no(entry.platform, entry.messageId, false);
   };
   return () => { chatEl.removeEventListener('click', onClick); outbox.onClientFetch = prev || null; };

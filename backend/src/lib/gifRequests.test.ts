@@ -1477,6 +1477,26 @@ test('review I4: vyčerpaný denní limit unlockeru uživatele → bez popisu a 
   assert.equal(noUnlock.at(-1), true);
 });
 
+test('re-review N2: popis z chyby bez odemčení (stránka stažená přímo, jen médium 429) se do limitu unlockeru nepočítá', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-N2' });
+  const noUnlock: boolean[] = [];
+  let described = 0;
+  const s = setup({
+    resolve: async (_src, hooks) => { noUnlock.push(!!hooks?.noUnlock); throw new GifError('host_blocked', blockedDesc); },
+    describe: async () => { described++; return blockedDesc; }, grants,
+    senderAccount: async () => 7, clientFetchPref: async () => 'ask',
+    toSender: async () => () => 1,
+  });
+  for (let i = 0; i <= GIF_UNLOCK_PER_USER_DAY; i++) {
+    const run = s.flow.intercept(from('42', `n${i}`, 'https://tenor.com/view/cat-gif-1'));
+    await untilGrant(grants);
+    grants.decline('tok-N2', 7);
+    await run;
+  }
+  assert.equal(described, 0);
+  assert.deepEqual(noUnlock, Array(GIF_UNLOCK_PER_USER_DAY + 1).fill(false), 'limit se nevyčerpal');
+});
+
 test('zamítnuté médium: schválit (jen do knihovny) / vault / trvale zahodit; retence 14 dní bez vaultu', async () => {
   const gone: string[] = [];
   const s = setup({ mediaDeleted: (id) => gone.push(id) });

@@ -1460,7 +1460,9 @@ export function createGifFlow(deps: GifFlowDeps) {
               return { ok: false, code };
             }
             const desc = fromErr ?? await deps.describe(p.candidate);
-            if ((fromErr || p.candidate.mode === 'page') && !unlockCounted) { unlockCounted = true; unlockUsed(k); }
+            // Jen skutečné odemčení: describe stránky. Stránka přes unlocker v resolve je už započítaná přes průběh
+            // `unlock` (unlockCounted); popis z chyby po přímo stažené stránce unlocker nestál (re-review N2).
+            if (!fromErr && p.candidate.mode === 'page') { unlockCounted = true; unlockUsed(k); }
             if (!desc) return { ok: false, code };
             const { token, grant, result } = deps.grants.issue({ requestKey: mk, channel: p.ucChannel, accountId, mediaUrl: desc.url, host: desc.host, kind: desc.kind, width: desc.width, height: desc.height });
             const delivered = progress('client_fetch', 50, { token, url: grant.mediaUrl, kind: grant.kind, width: grant.width, height: grant.height, host: grant.host, expiresAt: grant.expiresAt, serverNow: deps.now(), pref });
