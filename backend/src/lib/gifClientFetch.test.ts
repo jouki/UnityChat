@@ -47,6 +47,24 @@ test('granty: cizí účet, po TTL, prázdné, jiný typ, jiné rozměry → chy
   assert.deepEqual(await g.complete(noDims.token, 7, mp4(640, 360)), { ok: true }, 'bez popisu jen limity');
 });
 
+test('granty: vlastní timer na grant (nezávisí na sweep) — vyprší sám; complete() zruší timer jiného grantu', async () => {
+  const timers: Array<{ fn: () => void; cleared: boolean }> = [];
+  const fakeSetTimeout = (fn: () => void): unknown => { const t = { fn, cleared: false }; timers.push(t); return t; };
+  const fakeClearTimeout = (t: unknown): void => { (t as { cleared: boolean }).cleared = true; };
+  const g = createClientFetchGrants({ random: () => 'tok-live', setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout });
+
+  const a = g.issue(base);
+  assert.equal(timers.length, 1, 'issue() naplánuje vlastní timer');
+  timers[0].fn(); // vyprší sám — bez volání sweep()
+  assert.equal(await a.result, null);
+  assert.equal(g.size, 0);
+
+  const b = g.issue(base);
+  assert.equal(timers.length, 2);
+  assert.deepEqual(await g.complete(b.token, 7, gif(320, 240)), { ok: true });
+  assert.equal(timers[1].cleared, true, 'complete() zruší timer grantu');
+});
+
 test('granty: decline → result null hned; sweep po TTL; strop počtu', async () => {
   let t = 0;
   const g = createClientFetchGrants({ now: () => t, max: 2 });

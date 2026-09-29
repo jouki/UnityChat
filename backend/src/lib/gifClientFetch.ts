@@ -23,17 +23,38 @@ export interface ClientFetchGrants {
 }
 const hash = (t: string) => createHash('sha256').update(t).digest('hex');
 
-export function createClientFetchGrants({ now = Date.now, ttlMs = CLIENT_FETCH_TTL_MS, max = 500, random = () => randomBytes(32).toString('base64url') }: { now?: () => number; ttlMs?: number; max?: number; random?: () => string } = {}): ClientFetchGrants {
-  type Row = { grant: ClientFetchGrant; resolve: (v: ResolvedGif | null) => void };
+export function createClientFetchGrants({
+  now = Date.now, ttlMs = CLIENT_FETCH_TTL_MS, max = 500, random = () => randomBytes(32).toString('base64url'),
+  // Injektované časovače (testy s falešnými timery); produkce = globální setTimeout/clearTimeout.
+  setTimeout: setTimer = globalThis.setTimeout as (fn: () => void, ms: number) => unknown,
+  clearTimeout: clearTimer = globalThis.clearTimeout as (t: unknown) => void,
+}: {
+  now?: () => number; ttlMs?: number; max?: number; random?: () => string;
+  setTimeout?: (fn: () => void, ms: number) => unknown;
+  clearTimeout?: (t: unknown) => void;
+} = {}): ClientFetchGrants {
+  type Row = { grant: ClientFetchGrant; resolve: (v: ResolvedGif | null) => void; timer: unknown };
   const rows = new Map<string, Row>();
-  const drop = (k: string, v: ResolvedGif | null) => { const r = rows.get(k); if (!r) return false; rows.delete(k); r.resolve(v); return true; };
+  // Grant musí vypršet sám (řízený „mrtvý“ intercept by jinak visel do dalšího sweep() z server.ts, review Task 4
+  // liveness): každý issue() si naplánuje vlastní timer na TTL, drop() (z jakéhokoli důvodu) ho zase zruší.
+  const drop = (k: string, v: ResolvedGif | null) => {
+    const r = rows.get(k);
+    if (!r) return false;
+    rows.delete(k);
+    clearTimer(r.timer);
+    r.resolve(v);
+    return true;
+  };
   return {
     issue(g) {
       const token = random();
       const grant: ClientFetchGrant = { ...g, maxBytes: GIF_MAX_BYTES, expiresAt: now() + ttlMs };
       let resolve!: (v: ResolvedGif | null) => void;
       const result = new Promise<ResolvedGif | null>((r) => { resolve = r; });
-      rows.set(hash(token), { grant, resolve });
+      const k = hash(token);
+      const timer = setTimer(() => drop(k, null), ttlMs);
+      (timer as { unref?: () => void }).unref?.();
+      rows.set(k, { grant, resolve, timer });
       while (rows.size > max) drop(rows.keys().next().value!, null);
       return { token, grant, result };
     },

@@ -55,7 +55,9 @@ import integrationGifRoutes from './routes/integrationGif.js';
 import { createGifFlow, createGifNotifier, dbGifStore, senderAccount, servableMedia, servableMeta, startGifMaintenance } from './lib/gifRequests.js';
 import { sendAsBot, BotSendError } from './lib/botSend.js';
 import { claimGifSlot, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed } from './lib/gifAccess.js';
-import { resolveGif } from './lib/gifMedia.js';
+import { createBlockedHosts, describeGifSource, resolveGif } from './lib/gifMedia.js';
+import { createClientFetchGrants } from './lib/gifClientFetch.js';
+import { gifPrefs } from './lib/gifPrefs.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { createPhashWorker, dbGifLibraryStore, startPhashWorker } from './lib/gifLibrary.js';
@@ -117,10 +119,17 @@ const gifUnlocker = createUnlocker({
 });
 // Odhad doby Bright Data pro průběh u odesílatele (klouzavý průměr posledních 20 fallbacků, v paměti procesu).
 const gifUnlockEstimator = createUnlockEstimator();
+// Registr hostů, kteří serveru blokují IP (spec 2026-09-29 §1): resolveGif jim rovnou zkusí Bright Data / describe
+// místo přímého stažení, které by stejně skončilo host_blocked.
+const gifBlockedHosts = createBlockedHosts();
+// Jednorázové granty pro stažení GIFu prohlížečem odesílatele (spec §3, §6) — grant má vlastní timer (liveness,
+// gifClientFetch.ts) i pravidelný sweep tady jako pojistka (belt-and-braces).
+const gifGrants = createClientFetchGrants();
+setInterval(() => gifGrants.sweep(), 30_000).unref();
 const gifFlow = createGifFlow({
   store: dbGifStore,
   // probe: rozměr a počet snímků bez dekódování (sharp / ffprobe) → nad 2048 px / 600 snímků too_large (audit SEC-7).
-  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k) }),
+  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k), blockedHosts: gifBlockedHosts }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   claim: (workspace) => claimGifSlot(workspace),
@@ -152,6 +161,12 @@ const gifFlow = createGifFlow({
   mediaDeleted: (id) => gifMedia.forget(id),
   mediaChanged: (id) => gifMedia.invalidate(id),
   mediaApproved: (id) => gifMedia.prewarm(id),
+  // Host blokuje IP serveru (host_blocked) → popis stránky zdroje (Bright Data, může chybět bez klíče) + granty
+  // + předvolba účtu pro nabídku „stáhnout sám" (spec §3, §5, §6).
+  describe: (src) => describeGifSource(src, { unlocker: gifUnlocker, blockedHosts: gifBlockedHosts }),
+  grants: gifGrants,
+  senderAccount: (platform, userId) => senderAccount(platform, userId),
+  clientFetchPref: (accountId) => gifPrefs.getClientFetch(accountId),
   log: app.log,
 });
 // GIF knihovna (Task 2): dopočet perceptuálních hashů a návrhy duplikátů v rámci kanálu (lib/gifLibrary.ts).
@@ -320,7 +335,10 @@ await app.register(accountWarningRoutes, {
     return [...pendingEv, ...queueEv];
   },
 });
-await app.register(gifRoutes, { flow: gifFlow, store: dbGifStore, media: gifMedia });
+await app.register(gifRoutes, {
+  flow: gifFlow, store: dbGifStore, media: gifMedia,
+  grants: gifGrants, probe: (b, k) => probeMedia(b, k), prefs: gifPrefs,
+});
 await app.register(integrationGifRoutes, { flow: gifFlow, media: gifMedia });
 await app.register(soundboardRoutes);
 await app.register(sfxRequestRoutes);

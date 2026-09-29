@@ -146,5 +146,5 @@ Tabulka `bot_identities` (`sql/2026-09-22-bot-identities.sql`, tokeny šifrovan�
 ## GIF media: fetching sources that block the server
 
 - Cloudflare challenge on a direct download → Bright Data Web Unlocker API (`BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE`, daily cap `BRIGHTDATA_DAILY_CAP`; `lib/gifUnlocker.ts`).
-- Hosts that block the VPS IP entirely (Imgur) are handled by the sender's browser, see `docs/superpowers/specs/2026-09-29-gif-stazeni-prohlizecem-design.md`.
+- Host blocks the server's IP outright (Imgur) → `describeGifSource` (`lib/gifMedia.ts`) describes the page through the Web Unlocker (URL, kind, dimensions), and the sender's own browser downloads the bytes: a one-time grant (`lib/gifClientFetch.ts`, TTL `CLIENT_FETCH_TTL_MS`, own per-grant timer + `sweep()` as a backstop) is issued to the sender's `/account/stream`, who uploads the bytes via `POST /gif/client-upload` (verified against the grant: type, size, dimensions ±1 px). The account's preference (`ask` | `always` | `never`, `lib/gifPrefs.ts`, `account_gif_prefs`, `GET /auth/me` → `gifClientFetch`, `PUT /account/gif-prefs`) controls whether the offer is repeated. See `docs/superpowers/specs/2026-09-29-gif-stazeni-prohlizecem-design.md`.
 - `assertPublicUrl` runs before every hop regardless of the path.
