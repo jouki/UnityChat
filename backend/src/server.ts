@@ -57,7 +57,6 @@ import { sendAsBot, BotSendError } from './lib/botSend.js';
 import { claimGifSlot, gifAccess, gifAccessSync, gifCooldownUntilSync, gifUsed } from './lib/gifAccess.js';
 import { resolveGif } from './lib/gifMedia.js';
 import { createUnlocker, createUnlockEstimator } from './lib/gifUnlocker.js';
-import { createGifProxy } from './lib/gifProxy.js';
 import { isGifMessageId } from './lib/gifIds.js';
 import { createPhashWorker, dbGifLibraryStore, startPhashWorker } from './lib/gifLibrary.js';
 import { computePhash, probeMedia } from './lib/gifPhash.js';
@@ -118,19 +117,10 @@ const gifUnlocker = createUnlocker({
 });
 // Odhad doby Bright Data pro průběh u odesílatele (klouzavý průměr posledních 20 fallbacků, v paměti procesu).
 const gifUnlockEstimator = createUnlockEstimator();
-// Imgur blokuje IP serveru (stránky i CDN) → přes proxy Bright Data (bez přihlašovacích údajů vypnuto). Log jen host + kód.
-const gifProxy = createGifProxy({
-  customerId: config.BRIGHTDATA_CUSTOMER_ID,
-  zone: config.BRIGHTDATA_ZONE,
-  password: config.BRIGHTDATA_PROXY_PASSWORD,
-  ca: config.BRIGHTDATA_PROXY_CA,
-  dailyCap: config.BRIGHTDATA_DAILY_CAP,
-  log: (obj, msg) => app.log.info(obj, msg),
-});
 const gifFlow = createGifFlow({
   store: dbGifStore,
   // probe: rozměr a počet snímků bez dekódování (sharp / ffprobe) → nad 2048 px / 600 snímků too_large (audit SEC-7).
-  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k), proxy: gifProxy }),
+  resolve: (src, hooks) => resolveGif(src, { unlocker: hooks?.noUnlock ? null : gifUnlocker, estimator: gifUnlockEstimator, onProgress: hooks?.onProgress, probe: (b, k) => probeMedia(b, k) }),
   access: (q) => gifAccess(q, { log: app.log }),
   used: (p) => gifUsed(p, { log: app.log }),
   claim: (workspace) => claimGifSlot(workspace),

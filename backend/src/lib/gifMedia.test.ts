@@ -314,21 +314,3 @@ test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez
   const c = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: { headers: { 'content-type': 'image/gif' }, body: gif(10, 10) } }), lookupAll: publicDns });
   assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
 });
-
-test('resolveGif: host blokující IP serveru (imgur.com, i.imgur.com) jde přes deps.proxy, ostatní přímo; přesměrování hop po hopu', async () => {
-  const direct: string[] = [];
-  const proxied: string[] = [];
-  const page = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4">');
-  const routes: Record<string, Route> = {
-    'https://imgur.com/a/8as1KiG': { headers: { 'content-type': 'text/html' }, body: page },
-    'https://i.imgur.com/auBmmCk.mp4': { status: 302, headers: { location: 'https://cdn.example.net/auBmmCk.mp4' } },
-    'https://cdn.example.net/auBmmCk.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(640, 360) },
-  };
-  const viaProxy = fakeTransport(routes, proxied as never);
-  const viaDirect = fakeTransport(routes, direct as never);
-  const proxy = { transportFor: (h: string) => (h === 'imgur.com' || h.endsWith('.imgur.com') ? viaProxy : null), usedToday: 0 };
-  const r = await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport: viaDirect, lookupAll: publicDns, proxy });
-  assert.equal(r.kind, 'mp4');
-  assert.deepEqual(proxied.map((x: unknown) => (x as { url: string }).url), ['https://imgur.com/a/8as1KiG', 'https://i.imgur.com/auBmmCk.mp4']);
-  assert.deepEqual(direct.map((x: unknown) => (x as { url: string }).url), ['https://cdn.example.net/auBmmCk.mp4'], 'cizí CDN po přesměrování přímo');
-});

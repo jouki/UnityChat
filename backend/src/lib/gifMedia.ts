@@ -24,7 +24,6 @@ import https from 'node:https';
 import { findLinks } from './links.js';
 import { config } from '../config.js';
 import type { Unlocker, UnlockEstimator } from './gifUnlocker.js';
-import type { GifProxy } from './gifProxy.js';
 
 export type GifKind = 'gif' | 'webp' | 'mp4';
 
@@ -331,8 +330,6 @@ export interface FetchDeps {
   onProgress?: (e: GifFetchProgress) => void;
   /** Sonda rozměrů a počtu snímků bez dekódování (lib/gifPhash.ts probeMedia); chybí = jen rozměry z hlavičky. */
   probe?: MediaProber;
-  /** Proxy Bright Data pro hosty, které blokují IP serveru úplně — stránky i CDN (Imgur; lib/gifProxy.ts). null = vypnuto. */
-  proxy?: GifProxy | null;
 }
 
 /**
@@ -380,8 +377,7 @@ export async function isCloudflareChallenge(res: TransportResponse, signal: Abor
 
 /** GET s ručními přesměrováními (max 3, každé znovu ověřené) → odpověď se statusem 2xx. */
 async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps): Promise<{ res: TransportResponse; url: URL }> {
-  // Host blokující IP serveru → proxy (lib/gifProxy.ts); každý hop přesměrování zvlášť. Veřejnost adresy se ověří i tak.
-  const transportFor = (u: URL): Transport => deps.proxy?.transportFor(u.hostname) ?? deps.transport ?? nodeTransport;
+  const transport = deps.transport ?? nodeTransport;
   const signal = ctx.signal;
   let url: URL;
   try { url = new URL(start); } catch { throw new GifError('bad_url'); }
@@ -389,7 +385,7 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
     // Veřejná adresa se ověří VŽDY před jakýmkoli stažením — i před předáním URL do Bright Data.
     await assertPublicUrl(url, deps.lookupAll);
     let res: TransportResponse;
-    try { res = await transportFor(url)(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
+    try { res = await transport(url, { Accept: accept, 'User-Agent': UA, 'Accept-Encoding': 'identity' }, signal); }
     catch (e) { throw e instanceof GifError ? e : new GifError(signal.aborted ? 'timeout' : 'network'); }
     // Ochrana proti botům (Cloudflare challenge) = jediný případ pro Bright Data; jiné chyby (404, HTML místo
     // média, velikost…) jdou rovnou ven bez placeného pokusu. Bez možnosti obejít → vlastní kód bot_protection.

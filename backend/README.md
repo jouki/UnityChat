@@ -146,5 +146,5 @@ Tabulka `bot_identities` (`sql/2026-09-22-bot-identities.sql`, tokeny šifrovan�
 ## GIF media: fetching sources that block the server
 
 - Cloudflare challenge on a direct download → Bright Data Web Unlocker API (`BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE`, daily cap `BRIGHTDATA_DAILY_CAP`; `lib/gifUnlocker.ts`).
-- Hosts that block the VPS IP entirely, pages and CDN alike (Imgur: `imgur.com` + `i.imgur.com` answer 429 "over capacity"; verified 2026-09-28) → the same zone in **native proxy mode** (`brd.superproxy.io:44445`, CONNECT tunnel with our own headers; `lib/gifProxy.ts`). Needs `BRIGHTDATA_CUSTOMER_ID` (`hl_…`) and `BRIGHTDATA_PROXY_PASSWORD` (zone password from the zone's Overview → "Native proxy-based access"); optional `BRIGHTDATA_PROXY_CA` (their CA certificate, PEM base64 — Coolify cannot hold multi-line values), without it the proxied hosts are not certificate-verified. Empty credentials = proxy disabled. The VPS IP must be on the zone's IP allowlist.
-- `assertPublicUrl` runs before every hop regardless of the path (no SSRF through the proxy).
+- Hosts that block the VPS IP entirely (Imgur) are handled by the sender's browser, see `docs/superpowers/specs/2026-09-29-gif-stazeni-prohlizecem-design.md`.
+- `assertPublicUrl` runs before every hop regardless of the path.
