@@ -44,7 +44,7 @@ const { result: { sessionId } } = await call('Target.attachToTarget', { targetId
 const now = Date.now();
 const H = (platform, id, user, text, i) => ({ platform, id, username: user, userId: `u-${id}`, message: text, color: '#1e90ff', timestamp: now - 60000 + i * 1000, historical: true });
 const H1 = [H('twitch', 'tw-1', 'TwTester', 'ahoj z twitche', 1), H('kick', 'ki-1', 'KickTester', 'ahoj z kicku', 2), H('youtube', 'yt-1', 'YtTester', 'ahoj z youtube', 3)];
-const mock = { mod: true, broadcast: 'ok' };   // broadcast: 'ok' | 'kickfail' | 'not_mod'
+const mock = { mod: true, broadcast: 'ok', sameName: false };   // broadcast: 'ok' | 'kickfail' | 'not_mod'; sameName = stejný login na všech platformách
 const posts = { send: [], broadcast: [] };
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
 s.onevent = async (d) => {
@@ -59,6 +59,7 @@ s.onevent = async (d) => {
   if (u.includes('/account/stream-ticket')) return json({ ok: true, ticket: 'tk', expiresInMs: 60000 });
   if (u.includes('/account/stream')) return;   // podržet
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
+  if (u.includes('/auth/me') && mock.sameName) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'jouki728', displayName: 'Jouki728' }, kick: { login: 'jouki728', displayName: 'Jouki728' }, youtube: { login: 'jouki728', displayName: 'Jouki' } }, warnings: [] });
   if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: { login: 'modkick', displayName: 'ModKick' }, youtube: { login: '@modyt', displayName: 'Mod YT' } }, warnings: [] });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   if (u.includes('/moderation/')) return json({ ok: true, requests: [], messages: {} });
@@ -108,6 +109,8 @@ await ev(`document.getElementById('platform-menu').classList.add('hidden')`);
 mock.broadcast = 'kickfail';
 await type('ahoj všichni');
 await until(`document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]').length >= 3`, 4000);
+// POST jde až po vykreslení optimistických zpráv (token, fetch) → počkat na zachycení, jinak test závodí.
+for (let i = 0; i < 40 && !posts.broadcast.length; i++) await sleep(100);
 const b = posts.broadcast[0];
 check('B jeden POST /chat/broadcast s texty pro všechny platformy', posts.broadcast.length === 1 && b.text === 'ahoj všichni' && b.channel && Object.keys(b.texts).sort().join() === 'kick,twitch,youtube', JSON.stringify(b));
 check('B nic přes /chat/send', posts.send.length === 0);
@@ -171,8 +174,24 @@ check('G divák: píše na vybranou platformu', st.bc === false && !/všechny/.t
 const nb = posts.broadcast.length;
 await ev(`document.getElementById('platform-menu').classList.add('hidden')`);
 await type('divák píše');
-await sleep(600);
+// Počkat na zachycení POSTu (ne pevná pauza) — jinak test závodí s odesláním.
+for (let i = 0; i < 40 && posts.send.at(-1)?.text !== 'divák píše'; i++) await sleep(100);
 check('G divák: zpráva přes /chat/send, ne Broadcast', posts.broadcast.length === nb && posts.send.at(-1)?.text === 'divák píše', JSON.stringify(posts.send.at(-1)));
+
+// ---- H: stejný login na všech platformách — echo se páruje s optimistickou zprávou SVÉ platformy (hlášení 2026-09-29:
+// klíč bez platformy → tři optimistické zprávy sdílely jeden klíč a odesílatel viděl broadcast dvakrát) ----
+mock.mod = true; mock.sameName = true; mock.broadcast = 'ok';
+await ev(`chrome.storage.local.set({ uc_send_platform: 'twitch', uc_send_broadcast: true })`);
+await boot();
+await until(`document.body.classList.contains('uc-can-moderate')`);
+await until(`document.getElementById('active-badge').classList.contains('bc')`, 6000);
+await type('hmm, test');
+await until(`[...document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]')].filter(e => /hmm, test/.test(e.textContent)).length === 3`, 4000);
+await ev(`(() => { const t = Date.now(); for (const [platform, id, username] of [['twitch', 'echo-tw', 'Jouki728'], ['kick', 'echo-ki', 'Jouki728'], ['youtube', 'echo-yt', 'jouki728']]) window.ucGif.add({ platform, id, username, userId: 'u-' + id, message: 'hmm, test \u2800', timestamp: t, color: '#ff8c00' }); return true; })()`);
+await sleep(400);
+const hRows = await ev(`[...document.querySelectorAll('#chat .msg')].filter(e => /hmm, test/.test(e.querySelector('.tx')?.textContent || '')).map(e => ({ id: e.dataset.msgId, p: e.dataset.platform }))`);
+check('H stejný login: po echu přesně 3 zprávy (jedna na platformu), žádná optimistická nezbyla', Array.isArray(hRows) && hRows.length === 3 && hRows.map((r) => r.p).sort().join() === 'kick,twitch,youtube' && !hRows.some((r) => /^sent-/.test(r.id)), JSON.stringify(hRows));
+check('H echo dostalo id své platformy', Array.isArray(hRows) && ['twitch:echo-tw', 'kick:echo-ki', 'youtube:echo-yt'].every((k) => hRows.some((r) => `${r.p}:${r.id}` === k)), JSON.stringify(hRows));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

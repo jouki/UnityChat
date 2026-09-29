@@ -8244,7 +8244,7 @@ class UnityChat {
     }
 
     // Párování optimistická ↔ echo z platformy (echo má jiné id, stejný text).
-    const contentKey = this._contentKey(msg.username, msg.message);
+    const contentKey = this._contentKey(msg.platform, msg.username, msg.message);
     if (msg._optimistic) {
       if (contentKey) this._optimisticKeys.set(contentKey, msg.id);
     } else if (contentKey && this._optimisticKeys.has(contentKey)) {
@@ -8924,7 +8924,9 @@ class UnityChat {
     this._scrollEnd();
   }
 
-  _contentKey(username, message) {
+  // Klíč nese platformu: stejný login na víc platformách (broadcast) jinak dal třem optimistickým zprávám
+  // jeden klíč a echa se spárovala křížem / vůbec (hlášení 2026-09-29).
+  _contentKey(platform, username, message) {
     if (!username || !message) return null;
     const norm = (s) => (s || '')
       .toLowerCase()
@@ -8933,7 +8935,7 @@ class UnityChat {
       .trim()
       .substring(0, 80);
     // Úvodní @zmínka se nepočítá: optimistická odpověď napříč platformami ji v UnityChatu nemá, echo ano.
-    return norm(username) + '|' + norm(String(message).replace(/^\s*@\S+\s+/, ''));
+    return `${platform || ''}|${norm(username)}|${norm(String(message).replace(/^\s*@\S+\s+/, ''))}`;
   }
 
   // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
