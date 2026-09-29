@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { createHash } from 'node:crypto';
-import { zidolistaDonations, normalizeDonationsPage, _resetDonationsCache, DONATIONS_MAX_PAGES, zidolistaSignature, signedGetPath, emailProof } from './zidolista.js';
+import { zidolistaDonations, normalizeDonationsPage, _resetDonationsCache, DONATIONS_MAX_PAGES, zidolistaSignature, signedGetPath } from './zidolista.js';
 import { verifySignature } from './inboundAuth.js';
 
 test('podpis UC → Židolišta: t=<s>,v1=<hex HMAC(klíč, t + "." + "GET /cesta?query")>, query přesně jak se posílá', () => {
@@ -21,29 +20,6 @@ test('podpis UC → Židolišta: t=<s>,v1=<hex HMAC(klíč, t + "." + "GET /cest
 const quiet = { warn: () => {} };
 const Q = { workspace: 'Rob', platform: 'twitch' as const, userId: '42', login: 'Divak' };
 const res = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as unknown as Response;
-
-test('ověřený e-mail účtu: hlavička X-UC-Email + otisk emailHash v podepsané adrese, vlastní cache', async () => {
-  _resetDonationsCache();
-  const hash = createHash('sha256').update('tonner@example.com', 'utf8').digest('hex');
-  assert.deepEqual(emailProof('  Tonner@Example.COM '), { email: 'tonner@example.com', hash }, 'malá písmena, po trimu');
-  assert.equal(emailProof(''), null);
-  assert.equal(emailProof('nesmysl'), null);
-  const seen: Array<{ u: string; email: string | undefined }> = [];
-  const fetch = (async (u: string, init: { headers: Record<string, string> }) => {
-    seen.push({ u, email: init.headers['X-UC-Email'] });
-    assert.equal(verifySignature(init.headers['X-UC-Signature'], signedGetPath(u), 'k', Math.floor(Date.now() / 1000)), 'ok', 'otisk je v podepsané adrese');
-    return res({ ok: true, items: u.includes('emailHash=') ? [{ id: 'e1', amount: 100, currency: 'CZK', amountCzk: 100, paidAt: '2026-02-01T00:00:00Z', matchedBy: 'email' }] : [], nextBefore: null });
-  }) as unknown as typeof globalThis.fetch;
-  const deps = { fetch, apiKey: 'k', base: 'https://z.test/', now: () => 0, log: quiet };
-  assert.deepEqual(await zidolistaDonations(Q, deps), [], 'bez e-mailu jako dosud');
-  const items = await zidolistaDonations({ ...Q, email: ' Tonner@Example.com' }, deps);
-  assert.deepEqual(items!.map((i) => `${i.id}:${i.matchedBy}`), ['e1:email'], 'dotaz s e-mailem nebere cache dotazu bez něj');
-  assert.equal(seen[0].email, undefined);
-  assert.ok(!seen[0].u.includes('emailHash'));
-  assert.equal(seen[1].email, 'tonner@example.com');
-  assert.ok(seen[1].u.endsWith(`&emailHash=${hash}`), seen[1].u);
-  assert.ok(!seen[1].u.includes('tonner'), 'samotný e-mail v adrese není');
-});
 
 test('normalizeDonationsPage: čas → ms, bez id / času pryč, message a matchedBy', () => {
   const p = normalizeDonationsPage({ items: [

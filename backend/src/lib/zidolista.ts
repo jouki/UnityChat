@@ -8,7 +8,7 @@
 // Stream pro integraci (sse/integrationStream.ts) potřebuje mapování synchronně
 // (volá se z ingest onLive), proto `workspaceForChannelSync` čte jen cache,
 // kterou drží čerstvou `startWorkspaceRefresh()` ze serveru.
-import { createHash, createHmac } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { config } from '../config.js';
 import { signV2Headers } from './signatureV2.js';
 
@@ -202,10 +202,6 @@ export async function twitchChannelsOf(slug: string): Promise<string[]> {
 //   → { ok, workspace, total: { czk, byCurrency }, count, items: [{ id, amount, currency, amountCzk, paidAt, via,
 //       matchedBy: 'uc'|'nickname', nickname, message? }], nextBefore: ISO|null }
 // Hlavičky X-Api-Key + X-UC-Signature (zidolistaFetch: v2, bez klíče v2 dosavadní v1); limit Židolišty 300/min na klíč → cache 60 s na identitu nutná.
-// Ověřený e-mail účtu UC (2026-09-29): hlavička `X-UC-Email` + v query `emailHash` = sha256 hex e-mailu malými
-// písmeny po trimu. Podpis hlavičky nekryje, otisk v podepsané adrese ji k podpisu váže; samotný e-mail v adrese
-// není. Židolišta pak vrátí všechny platby z té adresy (i pod jinou přezdívkou dárce) s matchedBy 'email' = jistá
-// shoda. Jen e-mail ověřený kódem (account_emails), nikdy zadaný bez ověření. Nesoulad → 400 bad_email_hash.
 // `total`/`count` jsou za všechna dona diváka, ale jistou a odhadnutou (matchedBy 'nickname') část nerozlišují
 // a víc identit téhož člověka by se sečetlo dvakrát → UnityChat stáhne položky (max DONATIONS_MAX_PAGES stránek)
 // a součty počítá sám po dedupu podle id (lib/userHistory.ts donationTotals).
@@ -218,7 +214,7 @@ export interface DonationItem {
   /** Čas platby (ms). */
   paidAt: number;
   via: string;
-  /** 'uc' = jistá shoda (QR vytvořil tentýž divák v UC), 'email' = jistá (ověřený e-mail účtu), 'nickname' = jen odhad podle jména. */
+  /** 'uc' = jistá shoda (QR vytvořil tentýž divák v UC), 'nickname' = jen odhad podle jména. */
   matchedBy: string | null;
   nickname: string | null;
   message: string | null;
@@ -255,20 +251,7 @@ export function normalizeDonationsPage(raw: unknown): { items: DonationItem[]; n
   return { items, nextBefore: nb };
 }
 
-export interface DonationsQuery {
-  workspace: string; platform: Platform; userId: string; login: string;
-  /** Ověřený e-mail účtu UC, kterému identita patří (jen ověřený kódem). */
-  email?: string | null;
-}
-
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** E-mail pro Židolištu: malými písmeny po trimu + sha256 hex otisk (UTF-8). Neplatný / prázdný → null. */
-export function emailProof(email: string | null | undefined): { email: string; hash: string } | null {
-  const e = String(email ?? '').trim().toLowerCase();
-  if (!e || e.length > 254 || !EMAIL_SHAPE.test(e)) return null;
-  return { email: e, hash: createHash('sha256').update(e, 'utf8').digest('hex') };
-}
+export interface DonationsQuery { workspace: string; platform: Platform; userId: string; login: string }
 type WarnLog = { warn: (o: object, m: string) => void };
 export interface DonationsDeps {
   fetch?: typeof fetch; apiKey?: string; base?: string; now?: () => number; /** Čas podpisu (unix s) — testy. */ nowS?: () => number; log?: WarnLog;
@@ -290,8 +273,7 @@ const donationsCache = new Map<string, { at: number; value: DonationItem[] | nul
  */
 export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps = {}): Promise<DonationItem[] | null> {
   const now = deps.now ?? Date.now;
-  const proof = emailProof(q.email);
-  const key = `${q.workspace.toLowerCase()}|${q.platform}|${q.userId}|${q.login.toLowerCase()}|${proof?.hash ?? ''}`;
+  const key = `${q.workspace.toLowerCase()}|${q.platform}|${q.userId}|${q.login.toLowerCase()}`;
   const hit = donationsCache.get(key);
   if (hit?.inflight) return hit.inflight;
   if (hit && now() - hit.at < DONATIONS_CACHE_MS) return hit.value;
@@ -313,9 +295,8 @@ export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps 
       for (let page = 0; page < DONATIONS_MAX_PAGES; page++) {
         const qs = new URLSearchParams({ platform: q.platform, userId: q.userId, login: q.login.toLowerCase(), limit: String(DONATIONS_PAGE) });
         if (before) qs.set('before', before);
-        if (proof) qs.set('emailHash', proof.hash);
         const url = `${base}/integrations/${encodeURIComponent(q.workspace.toLowerCase())}/donations?${qs}`;
-        const r = await zidolistaFetch(url, { signal: AbortSignal.timeout(5000), legacyV1: true, ...(proof ? { headers: { 'X-UC-Email': proof.email } } : {}) }, { fetch: f, apiKey, signingKey: deps.signingKey, nowS: deps.nowS?.() });
+        const r = await zidolistaFetch(url, { signal: AbortSignal.timeout(5000), legacyV1: true }, { fetch: f, apiKey, signingKey: deps.signingKey, nowS: deps.nowS?.() });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as { ok?: boolean };
         if (!j || j.ok === false) throw new Error('not ok');
