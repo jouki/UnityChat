@@ -5014,10 +5014,15 @@ class UnityChat {
     const key = hidden ? '_hidden' : '_deleted';
     const srv = hidden ? '_srvHidden' : '_srvDeleted';
     // Živé smazání / schování: změna výšky zprávy plynule (core/height-anim.js), ne skokem.
-    for (const el of els) window.UC_CORE.animateHeightChange(el, () => this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' }));
+    for (const el of els) this._changeHeight(el, () => this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' }));
     // Citace smazané zprávy v odpovědích jen „↩ @jméno“ (odkaz smazaného GIFu se nesmí vrátit, review I2).
     if (!hidden) window.UC_CORE.dropReplyBodies([this.chatEl, ...(this._parkedTop || []), ...(this._parkedBottom || [])], id);
     return els.length;
+  }
+
+  /** Změna výšky zprávy (smazání / obnovení) plynule; chat, který držel konec, ho drží i během ní. */
+  _changeHeight(el, mutate) {
+    window.UC_CORE.changeHeightPinned(this.chatEl, el, mutate, { pinned: this.autoScroll, isPinned: () => this.autoScroll });
   }
 
   /** Vrátit lokální smazání (odmítnuté optimistické smazání). */
@@ -5025,10 +5030,10 @@ class UnityChat {
     if (this._serverDeleted?.has(String(id))) { this._ucLog('Mod', `undo ${platform}:${id} přeskočeno — smazání potvrdil server`); return; }
     const msg = this.store.get(String(id));
     if (msg) { msg._deleted = false; msg._srvDeleted = false; }
-    for (const el of this._msgEls(id, platform)) {
+    for (const el of this._msgEls(id, platform)) this._changeHeight(el, () => {
       if (msg && this._isModerated({ ...msg, deleted: false })) this._paintDeleted(el, msg);
       else this._restoreMessage(el, msg);
-    }
+    });
   }
 
   /** Nastavení stylu nebo role se změnily → přebarvit všechny smazané/skryté zprávy. */
@@ -5089,10 +5094,10 @@ class UnityChat {
       }
     }
     const els = this._msgEls(d.messageId, d.platform);
-    for (const el of els) {
+    for (const el of els) this._changeHeight(el, () => {
       if (msg && this._isModerated(msg)) this._paintDeleted(el, msg);
       else this._restoreMessage(el, msg || fresh);
-    }
+    });
     if (!els.length && !msg && fresh) this._addMessage({ ...fresh, hidden: false, deleted: false });
     return els.length;
   }

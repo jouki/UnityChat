@@ -4,6 +4,8 @@
 // s dočasně vynuceným zobrazením (`.uc-h-anim`, moderation.css) a průhledností. Bez rozdílu výšky nic.
 // Sdílené OBS chatem, webem i addonem. Bez chrome.*, DOM jen přes předaný element.
 
+import { scrollToBottom } from './slide-in.js';
+
 export const HEIGHT_ANIM_MS = 160;
 const EASE = 'cubic-bezier(0.45, 0, 0.25, 1)';
 const BOX = ['paddingTop', 'paddingBottom', 'marginTop', 'marginBottom'];
@@ -14,6 +16,44 @@ const reduced = (win) => { try { return !!win?.matchMedia?.('(prefers-reduced-mo
 export function cancelHeightAnim(el) {
   const a = el?._ucHeightAnim;
   if (a) { try { a.cancel(); } catch { /* ignore */ } }
+}
+
+/**
+ * Držet chat na konci po dobu změny výšky zprávy uvnitř (obnovená zpráva se rozbalí → konec chatu by utekl pod
+ * okraj, dokud nepřijde další zpráva — hlášení usera 2026-09-29). Dorovnává se před každým snímkem
+ * (requestAnimationFrame) a navíc časovačem — OBS pouští snímky pozdě. `isPinned()` = host pořád drží konec (uživatel mezitím neodjel nahoru).
+ * @param {HTMLElement} chatEl
+ * @param {{ms?: number, isPinned?: () => boolean, onPin?: () => void}} [o]
+ */
+export function holdBottom(chatEl, { ms = HEIGHT_ANIM_MS + 80, isPinned = () => true, onPin } = {}) {
+  if (!chatEl) return;
+  const win = chatEl.ownerDocument.defaultView;
+  const end = win.performance.now() + ms;
+  clearTimeout(chatEl._ucHoldTimer);
+  const run = (chatEl._ucHoldRun || 0) + 1;
+  chatEl._ucHoldRun = run;
+  const pin = () => {
+    if (chatEl._ucHoldRun !== run || !chatEl.isConnected || !isPinned()) return false;
+    onPin?.();
+    scrollToBottom(chatEl);
+    return win.performance.now() < end;
+  };
+  const tick = () => { if (pin()) chatEl._ucHoldTimer = setTimeout(tick, 16); };
+  const frame = () => { if (pin()) win.requestAnimationFrame?.(frame); };
+  tick();
+  win.requestAnimationFrame?.(frame);
+}
+
+/**
+ * `animateHeightChange` + držení konce chatu, když ho host držel před změnou (`pinned`).
+ * @param {HTMLElement} chatEl
+ * @param {HTMLElement} el
+ * @param {() => void} mutate
+ * @param {{pinned?: boolean, isPinned?: () => boolean, onPin?: () => void, durationMs?: number, reducedMotion?: boolean}} [o]
+ */
+export function changeHeightPinned(chatEl, el, mutate, { pinned = false, isPinned, onPin, ...anim } = {}) {
+  animateHeightChange(el, mutate, anim);
+  if (pinned) holdBottom(chatEl, { ms: (anim.durationMs ?? HEIGHT_ANIM_MS) + 80, isPinned, onPin });
 }
 
 /**
