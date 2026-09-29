@@ -40,8 +40,9 @@ import { gifUsable } from './gifAccess.js';
 const GIF_ROLES = new Set<GifRole>(['broadcaster', 'moderator', 'vip', 'sub', 'viewer']);
 /** Role uložená v meta žádosti → GifRole; staré žádosti bez role → null (gif-used bez role). */
 const gifRoleOf = (v: unknown): GifRole | null => (typeof v === 'string' && GIF_ROLES.has(v as GifRole) ? v as GifRole : null);
-import type { GifCandidate, GifFetchProgress, GifSource, ResolvedGif } from './gifMedia.js';
+import type { GifCandidate, GifDescriptor, GifFetchProgress, GifSource, ResolvedGif } from './gifMedia.js';
 import { GifError, normalizeSourceUrl, textWithoutLink } from './gifMedia.js';
+import type { ClientFetchGrants } from './gifClientFetch.js';
 import { gifMediaUrl, gifMessageId, gifMessageState } from './gifIds.js';
 import { clearMediaStrikes, moveMediaInto } from './gifLibrary.js';
 import type { Platform } from './zidolista.js';
@@ -74,6 +75,8 @@ export interface GifMediaInfo {
   width: number | null;
   height: number | null;
   sha256: string;
+  /** server (staženo serverem) | client (stažení prohlížečem odesílatele — host blokuje IP serveru, spec 2026-09-29). Starší řádky / testy bez sloupce = server. */
+  source?: string;
   approvedAt: Date | null;
   rejectedAt: Date | null;
   rejectedBy: string | null;
@@ -101,7 +104,7 @@ export interface GifPendingView {
    * `tokenRequired`: médium je zamítnuté (nová žádost na dříve zamítnutý GIF) → vydá se jen s tokenem moda
    * (`?t=`, audit SEC-1); karta moda ho načítá s tokenem.
    */
-  media: { url: string; kind: string; width: number | null; height: number | null; tokenRequired?: true };
+  media: { url: string; kind: string; width: number | null; height: number | null; tokenRequired?: true; clientFetched?: true };
   createdAt: number;
   expiresAt: number;
   /** GIF byl už dříve zamítnut (karta moda: kdy, kým; odesílatel jen ⚠). */
@@ -127,6 +130,7 @@ export function pendingView(r: GifRequest): GifPendingView {
     media: {
       url: r.mediaId ? gifMediaUrl(r.mediaId) : '', kind: r.kind, width: r.width, height: r.height,
       ...((r.meta as Record<string, unknown> | null)?.tokenRequired ? { tokenRequired: true as const } : {}),
+      ...((r.meta as Record<string, unknown> | null)?.clientFetched ? { clientFetched: true as const } : {}),
     },
     createdAt: r.createdAt.getTime(),
     expiresAt: r.expiresAt.getTime(),
@@ -202,7 +206,8 @@ export interface NewGifRequest {
 }
 
 export interface GifStore {
-  saveMedia(m: ResolvedGif, meta: { channel: string; sourceUrlNorm: string | null; sha256: string }): Promise<string>;
+  /** `source`: 'client' = bajty stáhl prohlížeč odesílatele (host blokuje IP serveru); chybí = 'server'. */
+  saveMedia(m: ResolvedGif, meta: { channel: string; sourceUrlNorm: string | null; sha256: string; source?: 'server' | 'client' }): Promise<string>;
   deleteMedia(id: string): Promise<void>;
   getMedia(id: string): Promise<GifMediaInfo | null>;
   /** Médium kanálu podle normalizované URL nebo sha256; přednost approved > rejected > pending. */
@@ -302,7 +307,7 @@ export interface GifStore {
 
 const mediaCols = {
   id: gifMedia.id, channel: gifMedia.channel, status: gifMedia.status, kind: gifMedia.kind, width: gifMedia.width, height: gifMedia.height,
-  sha256: gifMedia.sha256, approvedAt: gifMedia.approvedAt, rejectedAt: gifMedia.rejectedAt, rejectedBy: gifMedia.rejectedBy, vault: gifMedia.vault,
+  sha256: gifMedia.sha256, source: gifMedia.source, approvedAt: gifMedia.approvedAt, rejectedAt: gifMedia.rejectedAt, rejectedBy: gifMedia.rejectedBy, vault: gifMedia.vault,
   tags: gifMedia.tags, purgedAt: gifMedia.purgedAt, purgedBy: gifMedia.purgedBy, purgeAt: gifMedia.purgeAt, statusBeforePurge: gifMedia.statusBeforePurge,
 };
 /** findMedia: schválené (knihovna) > zamítnuté > čekající. */
@@ -319,6 +324,7 @@ export const dbGifStore: GifStore = {
     await db.insert(gifMedia).values({
       id, kind: m.kind, contentType: m.contentType, bytes: m.bytes, size: m.bytes.length,
       sha256: meta.sha256, width: m.width, height: m.height, channel: meta.channel, sourceUrlNorm: meta.sourceUrlNorm, status: 'pending',
+      source: meta.source ?? 'server',
       // Tagy ze stránky zdroje (Tenor/Giphy, lib/gifMedia.ts pageTags); hash a duplicity dopočítá lib/gifLibrary.ts na pozadí.
       tags: m.tags ?? [],
     });
@@ -787,6 +793,17 @@ export interface GifFlowDeps {
   mediaChanged?: (id: string) => void;
   /** Schváleno: médium do paměťové cache jako approved PŘED rozesláním (diváci přijdou naráz). */
   mediaApproved?: (id: string) => Promise<void>;
+  /**
+   * Host blokuje IP serveru (`host_blocked`, spec 2026-09-29 §3): popis média pro výzvu ke stažení prohlížečem
+   * odesílatele (describeGifSource). Chybí = výzva se nenabízí, převod selže jako dřív.
+   */
+  describe?: (src: GifSource) => Promise<GifDescriptor | null>;
+  /** Jednorázové granty pro stažení prohlížečem odesílatele (lib/gifClientFetch.ts). Chybí = výzva se nenabízí. */
+  grants?: ClientFetchGrants;
+  /** Účet odesílatele (lib/gifRequests.ts senderAccount) — bez účtu nemá kam poslat výzvu. */
+  senderAccount?: (platform: Platform, userId: string) => Promise<number | null>;
+  /** Předvolba účtu (lib/gifPrefs.ts): do události, ať klient nečeká na /auth/me. Chybí = 'ask'. */
+  clientFetchPref?: (accountId: number) => Promise<'ask' | 'always' | 'never'>;
   log: Log;
 }
 
@@ -1388,6 +1405,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         }
         const mode = access?.mode ?? 'all';
         progress('access', 10);
+        // Host odmítl server (host_blocked) → obtain() nabídne stažení prohlížečem odesílatele; sha256/dedup pak
+        // počítá z bajtů od klienta, ne ze serveru (saveMedia sourceUrlNorm null — URL zdroje není klíč dedupu).
+        let clientFetched = false;
 
         // Známé médium bez stahování: náš odkaz podle id, jinak normalizovaná URL; pak stažení + sha256.
         const urlNorm = p.candidate.mode === 'own' ? null : normalizeSourceUrl(p.candidate.url);
@@ -1414,7 +1434,23 @@ export function createGifFlow(deps: GifFlowDeps) {
               const pct = Math.min(50, 10 + Math.floor(40 * Math.max(0, Math.min(1, frac))));
               if (pct > lastPct && (pct >= lastPct + 5 || pct === 50)) progress('download', pct);
             } });
-          } catch (e) { return { ok: false, code: e instanceof GifError ? e.code : 'exception' }; }
+          } catch (e) {
+            const code = e instanceof GifError ? e.code : 'exception';
+            // Host blokuje IP serveru (spec 2026-09-29): popis média + jednorázový grant → odesílatel stáhne prohlížečem.
+            // Jen s účtem (tell), mimo režim approved (bajty by se nepoužily) a jen když popis je.
+            if (code !== 'host_blocked' || !tell || mode === 'approved' || !deps.grants || !deps.describe || !deps.senderAccount) return { ok: false, code };
+            const accountId = await deps.senderAccount(m.platform, m.platformUserId).catch(() => null);
+            const desc = accountId === null ? null : await deps.describe(p.candidate);
+            if (!desc || accountId === null) return { ok: false, code };
+            const pref = deps.clientFetchPref ? await deps.clientFetchPref(accountId).catch(() => 'ask' as const) : 'ask';
+            const { token, grant, result } = deps.grants.issue({ requestKey: mk, channel: p.ucChannel, accountId, mediaUrl: desc.url, host: desc.host, kind: desc.kind, width: desc.width, height: desc.height });
+            progress('client_fetch', 50, { token, url: grant.mediaUrl, kind: grant.kind, width: grant.width, height: grant.height, host: grant.host, expiresAt: grant.expiresAt, serverNow: deps.now(), pref });
+            deps.log.info({ channel: p.ucChannel, platform: m.platform, host: grant.host }, 'gif: host blokuje server → výzva odesílateli ke stažení prohlížečem');
+            const got = await result;
+            if (!got) return { ok: false, code: 'client_fetch' };
+            clientFetched = true;
+            v = got;
+          }
           const sha256 = createHash('sha256').update(v.bytes).digest('hex');
           const bySha = await deps.store.findMedia(p.ucChannel, { sha256 });
           return bySha ? { ok: true, known: bySha, fresh: null, sha256 } : { ok: true, known: null, fresh: v, sha256 };
@@ -1485,7 +1521,7 @@ export function createGifFlow(deps: GifFlowDeps) {
             deps.log.info({ channel: p.ucChannel, platform: m.platform, auto }, 'gif: globální cooldown chatu běží → okamžité schválení neprojde');
           } else try {
             if (!mediaId && res.fresh) {
-              mediaId = await deps.store.saveMedia(res.fresh, { channel: p.ucChannel, sourceUrlNorm: urlNorm, sha256: res.sha256 });
+              mediaId = await deps.store.saveMedia(res.fresh, { channel: p.ucChannel, sourceUrlNorm: clientFetched ? null : urlNorm, sha256: res.sha256, source: clientFetched ? 'client' : 'server' });
               savedFresh = true;
             }
             const v = res.fresh ?? known!;
@@ -1504,6 +1540,7 @@ export function createGifFlow(deps: GifFlowDeps) {
                 ...(auto ? { auto: true } : {}), ...(approvedKnown && !auto ? { instant: true } : {}), ...(previouslyRejected ? { previouslyRejected } : {}),
                 // Zamítnuté médium zůstává jen s tokenem i s novou žádostí (audit SEC-1) → karta moda ho načte s tokenem.
                 ...(known?.status === 'rejected' ? { tokenRequired: true } : {}),
+                ...(clientFetched ? { clientFetched: true } : {}),
               },
               // requestTtlSec z odpovědi Židolišty (z cache, už načtená); chybí → 300 s.
               expiresAt: new Date(deps.now() + (access?.requestTtlSec ?? 300) * 1000),
@@ -1519,8 +1556,9 @@ export function createGifFlow(deps: GifFlowDeps) {
         } else {
           deps.log.info({ channel: p.ucChannel, platform: m.platform, host: safeHost(p.candidate.url), code: res.code }, 'gif: převod odkazu selhal (běžný odkaz)');
           // Režim „jen schválené": náš odkaz na neznámé médium i odkaz za ochranou proti botům (Bright Data se
-          // v tomhle režimu nevolá) je nový GIF (smazaný filtrem už je pryč).
-          if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection') && p.preDeleted !== 'link_filter') {
+          // v tomhle režimu nevolá), i host blokující server (stažení prohlížečem klienta se v tomto režimu
+          // nenabízí, bajty by se nepoužily) je nový GIF (smazaný filtrem už je pryč).
+          if (mode === 'approved' && (p.candidate.mode === 'own' || res.code === 'bot_protection' || res.code === 'host_blocked') && p.preDeleted !== 'link_filter') {
             await dropOriginal(p, GIF_NOT_ALLOWED_REASON, { reason: 'approved_only', botReply: senderNoAccount });   // technický kód (res.code) je v logu výš
             notice('approved_only');
             return finish('not_allowed');
@@ -1590,7 +1628,7 @@ export function createGifFlow(deps: GifFlowDeps) {
         await safe('gif-pending', () => deps.notify(created!, 'gif-pending', view));
         await safe('integrace gif.pending', async () => deps.integration({ type: 'gif.pending', workspace: created!.workspace, requestId: created!.id, platform: created!.platform, userId: created!.userId, login: created!.login, messageId: created!.messageId, text: view.text, media: view.media, expiresAt: created!.expiresAt.toISOString(), ...(view.previouslyRejected ? { previouslyRejected: view.previouslyRejected } : {}) }));
         await emitQueue(p.ucChannel);
-        await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_request', platform: m.platform, targetLogin: created!.login, targetMessageId: m.platformMessageId, params: { requestId: created!.id, kind: created!.kind, source: safeHost(p.candidate.url), ...(view.previouslyRejected ? { previouslyRejected: true } : {}) }, result: {} }));
+        await safe('moderation_actions', async () => deps.recordAction?.({ channel: p.ucChannel, accountId: null, actor: 'filter', action: 'gif_request', platform: m.platform, targetLogin: created!.login, targetMessageId: m.platformMessageId, params: { requestId: created!.id, kind: created!.kind, source: (clientFetched ? 'client:' : '') + safeHost(p.candidate.url), ...(view.previouslyRejected ? { previouslyRejected: true } : {}) }, result: {} }));
         deps.log.info({ channel: p.ucChannel, platform: m.platform, requestId: created.id, kind: created.kind }, 'gif: žádost o schválení');
         return finish('requested');
       } catch (e) {

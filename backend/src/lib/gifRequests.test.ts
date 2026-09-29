@@ -4,6 +4,7 @@ import { createGifFlow, createGifNotifier, approvedMessageRow, pendingView, forS
 import type { GifRequest } from '../db/schema.js';
 import type { IngestMessage } from '../ingest/types.js';
 import { GifError, type ResolvedGif } from './gifMedia.js';
+import { createClientFetchGrants } from './gifClientFetch.js';
 import { toClientMessage } from '../routes/chat.js';
 
 const MEDIA = 'a'.repeat(32);
@@ -29,7 +30,7 @@ function memStore(now: () => number) {
   const store: GifStore = {
     async saveMedia(m, meta) {
       const id = mediaSeq++ === 0 ? MEDIA : `${String(mediaSeq).padStart(2, '0')}${'b'.repeat(30)}`;
-      media.set(id, { id, channel: meta.channel, status: 'pending', kind: m.kind, width: m.width, height: m.height, sha256: meta.sha256, approvedAt: null, rejectedAt: null, rejectedBy: null, vault: false, urlNorm: meta.sourceUrlNorm, useCount: 0 });
+      media.set(id, { id, channel: meta.channel, status: 'pending', kind: m.kind, width: m.width, height: m.height, sha256: meta.sha256, approvedAt: null, rejectedAt: null, rejectedBy: null, vault: false, urlNorm: meta.sourceUrlNorm, useCount: 0, source: meta.source ?? 'server' });
       return id;
     },
     async deleteMedia(id) { media.delete(id); log.push(`deleteMedia:${id}`); },
@@ -173,6 +174,9 @@ function memStore(now: () => number) {
 }
 
 const resolved: ResolvedGif = { bytes: Buffer.from('GIF89a'), kind: 'gif', contentType: 'image/gif', width: 320, height: 240, sourceUrl: 'https://media.tenor.com/x.gif' };
+
+/** GIF hlavička s rozměry (jako `gif()` v gifUnlocker.test.ts) — bajty pro upload klienta. */
+const gifBytes = (w: number, h: number): Buffer => { const b = Buffer.alloc(32); b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return b; };
 
 function setup(over: Partial<GifFlowDeps> = {}) {
   let t = 1_000_000;
@@ -1330,6 +1334,56 @@ test('průběh: převod selže → hotovo s výsledkem failed; neodemčeno → d
   await d.flow.intercept(params({ preDeleted: null, needAccess: true }));
   assert.equal(told.at(-1)!.outcome, 'denied');
   await f.flow._idle();
+});
+
+test('intercept: host blokuje server → popis + grant jen odesílateli (gif-progress client_fetch bez logu tokenu), upload → žádost; médium bez URL klíče', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-A' });
+  const sent: Array<[string, Record<string, unknown>]> = [];
+  const s = setup({
+    resolve: async () => { throw new GifError('host_blocked'); },
+    describe: async () => ({ url: 'https://i.imgur.com/a.gif', kind: 'gif', width: 320, height: 240, host: 'i.imgur.com' }),
+    grants,
+    senderAccount: async () => 7,
+    clientFetchPref: async () => 'ask',
+    toSender: async () => (e, d) => { sent.push([e, d as Record<string, unknown>]); },
+  });
+  const run = s.flow.intercept(params({ candidate: { url: 'https://imgur.com/a/8as1KiG', mode: 'page', token: 'https://imgur.com/a/8as1KiG' } }));
+  await new Promise((r) => setImmediate(r));
+  const cf = sent.find(([e, d]) => e === 'gif-progress' && d.phase === 'client_fetch')?.[1];
+  assert.ok(cf, 'výzva odešla');
+  assert.equal(cf!.token, 'tok-A'); assert.equal(cf!.url, 'https://i.imgur.com/a.gif'); assert.equal(cf!.host, 'i.imgur.com'); assert.equal(cf!.pref, 'ask'); assert.equal(cf!.pct, 50);
+  assert.deepEqual(await grants.complete('tok-A', 7, gifBytes(320, 240)), { ok: true });
+  assert.equal(await run, 'requested');
+  const r = s.mem.reqs.get(1)!;
+  assert.equal((r.meta as Record<string, unknown>).clientFetched, true);
+  const m = [...s.mem.media.values()][0];
+  assert.equal(m.urlNorm, null, 'URL zdroje není klíč dedupu');
+  assert.equal(m.source, 'client');
+  const pending = s.calls.find((c) => c[0] === 'notify:gif-pending')![1] as { media: Record<string, unknown> };
+  assert.equal(pending.media.clientFetched, true);
+});
+
+test('intercept: odmítnutí / vypršení grantu → běžný odkaz (settleHeld error); bez účtu, v režimu approved a bez popisu se výzva nenabízí', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-B' });
+  const sent: string[] = [];
+  const mk = (over: Partial<GifFlowDeps>) => setup({ resolve: async () => { throw new GifError('host_blocked'); }, describe: async () => ({ url: 'https://i.imgur.com/a.gif', kind: 'gif', width: 320, height: 240, host: 'i.imgur.com' }), grants, senderAccount: async () => 7, toSender: async () => (e, d) => { sent.push(`${e}:${(d as { phase?: string }).phase ?? ''}`); }, ...over });
+  const a = mk({});
+  const run = a.flow.intercept(params());
+  await new Promise((r) => setImmediate(r));
+  assert.ok(sent.includes('gif-progress:client_fetch'));
+  grants.decline('tok-B', 7);
+  assert.equal(await run, 'failed');
+  assert.ok(a.calls.some((c) => c[0] === 'restore'), 'zpráva obnovena jako běžný odkaz');
+  sent.length = 0;
+  const noAcc = mk({ toSender: async () => null });
+  assert.equal(await noAcc.flow.intercept(params()), 'failed');
+  assert.equal(sent.length, 0);
+  const approved = mk({ access: async () => ({ allowed: true, until: null, cooldownUntil: null, cooldownSec: 60, requestTtlSec: 120, mode: 'approved' }) });
+  assert.equal(await approved.flow.intercept(params()), 'not_allowed');
+  assert.ok(!sent.includes('gif-progress:client_fetch'));
+  const noDesc = mk({ describe: async () => null });
+  assert.equal(await noDesc.flow.intercept(params()), 'failed');
+  assert.ok(!sent.includes('gif-progress:client_fetch'));
 });
 
 test('zamítnuté médium: schválit (jen do knihovny) / vault / trvale zahodit; retence 14 dní bez vaultu', async () => {

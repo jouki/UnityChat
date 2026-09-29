@@ -166,6 +166,7 @@ export const gifMedia = pgTable('gif_media', {
   // GIF knihovna (backend/sql/2026-09-26-gif-library.sql): kanál, dedup URL, stav, počítadla použití.
   channel: text('channel'),                          // UC kanál (knihovna je per kanál)
   sourceUrlNorm: text('source_url_norm'),            // normalizovaná URL zdroje (lib/gifMedia.ts normalizeSourceUrl)
+  source: text('source').notNull().default('server'),   // server | client (stažení prohlížečem odesílatele, spec 2026-09-29 §7)
   // pending | approved | rejected | withdrawn (zahozeno, zprávy nechat) | purging (zahozeno i se zprávami, smaže se
   // v purge_at) | unavailable (stažený GIF, soubor smazán; řádek zůstává kvůli štítku ve zprávách a dedupu)
   status: text('status').notNull().default('pending'),
