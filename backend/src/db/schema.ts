@@ -565,6 +565,13 @@ export const accountDonatePrefs = pgTable('account_donate_prefs', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Stažení GIFu prohlížečem odesílatele (spec 2026-09-29 §5): předvolba účtu ask | always | never. Ručně SQL.
+export const accountGifPrefs = pgTable('account_gif_prefs', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  clientFetch: text('client_fetch').notNull().default('ask'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Soundboard (spec 2026-09-24-soundboard-se-tiers-design.md): oblíbené zvuky a počty
 // přehrání per účet. Zvuky samotné žijí v Židolišti, sound_id = její stabilní id.
 // Ručně SQL (backend/sql/2026-09-24-soundboard.sql).

@@ -21,6 +21,7 @@ import { runBroadcast } from '../lib/chatBroadcast.js';
 import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } from '../lib/twitchFirstMessage.js';
 import { accountModIdentities } from '../lib/chatRole.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
+import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -168,7 +169,10 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     // Nepotvrzená varování od moda (moderace část 2) — klient je ukáže hned po přihlášení.
     let warnings: Awaited<ReturnType<typeof pendingWarnings>> = [];
     try { warnings = await pendingWarnings(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: varování nenačtena'); }
-    return { ok: true, accountId: req.webAccountId, platforms, warnings };
+    // Předvolba „stažení GIFu prohlížečem odesílatele" (Task 6) — tabulka chybí / výpadek DB → výchozí 'ask'.
+    let gifClientFetch: ClientFetchPref = 'ask';
+    try { gifClientFetch = await getClientFetchPref(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: gifClientFetch nenačten'); }
+    return { ok: true, accountId: req.webAccountId, platforms, warnings, gifClientFetch };
   });
 
   // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.

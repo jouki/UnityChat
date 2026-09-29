@@ -651,3 +651,26 @@ test('POST /gif/client-upload: jen s Bearer, tokenem účtu a správnými bajty 
   r = await post({ 'x-gif-token': 'tok-Z' }, Buffer.alloc(10 * 1024 * 1024 + 2048));
   assert.equal(r.statusCode, 413); assert.equal(await g4.result, null);
 });
+
+// ---- PUT /account/gif-prefs (Task 6) ----
+
+test('PUT /account/gif-prefs: platná hodnota → 200 a zaznamenáno; neplatná → 400', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const media = new MediaServer(async () => null);
+  const app = Fastify();
+  const auth: preHandlerAsyncHookHandler = async (req) => { (req as { webAccountId?: number }).webAccountId = 7; };
+  const recorded: unknown[] = [];
+  await app.register(gifRoutes, {
+    flow: {} as never, store: {} as never, media, auth,
+    prefs: { getClientFetch: async () => 'ask', setClientFetch: async (a: number, v: string) => { recorded.push([a, v]); } } as never,
+  });
+  let r = await app.inject({ method: 'PUT', url: '/account/gif-prefs', payload: { clientFetch: 'always' } });
+  assert.equal(r.statusCode, 200);
+  assert.deepEqual(r.json(), { ok: true, clientFetch: 'always' });
+  assert.deepEqual(recorded, [[7, 'always']]);
+  r = await app.inject({ method: 'PUT', url: '/account/gif-prefs', payload: { clientFetch: 'x' } });
+  assert.equal(r.statusCode, 400);
+  assert.deepEqual(r.json(), { ok: false, error: 'clientFetch' });
+  await app.close();
+});

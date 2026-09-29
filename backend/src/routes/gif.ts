@@ -35,6 +35,7 @@ import { channelMatches } from '../lib/messageDeletes.js';
 import { publishRestored } from '../lib/linkRestore.js';
 import { GIF_MAX_BYTES, type MediaProber } from '../lib/gifMedia.js';
 import type { ClientFetchGrants } from '../lib/gifClientFetch.js';
+import { isClientFetchPref } from '../lib/gifPrefs.js';
 
 export type MediaEntry = { bytes: Buffer; contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel?: string | null };
 /** Médium bez bajtů (stav + kanál kvůli tokenu) — ověřuje se dřív, než se z DB načtou bajty (audit SEC-2). */
@@ -711,5 +712,15 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
     grants?.decline(String(req.body?.token || ''), acc);
     if (req.body?.remember === true) await opts.prefs?.setClientFetch(acc, 'never').catch(() => {});
     return { ok: true };
+  });
+
+  // Předvolba účtu „stažení GIFu prohlížečem odesílatele" (Task 6, nastavení).
+  app.put<{ Body: { clientFetch?: unknown } }>('/account/gif-prefs', { preHandler: session }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const v = req.body?.clientFetch;
+    if (!isClientFetchPref(v)) return reply.code(400).send({ ok: false, error: 'clientFetch' });
+    if (!opts.prefs) return reply.code(503).send({ ok: false, error: 'unavailable' });
+    await opts.prefs.setClientFetch(req.webAccountId!, v);
+    return { ok: true, clientFetch: v };
   });
 }
