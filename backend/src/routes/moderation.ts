@@ -48,6 +48,7 @@ import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter, toModeratedContent, toRestoredMessage, type ClientRow, type ClientMessage } from './chat.js';
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
+import { verifiedEmail } from './account.js';
 import { userSearchRoutes } from './userSearch.js';
 import { dbUserSearchDeps } from '../lib/userSearch.js';
 import { accountIdentities } from '../lib/moderationTargets.js';
@@ -408,6 +409,7 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
         return pch ? (await archivedUserByLogin(platform, pch, login))?.userId ?? null : null;
       },
       app.log,
+      verifiedEmail,
     ),
     defaultChannel: DEFAULT_CHANNEL,
   });

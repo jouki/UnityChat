@@ -221,7 +221,20 @@ test('buildPublicSummary: cíl bez UC účtu → Židolišta se ptá za kliknuto
   assert.deepEqual((out.body as Record<string, unknown>).donations, { total: { czk: 10, byCurrency: { CZK: 10 } }, count: 1 });
   await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, deps({ donations: async (_c, _i, o) => { asked++; opts = o; return []; } }));
   assert.equal(asked, 2);
-  assert.deepEqual(opts, { public: true }, 'veřejná volání jdou přes globální strop');
+  assert.deepEqual(opts, { public: true, accountId: 42 }, 'veřejná volání jdou přes globální strop');
+});
+
+test('dona: dotaz nese účet UC cíle (ověřený e-mail účtu páruje platby i pod jinou přezdívkou)', async () => {
+  const seen: unknown[] = [];
+  const d = deps({
+    resolveTargets: async () => ({ primary: { platform: 'twitch', userId: '1', login: 'trokner' }, all: [{ platform: 'twitch', userId: '1', login: 'trokner' }], accountId: 7 }),
+    accountIdentities: async () => [{ platform: 'youtube', userId: 'y1', login: 'tonne.r', displayName: 'Tonner' }],
+    donations: async (_c, _i, o) => { seen.push(o); return []; },
+  });
+  await buildSummary({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, d);
+  await buildDonations({ accountId: 1, channel: 'robdiesalot', platform: 'twitch', userId: '1' }, d);
+  await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, d);
+  assert.deepEqual(seen, [{ accountId: 7 }, { accountId: 7 }, { public: true, accountId: 7 }]);
 });
 
 test('makeWindowBudget: max N za okno celkem, po okně znovu', () => {

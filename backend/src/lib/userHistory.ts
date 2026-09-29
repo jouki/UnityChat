@@ -57,8 +57,9 @@ export interface HistoryDeps {
   /**
    * Dona identit ve workspace kanálu `channel` (registr, nikdy od klienta); null = Židolišta nedostupná.
    * `public` = veřejný Profil: necachovaná volání Židolišty jdou přes globální strop (PUBLIC_DONATIONS_PER_MIN).
+   * `accountId` = účet UC cíle: jeho ověřený e-mail jde do dotazu, Židolišta vrátí i platby z té adresy.
    */
-  donations: (channel: string, ids: UserTarget[], opts?: { public?: boolean }) => Promise<DonationItem[] | null>;
+  donations: (channel: string, ids: UserTarget[], opts?: { public?: boolean; accountId?: number | null }) => Promise<DonationItem[] | null>;
   /** Stav médií GIFů ve stránce (routes/chat.ts gifMediaStatuses; id → status, null = DB nedostupná); chybí = DB. */
   gifStatus?: (rows: Message[]) => Promise<ReadonlyMap<string, string> | null>;
 }
@@ -227,7 +228,7 @@ export async function buildSummary(input: SummaryInput, deps: HistoryDeps, cache
     deps.latestName(targets.primary.platform, targets.primary.userId),
     deps.moderation(input.channel, ids, HISTORY_MODERATION_LIMIT),
     latestInChannel(ids, byUc.get(input.channel) ?? [], deps),
-    deps.donations(input.channel, ids).catch(() => null),
+    deps.donations(input.channel, ids, { accountId: targets.accountId }).catch(() => null),
   ]);
   let nick: { nickname: string; color: string | null } | null = null;
   for (const i of [targets.primary, ...ids]) { nick = await deps.nickname(i.platform, i.login); if (nick) break; }
@@ -286,7 +287,7 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
     deps.latestName(primary.platform, primary.userId),
     latestInChannel([primary], here, deps),
     deps.nickname(primary.platform, primary.login),
-    ids.length ? deps.donations(input.channel, ids, { public: true }).catch(() => null) : Promise.resolve(null),
+    ids.length ? deps.donations(input.channel, ids, { public: true, accountId: targets.accountId }).catch(() => null) : Promise.resolve(null),
   ]);
   const user = {
     platform: primary.platform,
@@ -327,7 +328,7 @@ async function latestInChannel(ids: UserTarget[], groups: ChannelGroup[], deps: 
 export async function buildDonations(input: SummaryInput, deps: HistoryDeps, cache: HistoryTabsCache | null = null): Promise<Out> {
   const tabs = await historyTabs(input, deps, cache);
   if (!tabs) return { status: 404, body: { ok: false, error: 'not_found' } };
-  const items = await deps.donations(input.channel, tabs.ids).catch(() => null);
+  const items = await deps.donations(input.channel, tabs.ids, { accountId: tabs.targets.accountId }).catch(() => null);
   if (!items) return { status: 200, body: { ok: true, available: false, items: [] } };
   return {
     status: 200,
@@ -474,10 +475,10 @@ export function makeWindowBudget(max: number, windowMs = 60_000, now: () => numb
 const publicDonationsBudget = makeWindowBudget(PUBLIC_DONATIONS_PER_MIN);
 
 /** Dona identit: workspace JEN z registru podle kanálu (slug od klienta se nebere), dotaz per identita, dedup. */
-export async function registryDonations(channel: string, ids: UserTarget[], log?: { warn: (o: object, m: string) => void }, allowFetch?: () => boolean): Promise<DonationItem[] | null> {
+export async function registryDonations(channel: string, ids: UserTarget[], log?: { warn: (o: object, m: string) => void }, allowFetch?: () => boolean, email: string | null = null): Promise<DonationItem[] | null> {
   const ws = await defaultWorkspace(channel).catch(() => null);
   if (!ws || !ids.length) return null;
-  const lists = await Promise.all(ids.map((i) => zidolistaDonations({ workspace: ws.slug, platform: i.platform, userId: i.userId, login: i.login }, { log, allowFetch })));
+  const lists = await Promise.all(ids.map((i) => zidolistaDonations({ workspace: ws.slug, platform: i.platform, userId: i.userId, login: i.login, email }, { log, allowFetch })));
   return mergeDonations(lists);
 }
 
@@ -486,6 +487,8 @@ export const dbHistoryDeps = (
   accountIdentities: HistoryDeps['accountIdentities'],
   userIdByLogin: HistoryDeps['userIdByLogin'],
   log?: { warn: (o: object, m: string) => void },
+  /** Ověřený e-mail účtu UC (routes/account.ts verifiedEmail); chybí = dotazy bez e-mailu. */
+  emailOf?: (accountId: number) => Promise<string | null>,
 ): HistoryDeps => ({
   resolveTargets,
   accountIdentities,
@@ -496,5 +499,8 @@ export const dbHistoryDeps = (
   moderation: dbModeration,
   messagesPage: dbMessagesPage,
   userIdByLogin,
-  donations: (channel, ids, opts) => registryDonations(channel, ids, log, opts?.public ? publicDonationsBudget : undefined),
+  donations: async (channel, ids, opts) => {
+    const email = opts?.accountId != null && emailOf ? await emailOf(opts.accountId).catch(() => null) : null;
+    return registryDonations(channel, ids, log, opts?.public ? publicDonationsBudget : undefined, email);
+  },
 });
