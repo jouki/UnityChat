@@ -5641,7 +5641,7 @@ class UnityChat {
         this._ucLog('Account', 'session vypršela → odhlášen');
       } else if (r.ok) {
         const j = await r.json();
-        this._account = { accountId: j.accountId, platforms: j.platforms || {} };
+        this._account = { accountId: j.accountId, platforms: j.platforms || {}, gifClientFetch: j.gifClientFetch || 'ask' };
         // Nepotvrzená varování od moderátora (moderace část 2) — okno + blokace psaní.
         this._warn().set(j.warnings || []);
       }
@@ -5685,6 +5685,40 @@ class UnityChat {
     if (this._signedIn) this._checkAnniversary('account', { force: annivChanged });
     // Vlastní GIF zprávy z historie (zamítnuté / čekající) podle identity účtu → štítek, po odhlášení zase pryč.
     this._reapplyDeleted();
+    // Stažení GIFu prohlížečem odesílatele (core/gif-client-fetch.js): instalovat jen jednou, až outbox existuje.
+    if (!this._gifCfUninstall && this._account) {
+      this._gifCfUninstall = window.UC_CORE?.installGifClientFetch?.(document, this.chatEl, {
+        outbox: this._gifOut(),
+        upload: async (buf, token, remember) => {
+          const tok = await this._ucSessionToken();
+          const r = await fetch(`${UC_API}/gif/client-upload`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Gif-Token': token, ...(remember ? { 'X-Gif-Remember': '1' } : {}), ...(tok ? { Authorization: `Bearer ${tok}` } : {}) }, body: buf, cache: 'no-store', signal: AbortSignal.timeout(30000) });
+          let j = {}; try { j = await r.json(); } catch {}
+          if (remember && r.ok && this._account) { this._account.gifClientFetch = 'always'; this._syncGifClientFetchRow(); }
+          return { ok: r.ok && j.ok !== false, error: j.error, status: r.status };
+        },
+        decline: async (token, remember) => { await this._ucApi('/gif/client-fetch/decline', { method: 'POST', body: { token, remember } }); if (remember && this._account) { this._account.gifClientFetch = 'never'; this._syncGifClientFetchRow(); } },
+        pref: () => this._account?.gifClientFetch || 'ask',
+        log: (tag, t) => this._ucLog(tag, t),
+      });
+    }
+    this._syncGifClientFetchRow();
+  }
+
+  /** Řádek předvolby stažení GIFu prohlížečem: jen s účtem; hodnota z /auth/me, změna → PUT /account/gif-prefs. */
+  _syncGifClientFetchRow() {
+    const $ = (id) => document.getElementById(id);
+    const row = $('row-gif-client-fetch'), sel = $('input-gif-client-fetch');
+    if (!row || !sel) return;
+    row.hidden = !this._account;
+    if (this._account) sel.value = this._account.gifClientFetch || 'ask';
+    if (!sel._ucWired) {
+      sel._ucWired = true;
+      sel.addEventListener('change', async () => {
+        const v = sel.value;
+        try { await this._ucApi('/account/gif-prefs', { method: 'PUT', body: { clientFetch: v } }); if (this._account) this._account.gifClientFetch = v; this._ucLog('Gif', `předvolba stažení prohlížečem → ${v}`); }
+        catch (e) { this._ucLog('Gif', `předvolba se neuložila: ${e?.error || e}`); sel.value = this._account?.gifClientFetch || 'ask'; }
+      });
+    }
   }
 
   /** Okno varování od moderátora (core/account-warnings.js), lazy. */
