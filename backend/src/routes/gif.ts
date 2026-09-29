@@ -15,7 +15,7 @@
 // Médium: Content-Type podle ověřeného druhu, CSP default-src 'none', nosniff; čekající, zamítnuté a purging
 // `private, no-store` (zamítnuté a purging jen s tokenem), schválené a stažené (withdrawn) `public, max-age=300`,
 // unavailable 404. Paměťová cache se sdílenými načteními — schválený GIF si stáhnou všichni naráz.
-import type { FastifyInstance, FastifyReply, preHandlerAsyncHookHandler } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, onRequestAsyncHookHandler, preHandlerAsyncHookHandler } from 'fastify';
 import { z } from 'zod';
 import { requireWebSession, listIdentities, type PublicIdentity } from '../lib/webAuth.js';
 import { accountModIdentities, chatRole, type ChatRole } from '../lib/chatRole.js';
@@ -682,18 +682,24 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
   const uploadByIp = new RateLimiter(20, 20 / 60);
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
   // Tělo přes limit → Fastify vyhodí FST_ERR_CTP_BODY_TOO_LARGE dřív, než handler doběhne; grant by jinak visel
-  // do TTL. Účet tady ještě není (preHandler s Bearer session proběhne až PO parsování těla) → jen `expire` bez
-  // kontroly účtu (nic neprozradí, jen zruší čekající grant podle tokenu z hlavičky).
+  // do TTL. Session proběhla v onRequest (před tělem) → `decline` s účtem; bez účtu jen `expire` podle tokenu
+  // z hlavičky (nic neprozradí, jen zruší čekající grant).
   app.addHook('onError', async (req, _reply, err) => {
     if ((err as { code?: string }).code === 'FST_ERR_CTP_BODY_TOO_LARGE' && req.url.startsWith('/gif/client-upload')) {
-      grants?.expire(String(req.headers['x-gif-token'] || ''));
+      const token = String(req.headers['x-gif-token'] || '');
+      if (req.webAccountId != null) grants?.decline(token, req.webAccountId);
+      else grants?.expire(token);
     }
   });
-  app.post('/gif/client-upload', { preHandler: session, bodyLimit: GIF_MAX_BYTES + 1024 }, async (req, reply) => {
+  // Session a limity v onRequest = nad hlavičkami, PŘED čtením těla (až 10 MB): bez Bearer / přes limit se tělo
+  // vůbec neparsuje (review I5).
+  const uploadLimit = async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!uploadByAccount.allow(String(req.webAccountId)) || !uploadByIp.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+  };
+  app.post('/gif/client-upload', { onRequest: [session as unknown as onRequestAsyncHookHandler, uploadLimit], bodyLimit: GIF_MAX_BYTES + 1024 }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
     if (!grants) return reply.code(503).send({ ok: false, error: 'unavailable' });
     const acc = req.webAccountId!;
-    if (!uploadByAccount.allow(String(acc)) || !uploadByIp.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const token = String(req.headers['x-gif-token'] || '');
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const r = await grants.complete(token, acc, body, opts.probe);

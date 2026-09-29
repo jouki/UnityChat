@@ -321,8 +321,72 @@ test('blockedHosts: 429 mimo challenge → host si zapamatuje, kód host_blocked
   const blocked = createBlockedHosts({ now: () => 1000 });
   await assert.rejects(resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: blocked }), (e: GifError) => e.code === 'host_blocked');
   assert.equal(blocked.isBlocked('i.imgur.com'), true);
-  assert.equal(blocked.isBlocked('IMGUR.com.'), true, 'subdomény i kořen téhož místa');
+  assert.equal(blocked.isBlocked('I.IMGUR.com.'), true, 'velikost písmen a koncová tečka nevadí');
+  assert.equal(blocked.isBlocked('imgur.com'), false, 'klíč = přesný host, ne registrované jméno (review I3)');
   assert.equal(blocked.isBlocked('tenor.com'), false);
+});
+
+test('blockedHosts (review I3): přesný host — mark(imgur.com) neblokuje i.imgur.com; 403 = host_blocked bez zápisu', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  assert.equal(blocked.isBlocked('i.imgur.com'), false);
+  assert.equal(blocked.isBlocked('imgur.com'), true);
+  const b2 = createBlockedHosts();
+  const transport = fakeTransport({ 'https://x.cz/a.gif': { status: 403, headers: {}, body: Buffer.from('') } });
+  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: b2 }), (e: GifError) => e.code === 'host_blocked');
+  assert.equal(b2.isBlocked('x.cz'), false, '403 se neučí');
+  assert.equal(b2.size, 0);
+});
+
+// ---- review C1: známý blokující host — unlocker jen pro stránku ----
+const ogPage = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">');
+const countingUnlocker = (body: Buffer) => {
+  const u = { fetches: [] as string[], reports: [] as Array<[string, string | null]>, timeoutMs: 25_000,
+    fetch: async (url: URL) => { u.fetches.push(url.toString()); return { status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield body; })(), dispose() {} }; },
+    report: (url: URL, code: string | null) => { u.reports.push([url.toString(), code]); } };
+  return u;
+};
+
+test('C1: známý blokující host → page: unlocker přesně 1× (stránka), médium bez unlockeru, host_blocked s popisem z og; report se nevolá', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  blocked.mark('i.imgur.com');
+  const direct: string[] = [];
+  const transport: Transport = async (url) => { direct.push(url.toString()); return { status: 429, headers: {}, body: (async function* () {})(), dispose() {} }; };
+  const unlocker = countingUnlocker(ogPage);
+  const progress: string[] = [];
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker, onProgress: (e) => progress.push(e.phase) }); }
+  catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.deepEqual(err?.descriptor, { url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com' });
+  assert.deepEqual(unlocker.fetches, ['https://imgur.com/a/8as1KiG'], 'unlocker jen pro stránku');
+  assert.deepEqual(direct, [], 'známé hosty se přímo nevolají');
+  assert.deepEqual(unlocker.reports, [], 'host_blocked nejde do negativní cache');
+  assert.deepEqual(progress, ['unlock'], 'průběh unlock i ve větvi známého hosta (review I4)');
+});
+
+test('C1: médium na cizím místě než stránka → host_blocked bez popisu', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  const transport = fakeTransport({ 'https://evil.example/a.mp4': { status: 429, headers: {}, body: Buffer.from('') } });
+  const unlocker = countingUnlocker(Buffer.from('<meta property="og:video" content="https://evil.example/a.mp4">'));
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://imgur.com/a/x', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker }); } catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.equal(err?.descriptor, undefined);
+});
+
+test('C1: známý blokující host → direct: host_blocked, unlocker 0×, report 0×', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('i.imgur.com');
+  const unlocker = countingUnlocker(ogPage);
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }); } catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.equal(err?.descriptor, undefined);
+  assert.deepEqual(unlocker.fetches, []);
+  assert.deepEqual(unlocker.reports, []);
 });
 
 test('blockedHosts: známý host → přímé stažení se přeskočí (transport se nevolá) a jde se přes unlocker; TTL 24 h', async () => {
@@ -369,12 +433,12 @@ test('fix 1: přímé stažení narazí na Cloudflare challenge → odpověď un
   assert.equal(blocked.isBlocked('x.cz'), false, 'odpověď Bright Data neznamená, že NÁS blokuje cílový server');
 });
 
-test('fix 3: blokovaný host → jen jedno volání unlockeru, i když jeho odpověď sama vypadá jako Cloudflare challenge', async () => {
+test('fix 3: blokovaný host → jen jedno volání unlockeru (stránka), i když jeho odpověď sama vypadá jako Cloudflare challenge', async () => {
   const blocked = createBlockedHosts();
   blocked.mark('x.cz');
   let calls = 0;
   const unlocker = { timeoutMs: 25_000, fetch: async () => { calls++; return { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: (async function* () {})(), dispose() {} }; }, report() {} };
-  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403');
+  await assert.rejects(resolveGif({ url: 'https://x.cz/stranka', mode: 'page' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403');
   assert.equal(calls, 1, 'Cloudflare větev se u známého blokujícího hosta znovu nespouští');
 });
 

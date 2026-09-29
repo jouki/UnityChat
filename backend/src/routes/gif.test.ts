@@ -652,6 +652,40 @@ test('POST /gif/client-upload: jen s Bearer, tokenem účtu a správnými bajty 
   assert.equal(r.statusCode, 413); assert.equal(await g4.result, null);
 });
 
+test('POST /gif/client-upload (review I5): session a limity před tělem — bez Bearer 401 i s velkým tělem, complete se nevolá; přes limit 429', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const { createClientFetchGrants } = await import('../lib/gifClientFetch.js');
+  const inner = createClientFetchGrants({ random: () => 'tok-I5' });
+  let completes = 0;
+  const grants = { ...inner, complete: (...a: Parameters<typeof inner.complete>) => { completes++; return inner.complete(...a); }, decline: inner.decline, expire: inner.expire };
+  const media = new MediaServer(async () => null);
+  const app = Fastify();
+  let parsed = 0;
+  const auth: preHandlerAsyncHookHandler = async (req, reply) => {
+    if (!req.headers.authorization) { reply.code(401); return reply.send({ ok: false, error: 'no session' }); }
+    (req as { webAccountId?: number }).webAccountId = 7;
+  };
+  await app.register(async (a) => {
+    a.addHook('preParsing', async (_req, _reply, payload) => { parsed++; return payload; });
+    await a.register(gifRoutes, { flow: {} as never, store: {} as never, media, grants: grants as never, auth });
+  });
+  const gif = Buffer.alloc(32); gif.write('GIF89a', 0, 'latin1'); gif.writeUInt16LE(320, 6); gif.writeUInt16LE(240, 8);
+  const post = (headers: Record<string, string>, body: Buffer) => app.inject({ method: 'POST', url: '/gif/client-upload', headers: { 'content-type': 'application/octet-stream', 'x-gif-token': 'tok-I5', ...headers }, payload: body });
+  let r = await post({}, Buffer.alloc(9 * 1024 * 1024));
+  assert.equal(r.statusCode, 401);
+  assert.equal(completes, 0);
+  assert.equal(parsed, 0, 'tělo se bez session nečte');
+  // Limit účtu 5 → šestý pokus 429 bez čtení těla.
+  for (let i = 0; i < 5; i++) assert.equal((await post({ authorization: 'Bearer x' }, gif)).statusCode, 400);
+  const before = parsed;
+  r = await post({ authorization: 'Bearer x' }, gif);
+  assert.equal(r.statusCode, 429);
+  assert.equal(parsed, before, 'přes limit se tělo nečte');
+  assert.equal(completes, 5);
+  await app.close();
+});
+
 // ---- PUT /account/gif-prefs (Task 6) ----
 
 test('PUT /account/gif-prefs: platná hodnota → 200 a zaznamenáno; neplatná → 400', async () => {

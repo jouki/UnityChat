@@ -694,11 +694,12 @@ export function createGifNotifier(deps: GifNotifierDeps) {
      * Kanál k odesílateli (gif-progress, gif-notice); null = prokazatelně nemá účet UnityChatu. Chyba dotazu se
      * propaguje (volající rozliší „nemá účet“ od „nevím“ — odpověď bota jen při prvním, review I1).
      */
-    async toSender(platform: Platform, userId: string): Promise<((event: string, data: object) => void) | null> {
+    async toSender(platform: Platform, userId: string): Promise<((event: string, data: object) => number) | null> {
       const acc = await deps.senderAccount(platform, userId);
       if (acc === null) return null;
       const a = acc;
-      return (event, data) => { deps.send(a, event, data); };
+      // Vrací počet streamů /account/stream, kterým událost odešla (0 = odesílatel teď není připojený, review I2).
+      return (event, data) => deps.send(a, event, data);
     },
     /** Čekající žádosti, které účet smí vidět (po připojení /account/stream). */
     async visibleTo(accountId: number, rows: GifRequest[]): Promise<Array<GifPendingView & { own?: true; serverNow?: number }>> {
@@ -775,8 +776,11 @@ export interface GifFlowDeps {
   notify: (r: GifRequest, event: string, data: object) => Promise<unknown>;
   /** Jen modům kanálu (gif-queue); chybí = neposílá se. */
   notifyMods?: (channel: string, event: string, data: object) => Promise<unknown>;
-  /** Kanál k odesílateli (gif-progress, gif-notice); chybí / null = neposílá se. */
-  toSender?: (platform: Platform, userId: string) => Promise<((event: string, data: object) => void) | null>;
+  /**
+   * Kanál k odesílateli (gif-progress, gif-notice); chybí / null = neposílá se. Funkce vrací počet doručení
+   * (otevřené /account/stream); void = počet neznámý, bere se jako doručeno.
+   */
+  toSender?: (platform: Platform, userId: string) => Promise<((event: string, data: object) => number | void) | null>;
   integration: (ev: GifIntegration) => void | Promise<unknown>;
   recordAction?: (v: { channel: string; accountId: number | null; actor: string; action: string; platform: string; targetLogin: string | null; targetMessageId?: string | null; params: object; result: object }) => Promise<void>;
   now: () => number;
@@ -1326,15 +1330,16 @@ export function createGifFlow(deps: GifFlowDeps) {
       let created: GifRequest | null = null;
       let settled = false;
       // Průběh a hlášky jen odesílateli (má-li účet UnityChatu).
-      let tell: ((event: string, data: object) => void) | null = null;
+      let tell: ((event: string, data: object) => number | void) | null = null;
       // Odesílatel PROKAZATELNĚ nemá účet UnityChatu (dotaz uspěl a vrátil null) — jen pak smí odpovědět bot (review I1).
       let senderNoAccount = false;
       const base = { requestKey: mk, channel: p.ucChannel, platform: m.platform, messageId: m.platformMessageId };
       let lastPct = -1;
-      const progress = (phase: string, pct: number, extra: object = {}) => {
-        if (!tell) return;
+      /** Vrací počet doručení (0 = bez kanálu / nikdo nepřipojený / chyba; void z tell = neznámý počet → 1). */
+      const progress = (phase: string, pct: number, extra: object = {}): number => {
+        if (!tell) return 0;
         lastPct = Math.max(lastPct, pct);
-        try { tell('gif-progress', { ...base, phase, pct, ...extra }); } catch { /* ignore */ }
+        try { const n = tell('gif-progress', { ...base, phase, pct, ...extra }); return typeof n === 'number' ? n : 1; } catch { return 0; }
       };
       const done = (outcome: GifInterceptResult, extra: object = {}) => { if (tell) progress('done', 100, { outcome: outcome === 'requested' ? 'pending' : outcome, ...extra }); };
       const notice = (kind: string, extra: object = {}) => { if (tell) { try { tell('gif-notice', { ...base, kind, ...extra }); } catch { /* ignore */ } } };
@@ -1440,11 +1445,32 @@ export function createGifFlow(deps: GifFlowDeps) {
             // Jen s účtem (tell), mimo režim approved (bajty by se nepoužily) a jen když popis je.
             if (code !== 'host_blocked' || !tell || mode === 'approved' || !deps.grants || !deps.describe || !deps.senderAccount) return { ok: false, code };
             const accountId = await deps.senderAccount(m.platform, m.platformUserId).catch(() => null);
-            const desc = accountId === null ? null : await deps.describe(p.candidate);
-            if (!desc || accountId === null) return { ok: false, code };
+            if (accountId === null) return { ok: false, code };
             const pref = deps.clientFetchPref ? await deps.clientFetchPref(accountId).catch(() => 'ask' as const) : 'ask';
+            // Předvolba „nikdy“: grant ani výzva (klient by ji stejně odmítl, zpráva by 90 s zbytečně čekala, review I2).
+            if (pref === 'never') {
+              deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: host blokuje server, předvolba never → bez výzvy');
+              return { ok: false, code: 'client_fetch' };
+            }
+            // Popis ze stránky, která už přes unlocker prošla (review C1) — jinak describe (direct: bez unlockeru;
+            // page: druhé čtení stránky přes unlocker). Unlocker se počítá do denního limitu uživatele (review I4).
+            const fromErr = e instanceof GifError ? e.descriptor ?? null : null;
+            if (!fromErr && !unlockCounted && !unlockAllowed(k)) {
+              deps.log.info({ channel: p.ucChannel, platform: m.platform }, 'gif: host blokuje server, limit unlockeru uživatele → bez výzvy');
+              return { ok: false, code };
+            }
+            const desc = fromErr ?? await deps.describe(p.candidate);
+            if ((fromErr || p.candidate.mode === 'page') && !unlockCounted) { unlockCounted = true; unlockUsed(k); }
+            if (!desc) return { ok: false, code };
             const { token, grant, result } = deps.grants.issue({ requestKey: mk, channel: p.ucChannel, accountId, mediaUrl: desc.url, host: desc.host, kind: desc.kind, width: desc.width, height: desc.height });
-            progress('client_fetch', 50, { token, url: grant.mediaUrl, kind: grant.kind, width: grant.width, height: grant.height, host: grant.host, expiresAt: grant.expiresAt, serverNow: deps.now(), pref });
+            const delivered = progress('client_fetch', 50, { token, url: grant.mediaUrl, kind: grant.kind, width: grant.width, height: grant.height, host: grant.host, expiresAt: grant.expiresAt, serverNow: deps.now(), pref });
+            // Výzva nikomu nedošla (odesílatel nemá otevřený /account/stream — starý klient, zavřený panel): nečekat
+            // 90 s se schovanou zprávou, grant hned zrušit (review I2).
+            if (delivered === 0) {
+              deps.grants.expire(token);
+              deps.log.info({ channel: p.ucChannel, platform: m.platform, host: grant.host }, 'gif: host blokuje server, odesílatel není připojený → bez výzvy');
+              return { ok: false, code: 'client_fetch' };
+            }
             deps.log.info({ channel: p.ucChannel, platform: m.platform, host: grant.host }, 'gif: host blokuje server → výzva odesílateli ke stažení prohlížečem');
             const got = await result;
             if (!got) return { ok: false, code: 'client_fetch' };

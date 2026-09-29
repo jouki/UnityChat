@@ -1386,6 +1386,97 @@ test('intercept: odmítnutí / vypršení grantu → běžný odkaz (settleHeld 
   assert.ok(!sent.includes('gif-progress:client_fetch'));
 });
 
+// ---- opravná vlna po review (C1, I2, I4) ----
+
+/** Počkat, až intercept vydá grant (jinak by odmítnutí přišlo dřív než grant a intercept visel do TTL). */
+const untilGrant = async (g: { readonly size: number }) => { for (let i = 0; i < 200 && !g.size; i++) await new Promise((r) => setImmediate(r)); assert.ok(g.size > 0, 'grant vydán'); };
+const blockedDesc = { url: 'https://i.imgur.com/a.gif', kind: 'gif' as const, width: 320, height: 240, host: 'i.imgur.com' };
+
+test('review I2: notifier toSender vrací počet doručení (0 = odesílatel nemá otevřený stream)', async () => {
+  let streams = 0;
+  const n = createGifNotifier({ connected: () => [], isMod: async () => false, senderAccount: async () => 7, send: () => streams });
+  const tell = await n.toSender('twitch', '42');
+  assert.equal(tell!('gif-progress', {}), 0);
+  streams = 2;
+  assert.equal(tell!('gif-progress', {}), 2);
+});
+
+test('review I2: výzva nikomu nedošla (0 doručení) → grant hned zrušen, bez čekání, failed', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-I2' });
+  const sent: string[] = [];
+  const s = setup({
+    resolve: async () => { throw new GifError('host_blocked'); }, describe: async () => blockedDesc, grants,
+    senderAccount: async () => 7, clientFetchPref: async () => 'ask',
+    toSender: async () => (e, d) => { sent.push(`${e}:${(d as { phase?: string }).phase ?? ''}`); return 0; },
+  });
+  // Bez rozhodnutí grantu by intercept visel do TTL (90 s) — tady musí skončit sám.
+  assert.equal(await s.flow.intercept(params()), 'failed');
+  assert.equal(grants.size, 0, 'grant zrušen');
+  assert.ok(s.calls.some((c) => c[0] === 'restore'), 'zpráva obnovena jako běžný odkaz');
+});
+
+test('review I2: předvolba never → bez grantu a bez výzvy', async () => {
+  let issued = 0;
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-N' });
+  const counting = { ...grants, issue: (g: Parameters<typeof grants.issue>[0]) => { issued++; return grants.issue(g); } };
+  let described = 0;
+  const sent: string[] = [];
+  const s = setup({
+    resolve: async () => { throw new GifError('host_blocked'); }, describe: async () => { described++; return blockedDesc; }, grants: counting as never,
+    senderAccount: async () => 7, clientFetchPref: async () => 'never',
+    toSender: async () => (e, d) => { sent.push(`${e}:${(d as { phase?: string }).phase ?? ''}`); return 1; },
+  });
+  assert.equal(await s.flow.intercept(params()), 'failed');
+  assert.equal(issued, 0);
+  assert.equal(described, 0, 'popis (unlocker) se kvůli never nepálí');
+  assert.ok(!sent.includes('gif-progress:client_fetch'));
+});
+
+test('review C1: popis z chyby host_blocked (stránka už prošla unlockerem) → describe se nevolá, grant s tímto popisem', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-C1' });
+  let described = 0;
+  const sent: Array<[string, Record<string, unknown>]> = [];
+  const s = setup({
+    resolve: async (_src, hooks) => { hooks?.onProgress?.({ phase: 'unlock', estimateMs: 8000, elapsedMs: 0 }); throw new GifError('host_blocked', { ...blockedDesc, url: 'https://i.imgur.com/z.gif' }); },
+    describe: async () => { described++; return blockedDesc; }, grants,
+    senderAccount: async () => 7, clientFetchPref: async () => 'ask',
+    toSender: async () => (e, d) => { sent.push([e, d as Record<string, unknown>]); return 1; },
+  });
+  const run = s.flow.intercept(params());
+  await untilGrant(grants);
+  const cf = sent.find(([e, d]) => e === 'gif-progress' && d.phase === 'client_fetch')?.[1];
+  assert.equal(cf?.url, 'https://i.imgur.com/z.gif');
+  assert.equal(described, 0);
+  grants.decline('tok-C1', 7);
+  assert.equal(await run, 'failed');
+});
+
+test('review I4: vyčerpaný denní limit unlockeru uživatele → bez popisu a bez výzvy; popis přes unlocker se do limitu počítá', async () => {
+  const grants = createClientFetchGrants({ now: () => 1_000_000, random: () => 'tok-I4' });
+  let described = 0;
+  const sent: string[] = [];
+  const noUnlock: boolean[] = [];
+  const s = setup({
+    resolve: async (_src, hooks) => { noUnlock.push(!!hooks?.noUnlock); throw new GifError('host_blocked'); },
+    describe: async () => { described++; return blockedDesc; }, grants,
+    senderAccount: async () => 7, clientFetchPref: async () => 'ask',
+    toSender: async () => (e, d) => { sent.push(`${e}:${(d as { phase?: string }).phase ?? ''}`); return 1; },
+  });
+  // Každý pokus: describe stránky (mode page) = jedno použití unlockeru; výzvu odesílatel odmítne.
+  for (let i = 0; i < GIF_UNLOCK_PER_USER_DAY; i++) {
+    const run = s.flow.intercept(from('42', `u${i}`, 'https://tenor.com/view/cat-gif-1'));
+    await untilGrant(grants);
+    grants.decline('tok-I4', 7);
+    await run;
+  }
+  assert.equal(described, GIF_UNLOCK_PER_USER_DAY);
+  sent.length = 0;
+  assert.equal(await s.flow.intercept(from('42', 'u-last', 'https://tenor.com/view/cat-gif-1')), 'failed');
+  assert.equal(described, GIF_UNLOCK_PER_USER_DAY, 'popis se už nezkouší');
+  assert.ok(!sent.includes('gif-progress:client_fetch'), 'bez výzvy');
+  assert.equal(noUnlock.at(-1), true);
+});
+
 test('zamítnuté médium: schválit (jen do knihovny) / vault / trvale zahodit; retence 14 dní bez vaultu', async () => {
   const gone: string[] = [];
   const s = setup({ mediaDeleted: (id) => gone.push(id) });
