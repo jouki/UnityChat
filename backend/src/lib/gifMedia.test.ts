@@ -315,32 +315,20 @@ test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez
   assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
 });
 
-test('resolveGif: Imgur s Client-ID → api.imgur.com (album → první položka MP4), bez Client-ID HTML stránka', async () => {
-  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
-  const transport = fakeTransport({
-    'https://api.imgur.com/3/album/8as1KiG': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { images: [{ animated: true, link: 'https://i.imgur.com/auBmmCk.gif', mp4: 'https://i.imgur.com/auBmmCk.mp4' }], tags: [{ display_name: 'Reaction' }] } })) },
-    'https://i.imgur.com/auBmmCk.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(640, 360) },
-    'https://imgur.com/a/8as1KiG': { status: 429, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"success":false}') },
-  }, seen);
-  const r = await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' });
+test('resolveGif: host blokující IP serveru (imgur.com, i.imgur.com) jde přes deps.proxy, ostatní přímo; přesměrování hop po hopu', async () => {
+  const direct: string[] = [];
+  const proxied: string[] = [];
+  const page = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4">');
+  const routes: Record<string, Route> = {
+    'https://imgur.com/a/8as1KiG': { headers: { 'content-type': 'text/html' }, body: page },
+    'https://i.imgur.com/auBmmCk.mp4': { status: 302, headers: { location: 'https://cdn.example.net/auBmmCk.mp4' } },
+    'https://cdn.example.net/auBmmCk.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(640, 360) },
+  };
+  const viaProxy = fakeTransport(routes, proxied as never);
+  const viaDirect = fakeTransport(routes, direct as never);
+  const proxy = { transportFor: (h: string) => (h === 'imgur.com' || h.endsWith('.imgur.com') ? viaProxy : null), usedToday: 0 };
+  const r = await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport: viaDirect, lookupAll: publicDns, proxy });
   assert.equal(r.kind, 'mp4');
-  assert.deepEqual([r.width, r.height], [640, 360]);
-  assert.deepEqual(r.tags, ['reaction']);
-  assert.equal(seen[0].url, 'https://api.imgur.com/3/album/8as1KiG');
-  assert.equal(seen[0].headers.Authorization, 'Client-ID abc123');
-  assert.ok(!seen.some((x) => x.url === 'https://imgur.com/a/8as1KiG'), 'HTML stránka se s API nestahuje');
-  // Bez Client-ID: běžná cesta přes stránku (tady 429 → chyba převodu).
-  await assert.rejects(resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns }), (e: GifError) => e.code === 'http_429');
-});
-
-test('resolveGif: Imgur galerie s obrázkem → /3/album selže, /3/image dá GIF; neanimovaná položka = no_media', async () => {
-  const transport = fakeTransport({
-    'https://api.imgur.com/3/album/jVjKCJJ': { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"success":false}') },
-    'https://api.imgur.com/3/image/jVjKCJJ': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { animated: true, link: 'https://i.imgur.com/b1Fyunv.gif', mp4: 'https://i.imgur.com/b1Fyunv.mp4' } })) },
-    'https://i.imgur.com/b1Fyunv.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(320, 200) },
-    'https://api.imgur.com/3/image/StaTic1': { headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ success: true, data: { animated: false, link: 'https://i.imgur.com/StaTic1.jpg' } })) },
-  });
-  const r = await resolveGif({ url: 'https://imgur.com/gallery/hold-breath-jVjKCJJ', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' });
-  assert.equal(r.kind, 'mp4');
-  await assert.rejects(resolveGif({ url: 'https://imgur.com/StaTic1', mode: 'page' }, { transport, lookupAll: publicDns, imgurClientId: 'abc123' }), (e: GifError) => e.code === 'no_media');
+  assert.deepEqual(proxied.map((x: unknown) => (x as { url: string }).url), ['https://imgur.com/a/8as1KiG', 'https://i.imgur.com/auBmmCk.mp4']);
+  assert.deepEqual(direct.map((x: unknown) => (x as { url: string }).url), ['https://cdn.example.net/auBmmCk.mp4'], 'cizí CDN po přesměrování přímo');
 });

@@ -86,9 +86,12 @@ const EnvSchema = z.object({
   // Denní strop volání (reset o půlnoci UTC); free tier = 5000 požadavků / měsíc.
   // Prázdná hodnota = výchozí (z.coerce by z '' udělal 0 = vypnuto).
   BRIGHTDATA_DAILY_CAP: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().nonnegative().default(100)),
-  // GIFy z Imgur (lib/gifMedia.ts resolveImgurApi): Client-ID registrované aplikace api.imgur.com — HTML stránky Imgur
-  // vracejí IP serveru 429. Prázdné = jen HTML stránka. Jen v Coolify secrets, ne v gitu.
-  IMGUR_CLIENT_ID: z.string().default(''),
+  // Proxy Bright Data (lib/gifProxy.ts) pro weby blokující IP serveru úplně (Imgur: stránky i CDN 429, 2026-09-28):
+  // customer id + heslo zóny z Overview zóny v control panelu; CA jejich SSL certifikátu (PEM, v Coolify base64 —
+  // víceřádková hodnota rozbije build), bez ní se u proxovaných hostů certifikát neověřuje. Jen v Coolify secrets.
+  BRIGHTDATA_CUSTOMER_ID: z.string().default(''),
+  BRIGHTDATA_PROXY_PASSWORD: z.string().default(''),
+  BRIGHTDATA_PROXY_CA: z.string().default(''),
   ZIDOLISTA_WORKSPACES:z.string().default('robdiesalot=rob'),
   // Kam smí vracet OAuth napojení bota (returnTo z POST /integrations/bot/link-token): dashboard Židolišty.
   ZIDOLISTA_RETURN_ORIGINS: z.string().default('https://jouki.cz'),
