@@ -105,5 +105,24 @@ check('po okně sloučené oznámení', await until('window.__notes.length === 2
 const last = await ev('window.__notes[1]');
 check('sloučené = poslední (odpověď) + „a 1 další zpráva"', last?.title === 'Odpověď od Karel' && /a 1 další zpráva/.test(last.contextMessage || ''), JSON.stringify(last));
 
+// ---- Jména bez zavináče: celé slovo mimo adresu (hlášení usera 2026-09-29) ----
+const bare = async (id, message, username = 'Pepa') => {
+  await ev(`window.__uc._addMessage(${JSON.stringify({ platform: 'twitch', id, username, message, color: '#00ff00', timestamp: Date.now() })})`);
+  await sleep(150);
+  return ev(`(() => { const el = document.querySelector('.msg[data-msg-id="${id}"]'); return el ? { hl: el.classList.contains('mentioned'), spans: [...el.querySelectorAll('.tx .mention')].map((m) => m.textContent) } : null; })()`);
+};
+await ev(`window.__uc._addMessage(${JSON.stringify({ platform: 'twitch', id: 'e2e-kamo', username: 'kamo', message: 'zdar', color: '#ff00ff', timestamp: Date.now() })})`);
+await ev(`window.__uc._addMessage(${JSON.stringify({ platform: 'twitch', id: 'e2e-rob', username: 'RobDiesALot', message: 'zdar', color: '#ff00ff', timestamp: Date.now() })})`);
+const b1 = await bare('e2e-b1', 'to byl NotifyMe, ne?');
+check('moje jméno bez zavináče zprávu zvýrazní', b1?.hl === true, JSON.stringify(b1));
+const b2 = await bare('e2e-b2', 'hrál warcrafty s kamošem po telefonu');
+check('„kamo“ uvnitř „kamošem“ se nebarví', b2 && b2.spans.length === 0, JSON.stringify(b2));
+const b3 = await bare('e2e-b3', 'čau kamo jak je');
+check('„kamo“ jako celé slovo se barví', b3 && b3.spans.join() === 'kamo', JSON.stringify(b3));
+const b4 = await bare('e2e-b4', 'chat je na www.robdiesalot.com/chat a robdiesalot.com');
+check('jméno uvnitř adresy se nebarví', b4 && !b4.spans.some((t) => /robdiesalot/i.test(t)), JSON.stringify(b4));
+const b5 = await bare('e2e-b5', 'mrkni na notifyme.cz/profil');
+check('moje jméno uvnitř adresy zprávu nezvýrazní', b5?.hl === false, JSON.stringify(b5));
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

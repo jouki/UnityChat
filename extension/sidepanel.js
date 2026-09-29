@@ -3911,7 +3911,9 @@ class UnityChat {
     // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
     // loginu tak, jak dorazil z chatu, když ho známe.
     const core = window.UC_CORE;
-    return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform), (login) => this._chatUsers?.get(login)?.name || login);
+    // Stejná přezdívka u víc loginů platformy (starý handle) → přednost má login, který v chatu píše.
+    const known = (login) => !!this._chatUsers?.has(`${platform}:${login}`);
+    return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform, known), (login) => this._chatUsers?.get(login)?.name || login);
   }
 
   async _sendMessage(opts = {}) {
@@ -7786,24 +7788,24 @@ class UnityChat {
     // words. Plain key check is enough because _chatUsers only contains
     // entries for users we've actually seen (chat history + scrape +
     // queued mentions), so common Czech/English words don't collide.
-    const bareRe = /[A-Za-z0-9_]{3,25}/g;
+    // Jen celá slova (i s diakritikou: „kamo“ v „kamošem“ ne) a ne uvnitř adresy ani odkazu
+    // („robdiesalot“ v www.robdiesalot.com) — core/mentions.js bareWords.
     const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     const nodes2 = [];
     let n2;
     while ((n2 = walker2.nextNode())) {
       // Skip text nodes already inside a .mention (don't re-wrap @mentions)
       if (n2.parentNode?.classList?.contains('mention')) continue;
+      if (n2.parentElement?.closest('a')) continue;
       nodes2.push(n2);
     }
     for (const textNode of nodes2) {
       const text = textNode.nodeValue;
       if (!text) continue;
-      bareRe.lastIndex = 0;
-      let match;
       let last = 0;
       let frag = null;
-      while ((match = bareRe.exec(text)) !== null) {
-        const word = match[0];
+      for (const match of window.UC_CORE.bareWords(text)) {
+        const word = match.word;
         const lname = word.toLowerCase();
         const entry = this._chatUsers.get(`${platform}:${lname}`)
           || this._chatUsers.get(lname);
@@ -8371,9 +8373,11 @@ class UnityChat {
     const myNames = this._myMentionNames();
     const msgLower = msg.message?.toLowerCase() || '';
     const replyTarget = msg.replyTo?.username?.toLowerCase().replace(/^@/, '');
+    // I jméno bez zavináče („to byl Jouki“) jako celé slovo mimo adresu — ne ve vlastní zprávě.
     const isMentioned = myNames.size > 0 && (
       (replyTarget && myNames.has(replyTarget)) ||
-      [...myNames].some((n) => this._hasMention(msgLower, n))
+      [...myNames].some((n) => this._hasMention(msgLower, n)) ||
+      (!this._isOwnMsg(msg) && [...myNames].some((n) => window.UC_CORE.hasBareMention(msgLower, n)))
     );
 
     const el = document.createElement('div');

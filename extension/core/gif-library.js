@@ -1237,8 +1237,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       <button type="button" class="uc-gl-tab on" data-gl-tab="lib" role="tab"><span>GIFy</span></button>
       <button type="button" class="uc-gl-tab" data-gl-tab="rej" role="tab"><span>Zamítnuté GIFy</span></button>
     </div>
-    <div class="uc-gl-reward" role="status"></div>
     <div class="uc-gl-search"><input type="search" placeholder="Hledat GIF podle tagů…" autocomplete="off" spellcheck="false" aria-label="Hledat GIF"></div>
+    <div class="uc-gl-reward" role="status"></div>
     <div class="uc-gl-msg" role="alert" hidden></div>
     <div class="uc-gl-body"></div>
     <div class="uc-gl-preview" role="dialog" aria-modal="true" aria-label="Náhled GIFu" hidden></div>
