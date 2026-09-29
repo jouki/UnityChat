@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { preHandlerAsyncHookHandler } from 'fastify';
 import { servableStatus } from '../lib/gifRequests.js';
 import { MediaServer, MEDIA_CACHE_TTL_MS, mediaCacheControl, mediaAllowed, rejectedView, discardedView, parseRejectedCursor, gifStateFor, gifHeldState, parseHeldIds, GIF_HELD_BATCH, type MediaEntry, type GifStateDeps, type GifHeldDeps } from './gif.js';
 import type { Message } from '../db/schema.js';
@@ -612,4 +613,41 @@ test('duplicity v UC + knihovna: chybí tabulka/sloupec → 503 not_ready, jiná
   err = new Error('connection reset');
   for (const r of await calls()) assert.deepEqual([r.statusCode, r.json()], [500, { ok: false, error: 'internal' }]);
   await app.close();
+});
+
+// ---- POST /gif/client-upload + /gif/client-fetch/decline (Task 5) ----
+
+test('POST /gif/client-upload: jen s Bearer, tokenem účtu a správnými bajty → 202 a grant splněn; cizí / chybné → 4xx; decline → result null', async () => {
+  const { default: Fastify } = await import('fastify');
+  const { default: gifRoutes } = await import('./gif.js');
+  const { createClientFetchGrants } = await import('../lib/gifClientFetch.js');
+  const grants = createClientFetchGrants({ random: () => 'tok-Z' });
+  const media = new MediaServer(async () => null);
+  const app = Fastify();
+  let who = 7;
+  const auth: preHandlerAsyncHookHandler = async (req) => { (req as { webAccountId?: number }).webAccountId = who; };
+  const remembered: unknown[] = [];
+  await app.register(gifRoutes, { flow: {} as never, store: {} as never, media, grants, auth, prefs: { setClientFetch: async (a: number, v: string) => { remembered.push([a, v]); }, getClientFetch: async () => 'ask' } as never });
+  const gif = Buffer.alloc(32); gif.write('GIF89a', 0, 'latin1'); gif.writeUInt16LE(320, 6); gif.writeUInt16LE(240, 8);
+  const post = (headers: Record<string, string>, body: Buffer) => app.inject({ method: 'POST', url: '/gif/client-upload', headers: { 'content-type': 'application/octet-stream', ...headers }, payload: body });
+  const g1 = grants.issue({ requestKey: 'twitch:m1', channel: 'robdiesalot', accountId: 7, mediaUrl: 'https://i.imgur.com/a.gif', host: 'i.imgur.com', kind: 'gif', width: 320, height: 240 });
+  let r = await post({ 'x-gif-token': 'jiny' }, gif);
+  assert.equal(r.statusCode, 400); assert.equal(r.json().error, 'bad_token');
+  r = await post({ 'x-gif-token': 'tok-Z', 'x-gif-remember': '1' }, gif);
+  assert.equal(r.statusCode, 202);
+  assert.equal((await g1.result)?.kind, 'gif');
+  assert.deepEqual(remembered, [[7, 'always']]);
+  const g2 = grants.issue({ requestKey: 'twitch:m2', channel: 'robdiesalot', accountId: 7, mediaUrl: 'https://i.imgur.com/b.gif', host: 'i.imgur.com', kind: 'gif', width: 320, height: 240 });
+  who = 8;
+  r = await post({ 'x-gif-token': 'tok-Z' }, gif);
+  assert.equal(r.statusCode, 400); assert.equal(await g2.result, null);
+  who = 7;
+  const g3 = grants.issue({ requestKey: 'twitch:m3', channel: 'robdiesalot', accountId: 7, mediaUrl: 'https://i.imgur.com/c.gif', host: 'i.imgur.com', kind: 'gif', width: 320, height: 240 });
+  r = await app.inject({ method: 'POST', url: '/gif/client-fetch/decline', payload: { token: 'tok-Z', remember: true } });
+  assert.equal(r.statusCode, 200); assert.equal(await g3.result, null);
+  assert.deepEqual(remembered[1], [7, 'never']);
+  // Přes limit těla → 413 dřív, než se čte obsah.
+  const g4 = grants.issue({ requestKey: 'twitch:m4', channel: 'robdiesalot', accountId: 7, mediaUrl: 'https://i.imgur.com/d.gif', host: 'i.imgur.com', kind: 'gif', width: 320, height: 240 });
+  r = await post({ 'x-gif-token': 'tok-Z' }, Buffer.alloc(10 * 1024 * 1024 + 2048));
+  assert.equal(r.statusCode, 413); assert.equal(await g4.result, null);
 });

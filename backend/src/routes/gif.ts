@@ -33,6 +33,8 @@ import { moderationActions, type Message } from '../db/schema.js';
 import { dbGifLibraryStore, duplicateView, libraryErrorReply, libraryPage, resolveDuplicate, DUPLICATE_ACTIONS, DUPLICATES_PAGE, type DuplicateDeps, type GifLibraryStore } from '../lib/gifLibrary.js';
 import { channelMatches } from '../lib/messageDeletes.js';
 import { publishRestored } from '../lib/linkRestore.js';
+import { GIF_MAX_BYTES, type MediaProber } from '../lib/gifMedia.js';
+import type { ClientFetchGrants } from '../lib/gifClientFetch.js';
 
 export type MediaEntry = { bytes: Buffer; contentType: string; status: Exclude<GifMediaStatus, 'unavailable'>; channel?: string | null };
 /** Médium bez bajtů (stav + kanál kvůli tokenu) — ověřuje se dřív, než se z DB načtou bajty (audit SEC-2). */
@@ -59,6 +61,12 @@ export interface GifRouteOpts {
   library?: GifLibraryStore;
   /** Audit rozhodnutí o duplikátech (testy); chybí = moderation_actions. */
   recordAction?: DuplicateDeps['recordAction'];
+  /** Granty pro stažení GIFu prohlížečem odesílatele (Task 3, spec 2026-09-29 §6); chybí = /gif/client-upload vrací 503. */
+  grants?: ClientFetchGrants;
+  /** Sonda nahraných bajtů (stejná jako u serverového stažení) — rozměry/počet snímků nad limit → bad_media/too_large. */
+  probe?: MediaProber;
+  /** Předvolba klienta „stahovat sám" (Task 6); chybí = zaškrtnutí „Nezobrazovat znovu" se nezapamatuje. */
+  prefs?: { getClientFetch(accountId: number): Promise<'ask' | 'always' | 'never'>; setClientFetch(accountId: number, v: 'ask' | 'always' | 'never'): Promise<void> };
 }
 
 const DecideBody = z.object({ approve: z.boolean() });
@@ -665,5 +673,43 @@ export default async function gifRoutes(app: FastifyInstance, opts: GifRouteOpts
       app.log.warn({ err: (e as Error).message }, 'gif/held selhalo');
       return reply.code(503).send({ ok: false, error: 'unavailable' });
     }
+  });
+
+  // --- Stažení GIFu prohlížečem odesílatele (spec 2026-09-29 §6): tělo = bajty média, token v hlavičce (ne v URL — logy) ---
+  const grants = opts.grants ?? null;
+  const uploadByAccount = new RateLimiter(5, 5 / 60);
+  const uploadByIp = new RateLimiter(20, 20 / 60);
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+  // Tělo přes limit → Fastify vyhodí FST_ERR_CTP_BODY_TOO_LARGE dřív, než handler doběhne; grant by jinak visel
+  // do TTL. Účet tady ještě není (preHandler s Bearer session proběhne až PO parsování těla) → jen `expire` bez
+  // kontroly účtu (nic neprozradí, jen zruší čekající grant podle tokenu z hlavičky).
+  app.addHook('onError', async (req, _reply, err) => {
+    if ((err as { code?: string }).code === 'FST_ERR_CTP_BODY_TOO_LARGE' && req.url.startsWith('/gif/client-upload')) {
+      grants?.expire(String(req.headers['x-gif-token'] || ''));
+    }
+  });
+  app.post('/gif/client-upload', { preHandler: session, bodyLimit: GIF_MAX_BYTES + 1024 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!grants) return reply.code(503).send({ ok: false, error: 'unavailable' });
+    const acc = req.webAccountId!;
+    if (!uploadByAccount.allow(String(acc)) || !uploadByIp.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const token = String(req.headers['x-gif-token'] || '');
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    const r = await grants.complete(token, acc, body, opts.probe);
+    if (!r.ok) {
+      app.log.info({ accountId: acc, error: r.error, bytes: body.length }, 'gif: upload z prohlížeče odmítnut');
+      return reply.code(400).send({ ok: false, error: r.error });
+    }
+    if (req.headers['x-gif-remember'] === '1') await opts.prefs?.setClientFetch(acc, 'always').catch(() => {});
+    app.log.info({ accountId: acc, bytes: body.length }, 'gif: médium z prohlížeče odesílatele přijato');
+    return reply.code(202).send({ ok: true });
+  });
+
+  app.post<{ Body: { token?: unknown; remember?: unknown } }>('/gif/client-fetch/decline', { preHandler: session }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const acc = req.webAccountId!;
+    grants?.decline(String(req.body?.token || ''), acc);
+    if (req.body?.remember === true) await opts.prefs?.setClientFetch(acc, 'never').catch(() => {});
+    return { ok: true };
   });
 }
