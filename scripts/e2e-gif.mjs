@@ -101,6 +101,12 @@ const H1 = [
 const mock = { modUser: null, mod: true, sse: [], acc: [], heldAcc: null, decide: {}, held: {}, sendId: null,   // decide[id] = { code, body }; held[id] = odpověď /gif/held
   library: [], libHold: false, libHeld: [], dups: [], dupAct: null, rejected: [], rejMedia: new Set(), badTokens: new Set(), wd: [], pg: [], byId: [] };
 const posts = { modUser: [], decide: [], pending: [], tickets: 0, auth: [], send: [], state: [], held: [], token: 0, rejected: [], dupAct: [], dups: [], media: [], library: [], mediaTok: [], disc: [], byId: [] };
+// Stažení GIFu prohlížečem (Task 12): POST /gif/client-upload → { token, remember, bytes (přesně z postDataEntries,
+// `postData` string mangluje bajty nad 127) }, POST /gif/client-fetch/decline → { token, remember }.
+const uploads = [], declines = [];
+// Malý MP4 buffer (jen platný `ftyp` box header, obsah je jedno — mock uploadu přijme cokoli), > 100 bajtů ať sedí
+// check na velikost uploadu.
+const MP4_BUF = (() => { const b = Buffer.alloc(256, 0); b.write('ftypmp42', 4); return b; })();
 mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now() });
 const sseBody = (events) => 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
@@ -116,7 +122,8 @@ s.onevent = async (d) => {
   const sid = d.sessionId;
   const json = (o, code = 200) => fulfill(rid, sid, code, 'application/json', JSON.stringify(o));
   const u = q.url;
-  const body = q.postData ? JSON.parse(q.postData) : null;
+  // Binární tělo (client-upload) není platný JSON — bezpečný parse (nikdy nehodit výjimku uvnitř handleru).
+  const body = q.postData ? (() => { try { return JSON.parse(q.postData); } catch { return null; } })() : null;
   if (u.includes('/media/gif/')) {
     const [id, qs] = u.split('/media/gif/')[1].split('?');
     const tok = qs ? new URLSearchParams(qs).get('t') : null;
@@ -135,7 +142,7 @@ s.onevent = async (d) => {
     return;
   }
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
-  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: mock.meLogin || 'moduser', displayName: mock.meLogin || 'ModUser' }, kick: null, youtube: null }, warnings: [] });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: mock.meLogin || 'moduser', displayName: mock.meLogin || 'ModUser' }, kick: null, youtube: null }, warnings: [], gifClientFetch: 'ask' });
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: {} } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   // Obsah smazaných zpráv pro moda (smazaný GIF server neposílá) — nesmí odejít na produkci.
   if (u.includes('/moderation/deleted-content')) return json({ ok: true, messages: {} });
@@ -195,9 +202,21 @@ s.onevent = async (d) => {
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : H1, nextBefore: null });
   // Zprávy podle id (po SSE gif-media visible klient dotáhne obsah).
   if (u.includes('/chat/messages')) { posts.byId.push(u); return json({ ok: true, messages: mock.byId }); }
+  // Stažení GIFu prohlížečem (core/gif-client-fetch.js, spec 2026-09-29): fetch() z prohlížeče na hostitele média,
+  // pak upload bajtů s tokenem; „Ne“ pošle decline; předvolba účtu jde přes PUT /account/gif-prefs.
+  if (u.includes('i.imgur.com')) return call('Fetch.fulfillRequest', { requestId: rid, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'video/mp4' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: MP4_BUF.toString('base64') }, sid);
+  if (u.includes('/gif/client-upload')) {
+    const tok = q.headers['X-Gif-Token'] || q.headers['x-gif-token'] || '';
+    const remember = q.headers['X-Gif-Remember'] || q.headers['x-gif-remember'] || '';
+    const bytes = (q.postDataEntries || []).reduce((n, e) => n + Buffer.from(e.bytes, 'base64').length, 0);
+    uploads.push({ token: tok, remember, bytes });
+    return json({ ok: true }, 202);
+  }
+  if (u.includes('/gif/client-fetch/decline')) { declines.push({ token: body?.token, remember: body?.remember }); return json({ ok: true }); }
+  if (u.includes('/account/gif-prefs')) return json({ ok: true, clientFetch: body?.clientFetch });
   return call('Fetch.continueRequest', { requestId: rid }, sid);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/chat/messages', '/chat/send', '/nicknames/stream', '/account/', '/media/gif/', '/gif/state', '/gif/held', '/gifs/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: [...['/auth/me', '/moderation/', '/chat/history', '/chat/messages', '/chat/send', '/nicknames/stream', '/account/', '/media/gif/', '/gif/state', '/gif/held', '/gif/client-upload', '/gif/client-fetch', '/gifs/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })), { urlPattern: '*i.imgur.com*' }] }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -740,6 +759,11 @@ mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: null, cooldownS
 const pendBefore = posts.pending.length;
 await boot();
 await until(`!document.body.classList.contains('uc-can-moderate')`);
+// Instance UnityChat není globální → zachytit přes prototyp při dalším logu (vzor scripts/e2e-mention-notify.mjs),
+// potřeba pro CF test níže (reset lokální předvolby `_account.gifClientFetch` mezi zprávami).
+await ev(`(() => { const o = UnityChat.prototype._ucLog; UnityChat.prototype._ucLog = function (...a) { window.__uc = this; return o.apply(this, a); }; return true; })()`);
+await ev(`document.getElementById('input-deleted-style')?.dispatchEvent(new Event('change'))`);
+await until(`!!window.__uc`, 8000);
 const own = (id) => ev(`(() => { const m = document.querySelector('.msg[data-msg-id="${id}"]'); if (!m) return null; const s = m.querySelector('.uc-gif-st');
   const w = s?.querySelector('.uc-gif-st-warn');
   return { shown: getComputedStyle(m).display !== 'none', held: m.classList.contains('uc-gif-held'), deleted: m.classList.contains('uc-deleted'), text: m.querySelector('.tx')?.textContent || '',
@@ -922,6 +946,32 @@ check('I1 bez echa → zamítnuto: optimistická zůstane s textem (odkaz neživ
   && (await optRej())?.label === null && (await optRej()).text && !(await optRej()).link, JSON.stringify(await optRej()));
 check('I1 … ne jako neodeslaná', (await optRej())?.failed === false);
 mock.sendId = null;
+
+// ---- CF: stažení GIFu prohlížečem odesílatele (core/gif-client-fetch.js, spec 2026-09-29) ----
+mock.sse.push(OWNMSG('e2e-cf1', 'moje https://imgur.com/a/8as1KiG'));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf1"]')`, 8000);
+pushAcc(PR('e2e-cf1', 'client_fetch', 50, { token: 'tok-cf1', url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: Date.now() + 90000, serverNow: Date.now(), pref: 'ask' }));
+check('CF výzva: štítek s textem o imgur.com a tlačítky', await until(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st--client_fetch'); return !!st && /imgur\.com/.test(st.textContent) && !!st.querySelector('[data-cf="yes"]') && !!st.querySelector('[data-cf="no"]') && !!st.querySelector('[data-cf="remember"]'); })()`, 6000));
+await ev(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st--client_fetch'); st.querySelector('[data-cf="remember"]').checked = true; st.querySelector('[data-cf="yes"]').click(); return true; })()`);
+check('CF: klik → stažení z i.imgur.com a upload s tokenem + remember', await waitFor(() => uploads.length === 1, 6000) && uploads[0].token === 'tok-cf1' && uploads[0].remember === '1' && uploads[0].bytes > 100, JSON.stringify(uploads));
+check('CF: během uploadu kolečko', await ev(`document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st')?.dataset.kind`) === 'progress');
+pushAcc(PR('e2e-cf1', 'verify', 95), PR('e2e-cf1', 'done', 100, { outcome: 'pending' }));
+check('CF: po serveru „Schvalování moderátorem“', await until(`document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st')?.dataset.kind === 'pending'`, 6000));
+// Ne (bez zapamatování): cf1 uložilo remember+yes → lokální _account.gifClientFetch je teď „always“ (spec §4
+// „Zapamatovat → další GIF bez výzvy“ — ověřeno níže v CF3 na serverové předvolbě); pro nezávislý test výzvy + „Ne“
+// vrátit lokální předvolbu zpět na „ask“ (jako fresh /auth/me se starou hodnotou).
+await ev(`(() => { if (window.__uc?._account) window.__uc._account.gifClientFetch = 'ask'; return true; })()`);
+mock.sse.push(OWNMSG('e2e-cf2', 'druhé https://imgur.com/a/vGm2qzT'));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf2"]')`, 8000);
+pushAcc(PR('e2e-cf2', 'client_fetch', 50, { token: 'tok-cf2', url: 'https://i.imgur.com/b1Fyunv.mp4', kind: 'mp4', width: 480, height: 854, host: 'i.imgur.com', expiresAt: Date.now() + 90000, serverNow: Date.now(), pref: 'ask' }));
+check('CF2 výzva: štítek s tlačítky (lokální předvolba vrácena na ask)', await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st--client_fetch')`, 6000));
+await ev(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st--client_fetch'); st.querySelector('[data-cf="no"]').click(); return true; })()`);
+check('CF: Ne → decline na server a text „Odkaz zůstal běžnou zprávou“', await waitFor(() => declines.length === 1, 6000) && declines[0].token === 'tok-cf2' && await until(`document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st')?.dataset.kind === 'client_declined'`, 3000));
+// pref always ze serveru → bez výzvy rovnou stažení
+mock.sse.push(OWNMSG('e2e-cf3', 'třetí https://imgur.com/a/tCd8jXN'));
+await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf3"]')`, 8000);
+pushAcc(PR('e2e-cf3', 'client_fetch', 50, { token: 'tok-cf3', url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: Date.now() + 90000, serverNow: Date.now(), pref: 'always' }));
+check('CF: předvolba always → bez výzvy rovnou upload', await waitFor(() => uploads.length === 2, 6000) && uploads[1].token === 'tok-cf3');
 
 // ---- fáze D (divák): bublina cooldownu ----
 const SN = 5_000_000;   // hodiny serveru jinde než klient (posun přes serverNow)
