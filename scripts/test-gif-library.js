@@ -514,6 +514,8 @@ Promise.all([
   {
     check('normalizeGifPending: media.tokenRequired (dříve zamítnuté médium jen s tokenem)', g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif', tokenRequired: true }, expiresAt: 9 }).tokenRequired === true
       && g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif' }, expiresAt: 9 }).tokenRequired === false);
+    check('normalizeGifPending: media.clientFetched (médium z prohlížeče odesílatele)', g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif', clientFetched: true }, expiresAt: 9 }).clientFetched === true
+      && g.normalizeGifPending({ requestId: 1, channel: 'rob', media: { url: OUR, kind: 'gif' }, expiresAt: 9 }).clientFetched === false);
     let tn = 1_000_000, n = 0;
     const tk = new L.GifAccessToken({ api: async () => { n++; return { ok: true, token: `t${n}`, serverNow: 5_000, expiresAt: 5_000 + 30 * 86_400_000 }; }, now: () => tn });
     const a = await tk.get();

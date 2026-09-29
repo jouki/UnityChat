@@ -140,6 +140,8 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-29 (stažení GIFu prohlížečem odesílatele)
+- CLAUDE.md: milestone v3.41.89–91 (host blokující IP serveru → výzva ke stažení prohlížečem, `POST /gif/client-upload`, předvolba účtu `account_gif_prefs`, karta moda se štítkem „· z prohlížeče odesílatele“ u čekající žádosti).
 ### 2026-09-28 (rich text v Židolištce)
 - Memory `project_zidolista_rich_text.md` + řádek v MEMORY.md: jeden renderer `server/static/richText.js` (commandy + lišty + kopie na webu hlídaná testem), escape `\`, proměnné doslova; core `richTextToHtml` (v3.41.89) escape umí. Deploy serveru Židolišty potřebuje `static/` i v build stage Dockerfile.
 ### 2026-09-27 (výročí na Twitchi)

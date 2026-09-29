@@ -245,6 +245,8 @@ export function normalizeGifPending(d, opts = {}) {
     media,
     // Dříve zamítnuté médium: server ho servíruje jen s tokenem moda (`?t=`), karta ho tak načte.
     tokenRequired: d.media?.tokenRequired === true,
+    // Médium nahrané z prohlížeče odesílatele (host blokuje IP serveru) — karta moda to dá najevo v hlavičce.
+    clientFetched: d.media?.clientFetched === true,
     createdAt: Number(d.createdAt) || null,
     expiresAt,
     own: d.own === true,
@@ -1250,6 +1252,7 @@ export class GifRequests {
         <span class="uc-gif-card-pi"></span>
         <span class="uc-gif-card-who"></span>
         <span class="uc-gif-card-kind"></span>
+        <span class="uc-gif-card-src" hidden title="Médium stáhl prohlížeč odesílatele — adresa zdroje je jen jeho tvrzení">· z prohlížeče odesílatele</span>
         <span class="uc-gif-timer" title="Zbývá do propadnutí"></span>
       </div>
       <div class="uc-gif-card-text"></div>
@@ -1357,6 +1360,7 @@ export class GifRequests {
     el.classList.toggle('uc-gif-card--busy', !!card.busy);
     el.classList.toggle('uc-gif-card--locked', locked);
     el.querySelector('.uc-gif-card-kind').textContent = req.own ? 'Tvůj GIF' : 'Chce poslat GIF';
+    el.querySelector('.uc-gif-card-src').hidden = !req.clientFetched;
     const prevEl = el.querySelector('.uc-gif-card-prev');
     prevEl.textContent = req.previouslyRejected ? gifPrevRejectedText(req.previouslyRejected) : '';
     prevEl.hidden = !req.previouslyRejected;

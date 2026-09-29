@@ -151,6 +151,7 @@ body:not(.uc-raw) .msg .uc-gif .uc-gif-media:hover { filter: brightness(1.08); }
 .uc-gif-card-pi img { width: 16px; height: 16px; display: block; }
 .uc-gif-card-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .uc-gif-card-kind { color: var(--text-secondary, #adadb8); white-space: nowrap; }
+.uc-gif-card-src { font-weight: 400; opacity: .8; color: var(--text-secondary, #adadb8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .uc-gif-timer {
   margin-left: auto;
   flex: 0 0 auto;
