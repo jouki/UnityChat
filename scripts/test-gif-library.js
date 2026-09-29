@@ -171,6 +171,31 @@ Promise.all([
     check('Outbox: pozdní done po stropu stav opraví', b2.view('twitch', 'u1')?.kind === 'pending');
   }
 
+  // Stažení prohlížečem (spec 2026-09-29): výzva → view s tlačítky; start → kolečko; odmítnutí / vypršení → 5 s text.
+  {
+    const ch = []; let t = 5_000_000;
+    const bx = new L.GifOutbox({ channel: () => 'robdiesalot', now: () => t, onChange: (k) => ch.push(...k), hasMessage: () => true, setInterval: (fn) => { intervals.push(fn); return 99; }, clearInterval: () => {} });
+    const CF = { requestKey: 'twitch:c1', channel: 'robdiesalot', platform: 'twitch', messageId: 'c1', phase: 'client_fetch', pct: 50, token: 'tok', url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: t + 90_000, serverNow: t, pref: 'ask' };
+    bx.onProgress({ ...CF, phase: 'detect', pct: 0, token: undefined });
+    bx.onProgress(CF);
+    const v = bx.view('twitch', 'c1');
+    check('Outbox: client_fetch → view s hostem, tokenem, adresou a odpočtem', v.kind === 'client_fetch' && v.host === 'i.imgur.com' && v.token === 'tok' && v.url === CF.url && v.pref === 'ask' && v.remaining === 90_000 && /imgur\.com/.test(v.text), JSON.stringify(v));
+    check('Outbox: busy() i při výzvě', bx.busy() === true);
+    bx.clientFetchStarted('twitch', 'c1');
+    check('Outbox: start stahování → kolečko 50 %', bx.view('twitch', 'c1').kind === 'progress' && bx.view('twitch', 'c1').text === '50 %');
+    bx.onProgress({ ...CF, phase: 'client_fetch', token: 'tok2', messageId: 'c2', requestKey: 'twitch:c2' });
+    bx.clientFetchFailed('twitch', 'c2', 'too_large');
+    check('Outbox: chyba → červený text, po 5 s pryč', bx.view('twitch', 'c2').kind === 'client_failed' && bx.view('twitch', 'c2').text === 'GIF je moc velký (max 10 MB)');
+    t += 5_001; for (const fn of intervals) fn();
+    check('Outbox: … po 5 s bez štítku', bx.view('twitch', 'c2') === null);
+    bx.onProgress({ ...CF, messageId: 'c3', requestKey: 'twitch:c3' });
+    t += 90_001; for (const fn of intervals) fn();
+    check('Outbox: vypršení výzvy → „Vypršelo, odkaz zůstal běžnou zprávou“', bx.view('twitch', 'c3')?.text === 'Vypršelo, odkaz zůstal běžnou zprávou');
+    bx.onProgress({ ...CF, messageId: 'c4', requestKey: 'twitch:c4', expiresAt: t + 90_000 });
+    bx.onNotice({ requestKey: 'twitch:c4', channel: 'robdiesalot', platform: 'twitch', messageId: 'c4', kind: 'client_declined' });
+    check('Outbox: gif-notice client_declined → „Odkaz zůstal běžnou zprávou“', bx.view('twitch', 'c4')?.kind === 'client_declined');
+    check('normalizeGifProgress: client_fetch propouští popis', eq(Object.keys(L.normalizeGifProgress(CF)).filter((k) => ['token', 'url', 'host', 'kind', 'width', 'height', 'expiresAt', 'pref'].includes(k)).sort(), ['expiresAt', 'height', 'host', 'kind', 'pref', 'token', 'url', 'width']));
+  }
 
   // --- závěrečná review I1: štítek řídí stav zprávy, echo schovaného GIFu bez textu se páruje přes id ---
   {

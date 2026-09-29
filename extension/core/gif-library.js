@@ -11,7 +11,7 @@
 //
 // Bez chrome.*: DOM přes injektovaný `doc`, síť přes injektované `api(path, opts)` (hostitel přidá Bearer; chyba =
 // throw { error, status, body }). Cizí text jde do DOM jen přes textContent / esc. Token se nikdy neloguje.
-import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, GIF_HOLD_BATCH, GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, GIF_DENIED_REASON } from './gif.js';
+import { createGifMedia, removeGifMedia, normalizeGifMedia, normalizeGifPending, normalizeGifDecided, gifCountText, gifShortDate, sameChannel, isGifHeldReason, gifLocalTime, formatCountdown, GIF_HOLD_BATCH, GIF_REJECTED_REASON, GIF_NOT_ALLOWED_REASON, GIF_DENIED_REASON } from './gif.js';
 import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining, shakeLock, rewardStatusHtml, REWARD_STATUS_CLASS } from './soundboard.js';
@@ -67,7 +67,22 @@ export const GIF_STATUS_TEXT = {
   expired: 'Vypršelo',
   not_allowed: 'Nové GIFy teď nejsou povolené',
   denied: 'GIF teď není možné poslat',
+  client_declined: 'Odkaz zůstal běžnou zprávou',
+  client_expired: 'Vypršelo, odkaz zůstal běžnou zprávou',
 };
+/** Jak dlouho po odmítnutí / vypršení / chybě stažení prohlížečem se výzva/text ke stažení GIFu schová. */
+export const GIF_CLIENT_NOTE_MS = 5_000;
+/** Výzva „Server nemůže GIF stáhnout, stáhnout ho prohlížečem?“ (host = doména odkazu). */
+export const GIF_CLIENT_FETCH_TEXT = (host) => `Server nemůže GIF z ${host} stáhnout. Stáhnout ho tvým prohlížečem a poslat?`;
+export const GIF_CLIENT_FETCH_TIP = 'Stáhne se z tvého prohlížeče (host uvidí tvou IP)';
+/** Chyba stažení GIFu prohlížečem (`gif-progress` outcome / `clientFetchFailed`) → text štítku. */
+export const gifClientFailText = (code) => ({
+  too_large: 'GIF je moc velký (max 10 MB)',
+  bad_type: 'Za odkazem není GIF',
+  size_mismatch: 'Stažený soubor neodpovídá stránce',
+  network: 'Stažení v prohlížeči selhalo',
+  rate_limited: 'Moc rychle za sebou, chvíli počkej.',
+}[code] || 'Odeslání se nepovedlo');
 /**
  * Konečné (červené) stavy vlastního GIFu → důvod smazání. Zamítnuto / vypršelo: odesílatel (divák i mod) vidí svůj
  * text mírně ztlumený, bez živého odkazu, jen se štítkem — bez „SMAZÁNO“ / „Zpráva smazána“; ostatní smazanou zprávu.
@@ -81,7 +96,7 @@ export const GIF_APPROVED_ONLY_TEXT = 'Nové GIFy teď nejsou povolené, vyber z
 /** Náš odkaz (id) na GIF z knihovny: krátký stav bez procent, dokud server nezačne stahovat (test2 bod 4). */
 export const GIF_SENDING_TEXT = 'Odesílám…';
 /** Fáze, od které se u zprávy ukazuje kolečko s procenty. */
-const DOWNLOAD_PHASES = new Set(['download', 'unlock']);
+const DOWNLOAD_PHASES = new Set(['download', 'unlock', 'client_download']);
 
 /**
  * Hláška po `gif-notice` cooldown (test2 bod 4.1): GIF odkaz během cooldownu zůstal běžnou zprávou, nebo ho (removed)
@@ -91,9 +106,13 @@ export function gifCooldownNoticeText(ms, { removed = false } = {}) {
   return `GIF můžeš poslat až za ${formatRemaining(ms)} — ${removed ? 'zprávu s odkazem smazal filtr odkazů.' : 'odkaz zůstal jako běžná zpráva.'}`;
 }
 
-const PHASES = new Set(['detect', 'access', 'download', 'unlock', 'verify', 'done']);
+const PHASES = new Set(['detect', 'access', 'download', 'unlock', 'verify', 'done', 'client_fetch', 'client_download']);
 
-/** SSE `gif-progress` → { key, channel, platform, messageId, phase, pct, estimateMs, elapsedMs, outcome }, nebo null. */
+/**
+ * SSE `gif-progress` → { key, channel, platform, messageId, phase, pct, estimateMs, elapsedMs, outcome }, nebo null.
+ * Fáze `client_fetch` (server GIF nemůže stáhnout sám, spec 2026-09-29) navíc nese popis odkazu pro výzvu:
+ * `token, url, host, kind, width, height, expiresAt, serverNow, pref`.
+ */
 export function normalizeGifProgress(d) {
   if (!d || typeof d !== 'object' || !PHASES.has(d.phase)) return null;
   const platform = String(d.platform || '');
@@ -111,6 +130,15 @@ export function normalizeGifProgress(d) {
     estimateMs: num(d.estimateMs),
     elapsedMs: num(d.elapsedMs) ?? 0,
     outcome: d.phase === 'done' ? String(d.outcome || '') : null,
+    token: d.token ? String(d.token) : null,
+    url: d.url ? String(d.url) : null,
+    host: d.host ? String(d.host) : null,
+    kind: d.kind ? String(d.kind) : null,
+    width: num(d.width),
+    height: num(d.height),
+    expiresAt: num(d.expiresAt),
+    serverNow: num(d.serverNow),
+    pref: ['ask', 'always', 'never'].includes(d.pref) ? d.pref : 'ask',
   };
 }
 
@@ -197,7 +225,7 @@ export function gifEchoPatch(msg) {
  * GIF_OWN_MAX_CHECKS×); bez `api` / chyba dotazu → „Vypršelo“.
  */
 export class GifOutbox {
-  constructor({ channel, now, log, onChange, onNotice, hasMessage, api, serverOffset, setInterval: si, clearInterval: ci } = {}) {
+  constructor({ channel, now, log, onChange, onNotice, hasMessage, api, serverOffset, onClientFetch, setInterval: si, clearInterval: ci } = {}) {
     this.api = typeof api === 'function' ? api : null;
     /** Posun hodin (lokální − serverový) z GET /gif/state pro `expiresAt` bez `serverNow` (audit F1). */
     this.serverOffset = serverOffset || (() => 0);
@@ -207,6 +235,8 @@ export class GifOutbox {
     this.onChange = onChange || (() => {});
     this.onNoticeCb = onNotice || (() => {});
     this.hasMessage = hasMessage || (() => true);
+    /** Výzva ke stažení GIFu prohlížečem (fáze `client_fetch`) → hostitel rozhodne podle uložené předvolby (Task 9). */
+    this.onClientFetch = onClientFetch || null;
     this._si = si || globalThis.setInterval.bind(globalThis);
     this._ci = ci || globalThis.clearInterval.bind(globalThis);
     this._e = new Map();       // key → entry
@@ -304,7 +334,7 @@ export class GifOutbox {
   busy(now = this.now()) {
     for (const e of this._e.values()) {
       const v = this.view(e.platform, e.messageId, now);
-      if (v && (v.kind === 'progress' || v.kind === 'sending' || v.kind === 'pending')) return true;
+      if (v && (v.kind === 'progress' || v.kind === 'sending' || v.kind === 'pending' || v.kind === 'client_fetch')) return true;
     }
     return false;
   }
@@ -350,7 +380,7 @@ export class GifOutbox {
   _entry(key, platform, messageId) {
     let e = this._e.get(key);
     if (!e) {
-      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null, checks: 0, checking: false, nextCheck: null, expiresAt: null, pendingAt: null, final: false, fails: 0 };
+      e = { key, platform, messageId, state: 'progress', phase: 'detect', pct: 0, estimateMs: null, elapsedMs: 0, at: this.now(), floor: 0, warn: false, requestId: null, checks: 0, checking: false, nextCheck: null, expiresAt: null, pendingAt: null, final: false, fails: 0, cf: null, clearAt: null };
       this._e.set(key, e);
       if (this._e.size > 200) this._e.delete(this._e.keys().next().value);
     }
@@ -380,6 +410,18 @@ export class GifOutbox {
     // Rozhodnuto serverem (gif-decided, gif-message, /gif/held, gif-notice) → pozdní průběh ani `done` štítek
     // nevrátí (audit F8). Tiché optimistické kolečko (state none) skutečný průběh zase oživí.
     if (e.final) { this._L(`${p.key} ${p.phase} po rozhodnutí (${e.state}) → ignorováno`); return e; }
+    // Server GIF nemůže stáhnout sám → výzva ke stažení prohlížečem (spec 2026-09-29). Jen z rozpracovaného /
+    // nedotčeného stavu — pozdní `client_fetch` po jiném rozhodnutí štítek nevrátí (stejná pojistka jako `done`).
+    if (p.phase === 'client_fetch') {
+      if (e.state !== 'progress' && e.state !== 'none') return e;
+      // Vypršení podle hodin serveru (serverNow) → lokální čas.
+      const off = p.serverNow !== null ? this.now() - p.serverNow : this.serverOffset();
+      e.state = 'client_fetch'; e.optimistic = false;
+      e.cf = { token: p.token, url: p.url, kind: p.kind, width: p.width, height: p.height, host: p.host || 'server', pref: p.pref, expiresAt: p.expiresAt !== null ? p.expiresAt + off : this.now() + 90_000 };
+      this._L(`${p.key} výzva ke stažení prohlížečem (${e.cf.host}, ${e.cf.pref})`);
+      this._arm(); this.onChange([p.key]); try { this.onClientFetch?.(e, p); } catch { /* ignore */ }
+      return e;
+    }
     if (e.state === 'none' && p.phase !== 'done') e.state = 'progress';
     // Pozdní průběh po čekání (pending → progress by štítek vrátil zpět) ignorovat.
     if (e.state !== 'progress' && p.phase !== 'done') return e;
@@ -418,6 +460,8 @@ export class GifOutbox {
     else if (d.kind === 'auto_rejected') e.state = 'rejected';
     // Cooldown: odkaz zůstal běžnou zprávou → bez kolečka i štítku (test2 bod 4.1), hlášku ukáže hostitel.
     else if (d.kind === 'cooldown') { e.state = 'none'; e.optimistic = false; }
+    // Uživatel odmítl stažení prohlížečem (Task 9) → odkaz zůstal běžnou zprávou, 5 s text, pak pryč.
+    else if (d.kind === 'client_declined') { e.state = 'client_declined'; e.clearAt = this.now() + GIF_CLIENT_NOTE_MS; }
     else { this._L(`gif-notice ${d.kind} neznámý`); return e; }
     e.final = true;
     this._L(`${key} gif-notice ${d.kind}${d.reason ? ` (${d.reason})` : ''}`);
@@ -476,6 +520,12 @@ export class GifOutbox {
     return e;
   }
 
+  /** Uživatel odsouhlasil stažení GIFu prohlížečem (Task 9) → kolečko 50 % (fáze `client_download`) do dalšího `gif-progress`. */
+  clientFetchStarted(platform, id) { const e = this.get(platform, id); if (!e || e.state !== 'client_fetch') return null; e.state = 'progress'; e.phase = 'client_download'; e.pct = 50; e.floor = 50; e.dl = true; e.at = this.now(); this._arm(); this.onChange([e.key]); return e; }
+
+  /** Stažení / odeslání prohlížečem selhalo (moc velký, špatný typ, síť, …) → červený text, po `GIF_CLIENT_NOTE_MS` pryč. */
+  clientFetchFailed(platform, id, code) { const e = this.get(platform, id); if (!e) return null; e.state = 'client_failed'; e.failCode = String(code || ''); e.final = true; e.clearAt = this.now() + GIF_CLIENT_NOTE_MS; this._arm(); this.onChange([e.key]); return e; }
+
   /** Štítek pro zprávu: { kind: progress|pending|rejected|expired|not_allowed|approved, pct?, text?, warn? } | null. */
   view(platform, id, now = this.now()) {
     const e = this.get(platform, id);
@@ -488,6 +538,9 @@ export class GifOutbox {
       const pct = gifProgressPct(e, now, e.floor);
       return { kind: 'progress', pct, text: formatGifPct(pct) };
     }
+    // Výzva ke stažení prohlížečem (client_fetch) a chyba stažení (client_failed): vlastní stav (tlačítka / důvod).
+    if (e.state === 'client_fetch' && e.cf) return { kind: 'client_fetch', text: GIF_CLIENT_FETCH_TEXT(e.cf.host), host: e.cf.host, url: e.cf.url, token: e.cf.token, expiresAt: e.cf.expiresAt, pref: e.cf.pref, remaining: Math.max(0, e.cf.expiresAt - now) };
+    if (e.state === 'client_failed') return { kind: 'client_failed', text: gifClientFailText(e.failCode) };
     if (e.state === 'approved') return { kind: 'approved' };
     return { kind: e.state, text: GIF_STATUS_TEXT[e.state] || '', warn: e.state === 'pending' && e.warn };
   }
@@ -608,33 +661,50 @@ export class GifOutbox {
    * Časovač: animace unlock + optimistického kolečka (překreslit) a strop pro vše rozpracované / čekající
    * (průběh bez události 60 s, čekání na moda po expiresAt) → dotaz na stav.
    */
+  /**
+   * Časovač sleduje entry, dokud je „rozpracovaná“: kolečko / čekání na moda, výzva ke stažení prohlížečem
+   * (client_fetch, kvůli odpočtu), nebo dočasný text čekající na smazání (`clearAt` — client_failed /
+   * client_declined / client_expired po `GIF_CLIENT_NOTE_MS`).
+   */
+  _watched(e) { return !e.checking && !e.stalled && (e.state === 'progress' || e.state === 'pending' || e.state === 'client_fetch' || !!e.clearAt); }
+
   _arm() {
-    const watched = (e) => !e.checking && !e.stalled && (e.state === 'progress' || e.state === 'pending');
-    if (![...this._e.values()].some(watched)) { if (this._timer) { this._ci(this._timer); this._timer = null; } return; }
+    if (![...this._e.values()].some((e) => this._watched(e))) { if (this._timer) { this._ci(this._timer); this._timer = null; } return; }
     if (this._timer) return;
-    this._timer = this._si(() => {
-      const now = this.now();
-      const keys = [];
-      const due = [];
-      for (const e of this._e.values()) {
-        if (e.checking || e.stalled) continue;
-        if (e.state === 'progress') {
-          if (e.optimistic) {
-            if (now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
-            keys.push(e.key);
-          } else if (now - e.at > GIF_PROGRESS_MAX_SILENT_MS) {
-            this._L(`${e.key} ${e.phase} bez další události ${Math.round((now - e.at) / 1000)} s → dotaz na stav`);
-            due.push(e);
-          } else if (e.phase === 'unlock') keys.push(e.key);
-        } else if (e.state === 'pending' && now >= this._pendingDue(e)) {
-          this._L(`${e.key} čeká na moda i po konci žádosti → dotaz na stav`);
+    this._timer = this._si(() => this._tick(), GIF_PROGRESS_TICK_MS);
+  }
+
+  /** Tik časovače z `_arm()`: animace unlock/optimistického kolečka, strop rozpracovaného/čekajícího, odpočet a
+   * vypršení výzvy ke stažení prohlížečem (client_fetch), smazání dočasných textů (clearAt). */
+  _tick() {
+    const now = this.now();
+    const keys = [];
+    const due = [];
+    for (const e of this._e.values()) {
+      if (e.checking || e.stalled) continue;
+      if (e.state === 'progress') {
+        if (e.optimistic) {
+          if (now - e.at > GIF_OPTIMISTIC_SILENT_MS) { e.state = 'none'; e.optimistic = false; this._L(`${e.key} bez odezvy serveru → kolečko pryč`); }
+          keys.push(e.key);
+        } else if (now - e.at > GIF_PROGRESS_MAX_SILENT_MS) {
+          this._L(`${e.key} ${e.phase} bez další události ${Math.round((now - e.at) / 1000)} s → dotaz na stav`);
           due.push(e);
-        }
+        } else if (e.phase === 'unlock') keys.push(e.key);
+      } else if (e.state === 'pending' && now >= this._pendingDue(e)) {
+        this._L(`${e.key} čeká na moda i po konci žádosti → dotaz na stav`);
+        due.push(e);
+      } else if (e.state === 'client_fetch' && e.cf && now >= e.cf.expiresAt) {
+        e.state = 'client_expired'; e.final = true; e.clearAt = now + GIF_CLIENT_NOTE_MS;
+        this._L(`${e.key} výzva ke stažení prohlížečem vypršela`);
+        keys.push(e.key);
+      } else if (e.state === 'client_fetch') {
+        keys.push(e.key);   // odpočet
       }
-      if (keys.length) this.onChange(keys);
-      if (due.length) void this._check(due);
-      if (this._timer && ![...this._e.values()].some(watched)) { this._ci(this._timer); this._timer = null; }
-    }, GIF_PROGRESS_TICK_MS);
+      if (e.clearAt && now >= e.clearAt) { e.state = 'none'; e.clearAt = null; keys.push(e.key); }
+    }
+    if (keys.length) this.onChange(keys);
+    if (due.length) void this._check(due);
+    if (this._timer && ![...this._e.values()].some((e) => this._watched(e))) { this._ci(this._timer); this._timer = null; }
   }
 }
 
@@ -688,6 +758,11 @@ export function paintGifStatus(doc, msgEl, view) {
       st.innerHTML = '<span class="uc-qd-ring uc-gif-st-ring"><i></i></span><span class="uc-gif-st-pct"></span>';
     } else if (kind === 'pending') {
       st.innerHTML = `<span class="uc-gif-st-txt"></span> <span class="uc-gif-st-wait" aria-hidden="true">(<i class="uc-gif-st-spin"></i>)</span><span class="uc-gif-st-warn" hidden title="${esc(GIF_PREV_REJECTED_TIP)}" data-tooltip="${esc(GIF_PREV_REJECTED_TIP)}">${WARN_SVG}</span>`;
+    } else if (kind === 'client_fetch') {
+      // Výzva ke stažení prohlížečem: tlačítka Task 9 čte přes `[data-cf]`; token nikdy do DOM (jen outbox.view()).
+      st.innerHTML = '<span class="uc-gif-st-txt"></span><span class="uc-gif-cf-actions"><button type="button" class="uc-gif-cf-btn" data-cf="yes">Stáhnout a poslat</button><button type="button" class="uc-gif-cf-btn uc-gif-cf-no" data-cf="no">Ne</button><label class="uc-gif-cf-rem"><input type="checkbox" data-cf="remember"> Zapamatovat volbu</label></span><span class="uc-gif-st-wait uc-gif-cf-left" aria-hidden="true"></span>';
+      st.title = GIF_CLIENT_FETCH_TIP;
+      st.setAttribute('data-tooltip', GIF_CLIENT_FETCH_TIP);
     } else {
       st.innerHTML = '<span class="uc-gif-st-txt"></span>';
     }
@@ -701,6 +776,8 @@ export function paintGifStatus(doc, msgEl, view) {
     st.querySelector('.uc-gif-st-txt').textContent = view.text || '';
     const w = st.querySelector('.uc-gif-st-warn');
     if (w) w.hidden = !view.warn;
+    const left = st.querySelector('.uc-gif-cf-left');
+    if (left) left.textContent = formatCountdown(view.remaining);
     st.setAttribute('aria-label', `${view.text || ''}${view.warn ? ` (${GIF_PREV_REJECTED_TIP})` : ''}`);
   }
   return st;
