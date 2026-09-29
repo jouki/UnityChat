@@ -22,6 +22,7 @@ import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } fr
 import { accountModIdentities } from '../lib/chatRole.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
 import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
+import { syncEmailLink } from '../lib/emailLink.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -158,6 +159,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const res = await exchangePendingCode(body.data.code, bearerToken(req));
     if (!res) { reply.code(400); return { ok: false, error: 'code invalid or expired' }; }
     req.log.info({ accountId: res.accountId, linked: res.linked, linkRefused: res.linkRefused }, 'web OAuth exchange');
+    // Nová platforma na účtu → seznam identit u ověřeného e-mailu v Židolištce (účet bez e-mailu nic neposílá dál).
+    if (res.linked) void syncEmailLink(res.accountId, { log: req.log });
     return { ok: true, token: res.sessionToken, linked: res.linked, expiresInMs: WEB_SESSION_TTL_MS };
   });
 
@@ -189,6 +192,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const params = PlatformParam.safeParse(req.params);
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     await unlinkIdentity(req.webAccountId!, params.data.platform);
+    void syncEmailLink(req.webAccountId!, { log: req.log });
     return { ok: true };
   });
 

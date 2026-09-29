@@ -30,6 +30,7 @@ import accountWarningRoutes from './routes/accountWarnings.js';
 import { disconnectAllAccountStreams } from './lib/accountWarnings.js';
 import { publishUserModerated, recordBan } from './lib/userModeration.js';
 import { publishIntegration, integrationStreamStats, disconnectAllIntegrationStreams } from './sse/integrationStream.js';
+import { syncAllEmailLinks } from './lib/emailLink.js';
 import { startWorkspaceRefresh, stopWorkspaceRefresh, onWorkspaces, PLATFORMS as WS_PLATFORMS } from './lib/zidolista.js';
 import { loadBotLogins } from './lib/botIdentities.js';
 import { isConfigured as cwsConfigured } from './lib/cwsApi.js';
@@ -380,6 +381,8 @@ try {
   await app.listen({ port: config.PORT, host: config.HOST });
   // Změny přezdívek z DB (trigger) → SSE; selhání poslechu nesmí shodit server.
   startNicknameNotify(app.log).catch((e) => app.log.error({ err: (e as Error).message }, 'nicknames: LISTEN selhal'));
+  // Dorovnání propojení účet ↔ ověřený e-mail v Židolištce (idempotentní; opraví i propojení, které dřív neprošlo).
+  setTimeout(() => { void syncAllEmailLinks({ log: app.log }); }, 15_000).unref?.();
 } catch (err) {
   app.log.error(err);
   process.exit(1);
