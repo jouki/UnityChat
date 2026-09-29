@@ -73,6 +73,16 @@ export function isBotAccount(platform: string, workspace: string, platformUserId
   return !!s && (s.has(SHARED) || s.has(workspace));
 }
 
+/**
+ * Je autor zprávy sdílený bot UnityChatu (JoukiBOT)? JEN podle id účtu na platformě z bot_identities
+ * (workspace `_shared`) — nikdy podle jména: login „joukibot“ si na Kicku / YouTube může vzít kdokoli.
+ * Jeho zprávy dostávají zlaté logo UnityChatu (pokyn usera 2026-09-30).
+ */
+export function isSharedBotId(platform: string, platformUserId: string | null | undefined): boolean {
+  if (!platformUserId) return false;
+  return !!botLogins.get(idKey(platform, String(platformUserId)))?.has(SHARED);
+}
+
 export async function upsertBotIdentity(workspace: string, platform: Platform, identity: IdentityInfo, tokens: TokenSet): Promise<void> {
   const cols = encryptedColumns(tokens);
   await db

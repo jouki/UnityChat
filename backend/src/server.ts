@@ -44,7 +44,7 @@ import { startMailKeepalive } from './lib/mailKeepalive.js';
 import { publishDeleted } from './lib/messageDeletes.js';
 import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
-import { isBotAccount } from './lib/botIdentities.js';
+import { isBotAccount, isSharedBotId } from './lib/botIdentities.js';
 import { workspaceForChannelSync } from './lib/zidolista.js';
 import { deletePlatformMessage, deleteOwnMessageAsSender } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
@@ -235,6 +235,8 @@ const ingest = createIngest({
     if (gifFlow.scrubReplyParent(m)) app.log.info({ platform: m.platform }, 'gif: citace smazané GIF zprávy v odpovědi vyprázdněna');
     // Command odeslaný z UnityChatu (bez markeru) — klient ho předem nahlásil (lib/ucSends.ts).
     if (ucSends.match(m)) markUc(m, app.log);
+    // Sdílený bot UnityChatu (JoukiBOT) píše přes UnityChat vždy → zlaté logo i bez markeru (shoda jen podle id účtu).
+    else if (!m.isUnitychatUser && isSharedBotId(m.platform, m.platformUserId)) markUc(m, app.log);
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
     const rep = ucReplies.take(m);
     if (rep?.data) attachUcReply(m, rep.data, app.log);
