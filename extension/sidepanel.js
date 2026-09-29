@@ -3940,8 +3940,9 @@ class UnityChat {
     if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
     if (this._warnings?.blocked) { this._ucLog('ModMenu', 'send blokováno — nepotvrzené varování'); this._warnings.open(); return; }
     // Broadcast (mod / streamer, roli ověřuje server): text z pole na všechny přihlášené platformy.
-    // Commandy jdou jen na vybranou platformu (bot by reagoval vícekrát), GIF odkaz Broadcastem vůbec.
-    if (!external && this._isBroadcast() && !text.startsWith('!') && !text.startsWith('/')) {
+    // !command jde taky na všechny platformy (pokyn usera 2026-09-29); lomítkové commandy jsou věc platformy
+    // → jen na vybranou. GIF odkaz Broadcastem vůbec.
+    if (!external && this._isBroadcast() && !text.startsWith('/')) {
       if (window.UC_CORE.hasGifLink(text)) { this._sys('GIF pošli na jednu platformu — vyber ji v menu u pole.'); return; }
       await this._sendBroadcast(text);
       return;

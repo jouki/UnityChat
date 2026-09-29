@@ -51,12 +51,16 @@ test('jen přihlášené platformy; méně než dvě = 400 targets', async () =>
   assert.equal(one.body.error, 'targets');
 });
 
-test('commandy a GIF odkazy Broadcastem nejdou', async () => {
+test('command s vykřičníkem jde Broadcastem na všechny platformy (bez markeru); lomítkový a GIF odkaz ne', async () => {
+  // Pokyn usera 2026-09-29: „přece jen je to broadcast“ — !command (i StreamElements) na všechny platformy.
+  const bang: string[] = [];
+  const ok = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: '!logi' }, deps({ sent: bang }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(bang, ['twitch:!logi', 'kick:!logi', 'youtube:!logi']);
   const sent: string[] = [];
-  for (const text of ['!se prd', '/me ahoj']) {
-    const out = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text }, deps({ sent }));
-    assert.equal(out.body.error, 'command');
-  }
+  // Lomítkové commandy jsou věc platformy (/me, /timeout…) → dál jen na vybranou platformu přes /chat/send.
+  const slash = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: '/me ahoj' }, deps({ sent }));
+  assert.equal(slash.body.error, 'command');
   const gif = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: 'koukej https://media.tenor.com/abc/x.gif' }, deps({ sent }));
   assert.equal(gif.body.error, 'gif');
   assert.deepEqual(sent, []);
@@ -67,7 +71,7 @@ test('texty pro jednotlivé platformy: každá svůj, kontrola i na nich (comman
   const out = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: '@Přezdívka ahoj', texts: { twitch: '@jouki728 ahoj', youtube: '@jouki ahoj' } }, deps({ sent }));
   assert.equal(out.status, 200);
   assert.deepEqual(sent, ['twitch:@jouki728 ahoj ⠀', 'kick:@Přezdívka ahoj ⠀', 'youtube:@jouki ahoj ⠀']);
-  const cmd = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: 'ahoj', texts: { kick: '!se prd' } }, deps({ sent: [] }));
+  const cmd = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: 'ahoj', texts: { kick: '/ban nekdo' } }, deps({ sent: [] }));
   assert.equal(cmd.body.error, 'command');
   const gif = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: 'ahoj', texts: { youtube: 'https://media.tenor.com/a/b.gif' } }, deps({ sent: [] }));
   assert.equal(gif.body.error, 'gif');

@@ -120,13 +120,16 @@ check('B neodeslaná část (Kick) označená, ostatní ne', await until(`[...do
 check('B pole prázdné (část prošla)', await ev(`document.getElementById('msg-input').value`) === '');
 mock.broadcast = 'ok';
 
-// ---- C: command jen na vybranou platformu, GIF se neodešle ----
+// ---- C: !command Broadcastem na všechny platformy (pokyn usera 2026-09-29), lomítkový jen na vybranou, GIF se neodešle ----
 await type('!test');
-await until(`${posts.send.length} < 1 ? false : true`, 1);
-check('C command → /chat/send na jednu platformu', await (async () => { await sleep(500); return posts.send.length === 1 && posts.send[0].text === '!test' && posts.broadcast.length === 1; })(), JSON.stringify(posts.send));
+for (let i = 0; i < 40 && posts.broadcast.length < 2; i++) await sleep(100);
+check('C !command → Broadcast na všechny platformy, nic přes /chat/send', posts.broadcast.length === 2 && posts.broadcast[1].text === '!test' && Object.keys(posts.broadcast[1].texts).sort().join() === 'kick,twitch,youtube' && posts.send.length === 0, JSON.stringify({ bc: posts.broadcast[1], send: posts.send }));
+await type('/me test');
+for (let i = 0; i < 40 && posts.send.length < 1; i++) await sleep(100);
+check('C lomítkový command → /chat/send na jednu platformu', posts.send.length === 1 && posts.send[0].text === '/me test' && posts.broadcast.length === 2, JSON.stringify(posts.send));
 await type('koukej https://media.tenor.com/abc/x.gif');
 await sleep(400);
-check('C GIF odkaz Broadcastem ne → hláška, nic neodešlo', posts.broadcast.length === 1 && posts.send.length === 1 && /GIF pošli na jednu platformu/.test(await lastSys() || ''), await lastSys());
+check('C GIF odkaz Broadcastem ne → hláška, nic neodešlo', posts.broadcast.length === 2 && posts.send.length === 1 && /GIF pošli na jednu platformu/.test(await lastSys() || ''), await lastSys());
 await ev(`(() => { const i = document.getElementById('msg-input'); i.value = ''; return true; })()`);
 
 // ---- D: odpověď → platforma autora, pak zpět ----

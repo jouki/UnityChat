@@ -38,7 +38,9 @@ export async function runBroadcast(
   for (const pl of [null, ...ORDER] as (Platform | null)[]) {
     const raw = String((pl ? p.texts?.[pl] : p.text) ?? '').trim();
     if (pl && !p.texts?.[pl]) continue;
-    if (raw.startsWith('!') || raw.startsWith('/')) return { status: 400, body: { ok: false, error: 'command' } };
+    // !command jde na všechny platformy (pokyn usera 2026-09-29, i commandy StreamElements); lomítkové commandy
+    // jsou věc platformy (/me, /timeout…) → jen přes /chat/send na vybranou platformu.
+    if (raw.startsWith('/')) return { status: 400, body: { ok: false, error: 'command' } };
     let out: string;
     try { out = outgoingText(raw); } catch (e) { return { status: 400, body: { ok: false, error: (e as Error).message } }; }
     if (gifCandidate(raw)) return { status: 400, body: { ok: false, error: 'gif' } };
