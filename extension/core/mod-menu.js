@@ -167,6 +167,14 @@ export function modScopePrompt(platform, result) {
   return { text, action: platform === 'twitch' ? 'Obnovit přihlášení (moderace)' : 'Povolit moderaci účtem' };
 }
 
+/** Hodnoty přejmenování: prázdná přezdívka + barva = jen barva pod stávajícím jménem; prázdná bez barvy = smazat. */
+export function renameValues(nickname, color, currentName) {
+  const n = String(nickname || '').trim();
+  const c = color || null;
+  if (!n && c) return { nickname: String(currentName || '').trim().slice(0, NICKNAME_MAX) || null, color: c };
+  return { nickname: n || null, color: n ? c : null };
+}
+
 /**
  * Požadavek na backend pro akci z nabídky (čistá funkce, testovaná).
  * @param {'state'|'delete'|'restore'|'timeout'|'ban'|'unban'|'warn'|'permit'|'rename'} kind
@@ -818,16 +826,18 @@ export class ModMenu {
     this.dialog = openModDialog({
       doc: this.doc,
       title: `Přejmenovat ${t.login}`,
-      subtitle: 'Přezdívka platí v celém UnityChatu. Prázdné pole přezdívku smaže.',
+      subtitle: 'Přezdívka i barva platí v celém UnityChatu. Jen barva: nech pole prázdné a zaškrtni barvu. Prázdné pole bez barvy přezdívku smaže.',
       fields: [
         { name: 'nickname', label: 'Přezdívka', value: t.nickname || '', maxLength: NICKNAME_MAX, placeholder: who },
         { name: 'color', type: 'color', label: 'Vlastní barva', value: t.nickname ? t.color : null },
       ],
       submitLabel: 'Uložit',
       onSubmit: async (v) => {
-        const { nickname, error } = validateNickname(v.nickname);
+        const { nickname: typed, error } = validateNickname(v.nickname);
         if (error) throw new Error(error);
-        const x = { nickname, color: v.color };
+        // Jen barva (pole prázdné, barva zaškrtnutá): jméno zůstane, jak je — uloží se pod ním barva
+        // (hlášení usera 2026-09-30: prázdné pole + barva přezdívku smazalo a barva se nenastavila).
+        const x = renameValues(typed, v.color, who);
         const res = await this.call('rename', t, x);
         this.notify(summarizeModResult('rename', t, res, x), { ok: true, kind: 'rename', target: t, res });
         this._afterResult('rename', t, res, x);
