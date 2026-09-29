@@ -7752,7 +7752,9 @@ class UnityChat {
         span.dataset.mentionUser = login;
         const entry = this._chatUsers.get(`${platform}:${login}`)
           || this._chatUsers.get(login);
-        const color = entry?.color;
+        // Vlastní barva z profilu UnityChatu má přednost před barvou z platformy — stejně jako u jména
+        // (hlášení usera 2026-09-29: zmínka měla barvu z YouTube, jméno barvu z profilu).
+        const color = this.nicknames?.getColor(platform, login) || entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
           if (sanitized) span.style.color = readableColor(sanitized);
@@ -7814,7 +7816,7 @@ class UnityChat {
         const span = document.createElement('span');
         span.className = 'mention bare';
         span.dataset.mentionUser = lname;
-        const sanitized = this.emotes._sc(entry.color);
+        const sanitized = this.emotes._sc(this.nicknames?.getColor(platform, lname) || entry.color);
         if (sanitized) span.style.color = readableColor(sanitized);
         span.textContent = word;
         frag.appendChild(span);
