@@ -7,7 +7,8 @@ Promise.all([
   import('../extension/core/gif-links.js'),
   import('../extension/core/chat-store.js'),
   import('../extension/core/gif-host.js'),
-]).then(async ([L, g, links, cs, H]) => {
+  import('../extension/core/gif-client-fetch.js'),
+]).then(async ([L, g, links, cs, H, CF]) => {
   let fails = 0;
   const check = (n, ok, detail = '') => { console.log((ok ? 'PASS ' : 'FAIL ') + n + (ok || !detail ? '' : ` — ${detail}`)); if (!ok) fails++; };
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -683,6 +684,51 @@ Promise.all([
     check('gifRewardTip: režim approved → řádek „Teď jdou jen GIFy z knihovny.“', ap.lines.includes('Teď jdou jen GIFy z knihovny.'));
     const apCd = T(RV({ allowed: true, until: 35_000, mode: 'approved', rewardUntil: 226_000 }, 0));
     check('gifRewardTip: cooldown + jen schválené → bez věty o knihovně (bod 4)', apCd.mode === 'cooldown' && !apCd.lines.length, JSON.stringify(apCd));
+  }
+
+  // --- core/gif-client-fetch.js: stažení v prohlížeči (CORS, bez cookies), upload, chyby ---
+  {
+    const mkRes = (bytes, headers = { 'content-type': 'video/mp4', 'content-length': String(bytes.length) }) => ({ ok: true, status: 200, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) });
+    const bytes = new Uint8Array(1000);
+    const calls = [];
+    const upload = async (b, token, remember) => { calls.push([b.byteLength, token, remember]); return { ok: true }; };
+    const r1 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', remember: true, fetchImpl: async (u, init) => { calls.push(['fetch', u, init.mode, init.credentials, init.redirect]); return mkRes(bytes); }, upload });
+    check('runClientFetch: CORS bez cookies, upload s tokenem a remember', eq(r1, { ok: true }) && eq(calls[0], ['fetch', 'https://i.imgur.com/a.mp4', 'cors', 'omit', 'error']) && eq(calls[1], [1000, 'tok', true]), JSON.stringify(calls));
+    const r2 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', maxBytes: 500, fetchImpl: async () => mkRes(bytes), upload });
+    check('runClientFetch: Content-Length přes limit → too_large bez uploadu', eq(r2, { ok: false, code: 'too_large' }) && calls.length === 2);
+    const r3 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => { throw new TypeError('Failed to fetch'); }, upload });
+    check('runClientFetch: chyba sítě / CORS → network', eq(r3, { ok: false, code: 'network' }));
+    const r4 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => mkRes(bytes), upload: async () => ({ ok: false, error: 'size_mismatch', status: 400 }) });
+    check('runClientFetch: server odmítl → jeho kód', eq(r4, { ok: false, code: 'size_mismatch' }));
+    const r5 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => mkRes(bytes), upload: async () => { throw { error: 'rate_limited', status: 429 }; } });
+    check('runClientFetch: upload zamítl (throw) → jeho kód', eq(r5, { ok: false, code: 'rate_limited' }));
+    const r6 = await CF.runClientFetch({ url: 'https://i.imgur.com/a.mp4', token: 'tok', fetchImpl: async () => ({ ok: false, status: 404, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) }), upload });
+    check('runClientFetch: HTTP chyba stažení (ok:false) → network, bez uploadu', eq(r6, { ok: false, code: 'network' }) && calls.length === 2);
+  }
+
+  // --- installGifClientFetch: klikání na štítek + automatika podle předvolby (always/never), bez DOM ---
+  {
+    let t9 = 0;
+    const bx9 = new L.GifOutbox({ channel: () => 'rob', now: () => t9, hasMessage: () => true, setInterval: () => 1, clearInterval: () => {} });
+    const uploadCalls = [];
+    const declineCalls = [];
+    const upload9 = async (b, token, remember) => { uploadCalls.push([b.byteLength, token, remember]); return { ok: true }; };
+    const decline9 = async (token, remember) => { declineCalls.push([token, remember]); };
+    const fetchImpl9 = async () => ({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === 'content-length' ? '4' : null) }, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
+    const fakeChatEl = { addEventListener() {}, removeEventListener() {}, contains: () => true };
+    const uninstall9 = CF.installGifClientFetch({}, fakeChatEl, { outbox: bx9, upload: upload9, decline: decline9, fetchImpl: fetchImpl9, pref: () => 'ask' });
+    const CFEV = (id, pref) => ({ requestKey: `twitch:${id}`, channel: 'rob', platform: 'twitch', messageId: id, phase: 'client_fetch', pct: 50, token: 'tokA', url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: t9 + 90_000, serverNow: t9, pref });
+    bx9.onProgress(CFEV('always1', 'always'));
+    await new Promise((r) => setTimeout(r, 0));
+    check('installGifClientFetch: předvolba "always" → rovnou stáhnout a nahrát bez zapamatování', eq(uploadCalls, [[4, 'tokA', false]]), JSON.stringify(uploadCalls));
+    bx9.onProgress(CFEV('never1', 'never'));
+    await new Promise((r) => setTimeout(r, 0));
+    check('installGifClientFetch: předvolba "never" → rovnou odmítnout, štítek client_declined', eq(declineCalls, [['tokA', false]]) && bx9.view('twitch', 'never1')?.kind === 'client_declined', JSON.stringify(declineCalls));
+    // "ask" (bez pref override) → nic se samo nestane, výzva zůstává vidět s tlačítky.
+    bx9.onProgress(CFEV('ask1', 'ask'));
+    check('installGifClientFetch: předvolba "ask" → beze změny, výzva čeká na klik', bx9.view('twitch', 'ask1')?.kind === 'client_fetch' && uploadCalls.length === 1 && declineCalls.length === 1);
+    uninstall9();
+    check('installGifClientFetch: uninstall vrátí outbox.onClientFetch (žádný předchozí hák → null)', bx9.onClientFetch === null);
   }
 
   console.log(fails ? `\n${fails} FAIL` : '\nvše PASS');

@@ -18,6 +18,8 @@ import { buildModRequest, createDurationNumber, CUSTOM_UNITS, customDurationSec,
 
 export const GIF_MAX_W = 400;
 export const GIF_MAX_H = 250;
+/** Max velikost staženého souboru (stažení GIFu prohlížečem, spec 2026-09-29 §4) — stejný limit jako server. */
+export const GIF_MAX_BYTES = 10 * 1024 * 1024;
 /** GIF užší než tenhle poměr (šířka / výška) dostane ve zprávě rám 4:3 s ambientem (rozmazaná kopie po stranách). */
 export const GIF_AMBIENT_RATIO = 0.8;
 /** Jak dlouho zůstane rozhodnutá / propadlá karta vidět (zelená / červená + kdo rozhodl). */
