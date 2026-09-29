@@ -421,6 +421,10 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
     await assertPublicUrl(url, deps.lookupAll);
     const blockedKnown = !!deps.blockedHosts?.isBlocked(url.hostname);
     let res: TransportResponse;
+    // true, jakmile odpověď pochází z unlockeru (blokovaný host NEBO Cloudflare challenge) — kontrola host_blocked
+    // níž smí posuzovat jen odpověď PŘÍMÉHO transportu, ne odpověď Bright Data (ta má vlastní status, žádný vztah
+    // k tomu, jestli nás blokuje cílový server).
+    let viaUnlock = blockedKnown;
     if (blockedKnown) {
       // Známý blokující host: přímé stažení by jen spálilo čas → rovnou unlocker (jen když je; jinak host_blocked).
       if (!deps.unlocker) throw new GifError('host_blocked');
@@ -436,7 +440,8 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
     }
     // Ochrana proti botům (Cloudflare challenge) = jediný případ pro Bright Data; jiné chyby (404, HTML místo
     // média, velikost…) jdou rovnou ven bez placeného pokusu. Bez možnosti obejít → vlastní kód bot_protection.
-    if ((res.status === 403 || res.status === 503) && await isCloudflareChallenge(res, signal)) {
+    // `!blockedKnown` — u známého blokujícího hosta už odpověď z unlockeru je (viz výš), druhé volání by bylo zbytečné.
+    if (!blockedKnown && (res.status === 403 || res.status === 503) && await isCloudflareChallenge(res, signal)) {
       res.dispose();
       const original = new GifError('bot_protection');
       if (!deps.unlocker) throw original;
@@ -448,6 +453,7 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
       const via = await deps.unlocker.fetch(url, signal);
       if (!via) { ctx.unlocked.pop(); throw original; } // strop / negativní cache → původní chyba, nic nereportovat
       res = via;
+      viaUnlock = true;
       // Bright Data přesměrování sleduje u sebe; kdyby odpověď nesla cílovou adresu, musí být veřejná.
       for (const k of ['x-brd-final-url', 'x-final-url', 'content-location']) {
         const v = res.headers[k];
@@ -458,7 +464,8 @@ async function safeGet(start: string, accept: string, ctx: Ctx, deps: FetchDeps)
       }
     }
     // Host blokuje IP serveru (429 / 403 bez challenge): zapamatovat, kód host_blocked (flow nabídne stažení prohlížečem).
-    if (!blockedKnown && deps.blockedHosts && (res.status === 429 || res.status === 403)) {
+    // Jen odpověď přímého transportu — `viaUnlock` vylučuje odpověď Bright Data (blokovaný host i Cloudflare cesta).
+    if (!viaUnlock && deps.blockedHosts && (res.status === 429 || res.status === 403)) {
       res.dispose();
       deps.blockedHosts.mark(url.hostname);
       throw new GifError('host_blocked');
@@ -624,8 +631,11 @@ export function pageTags(html: string): string[] {
   return normalizeTags([title, ...keywords, ...jsonLdKeywords(html)].map((s) => cleanTitle(decodeEntities(String(s)))));
 }
 
-/** og:video (MP4) přednostně, jinak og:image; URL relativně ke stránce. */
-export function pickOgMedia(html: string, base: URL): string | null {
+/**
+ * og:video (MP4) přednostně, jinak og:image — sdíleno `pickOgMedia` i `pickOgDescriptor`, ať se „je to video"
+ * nerozchází (extension URL vs. `og:video:type`). `video` = true, i když adresa sama příponu .mp4 nenese.
+ */
+function pickOg(html: string, base: URL): { url: string; video: boolean } | null {
   const meta = metaTags(html);
   const first = (keys: string[], filter?: (u: string) => boolean): string | null => {
     for (const k of keys) for (const v of meta[k] ?? []) if (v && (!filter || filter(v))) return v;
@@ -635,19 +645,24 @@ export function pickOgMedia(html: string, base: URL): string | null {
     ?? ((meta['og:video:type'] ?? []).some((t) => /video\/mp4/i.test(t)) ? first(['og:video:secure_url', 'og:video:url', 'og:video']) : null);
   const pick = video ?? first(['og:image:secure_url', 'og:image:url', 'og:image']);
   if (!pick) return null;
-  try { return new URL(pick, base).toString(); } catch { return null; }
+  try { return { url: new URL(pick, base).toString(), video: video != null }; } catch { return null; }
+}
+
+/** og:video (MP4) přednostně, jinak og:image; URL relativně ke stránce. */
+export function pickOgMedia(html: string, base: URL): string | null {
+  return pickOg(html, base)?.url ?? null;
 }
 
 export interface GifDescriptor { url: string; kind: GifKind | null; width: number | null; height: number | null; host: string }
 const kindFromUrl = (u: string): GifKind | null => { const m = /\.(gif|webp|mp4)(\?|$)/i.exec(u); return m ? (m[1].toLowerCase() as GifKind) : null; };
 /** og:video (MP4) přednostně, jinak og:image; rozměry z og:*:width/height. null = bez média. */
 export function pickOgDescriptor(html: string, base: URL): GifDescriptor | null {
-  const url = pickOgMedia(html, base);
-  if (!url) return null;
+  const og = pickOg(html, base);
+  if (!og) return null;
+  const { url, video } = og;
   const meta = metaTags(html);
   const num = (k: string): number | null => { const v = Number((meta[k] ?? [])[0]); return Number.isInteger(v) && v > 0 ? v : null; };
-  const video = /\.mp4(\?|$)/i.test(url);
-  const kind = kindFromUrl(url) ?? (video ? 'mp4' : null);
+  const kind = video ? 'mp4' : kindFromUrl(url);
   return { url, kind, width: num(video ? 'og:video:width' : 'og:image:width'), height: num(video ? 'og:video:height' : 'og:image:height'), host: new URL(url).hostname };
 }
 /**

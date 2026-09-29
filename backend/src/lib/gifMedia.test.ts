@@ -359,3 +359,28 @@ test('pickOgDescriptor: og:video přednostně s rozměry, jinak og:image; sameSi
   assert.equal(sameSite(new URL('https://tenor.com/v'), new URL('https://media.tenor.com/x.gif')), true);
   assert.equal(sameSite(new URL('https://imgur.com/a'), new URL('https://evil.example/a.mp4')), false);
 });
+
+test('fix 1: přímé stažení narazí na Cloudflare challenge → odpověď unlockeru (i 403/429) se NEPOČÍTÁ jako host_blocked', async () => {
+  const url = 'https://x.cz/a.gif';
+  const blocked = createBlockedHosts();
+  const transport = fakeTransport({ [url]: { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: Buffer.from('') } });
+  const unlocker = { timeoutMs: 25_000, fetch: async () => ({ status: 403, headers: {}, body: (async function* () {})(), dispose() {} }), report() {} };
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403', 'stejné chování jako bez blockedHosts — ne host_blocked');
+  assert.equal(blocked.isBlocked('x.cz'), false, 'odpověď Bright Data neznamená, že NÁS blokuje cílový server');
+});
+
+test('fix 3: blokovaný host → jen jedno volání unlockeru, i když jeho odpověď sama vypadá jako Cloudflare challenge', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('x.cz');
+  let calls = 0;
+  const unlocker = { timeoutMs: 25_000, fetch: async () => { calls++; return { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: (async function* () {})(), dispose() {} }; }, report() {} };
+  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403');
+  assert.equal(calls, 1, 'Cloudflare větev se u známého blokujícího hosta znovu nespouští');
+});
+
+test('fix 2: pickOgDescriptor a pickOgMedia se shodnou na og:video bez přípony + og:video:type video/mp4', () => {
+  const base = new URL('https://x.cz/a');
+  const html = '<meta property="og:video" content="https://x.cz/video"><meta property="og:video:type" content="video/mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">';
+  assert.equal(pickOgMedia(html, base), 'https://x.cz/video');
+  assert.deepEqual(pickOgDescriptor(html, base), { url: 'https://x.cz/video', kind: 'mp4', width: 640, height: 360, host: 'x.cz' });
+});
