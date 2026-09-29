@@ -312,12 +312,14 @@ export interface RenameDeps {
   log: Log;
 }
 
-/** Mod nastaví / smaže přezdívku divákovi. SSE nickname-change/-delete rozešle trigger v DB (nicknames_notify). */
+/**
+ * Mod nastaví / smaže přezdívku (a barvu) komukoli v kanálu — i jinému modovi a streamerovi (pokyn usera
+ * 2026-09-30). Hierarchie (checkHierarchy) platí jen pro tresty: přezdívka nikoho neumlčí a jde kdykoli vrátit.
+ * SSE nickname-change/-delete rozešle trigger v DB (nicknames_notify).
+ */
 export async function runRename(input: RenameInput, deps: RenameDeps): Promise<Out> {
   const u = await deps.findUser(input.channel, input.platform, input.login);
   if (!u) return notFound;
-  const denied = await checkHierarchy(input.channel, [u], input.callerIsBroadcaster, deps.targetRole);
-  if (denied) return denied;
   if (input.nickname !== null && await deps.blacklisted(input.channel, input.nickname)) {
     return { status: 400, body: { ok: false, error: 'nickname_blacklisted' } };
   }

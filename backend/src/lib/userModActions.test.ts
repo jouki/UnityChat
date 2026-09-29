@@ -263,14 +263,19 @@ test('rename: login z archivu, upsert / smazání; mimo kanál 404', async () =>
   assert.deepEqual(calls, ['up:twitch:spammer:Pan Spam:null', 'rm:twitch:spammer']);
 });
 
-test('rename: přezdívka s blacklistem → 400 nickname_blacklisted; mod/broadcaster cíle → 403', async () => {
-  let d = renameDeps();
+test('rename: přezdívka s blacklistem → 400 nickname_blacklisted', async () => {
+  const d = renameDeps();
   assert.deepEqual(await runRename({ ...renameBase, login: 'spammer', nickname: 'Zlé slovo' }, d.deps), { status: 400, body: { ok: false, error: 'nickname_blacklisted' } });
-  d = renameDeps({ targetRole: async () => 'moderator' });
-  assert.equal((await runRename({ ...renameBase, login: 'modik2', nickname: 'X' }, d.deps)).status, 403);
-  d = renameDeps({ targetRole: async () => 'broadcaster' });
-  assert.equal((await runRename({ ...renameBase, callerIsBroadcaster: true, login: 'robdiesalot', nickname: null }, d.deps)).status, 403);
   assert.deepEqual(d.calls, []);
+});
+
+test('rename: mod smí přejmenovat i jiného moda a streamera (pokyn usera 2026-09-30) — hierarchie platí jen pro tresty', async () => {
+  let d = renameDeps({ targetRole: async () => 'moderator' });
+  assert.equal((await runRename({ ...renameBase, callerIsBroadcaster: false, login: 'modik2', nickname: 'X' }, d.deps)).status, 200);
+  assert.ok(d.calls.length > 0, 'přezdívka se zapsala');
+  d = renameDeps({ targetRole: async () => 'broadcaster' });
+  assert.equal((await runRename({ ...renameBase, callerIsBroadcaster: false, login: 'robdiesalot', nickname: null }, d.deps)).status, 200);
+  assert.ok(d.calls.length > 0);
 });
 
 test('echo CLEARCHAT dorazí DŘÍV než výsledek Helixu → jediná událost (od moda), žádný druhý zápis banu', async () => {
