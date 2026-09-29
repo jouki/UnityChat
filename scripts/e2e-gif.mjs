@@ -951,7 +951,7 @@ mock.sendId = null;
 mock.sse.push(OWNMSG('e2e-cf1', 'moje https://imgur.com/a/8as1KiG'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf1"]')`, 8000);
 pushAcc(PR('e2e-cf1', 'client_fetch', 50, { token: 'tok-cf1', url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com', expiresAt: Date.now() + 90000, serverNow: Date.now(), pref: 'ask' }));
-check('CF výzva: štítek s textem o imgur.com a tlačítky', await until(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st--client_fetch'); return !!st && /imgur\.com/.test(st.textContent) && !!st.querySelector('[data-cf="yes"]') && !!st.querySelector('[data-cf="no"]') && !!st.querySelector('[data-cf="remember"]'); })()`, 6000));
+check('CF výzva: štítek s textem o imgur.com a tlačítky', await until(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st--client_fetch'); return !!st && /imgur\\.com/.test(st.textContent) && !!st.querySelector('[data-cf="yes"]') && !!st.querySelector('[data-cf="no"]') && !!st.querySelector('[data-cf="remember"]'); })()`, 6000));
 await ev(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st--client_fetch'); st.querySelector('[data-cf="remember"]').checked = true; st.querySelector('[data-cf="yes"]').click(); return true; })()`);
 check('CF: klik → stažení z i.imgur.com a upload s tokenem + remember', await waitFor(() => uploads.length === 1, 6000) && uploads[0].token === 'tok-cf1' && uploads[0].remember === '1' && uploads[0].bytes > 100, JSON.stringify(uploads));
 check('CF: během uploadu kolečko', await ev(`document.querySelector('.msg[data-msg-id="e2e-cf1"] .uc-gif-st')?.dataset.kind`) === 'progress');
@@ -966,7 +966,10 @@ await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf2"]')`, 8000);
 pushAcc(PR('e2e-cf2', 'client_fetch', 50, { token: 'tok-cf2', url: 'https://i.imgur.com/b1Fyunv.mp4', kind: 'mp4', width: 480, height: 854, host: 'i.imgur.com', expiresAt: Date.now() + 90000, serverNow: Date.now(), pref: 'ask' }));
 check('CF2 výzva: štítek s tlačítky (lokální předvolba vrácena na ask)', await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st--client_fetch')`, 6000));
 await ev(`(() => { const st = document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st--client_fetch'); st.querySelector('[data-cf="no"]').click(); return true; })()`);
-check('CF: Ne → decline na server a text „Odkaz zůstal běžnou zprávou“', await waitFor(() => declines.length === 1, 6000) && declines[0].token === 'tok-cf2' && await until(`document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st')?.dataset.kind === 'client_declined'`, 3000));
+check('CF: Ne → decline na server a text „Odkaz zůstal běžnou zprávou“', await waitFor(() => declines.length === 1, 6000) && declines[0].token === 'tok-cf2'
+  && await until(`document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st')?.dataset.kind === 'client_declined'`, 3000)
+  && await until(`document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st-txt')?.textContent === 'Odkaz zůstal běžnou zprávou'`, 3000),
+  await ev(`document.querySelector('.msg[data-msg-id="e2e-cf2"] .uc-gif-st-txt')?.textContent`));
 // pref always ze serveru → bez výzvy rovnou stažení
 mock.sse.push(OWNMSG('e2e-cf3', 'třetí https://imgur.com/a/tCd8jXN'));
 await until(`!!document.querySelector('.msg[data-msg-id="e2e-cf3"]')`, 8000);
