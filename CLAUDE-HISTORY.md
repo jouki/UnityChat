@@ -142,6 +142,7 @@
 ## Changelog dokumentace
 ### 2026-09-30 večer (odznak podporovatele)
 - CLAUDE.md: milestone v3.41.113–122 (tooltip s datem, pauza GIFu, smazání druhým klikem, nastavení jako záložky Účet | Rozhraní, odznak dárce → podporovatele: volby tempo / intenzita / odstupy / nahrazení globálního odznaku Twitche, částka v tooltipu, odznak v hlavičce Profilu, vložené SVG místo souborů).
+- Memory: `feedback_web_port_rule.md` — před pushem do UnityChat-web i `cd web && npm test` (Web CI padalo od v3.41.114, mail každých 15 min ze sync akce).
 - Memory: `project_donor_badge.md` (nový — zdroj dárců, prefs kanálu, animace, otevřené otázky pro usera), řádek v MEMORY.md, checkpoint doplněn.
 ### 2026-09-30 (session 2026-09-29/30, unitychat-8f)
 - CLAUDE.md: milestone v3.41.98–112 (zmínky bez zavináče + přezdívky, posuvníky, rezervovaná jména, announcement v historii, trvalé filtry, cooldown jako pruh, QR testmode pro moda, donaty podle ověřeného e-mailu, JoukiBOT zlatý, SE na Kicku v link filtru, broadcast commandů), UC_LOG tagy `Viewport` a `Mention`.
