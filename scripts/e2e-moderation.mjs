@@ -74,7 +74,7 @@ s.onevent = async (d) => {
     const body = 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
     return call('Fetch.fulfillRequest', { requestId: rid, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/event-stream' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, d.sessionId);
   }
-  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser', channelManage: mock.channelManage === true }, kick: null, youtube: null }, badgeReplaceGlobal: mock.badgeReplace === true });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, badgeReplaceGlobal: mock.badgeReplace === true });
   if (u.includes('/account/badge-prefs')) { const b = q.postData ? JSON.parse(q.postData) : {}; badgePuts.push(b); mock.badgeReplace = b.replaceGlobal === true; return json({ ok: true, replaceGlobal: mock.badgeReplace }); }
   // Účtu moda chybí Twitch mod scopes (starý token jen s user:write:chat) → po smazání botem nabídka přihlášení.
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: { twitch: ['moderator:manage:chat_messages'] } } : { ok: true, mod: false, platforms: [], missingScopes: {} });
@@ -162,14 +162,6 @@ check('náhled: změna volby animovaná (odznak UC přejede, globální vybledne
 check('volba účtu: pod barvou jména, nad Uložit; náhled = odznak UC poslední za vlastními odznaky (role + globální), jméno účtu', br?.before && !br.before.hidden && br.before.inSettings === 'account' && br.before.afterColor && br.before.beforeSave && br.before.pv === 'moderator,glitchcon2020,UC' && br.before.name === 'ModUser', JSON.stringify(br?.before));
 check('náhled sleduje přezdívku a barvu při psaní', br?.live?.name === 'Modík' && /rgb\(0, 255, 0\)|#00ff00/i.test(br.live.color || ''), JSON.stringify(br?.live));
 check('zaškrtnutí → PUT /account/badge-prefs {replaceGlobal:true}, v náhledu odznak UC na místě globálního (role zůstává)', br?.checked === true && br.pvOn === 'moderator,UC' && badgePuts.length === 1 && badgePuts[0]?.replaceGlobal === true, JSON.stringify({ pvOn: br?.pvOn, badgePuts }));
-// Streamer — „Povolit správu kanálu“ (kontrakt 2026-09-30: /auth/:platform/start { streamer: true }, /auth/me channelManage).
-mock.channelManage = true;   // po „přihlášení“ vrátí /auth/me channelManage: true (řádek už je vykreslený s tlačítkem)
-const stR = await ev(`(async () => { const row = document.getElementById('row-streamer'); const before = { hidden: row.hidden, rows: [...row.querySelectorAll('.streamer-row')].map((r) => r.dataset.platform + ':' + r.textContent.trim()).join('|'), btn: !!row.querySelector('.btn-streamer') };
-  window.__streamerLogins = []; const orig = window.__uc._ucLogin; window.__uc._ucLogin = async (platform, opts) => { window.__streamerLogins.push({ platform, ...opts }); };
-  row.querySelector('.btn-streamer').click(); await new Promise((r) => setTimeout(r, 600)); window.__uc._ucLogin = orig;
-  return { before, logins: window.__streamerLogins, after: [...row.querySelectorAll('.streamer-row')].map((r) => r.textContent.trim()).join('|'), status: document.getElementById('streamer-status')?.textContent }; })()`);
-check('streamer: sekce „Správa kanálu“ pro přihlášený Twitch s tlačítkem Povolit', stR?.before && !stR.before.hidden && stR.before.btn && /^twitch:Twitch · ModUser/.test(stR.before.rows), JSON.stringify(stR?.before));
-check('streamer: klik → přihlášení se streamer: true, po /auth/me „✓ Správa kanálu povolena“', stR && stR.logins.length === 1 && stR.logins[0].platform === 'twitch' && stR.logins[0].streamer === true && /✓ Správa kanálu povolena/.test(stR.after) && stR.status === 'Správa kanálu povolena.', JSON.stringify({ logins: stR?.logins, after: stR?.after, status: stR?.status }));
 const dbp = await ev(`(async () => { const row = document.getElementById('row-donor-badge'); const items = [...row.querySelectorAll('.uc-dbp-item')];
   const pics = () => items.map((i) => i.querySelector('img').dataset.donorBadge).join(',');
   const before = { hidden: row.hidden, disp: getComputedStyle(row).display, n: items.length, on: row.querySelector('.uc-dbp-item.on input')?.value, imgs: items.every((i) => i.querySelector('img')?.src.startsWith('data:image/svg+xml')), pics: pics(),

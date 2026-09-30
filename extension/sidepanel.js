@@ -5765,14 +5765,14 @@ class UnityChat {
 
   /** Přihlášení (nebo napojení další platformy na účet, když už session je) —
    *  stejný flow jako web: /auth/:platform/start → OAuth v okně prohlížeče → /auth/exchange. */
-  async _ucLogin(platform = 'twitch', { mod = false, streamer = false } = {}) {
+  async _ucLogin(platform = 'twitch', { mod = false } = {}) {
     const returnTo = chrome.identity.getRedirectURL();
     const current = await this._ucSessionToken();
     const headers = { 'Content-Type': 'application/json' };
     if (current) headers.Authorization = `Bearer ${current}`;   // napojit na existující účet
-    // mod: true = navíc moderátorské scopes (mazání zpráv); streamer: true = všechna oprávnění majitele kanálu
-    // (správa kanálu pro Židolištu, lib/broadcasterScopes.ts) — backend /auth/:platform/start.
-    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify({ returnTo, ...(mod ? { mod: true } : {}), ...(streamer ? { streamer: true } : {}) }) });
+    // mod: true = navíc moderátorské scopes (mazání zpráv) — backend /auth/:platform/start. (Správa kanálu streamera
+    // se povoluje ze Židolišty, ne z UnityChatu — rozhodnutí usera 2026-10-01.)
+    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify(mod ? { returnTo, mod: true } : { returnTo }) });
     const sj = await start.json().catch(() => ({}));
     if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
     const final = await chrome.identity.launchWebAuthFlow({ url: sj.url, interactive: true });
@@ -5869,40 +5869,9 @@ class UnityChat {
     }
     this._syncGifClientFetchRow();
     this._syncBadgeReplaceRow();
-    this._syncStreamerRows();
   }
 
   /** Řádek předvolby stažení GIFu prohlížečem: jen s účtem; hodnota z /auth/me, změna → PUT /account/gif-prefs. */
-  /**
-   * Streamer — „Povolit správu kanálu“ (jako web Nastavení → Účet): pro každou přihlášenou identitu Twitch / Kick řádek,
-   * po povolení „✓ Správa kanálu povolena“ (`channelManage` z /auth/me). Klik = přihlášení navíc s oprávněními majitele
-   * kanálu (`streamer: true`), pak /auth/me znovu. Účel: commandy Židolišty přepínají kategorii streamu tokenem streamera.
-   */
-  _syncStreamerRows() {
-    const row = document.getElementById('row-streamer');
-    const host = document.getElementById('streamer-rows');
-    if (!row || !host) return;
-    const ids = ['twitch', 'kick'].map((p) => [p, this._account?.platforms?.[p]]).filter(([, id]) => id);
-    row.hidden = !ids.length;
-    if (!ids.length) { host.innerHTML = ''; return; }
-    const esc = (t) => window.UC_CORE.escapeHtml(String(t ?? ''));
-    host.innerHTML = ids.map(([p, id]) => `<div class="streamer-row" data-platform="${p}"><span>${p === 'twitch' ? 'Twitch' : 'Kick'} · ${esc(id.displayName || id.login)}</span>${id.channelManage ? '<span class="streamer-ok">✓ Správa kanálu povolena</span>' : `<button type="button" class="btn-nick btn-streamer" data-platform="${p}">Povolit správu kanálu</button>`}</div>`).join('');
-    if (!host._ucWired) {
-      host._ucWired = true;
-      host.addEventListener('click', async (e) => {
-        const b = e.target.closest?.('.btn-streamer');
-        if (!b) return;
-        const status = document.getElementById('streamer-status');
-        b.disabled = true;
-        if (status) { status.textContent = 'Otevírám přihlášení…'; status.className = 'nick-status'; }
-        this._ucLog('Account', `správa kanálu: ${b.dataset.platform}`);
-        const ok = await this._loginPlatform(b.dataset.platform, { streamer: true });
-        if (status) { status.textContent = ok && this._account?.platforms?.[b.dataset.platform]?.channelManage ? 'Správa kanálu povolena.' : (ok ? 'Přihlášení proběhlo, ale oprávnění majitele kanálu chybí.' : ''); status.className = ok ? 'nick-status success' : 'nick-status'; }
-        b.disabled = false;
-      });
-    }
-  }
-
   /**
    * Volba účtu „odznak podporovatele místo globálního odznaku Twitche“ (core badgeReplaceHtml, PUT /account/badge-prefs):
    * jen s propojeným Twitchem; pod ní náhled vlastní zprávy (badgePreviewHtml) — přezdívka, barva, odznaky.
@@ -6163,9 +6132,9 @@ class UnityChat {
   }
 
   /** Přihlásit / připojit platformu a rovnou na ni psát. Vrací true při úspěchu. */
-  async _loginPlatform(platform, { mod = false, streamer = false } = {}) {
+  async _loginPlatform(platform, { mod = false } = {}) {
     try {
-      await this._ucLogin(platform, { mod, streamer });
+      await this._ucLogin(platform, { mod });
       await this._refreshAccount();
       if (this._identity(platform)) this._selectSendPlatform(platform);
       return true;

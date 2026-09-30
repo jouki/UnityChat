@@ -60,14 +60,6 @@
       </div>
       <span id="nickname-status" class="nick-status"></span>
     </div>
-    <!-- Streamer: „Povolit správu kanálu“ (backend /auth/:platform/start { streamer: true }, lib/broadcasterScopes.ts) —
-         commandy Židolišty pak smí měnit kategorii streamu tokenem majitele kanálu; jen Twitch / Kick, jedno přihlášení natrvalo. -->
-    <div class="setting-row" id="row-streamer" hidden>
-      <label>Streamer <span class="setting-sub">(správa kanálu)</span></label>
-      <div class="setting-hint">Jen pro majitele kanálu: dovolí commandům Židolišty měnit kategorii streamu a další nastavení kanálu. Jedno přihlášení, platí trvale.</div>
-      <div id="streamer-rows"></div>
-      <span id="streamer-status" class="nick-status"></span>
-    </div>
     <!-- Odznak podporovatele (core/donor-badge.js): jen mod / streamer v Dev mode, společný pro celý kanál (routes/channelPrefs.ts). -->
     <div class="setting-row uc-mod-only dev-only" id="row-donor-badge" hidden>
       <label>Odznak podporovatele <span class="setting-sub">(společný pro celý kanál)</span></label>
