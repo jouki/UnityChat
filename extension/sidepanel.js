@@ -5889,7 +5889,8 @@ class UnityChat {
         const cb = e.target.closest?.('[name="uc-badge-replace"]');
         if (!cb) return;
         const v = !!cb.checked;
-        this._renderBadgePreview();
+        // Náhled může změnit výšku řádku (zalomení) → panel přejede (core morphResize), jako u záložek.
+        core.morphResize(document.getElementById('settings'), () => this._renderBadgePreview());
         try {
           await this._ucApi('/account/badge-prefs', { method: 'PUT', body: { replaceGlobal: v } });
           if (this._account) this._account.badgeReplaceGlobal = v;
