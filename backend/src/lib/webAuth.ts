@@ -272,7 +272,33 @@ export async function completeWebLogin(
     const ins = await db.insert(webAccounts).values({}).returning({ id: webAccounts.id });
     accountId = ins[0].id;
   }
+  await upsertIdentity(accountId, platform, identity, tokens);
 
+  const sessionToken = await createWebSession(accountId);
+  return { accountId, sessionToken };
+}
+
+/**
+ * Identita + tokeny k účtu, bez session — pro přihlášení i pro souhlas streamera ze Židolišty
+ * (kind:'broadcaster' v routes/integrations.ts: tokeny majitele kanálu → lib/channelManage.ts).
+ * Účet podle identity (platform + platformUserId), jinak nový.
+ */
+export async function storeIdentityForOwner(platform: Platform, identity: IdentityInfo, tokens: TokenSet): Promise<number> {
+  const known = await db
+    .select({ accountId: webIdentities.accountId })
+    .from(webIdentities)
+    .where(and(eq(webIdentities.platform, platform), eq(webIdentities.platformUserId, identity.platformUserId)))
+    .limit(1);
+  let accountId = known[0]?.accountId ?? null;
+  if (accountId === null) {
+    const ins = await db.insert(webAccounts).values({}).returning({ id: webAccounts.id });
+    accountId = ins[0].id;
+  }
+  await upsertIdentity(accountId, platform, identity, tokens);
+  return accountId;
+}
+
+async function upsertIdentity(accountId: number, platform: Platform, identity: IdentityInfo, tokens: TokenSet): Promise<void> {
   const cols = encryptedColumns(tokens);
   await db
     .insert(webIdentities)
@@ -296,9 +322,6 @@ export async function completeWebLogin(
         signedOutAt: null,
       },
     });
-
-  const sessionToken = await createWebSession(accountId);
-  return { accountId, sessionToken };
 }
 
 export interface PublicIdentity {
