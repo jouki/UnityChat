@@ -21,4 +21,10 @@ test('reservedNicknameClash: jméno streamera smí jen účet s tím loginem', (
   assert.equal(reservedNicknameClash('Jouki', ['jouki728'], RES), null, 'běžná přezdívka projde');
   assert.equal(reservedNicknameClash('RobDiesALot2', ['jouki728'], RES), null, 'jiné jméno není rezervované');
   assert.equal(reservedNicknameClash('', ['x'], RES), null);
+  // Skupiny po workspacu: streamer smí jméno svého kanálu z jiné platformy (jouki728 ↔ YouTube @Jouki, živě 2026-09-30).
+  const GROUPS = [['unitychat', 'joukibot'], ['jouki728', 'jouki728', '@Jouki'], ['robdiesalot', '@robdiesalot']];
+  assert.equal(reservedNicknameClash('Jouki', ['jouki728'], GROUPS), null, 'vlastník workspace jouki');
+  assert.equal(reservedNicknameClash('Jouki', ['nekdojiny'], GROUPS), '@Jouki', 'cizí účet ne');
+  assert.equal(reservedNicknameClash('RobDiesALot', ['jouki728'], GROUPS), 'robdiesalot', 'jiný workspace zůstává rezervovaný');
+  assert.equal(reservedNicknameClash('JoukiBOT', ['jouki728'], GROUPS), 'joukibot', 'pevná jména jsou vlastní skupina');
 });
