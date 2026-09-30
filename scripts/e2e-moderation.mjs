@@ -115,8 +115,15 @@ check('A body.uc-can-moderate z /moderation/me', await until(`document.body.clas
 const order = await ev(`[...document.querySelector('.msg[data-msg-id="e2e-m1"] .msg-actions').children].map(b => b.dataset.act || b.title).join('|')`);
 check('A 💩 první, koš hned za ním (oko pro smazanou zprávu před košem, skryté) — pokyn usera 2026-09-30', /^poop\|restore\|delete\|/.test(order || ''), order);
 // Nastavení: sekce Účet / Rozhraní, výběr odznaku dárce jen pro moda (core/donor-badge.js), PUT + překreslení.
-const secT = await ev(`[...document.querySelectorAll('#settings .settings-title')].map((t) => t.textContent.trim())`);
-check('nastavení má sekce Účet a Rozhraní a patičku s odkazy', Array.isArray(secT) && secT.join(',') === 'Účet,Rozhraní' && await ev(`!!document.querySelector('#settings .settings-foot .settings-links a[href*="privacy"]') && !!document.querySelector('#settings .settings-foot .kofi-link')`) === true, JSON.stringify(secT));
+const secT = await ev(`(async () => { document.getElementById('btn-settings').click(); await new Promise((r) => setTimeout(r, 120));
+  const tabs = [...document.querySelectorAll('#settings .settings-tab')].map((t) => t.textContent.trim());
+  const vis = () => [...document.querySelectorAll('#settings .settings-pane')].filter((p) => !p.hidden).map((p) => p.dataset.pane);
+  const a = vis(); document.querySelector('#settings .settings-tab[data-tab="ui"]').click(); await new Promise((r) => setTimeout(r, 50)); const b = vis();
+  const ind = !!document.querySelector('#settings .settings-tabs .uc-slide-ind'); const saved = localStorage.getItem('uc_settings_tab');
+  document.querySelector('#settings .settings-tab[data-tab="account"]').click();
+  const foot = !!document.querySelector('#settings .settings-foot .settings-links a[href*="privacy"]') && !!document.querySelector('#settings .settings-foot .kofi-link');
+  return { tabs, a, b, ind, saved, foot }; })()`);
+check('nastavení: záložky Účet | Rozhraní přepínají panely (posuvné zvýraznění, volba uložená), patička s odkazy', secT && secT.tabs.join(',') === 'Účet,Rozhraní' && secT.a.join() === 'account' && secT.b.join() === 'ui' && secT.ind && secT.saved === 'ui' && secT.foot, JSON.stringify(secT));
 const dbp = await ev(`(async () => { const row = document.getElementById('row-donor-badge'); const items = [...row.querySelectorAll('.uc-dbp-item')]; const before = { hidden: row.hidden, disp: getComputedStyle(row).display, n: items.length, on: row.querySelector('.uc-dbp-item.on input')?.value, imgs: items.every((i) => i.querySelector('img')?.src.includes('/icons/badges/donor/')) };
   const inp = row.querySelector('input[value="money-bag"]'); inp.checked = true; inp.dispatchEvent(new Event('change', { bubbles: true }));
   await new Promise((r) => setTimeout(r, 400));

@@ -33,25 +33,12 @@
 
   <!-- Settings Panel -->
   <div id="settings" class="hidden">
-    <details class="settings-section" id="channels-section">
-      <summary>
-        <span>Kanály</span>
-      </summary>
-      <div class="setting-row">
-        <label for="input-channel">Twitch</label>
-        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
-      </div>
-      <div class="setting-row">
-        <label for="input-kick-channel">Kick</label>
-        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
-      </div>
-      <div class="setting-row">
-        <label for="input-yt-channel">YouTube</label>
-        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
-      </div>
-    </details>
-    <!-- Sekce nastavení (pokyn usera 2026-09-30): Účet (e-mail, profil, odznaky) / Rozhraní (vzhled, chování) / patička. -->
-    <div class="settings-title">Účet</div>
+    <!-- Záložky nastavení (pokyn usera 2026-09-30): Účet | Rozhraní; patička vždy dole. Vybraná záložka v localStorage. -->
+    <div class="settings-tabs" role="tablist">
+      <button type="button" class="settings-tab on" data-tab="account" role="tab" aria-selected="true">Účet</button>
+      <button type="button" class="settings-tab" data-tab="ui" role="tab" aria-selected="false">Rozhraní</button>
+    </div>
+    <div class="settings-pane" data-pane="account">
     <!-- Email účtu (core/email-verify.js createEmailSettings). -->
     <div id="email-settings" class="setting-row"></div>
     <div class="setting-row">
@@ -77,7 +64,26 @@
       <div id="donor-badge-picker"></div>
       <span id="donor-badge-status" class="nick-status"></span>
     </div>
-    <div class="settings-title">Rozhraní</div>
+    </div>
+    <div class="settings-pane" data-pane="ui" hidden>
+    <details class="settings-section" id="channels-section">
+      <summary>
+        <span>Kanály</span>
+      </summary>
+      <div class="setting-row">
+        <label for="input-channel">Twitch</label>
+        <input type="text" id="input-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
+      </div>
+      <div class="setting-row">
+        <label for="input-kick-channel">Kick</label>
+        <input type="text" id="input-kick-channel" value="robdiesalot" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
+      </div>
+      <div class="setting-row">
+        <label for="input-yt-channel">YouTube</label>
+        <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
+      </div>
+    </details>
+    <!-- Sekce nastavení (pokyn usera 2026-09-30): Účet (e-mail, profil, odznaky) / Rozhraní (vzhled, chování) / patička. -->
     <div class="setting-row">
       <label for="input-layout">Velikost layoutu</label>
       <select id="input-layout">
@@ -154,6 +160,7 @@
       <button id="btn-dump-cache">Stáhnout message cache</button>
       <button id="btn-dump-nicknames">Stáhnout nickname cache</button>
       <button id="btn-clear-cache">Smazat message cache</button>
+    </div>
     </div>
     <!-- Patička: odkazy vlevo, autor + Ko-fi vpravo (stejně jako web). -->
     <div class="settings-foot">

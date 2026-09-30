@@ -46,6 +46,7 @@ import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
 import { isBotAccount, isSharedBotId } from './lib/botIdentities.js';
 import { anncHides } from './lib/anncHides.js';
+import { startDonorsRefresh } from './lib/donors.js';
 import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
 import { deletePlatformMessage, deleteOwnMessageAsSender } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
@@ -284,6 +285,8 @@ app.addHook('onReady', async () => {
     for (const w of list) void refreshLinkFilter(w.slug, { log: app.log });
   });
   startWorkspaceRefresh(app.log);
+  // Dárci za 30 dní (odznak v chatu) — ze Židolišty každých 5 min (lib/donors.ts).
+  startDonorsRefresh(app.log);
   gifFlow.loadPending().then((n) => app.log.info({ n }, 'gif: čekající žádosti načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: načtení žádostí selhalo (tabulka chybí?)'));
   // Propadnutí (10 s), dorovnání schválených bez zprávy (30 s po startu, pak 1×/min, audit A1) a retence
   // (2 min po startu, pak 1×/h — audit B2: dev se nasazuje častěji než jednou za hodinu).

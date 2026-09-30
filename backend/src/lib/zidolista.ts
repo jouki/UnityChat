@@ -321,6 +321,8 @@ export async function zidolistaDonations(q: DonationsQuery, deps: DonationsDeps 
 
 /** Jen pro testy. */
 export function _resetDonationsCache(): void { donationsCache.clear(); }
+/** Jen pro testy: registr workspaců natvrdo (workspaceForChannelSync čte cache). */
+export function _setWorkspacesForTest(list: WorkspaceInfo[]): void { cache = { at: Date.now(), list, source: 'env' }; }
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 /** Držet cache čerstvou pro synchronní použití (server boot). */

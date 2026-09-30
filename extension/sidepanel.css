@@ -532,6 +532,15 @@ body.uc-dev .dev-only { display: block; }
 /* ---- Dev tools ---- */
 
 .dev-mode-row { padding-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
+/* Záložky nastavení (Účet | Rozhraní): posuvné zvýraznění jako jinde (core/slide-indicator.js). */
+.settings-tabs { display: flex; gap: 4px; padding: 0 0 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.settings-tab { flex: 1; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.on { color: var(--text-primary); }
+.settings-tabs.uc-slide-host > .settings-tab { position: relative; z-index: 1; }
+.settings-tabs > .uc-slide-ind { border-radius: 6px; }
+.settings-pane { display: flex; flex-direction: column; gap: 8px; }
+.settings-pane[hidden] { display: none; }
 /* Sekce nastavení (Účet / Rozhraní) a patička — jako web (#settings-menu .pm-title / .st-foot). */
 .settings-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); opacity: 0.7; padding: 6px 0 0; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
 .settings-title:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }

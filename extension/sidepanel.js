@@ -1626,6 +1626,7 @@ class UnityChat {
     };   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
     this.nicknames.onChannelPrefs = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._applyChannelPrefs(d.prefs, 'sse'); };
+    this._initSettingsTabs();
     this._initDonorBadgePicker();
     this._loadChannelPrefs();
     this.nicknames.onLoad = () => {
@@ -2052,6 +2053,7 @@ class UnityChat {
     });
     $('btn-settings').addEventListener('click', () => {
       const opening = $('settings').classList.toggle('hidden') === false;
+      if (opening) this._settingsTabsUpdate?.();   // indikátor záložek se v zavřeném panelu nezměří
       if (opening) this._refreshAccount();
     });
     // Pole pro psaní (jako web): badge + šipka → menu „Psát jako", bez přihlášení výzva.
@@ -5155,6 +5157,26 @@ class UnityChat {
   // ---- Nastavení kanálu společné pro všechny (odznak dárce, core/donor-badge.js) ----
   _donorAssetUrl(rel) { return chrome.runtime.getURL(`icons/${rel}`); }
 
+  /** Záložky nastavení (Účet | Rozhraní): přepnutí panelu, posuvné zvýraznění, uložená volba. */
+  _initSettingsTabs() {
+    const bar = document.querySelector('#settings .settings-tabs');
+    if (!bar || bar._ucInit) return;
+    bar._ucInit = true;
+    const panes = [...document.querySelectorAll('#settings .settings-pane')];
+    const ind = window.UC_CORE.createSlideIndicator?.({ container: bar, getActive: () => bar.querySelector('.settings-tab.on') });
+    const select = (tab, animate = true) => {
+      for (const b of bar.querySelectorAll('.settings-tab')) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
+      for (const p of panes) p.hidden = p.dataset.pane !== tab;
+      ind?.update({ animate });
+      try { localStorage.setItem('uc_settings_tab', tab); } catch { /* ignore */ }
+    };
+    let saved = 'account';
+    try { saved = localStorage.getItem('uc_settings_tab') || 'account'; } catch { /* ignore */ }
+    select(panes.some((p) => p.dataset.pane === saved) ? saved : 'account', false);
+    bar.addEventListener('click', (e) => { const b = e.target.closest('.settings-tab'); if (b) select(b.dataset.tab); });
+    this._settingsTabsUpdate = () => ind?.update({ animate: false });
+  }
+
   _initDonorBadgePicker() {
     const host = document.getElementById('donor-badge-picker');
     if (!host || host._ucInit) return;
@@ -8114,6 +8136,8 @@ class UnityChat {
   _badgesEl(msg) {
     const bdg = document.createElement('span');
     bdg.className = 'bdg';
+    // Dárce za posledních 30 dní (server `donor`, lib/donors.ts) → odznak dárce (varianta kanálu, core/donor-badge.js).
+    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, (rel) => this._donorAssetUrl(rel)));
     const badgeCount = Object.keys(this._twitchBadges).length;
     for (const badge of String(msg?.badgesRaw || '').split(',')) {
       if (!badge) continue;

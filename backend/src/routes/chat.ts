@@ -10,6 +10,7 @@ import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
 import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, gifMessageState, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
 import { announcementsBetween, type AnnouncementPayload } from './announcements.js';
+import { isDonor } from '../lib/donors.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -52,6 +53,8 @@ export interface ClientMessage {
   anncHidden?: boolean;
   /** Announcement jako položka historie (announcementMessage). */
   ucAnnouncement?: unknown;
+  /** Autor donatoval v posledních 30 dnech (lib/donors.ts) → odznak dárce. */
+  donor?: boolean;
   /**
    * Jen GIFy schválené před 2026-09-26: nahrazuje původní zprávu (`<platform>:<messageId>`) na jejím místě.
    * Nové schválené GIFy jdou na konec chatu (čas schválení) a nesou jen `gifOrigin`.
@@ -124,6 +127,8 @@ export async function gifMediaStatuses(rows: ReadonlyArray<Pick<ClientRow, 'cont
  */
 export type ClientRow = Pick<Message, 'platform' | 'platformMessageId' | 'platformUserId' | 'platformUsername' | 'content' | 'sentAt'> & {
   contentRaw?: unknown;
+  /** Platformní kanál (dárce podle workspace, lib/donors.ts). */
+  channel?: string;
   isReply?: boolean | null;
   replyToMessageId?: string | null;
   isUnitychatUser?: boolean | null;
@@ -260,6 +265,8 @@ function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage
     timestamp: row.sentAt.getTime(),
     historical,
     ...(row.isUnitychatUser ? { uc: true } : {}),
+    // Dárce za posledních 30 dní (lib/donors.ts) → odznak dárce v chatu (core/donor-badge.js).
+    ...(isDonor(row.platform, row.channel || '', row.platformUserId) ? { donor: true } : {}),
   };
   if (row.platform === 'twitch') {
     return {

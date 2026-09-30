@@ -143,5 +143,10 @@ check('historie vykreslená bez jmen je bez zvýraznění', late && late.before.
 check('po načtení jmen se doplní „Replying to you“ a „Mentions you“', late && late.after[0].hl && late.after[0].tag === 'Replying to you' && late.after[1].hl && late.after[1].tag === 'Mentions you' && !late.after[2].hl, JSON.stringify(late?.after));
 check('zpráva z Twitche bez barvy má výchozí barvu podle jména (ne bílou)', late && /rgb|#/.test(late.after[0].color), JSON.stringify(late?.after?.[0]));
 
+// Zpráva dárce (server `donor: true`) → odznak dárce (core/donor-badge.js, varianta kanálu; bez načtených prefs výchozí mince).
+const dn = await ev(`(() => { window.__uc._addMessage({ platform: 'twitch', id: 'e2e-donor', username: 'Darce', userId: 'u55', message: 'ahoj', color: '#00ff00', timestamp: Date.now(), donor: true });
+  const img = document.querySelector('.msg[data-msg-id="e2e-donor"] .bdg img[data-donor-badge]'); return { has: !!img, v: img?.dataset.donorBadge, src: img?.getAttribute('src') || '', alt: img?.alt }; })()`);
+check('zpráva dárce má odznak dárce (soubor z rozšíření)', dn && dn.has && /icons[/]badges[/]donor[/][a-z-]+[/]animated[.]svg$/.test(dn.src) && dn.alt === 'Dárce', JSON.stringify(dn));
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);
