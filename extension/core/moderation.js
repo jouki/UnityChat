@@ -123,6 +123,9 @@ export function applyDeleted(el, opts = {}) {
   }
 
   el.hidden = false;
+  // Smazaná / skrytá zpráva je bez odznaků — i modovi s dotaženým obsahem (user 2026-09-30); při odkrytí je host
+  // vrátí přes setMessageBadges.
+  setMessageBadges(el, null);
   if (restorable) el.classList.add('uc-deleted--restorable');
   else el.classList.remove('uc-deleted--restorable');
   for (const m of DELETED_STYLES) el.classList.remove(`uc-deleted--${m}`);
@@ -169,6 +172,20 @@ export function applyDeleted(el, opts = {}) {
     }
     if (tagEl) tagEl.textContent = hidden ? 'Skryto v UnityChatu' : 'Smazáno';
   }
+}
+
+/**
+ * Odznaky zprávy (`:scope > .bdg`): stávající pryč, `node` (span.bdg z renderu hosta, nebo null) před jméno `.un`.
+ * Smazaná zpráva (`uc-deleted`) odznaky nedostane — dodatečné dopsání (7TV, změna nastavení) ji přeskočí.
+ * Vrací true, když odznaky vložil.
+ */
+export function setMessageBadges(el, node) {
+  if (!el || typeof el.querySelectorAll !== 'function') return false;
+  for (const old of el.querySelectorAll(':scope > .bdg')) old.remove();
+  if (!node || el.classList.contains('uc-deleted')) return false;
+  const un = el.querySelector(':scope > .un');
+  if (un) el.insertBefore(node, un); else el.appendChild(node);
+  return true;
 }
 
 /**

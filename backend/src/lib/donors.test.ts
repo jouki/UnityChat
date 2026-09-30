@@ -7,14 +7,14 @@ test('parseDonors: jen známé platformy s id', () => {
   const s = parseDonors({ ok: true, donors: [{ platform: 'twitch', userId: '1' }, { platform: 'Kick', userId: ' 2 ' }, { platform: 'x', userId: '3' }, { platform: 'youtube', userId: '' }] });
   assert.deepEqual([...s].sort(), ['kick:2', 'twitch:1']);
   assert.equal(parseDonors(null).size, 0);
-  const am = parseDonorAmounts({ donors: [{ platform: 'twitch', userId: '1', amountCzk: 1130.4 }, { platform: 'twitch', userId: '2' }, { platform: 'twitch', userId: '1', amountCzk: 50 }] });
-  assert.deepEqual([...am], [['twitch:1', 1130], ['twitch:2', 0]], 'částka zaokrouhlená, bez částky 0, duplicitní klíč = větší');
+  const am = parseDonorAmounts({ donors: [{ platform: 'twitch', userId: '1', amountCzk: 1130.4, nickname: 'Brix' }, { platform: 'twitch', userId: '2' }, { platform: 'twitch', userId: '1', amountCzk: 50 }, { platform: null, userId: null, nickname: 'Spaja X', amountCzk: 199 }] });
+  assert.deepEqual([...am], [['twitch:1', 1130], ['nick:brix', 1130], ['twitch:2', 0], ['nick:spajax', 199]], 'částka zaokrouhlená, bez částky 0, duplicitní klíč = větší, přezdívka jako nick:<zjednodušené jméno>');
 });
 
 test('refreshDonors + isDonor: cache per workspace, 404 = prázdno bez chyby, výpadek nechá poslední stav', async () => {
   _resetDonorsForTest();
   _setWorkspacesForTest([{ slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robdiesalot', youtube: null }, bot: { mode: 'shared', displayName: 'JoukiBOT' } }]);
-  let status = 200; let body: unknown = { ok: true, donors: [{ platform: 'twitch', userId: '30645675', amountCzk: 1130 }] };
+  let status = 200; let body: unknown = { ok: true, donors: [{ platform: 'twitch', userId: '30645675', amountCzk: 1130 }, { platform: null, userId: null, nickname: 'SpajaX', amountCzk: 199 }] };
   const fetch = (async () => ({ ok: status < 400, status, type: 'basic', json: async () => body })) as unknown as typeof globalThis.fetch;
   const deps = { fetch, apiKey: 'k', base: 'https://z.test', signingKey: 'ab'.repeat(32), log: { warn: () => {} } };
   assert.equal(await refreshDonors('rob', deps), true);
@@ -22,6 +22,11 @@ test('refreshDonors + isDonor: cache per workspace, 404 = prázdno bez chyby, v�
   assert.equal(isDonor('twitch', 'robdiesalot', '999'), false);
   assert.equal(donorAmount('twitch', 'robdiesalot', '30645675'), 1130);
   assert.equal(donorAmount('twitch', 'robdiesalot', '999'), null);
+  // Dárce bez identity (donate z webu) → podle jména autora (bez ohledu na velikost písmen / mezery), na každé platformě.
+  assert.equal(isDonor('twitch', 'robdiesalot', '550788633', 'spajax'), true);
+  assert.equal(isDonor('kick', 'robdiesalot', 'k9', 'Spaja_X'), true);
+  assert.equal(donorAmount('twitch', 'robdiesalot', '550788633', 'SpajaX'), 199);
+  assert.equal(isDonor('twitch', 'robdiesalot', '777', 'nekdojiny'), false);
   assert.equal(isDonor('kick', 'robdiesalot', '30645675'), false, 'jiná platforma = jiné id');
   assert.equal(isDonor('twitch', 'jinykanal', '30645675'), false, 'kanál mimo registr');
   status = 500;

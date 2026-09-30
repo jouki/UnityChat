@@ -67,7 +67,7 @@ const mock = {
   userResults: { twitch: 'ok', kick: 'bot' },               // /moderation/user results
   deleteResult: 'ok',                                       // /moderation/delete result
 };
-const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera https://tenor.com/view/profil-odkaz-1', 3)];
+const H1 = [H('e2e-a1', 'Tester', 'u1', 'první zpráva testera', 1), { ...H('e2e-b1', 'Other', 'u2', 'zpráva jiného', 2), donor: true }, H('e2e-a2', 'Tester', 'u1', 'druhá zpráva testera https://tenor.com/view/profil-odkaz-1', 3)];
 const posts = { user: [], ack: [], send: [], tickets: 0, hist: [], del: [], restore: [], seventv: 0, search: [], media: [] };
 const GIF_1PX = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 // `/user`: server zná i uživatele, kteří v session nepsali (zigi187 z archivu); fulltext najde i „azig“ na Kicku.
@@ -93,7 +93,7 @@ const summaryMod = (who) => who === 'other'
     user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, identities: [{ platform: 'twitch', login: 'tester', userId: 'u1', displayName: 'Tester' }, { platform: 'kick', login: 'tester_k', userId: 'k1', displayName: 'Tester K' }], firstSeen: now - 86400000, lastSeen: now, total: 6 },
     channels: [{ channel: 'robdiesalot', count: 2, firstAt: now - 60000, lastAt: now }, { channel: 'arcadebulls', count: 3, firstAt: now - 86400000, lastAt: now - 3600000 }, { channel: 'tensterakdary', count: 1, firstAt: now - 7200000, lastAt: now - 7200000 }],
     moderation: [{ action: 'timeout', at: now - 1000, by: 'twitch:modik', platform: 'twitch', params: { durationSec: 600, reason: 'spam' } }],
-    latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '' }, kick: { platform: 'kick', id: 'k-1', username: 'tester_k', userId: 'k1', timestamp: now, color: null, badgesRaw: 'moderator' } },
+    latest: { twitch: { platform: 'twitch', id: 'e2e-a2', username: 'Tester', userId: 'u1', timestamp: now, color: '#1e90ff', badgesRaw: '', donor: true, donorCzk: 250 }, kick: { platform: 'kick', id: 'k-1', username: 'tester_k', userId: 'k1', timestamp: now, color: null, badgesRaw: 'moderator', donor: true } },
     donations: { total: { czk: 1750, byCurrency: { CZK: 1250, EUR: 20 } }, count: 3, uc: { czk: 1500, count: 2 }, guess: { czk: 250, byCurrency: { CZK: 250 }, count: 1 } } };
 // Veřejný tvar (divák): jen tahle pole — stejně jako server (buildPublicSummary).
 const summaryPublic = { ok: true, view: 'public', user: { platform: 'twitch', userId: 'u1', login: 'tester', displayName: 'Tester', nickname: null, color: null, firstSeen: now - 86400000, lastSeen: now, total: 2 },
@@ -324,10 +324,14 @@ check('R zpráva zpět (text, bez smazání) + koš místo oka', await until(`((
   && await actDisp('e2e-b1', 'delete') === 'flex' && await actDisp('e2e-b1', 'restore') === 'none', JSON.stringify(await msgState('e2e-b1')));
 check('R hláška „odkryta v UnityChatu"', await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent === 'Zpráva od Other odkryta v UnityChatu (na platformě zůstává smazaná).')`, 3000), await lastSys());
 // Skrytá zpráva + oko v hover akcích
+const donorBadge = () => ev(`!!document.querySelector('.msg[data-msg-id="e2e-b1"] > .bdg img[data-donor-badge]')`);
+check('R odkrytá zpráva dárce má odznak podporovatele', await donorBadge() === true);
 mock.sse.push(['message-hidden', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'zidolista:1', at: Date.now() }]);
 check('R skrytá zpráva: oko místo koše', await until(`document.querySelector('.msg[data-msg-id="e2e-b1"]')?.classList.contains('uc-deleted')`, 6000) && await actDisp('e2e-b1', 'restore') === 'flex');
+check('R smazaná / skrytá zpráva bez odznaků (i modovi) — user 2026-09-30', await donorBadge() === false);
 await ev(`document.querySelector('.msg[data-msg-id="e2e-b1"] .msg-action-btn[data-act="restore"]').click()`);
 check('R oko → POST restore + zpráva zpět', await until(`!document.querySelector('.msg[data-msg-id="e2e-b1"]').classList.contains('uc-deleted')`, 3000) && posts.restore.length === 2 && posts.restore[1].messageId === 'e2e-b1', JSON.stringify(posts.restore));
+check('R po odkrytí odznaky zpátky', await donorBadge() === true);
 // Odkrytí jiným modem (SSE message-restored) → zpráva zpět i tady, koš se vrátí.
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-b1', by: 'twitch:jinymod', reason: 'mod', at: Date.now() }]);
 await until(`document.querySelector('.msg[data-msg-id="e2e-b1"]')?.classList.contains('uc-deleted')`, 6000);
@@ -346,7 +350,7 @@ check('H summary GET s kanálem a cílem', /summary\?channel=robdiesalot&platfor
 check('H hlavička: jméno v barvě uživatele', await until(`document.querySelector('.uc-uh-name')?.textContent === 'Tester'`, 3000)
   && !!nameColor && (await ev(`document.querySelector('.uc-uh-name').style.color`)) === nameColor, String(nameColor));
 const badgesH = await ev(`[...document.querySelectorAll('.uc-uh-badge-group')].map(g => g.dataset.platform + ':' + [...g.querySelectorAll('img.bdg-img')].map(i => i.alt).join('+') + ':' + !!g.querySelector('.uc-uh-pi')).join(',')`);
-check('H 2 badge u jména: Twitch vč. 7TV + Kick moderator, skupiny s logem platformy', badgesH === 'twitch:7TV Test:true,kick:Moderator:true', badgesH);
+check('H 2 badge u jména: podporovatel jednou (s částkou) před skupinami, Twitch vč. 7TV + Kick moderator, skupiny s logem platformy', badgesH === 'undefined:Podporovatel · 250 Kč (za 30 dní):false,twitch:7TV Test:true,kick:Moderator:true', badgesH);
 const idsTxt = await ev(`[...document.querySelectorAll('.uc-uh-id')].map(e => e.textContent + ':' + !!e.querySelector('img') + ':' + e.title).join(',')`);
 check('H 5 chipy identit = zobrazované jméno, login v title', idsTxt === 'Tester:true:Twitch: tester,Tester K:true:Kick: tester_k', idsTxt);
 const donSum = await ev(`(() => { const d = document.querySelector('.uc-uh-donsum'); return d && { amt: d.textContent, title: d.title, inTop: d.parentElement.classList.contains('uc-uh-top'), next: d.nextElementSibling?.className }; })()`);

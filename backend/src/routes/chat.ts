@@ -12,10 +12,10 @@ import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, gifMessageState,
 import { announcementsBetween, type AnnouncementPayload } from './announcements.js';
 import { isDonor, donorAmount } from '../lib/donors.js';
 
-/** `donor: true` (+ `donorCzk` = součet za 30 dní, když ho Židolišta posílá) pro autora zprávy, jinak nic. */
-function donorFields(platform: string, channel: string, userId: string | null | undefined): { donor?: true; donorCzk?: number } {
-  if (!isDonor(platform, channel, userId)) return {};
-  const czk = donorAmount(platform, channel, userId);
+/** `donor: true` (+ `donorCzk` = součet za 30 dní, když ho Židolišta posílá) pro autora zprávy (identita nebo jméno = přezdívka donatu), jinak nic. */
+function donorFields(platform: string, channel: string, userId: string | null | undefined, username: string | null | undefined): { donor?: true; donorCzk?: number } {
+  if (!isDonor(platform, channel, userId, username)) return {};
+  const czk = donorAmount(platform, channel, userId, username);
   return czk ? { donor: true, donorCzk: czk } : { donor: true };
 }
 
@@ -274,7 +274,7 @@ function toClientMessageBase(row: ClientRow, historical: boolean): ClientMessage
     historical,
     ...(row.isUnitychatUser ? { uc: true } : {}),
     // Dárce za posledních 30 dní (lib/donors.ts) → odznak dárce v chatu (core/donor-badge.js).
-    ...donorFields(row.platform, row.channel || '', row.platformUserId),
+    ...donorFields(row.platform, row.channel || '', row.platformUserId, row.platformUsername),
   };
   if (row.platform === 'twitch') {
     return {

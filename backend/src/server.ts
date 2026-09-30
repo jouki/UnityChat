@@ -247,7 +247,10 @@ const ingest = createIngest({
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
     const rep = ucReplies.take(m);
     if (rep?.data) attachUcReply(m, rep.data, app.log);
-    publishChat(m.channel, m.platform, toClientMessage(toRow(m), false));
+    const live = toClientMessage(toRow(m), false);
+    publishChat(m.channel, m.platform, live);
+    // Odznak podporovatele u živé zprávy: addon ji má z vlastního IRC (bez `donor`) → SSE donor-mark (jako uc-mark).
+    if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}) });
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
     publishIntegration(m);
   },

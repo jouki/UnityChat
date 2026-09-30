@@ -73,7 +73,7 @@ export function donorBadgeHtml(id, _assetUrl = null, { size = 20, className = 'b
   return `<img class="${escapeAttr(className)}" src="${escapeAttr(donorBadgeStaticUrl(v))}" width="${size}" height="${size}" alt="${escapeAttr(t)}" data-tooltip="${escapeAttr(t)}" data-donor-badge="${escapeAttr(v)}">`;
 }
 
-/** Odznaky Twitche, které při „nahradit globální odznak“ zůstávají (role, sub); ostatní sety = globální → pryč. */
+/** Odznaky Twitche, které při „skrýt globální odznaky“ zůstávají (role, sub); ostatní sety = globální → pryč. */
 export const TWITCH_KEEP_BADGE_SETS = new Set(['subscriber', 'founder', 'moderator', 'vip', 'broadcaster', 'staff', 'admin', 'global_mod', 'partner', 'verified', 'bot', 'sub-gifter', 'sub-gift-leader', 'bits-leader', 'hype-train', 'predictions']);
 /** `badgesRaw` Twitche bez globálních odznaků (jen sety z TWITCH_KEEP_BADGE_SETS). */
 export function stripGlobalTwitchBadges(badgesRaw) {
@@ -99,7 +99,7 @@ export function donorBadgePickerHtml(prefs, _assetUrl = null, { disabled = false
     <label class="uc-dbp-opt"><span>Intenzita</span><select name="uc-donor-strength"${dis}>${opts(DONOR_STRENGTHS, p.donorStrength)}</select></label>
     <label class="uc-dbp-opt"><span>Odstup od (s)</span><input type="number" name="uc-donor-gapmin" min="0" max="${DONOR_GAP_MAX_S}" step="0.5" value="${p.donorGapMin}"${dis}></label>
     <label class="uc-dbp-opt"><span>Odstup do (s)</span><input type="number" name="uc-donor-gapmax" min="0" max="${DONOR_GAP_MAX_S}" step="0.5" value="${p.donorGapMax}"${dis}></label>
-    <label class="uc-dbp-check"><input type="checkbox" name="uc-donor-replace"${p.donorReplaceGlobal ? ' checked' : ''}${dis}> Nahradit globální odznak Twitche odznakem UnityChat</label>
+    <label class="uc-dbp-check"><input type="checkbox" name="uc-donor-replace"${p.donorReplaceGlobal ? ' checked' : ''}${dis}> Skrýt globální odznaky Twitche (u všech; podporovatel má místo nich odznak UnityChat)</label>
   </div>`;
 }
 

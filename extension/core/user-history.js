@@ -492,9 +492,18 @@ export class UserHistoryPanel {
     const primary = u.platform || this.target.platform;
     const order = [primary, ...Object.keys(latest).filter((p) => p !== primary)].filter((p) => latest[p]);
     this._badges.replaceChildren();
+    // Odznak podporovatele patří člověku, ne platformě → jednou před skupinami (user 2026-09-30), ve skupinách bez něj.
+    const donorOf = order.find((p) => latest[p]?.donor);
+    if (donorOf && this.renderBadges) {
+      try {
+        const czk = Math.max(0, ...order.map((p) => Number(latest[p]?.donorCzk) || 0));
+        const node = toNode(doc, this.renderBadges({ platform: donorOf, donor: true, donorCzk: czk || undefined, badgesRaw: '' }));
+        if (node && (node.childElementCount || node.textContent)) { const g = doc.createElement('span'); g.className = 'uc-uh-badge-group uc-uh-badge-donor'; g.appendChild(node); this._badges.appendChild(g); }
+      } catch (e) { this.log('Profile', `badge donor: ${e?.message || e}`); }
+    }
     for (const p of order) {
       let node = null;
-      try { node = this.renderBadges ? toNode(doc, this.renderBadges(latest[p])) : null; } catch (e) { this.log('Profile', `badge ${p}: ${e?.message || e}`); }
+      try { node = this.renderBadges ? toNode(doc, this.renderBadges({ ...latest[p], donor: false })) : null; } catch (e) { this.log('Profile', `badge ${p}: ${e?.message || e}`); }
       if (!node || !(node.childElementCount || node.textContent)) continue;
       const g = doc.createElement('span');
       g.className = 'uc-uh-badge-group';

@@ -1,38 +1,57 @@
 // Dárci kanálu za posledních 30 dní (pokyn usera 2026-09-30) → odznak dárce v chatu (core/donor-badge.js).
-// Zdroj: Židolišta `GET <base>/integrations/:slug/donors?days=30` → { ok, donors: [{ platform, userId, login? }] }
-// (kontrakt navržený 2026-09-30; dokud endpoint není, seznam je prázdný = žádné odznaky, žádná chyba).
+// Zdroj: Židolišta `GET <base>/integrations/:slug/donors?days=30` → { ok, donors: [{ platform, userId, login?, nickname?, amountCzk? }] }
+// (kontrakt 2026-09-30). Dárce bez identity platformy (donate z webového formuláře) má jen `nickname` — páruje se
+// na jméno autora zprávy po zjednodušení (simplifyName; rozhodnutí usera 2026-09-30: každý z Hall of Fame má odznak).
 // Cache per workspace, obnova každých 5 min (limit Židolišty 300/min se nedotkne); při výpadku poslední stav.
 // Příznak `donor: true` doplní routes/chat.ts toClientMessage (historie i /chat/stream) podle platformního kanálu
 // zprávy → workspace (registr). Synchronní dotaz jen z cache.
 import { config } from '../config.js';
 import { zidolistaFetch, zidolistaBase, getWorkspaces, workspaceForChannelSync, type Platform } from './zidolista.js';
+import { simplifyName } from './reservedNicknames.js';
 
 export const DONORS_DAYS = 30;
 export const DONORS_REFRESH_MS = 5 * 60_000;
 const PLATFORMS = new Set(['twitch', 'kick', 'youtube']);
 
 type Log = { info?: (o: object, m: string) => void; warn: (o: object, m: string) => void };
-const cache = new Map<string, { at: number; keys: Set<string>; amounts: Map<string, number>; ok: boolean }>();   // slug → dárci (platform:userId), částky za okno (Kč)
+type DonorCache = { at: number; keys: Set<string>; amounts: Map<string, number>; ok: boolean };
+const cache = new Map<string, DonorCache>();   // slug → dárci (platform:userId | nick:<zjednodušené jméno>), částky za okno (Kč)
 const key = (platform: string, userId: string) => `${platform}:${userId}`;
+const nickKey = (name: string) => `nick:${simplifyName(name)}`;
 
 /** Odpověď Židolišty → množina klíčů (čistá funkce; neznámé platformy / prázdná id se zahodí). */
 export function parseDonors(raw: unknown): Set<string> {
   return new Set(parseDonorAmounts(raw).keys());
 }
 
-/** Odpověď Židolišty → klíč → částka za okno v Kč (`amountCzk`, 0 když ji Židolišta neposílá). */
+/**
+ * Odpověď Židolišty → klíč → částka za okno v Kč (`amountCzk`, 0 když ji Židolišta neposílá).
+ * Klíč `platform:userId` z identity, `nick:<jméno>` z přezdívky (i u dárce s identitou — stejná částka pod oběma).
+ */
 export function parseDonorAmounts(raw: unknown): Map<string, number> {
   const out = new Map<string, number>();
   const list = (raw && typeof raw === 'object' ? (raw as Record<string, unknown>).donors : null);
   if (!Array.isArray(list)) return out;
+  const put = (k: string, czk: number) => out.set(k, Math.max(out.get(k) ?? 0, czk));
   for (const d of list) {
     const r = d as Record<string, unknown>;
     const p = String(r?.platform ?? '').toLowerCase();
     const id = String(r?.userId ?? '').trim();
-    if (!PLATFORMS.has(p) || !id) continue;
-    const czk = Number(r?.amountCzk);
-    out.set(key(p, id), Math.max(out.get(key(p, id)) ?? 0, Number.isFinite(czk) && czk > 0 ? Math.round(czk) : 0));
+    const nick = simplifyName(typeof r?.nickname === 'string' ? r.nickname : '');
+    const n = Number(r?.amountCzk);
+    const czk = Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+    if (PLATFORMS.has(p) && id) put(key(p, id), czk);
+    if (nick) put(nickKey(nick), czk);
   }
+  return out;
+}
+
+/** Klíče, pod kterými se autor zprávy hledá: identita platformy a zjednodušené jméno. */
+function lookupKeys(platform: string, userId: string | null | undefined, username?: string | null): string[] {
+  const out: string[] = [];
+  if (userId) out.push(key(platform, String(userId)));
+  const nick = simplifyName(username);
+  if (nick) out.push(nickKey(nick));
   return out;
 }
 
@@ -63,21 +82,20 @@ export async function refreshDonors(slug: string, deps: DonorsDeps = {}): Promis
   }
 }
 
-/** Je autor zprávy dárce? Jen z cache (ingest onLive, historie). `channel` = platformní kanál zprávy. */
-export function isDonor(platform: Platform | string, channel: string, userId: string | null | undefined): boolean {
-  if (!userId) return false;
+/** Je autor zprávy dárce (identita, nebo jméno = přezdívka donatu)? Jen z cache (ingest onLive, historie). `channel` = platformní kanál zprávy. */
+export function isDonor(platform: Platform | string, channel: string, userId: string | null | undefined, username?: string | null): boolean {
   const ws = workspaceForChannelSync(platform as Platform, channel);
   const c = ws ? cache.get(ws.slug) : null;
-  return !!c && c.keys.has(key(platform, String(userId)));
+  return !!c && lookupKeys(platform, userId, username).some((k) => c.keys.has(k));
 }
 
-/** Částka dárce za okno (Kč), null = není dárce / Židolišta částky neposílá (0). */
-export function donorAmount(platform: Platform | string, channel: string, userId: string | null | undefined): number | null {
-  if (!userId) return null;
+/** Částka dárce za okno (Kč, větší z identity / přezdívky), null = není dárce / Židolišta částky neposílá (0). */
+export function donorAmount(platform: Platform | string, channel: string, userId: string | null | undefined, username?: string | null): number | null {
   const ws = workspaceForChannelSync(platform as Platform, channel);
   const c = ws ? cache.get(ws.slug) : null;
-  const a = c?.amounts.get(key(platform, String(userId)));
-  return a && a > 0 ? a : null;
+  if (!c) return null;
+  const a = Math.max(0, ...lookupKeys(platform, userId, username).map((k) => c.amounts.get(k) ?? 0));
+  return a > 0 ? a : null;
 }
 
 /** Jen pro testy. */
