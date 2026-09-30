@@ -35,8 +35,9 @@ Nahrává CI (`scripts/build-store.ps1` → `scripts/cws.mjs release`) při push
 změn (od v3.38.67 žádné stripování). Oprávnění v manifestu:
 `sidePanel, storage, tabs, scripting, cookies, downloads` + 19 host permissions.
 
-⚠️ **v3.44.5 přidává oprávnění `notifications`** (opt-in oznámení na @zmínky).
-Pole „Vysvětlení oprávnění → notifications" **musí být vyplněné v dashboardu PŘED
+ℹ️ **v3.42.0 přidala oprávnění `notifications`** (opt-in oznámení na @zmínky).
+Pole „Vysvětlení oprávnění → notifications" se v dashboardu objeví až po nahrání balíčku s novým
+oprávněním; první `:publish` proto selže (`INVALID_ITEM_METADATA`), po vyplnění další release projde. Vyplněno 2026-10-01. Původně: **musí být vyplněné v dashboardu PŘED
 mergem do master** — text je v `permissions-justification.md` (sekce `notifications`).
 Po vyplnění sem doplnit text do „Vysvětlení oprávnění" níže a tuto poznámku smazat.
 
@@ -157,7 +158,7 @@ extension writes its in-memory diagnostic log to the Downloads folder so the
 user can attach it to a bug report. Nothing is downloaded without that click.
 ```
 
-**notifications** (696 znaků) — ⚠️ ZATÍM NEVYPLNĚNO (přibude s v3.44.5)
+**notifications** (696 znaků) — ✅ vyplněno 2026-09-30/10-01 (po nahrání 3.42.0 se pole objevilo; 3.42.2 pak prošla `:publish`)
 ```
 Optional and off by default. When the user turns on "Notify on mentions" in the panel settings, the extension shows a local notification when someone in the chat @mentions the user or replies directly to the user's message while the panel is in the background (hidden or not focused). The notification contains only the author's name, the message text and the platform and channel, all taken from the chat already displayed in the panel. Clicking it focuses the browser window with the panel. Notifications are created locally with chrome.notifications; nothing is sent to our server or to any third party, and no notification is shown for other messages or while the user is looking at the chat.
 ```

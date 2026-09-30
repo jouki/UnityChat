@@ -369,7 +369,7 @@ api.frankerfacez.com, cdn.frankerfacez.com                        # FFZ
 ## Verzování
 - Verze v `extension/manifest.json` → titulek side panelu (`chrome.runtime.getManifest().version`)
 - Bumpovat jediný manifest při release
-- Aktuální: **v3.42.0** (dev i master; release 2026-09-30 = vše z 3.41.9–127: odznak podporovatele, nastavení v záložkách s morfováním, moderace, zmínky, cooldown pruhy, dárci podle Židolišty; nové oprávnění `notifications` → zdůvodnění v CWS dashboardu doplnit po nahrání balíčku)
+- Aktuální: **v3.42.2** (dev i master; release PR #34 2026-10-01 — CWS 3.42.2 odeslána ke kontrole, AMO odesláno; předchozí 3.42.0 = vše z 3.41.9–127: odznak podporovatele, nastavení v záložkách s morfováním, moderace, zmínky, cooldown pruhy, dárci podle Židolišty; nové oprávnění `notifications` → zdůvodnění v CWS dashboardu doplnit po nahrání balíčku)
 
 ## Chrome Web Store (v3.38.58+)
 
