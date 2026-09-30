@@ -10,10 +10,11 @@
 // „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
 import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
 import { canAutoFocus, refocusField } from './panel-morph.js';
-import { cooldownBarHtml, updateCooldownBar, shakeCooldownLabel, cooldownTotal, renderCooldownBars, COOLDOWN_BAR_CLASS } from './cooldown-bar.js';
+import { cooldownBarHtml, updateCooldownBar, shakeCooldownLabel, cooldownTotal, renderCooldownBars, pickCooldown, cooldownProgress, COOLDOWN_BAR_CLASS } from './cooldown-bar.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
+const CHEVRON_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 6l4 4 4-4"/></svg>';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ms = (iso) => { const t = Date.parse(iso ?? ''); return Number.isNaN(t) ? null : t; };
 
@@ -433,7 +434,7 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
       <label class="uc-sb-vol" title="Hlasitost náhledu (jen pro tebe)">${SPEAKER_SVG}<input type="range" min="0" max="100" step="1" aria-label="Hlasitost náhledu"></label>
     </div>
     <div class="uc-sb-status"></div>
-    ${cooldownBarHtml('global')}${cooldownBarHtml('user')}
+    ${cooldownBarHtml('user')}
     <div class="uc-sb-body"></div>
     <div class="uc-sb-foot"></div>
     ${requestApi ? '<div class="uc-sb-reqview"></div>' : ''}`;
@@ -441,7 +442,7 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
   const search = panel.querySelector('input[type="search"]');
   const volInput = panel.querySelector('.uc-sb-vol input');
   const statusEl = panel.querySelector('.uc-sb-status');
-  const cdEls = { global: panel.querySelector(`.${COOLDOWN_BAR_CLASS}[data-cd="global"]`), user: panel.querySelector(`.${COOLDOWN_BAR_CLASS}[data-cd="user"]`) };
+  const cdEl = panel.querySelector(`.${COOLDOWN_BAR_CLASS}`);
   const body = panel.querySelector('.uc-sb-body');
   const foot = panel.querySelector('.uc-sb-foot');
   volInput.value = String(Math.round(vol * 100));
@@ -453,7 +454,7 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
   const iconTip = createIconTip({ host });
   const tip = iconTip.el;
 
-  button.innerHTML = `${SOUNDBOARD_BUTTON_SVG}<span class="uc-sb-bar"></span>`;
+  button.innerHTML = `${SOUNDBOARD_BUTTON_SVG}<span class="uc-sb-cdbar"></span><span class="uc-sb-bar"></span>`;
   button.classList.add('uc-sb-btn');
   button.setAttribute('aria-haspopup', 'dialog');
   button.setAttribute('aria-expanded', 'false');
@@ -506,6 +507,10 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
     button.setAttribute('aria-label', s.mode === 'active' ? 'Soundboard' : `Soundboard: ${s.title}`);
     button.style.setProperty('--uc-sb-p', s.mode === 'active' && s.progress !== null ? String(s.progress) : '1');
     button.classList.toggle('uc-sb-timed', s.mode === 'active' && s.progress !== null);
+    // Pásek cooldownu nahoře na notě (dole je odpočet odměny) — fialový, delší z osobního / globálního.
+    const cdp = s.mode === 'active' ? cooldownProgress(pickCooldown(s.cooldowns)) : null;
+    button.classList.toggle('uc-sb-cdtimed', cdp !== null);
+    button.style.setProperty('--uc-sb-cdp', cdp === null ? '1' : cdp.toFixed(4));
     if (tipOpen) renderTip(s);
     // Záložka SFX: pásek odměny + tooltip (na smajlíku ne — buttonIndicator: false); kanál bez zvuků záložku schová.
     const hide = s.mode === 'hidden';
@@ -534,9 +539,28 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
     </div>`;
   }
+  // Sbalené sekce (klik na hlavičku, pokyn usera 2026-09-30): stav si pamatuje prohlížeč (localStorage, per kanál).
+  const COLLAPSE_KEY = 'uc_sfx_collapsed';
+  const collapsed = new Set((() => { try { return JSON.parse(win.localStorage?.getItem(COLLAPSE_KEY) || '[]'); } catch { return []; } })());
+  const saveCollapsed = () => { try { win.localStorage?.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ } };
+  const collapseId = (key) => `${state?.channel || ''}|${key}`;
+  function toggleSection(sec) {
+    const key = sec.dataset.sec;
+    if (!key || key === 'search') return;
+    const id = collapseId(key);
+    const on = !collapsed.has(id);
+    if (on) collapsed.add(id); else collapsed.delete(id);
+    saveCollapsed();
+    sec.classList.toggle('collapsed', on);
+    sec.querySelector('.uc-sb-h')?.setAttribute('aria-expanded', String(!on));
+    hideHover();
+  }
+
   function section(key, head, list, ctx, extra = '') {
     if (!list.length) return '';
-    return `<div class="uc-sb-sec" data-sec="${esc(key)}"><div class="uc-sb-h">${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, ctx)).join('')}</div></div>`;
+    const col = key !== 'search' && collapsed.has(collapseId(key));
+    // Hlavička = tlačítko sbalení (šipka vlevo); štítek času / zámku zůstává vpravo a klik na něj sekci taky sbalí.
+    return `<div class="uc-sb-sec${col ? ' collapsed' : ''}" data-sec="${esc(key)}"><div class="uc-sb-h" role="button" tabindex="0" aria-expanded="${!col}" title="${col ? 'Rozbalit' : 'Sbalit'}"><span class="uc-sb-chev" aria-hidden="true">${CHEVRON_SVG}</span>${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, ctx)).join('')}</div></div>`;
   }
 
   /** Hlavička sekce tieru: zamčeno / pozastaveno se zamrzlým časem / bez omezení / odpočet + pruh. */
@@ -589,9 +613,9 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
     // Beze změny nepřepisovat (tik 1 s by zámku uprostřed zatřesení vyměnil prvek).
     if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; resumeShake(); }
     statusEl.className = `uc-sb-status ${REWARD_STATUS_CLASS}${mode ? ` ${REWARD_STATUS_CLASS}--${mode}` : ''}${html ? '' : ' hidden'}`;
-    // Globální i osobní cooldown jako pruhy s odpočtem (jen s odemčenou odměnou).
-    const bars = s.mode === 'active' ? cooldownBars(state, now()) : [];
-    for (const kind of ['global', 'user']) { const c = bars.find((b) => b.kind === kind); updateCooldownBar(cdEls[kind], c ? c.remainingMs : 0, c?.totalMs); }
+    // Jeden pruh cooldownu = delší z osobního / globálního (jen s odemčenou odměnou).
+    const c = s.mode === 'active' ? pickCooldown(cooldownBars(state, now())) : null;
+    updateCooldownBar(cdEl, c ? c.remainingMs : 0, c?.totalMs, c?.kind);
     const d = state?.denied;
     if (d && Date.now() - d.at < DENIED_SHOW_MS) {
       const retry = d.retryAt ? ` · znovu za ${formatRemaining(d.retryAt - now())}` : '';
@@ -652,8 +676,8 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
       return;
     }
     if (cooldownLeft(state, t) > 0) {
-      // Během cooldownu: štítek (osobní, jinak globální) se zatřese a zčervená — jako zámek u zamčeného zvuku.
-      shakeCooldownLabel(userCooldownLeft(state, t) > 0 ? cdEls.user : cdEls.global);
+      // Během cooldownu: štítek pruhu se zatřese a zčervená — jako zámek u zamčeného zvuku.
+      shakeCooldownLabel(cdEl);
       return;
     }
     log?.('Soundboard', `!se ${sound.name}`);
@@ -757,7 +781,12 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
   body.addEventListener('scroll', hideHover, { passive: true });
 
   panel.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  panel.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('uc-sb-h')) { e.preventDefault(); const sec = e.target.closest('.uc-sb-sec'); if (sec) toggleSection(sec); }
+  });
   panel.addEventListener('click', (e) => {
+    const h = e.target.closest('.uc-sb-h');
+    if (h && !e.target.closest('[data-act]')) { const sec = h.closest('.uc-sb-sec'); if (sec) toggleSection(sec); return; }
     const b = e.target.closest('[data-act]');
     if (!b) return;
     if (b.dataset.act === 'login') { close(); onLogin?.(); return; }

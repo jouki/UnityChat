@@ -355,6 +355,13 @@ div.uc-gif-more { cursor: default; }
 .uc-ep-tab-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
 .uc-ep-btn-bar { position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
 .uc-ep-btn-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-ep-p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
+/* Pásek cooldownu NAHOŘE (fialový) na ikoně emotů a záložce GIFy; dole zůstává odpočet odměny (pokyn usera 2026-09-30). */
+.uc-ep-tab-cd { position: absolute; left: 5px; right: 5px; top: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-tab-cd::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
+.uc-ep-btn-cd { position: absolute; left: 3px; right: 3px; top: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-btn-cd::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-ep-cdp, 1) * 100%); border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
+.uc-ep-tab-cd[hidden], .uc-ep-btn-cd[hidden] { display: none; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab > .uc-ep-tab-cd { position: absolute; }
 .uc-ep-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .uc-ep-pane[hidden] { display: none; }
 

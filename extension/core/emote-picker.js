@@ -229,6 +229,8 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
   function setIndicator(key, v) {
     if (v && Number.isFinite(v.progress)) indicators.set(key, { progress: Math.min(1, Math.max(0, v.progress)), title: v.title || '' });
     else indicators.delete(key);
+    // Pásek cooldownu (fialový) NAHOŘE na záložce i na ikoně emotů — dole zůstává odpočet odměny (pokyn usera 2026-09-30).
+    if (v && Number.isFinite(v.cooldown)) cooldowns.set(key, Math.min(1, Math.max(0, v.cooldown))); else cooldowns.delete(key);
     // Stav pro vlastní tooltip (ikona emotů + záložka): i bez pásku (zamčeno, cooldown bez konce odměny).
     if (v?.tip) tipStates.set(key, v.tip); else tipStates.delete(key);
     const tab = panel.querySelector(`.uc-ep-tab[data-tab="${CSS_ESC(key)}"]`);
@@ -243,6 +245,15 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
     if (best && !bb) { bb = doc.createElement('span'); bb.className = 'uc-ep-btn-bar'; button.appendChild(bb); }
     button.classList.toggle('uc-ep-timed', !!best);
     if (bb) { bb.hidden = !best; if (best) button.style.setProperty('--uc-ep-p', best.progress.toFixed(4)); }
+    const cdTab = tab?.querySelector('.uc-ep-tab-cd');
+    const curCd = cooldowns.get(key);
+    if (tab && curCd !== undefined && !cdTab) { const el = doc.createElement('span'); el.className = 'uc-ep-tab-cd'; tab.appendChild(el); }
+    const cdTab2 = tab?.querySelector('.uc-ep-tab-cd');
+    if (cdTab2) { cdTab2.hidden = curCd === undefined; if (curCd !== undefined) cdTab2.style.setProperty('--p', curCd.toFixed(4)); }
+    const bestCd = [...cooldowns].filter(([k]) => onSmiley(k)).map(([, x]) => x).reduce((a, x) => (a === null || x > a ? x : a), null);
+    let bc = button.querySelector(':scope > .uc-ep-btn-cd');
+    if (bestCd !== null && !bc) { bc = doc.createElement('span'); bc.className = 'uc-ep-btn-cd'; button.appendChild(bc); }
+    if (bc) { bc.hidden = bestCd === null; if (bestCd !== null) button.style.setProperty('--uc-ep-cdp', bestCd.toFixed(4)); }
     // Otevřený tooltip: jen nový text / pásek (prvek zůstává).
     if (btnTip?.open) btnTip.update(buttonTip());
     if (tabTip?.open && tabTipKey === key) tabTip.update(tabTipState(key));
@@ -250,6 +261,7 @@ export function createEmotePicker({ host, button, textarea, emotes, recent, log,
 
   // ---- vlastní tooltipy (stejné jako u noty soundboardu, core/soundboard.js createIconTip) — test2 body 1 a 3 ----
   const tipStates = new Map();   // key záložky → stav tooltipu (gifRewardTip)
+  const cooldowns = new Map();   // key záložky → podíl zbývajícího cooldownu (0–1), pásek nahoře
   const plainTip = (title) => ({ mode: 'plain', title });
   /**
    * Ikona emotů: tooltip jen s aktivní odměnou záložky (GIFy — aktivní / cooldown). Zamčená nebo neznámá odměna

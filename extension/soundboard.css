@@ -12,6 +12,10 @@
 .uc-sb-bar { position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); display: none; }
 .uc-sb-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-sb-p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
 .uc-sb-btn.uc-sb-timed .uc-sb-bar { display: block; }
+/* Pásek cooldownu nahoře na notě (fialový, delší z osobního / globálního); dole zůstává odpočet odměny. */
+.uc-sb-cdbar { position: absolute; left: 3px; right: 3px; top: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); display: none; }
+.uc-sb-cdbar::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-sb-cdp, 1) * 100%); border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
+.uc-sb-btn.uc-sb-cdtimed .uc-sb-cdbar { display: block; }
 .uc-sb-btn:not(.uc-sb-off) { color: var(--accent-light); }
 .uc-sb-btn.uc-sb-cd { color: var(--text-secondary); }
 
@@ -123,6 +127,15 @@
 }
 /* „(Tier 1)“ za jménem tieru: menší a nevýrazné (stejně jako dashboard Židolišty). */
 .uc-sb-tiern { font-size: 0.85em; font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.6; }
+/* Sbalitelné sekce: hlavička je tlačítko, šipka vlevo se otočí, mřížka se schová (stav v localStorage). */
+.uc-sb-h { cursor: pointer; user-select: none; }
+.uc-sb-h:hover { color: var(--text-primary); }
+.uc-sb-h:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; border-radius: 4px; }
+.uc-sb-chev { display: inline-flex; align-items: center; color: var(--text-muted, #7c7c86); transition: transform 0.18s ease; margin-right: -2px; }
+.uc-sb-sec.collapsed .uc-sb-chev { transform: rotate(-90deg); }
+.uc-sb-sec.collapsed .uc-sb-grid { display: none; }
+.uc-sb-sec.collapsed .uc-sb-h { padding-bottom: 7px; }
+@media (prefers-reduced-motion: reduce) { .uc-sb-chev { transition: none; } }
 .uc-sb-time { margin-left: auto; text-transform: none; letter-spacing: 0; color: var(--accent-light); font-variant-numeric: tabular-nums; }
 .uc-sb-lock { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .uc-sb-hbar { flex-basis: 100%; }
@@ -216,10 +229,6 @@
 .uc-cd-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .uc-cd-l { color: #c9a6ff; font-weight: 700; }
 .uc-cd-t { color: #d7b8ff; font-weight: 700; font-variant-numeric: tabular-nums; }
-/* Globální cooldown chatu (po cizím zvuku): modře, ať se od osobního liší na první pohled. */
-.uc-cd--global .uc-cd-l { color: #8fc1ff; }
-.uc-cd--global .uc-cd-t { color: #b3d4ff; }
-.uc-cd--global .uc-cd-bar::after { background: linear-gradient(90deg, #2563eb, #60a5fa); }
 .uc-cd-bar { display: block; position: relative; height: 3px; margin-top: 5px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
 .uc-cd-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: 2px; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
 .uc-cd-bar.uc-cd-jump::after { transition: none; }
@@ -234,17 +243,6 @@
   38% { transform: translateX(-1px); color: #ff4d4d; }
   46% { transform: none; }
   100% { transform: none; color: #c9a6ff; }
-}
-.uc-cd--global .uc-cd-l.uc-cd-shake { animation-name: uc-cd-shake-g; }
-@keyframes uc-cd-shake-g {
-  0% { transform: translateX(0); color: #ff4d4d; }
-  6% { transform: translateX(-3px); }
-  14% { transform: translateX(3px); }
-  22% { transform: translateX(-3px); }
-  30% { transform: translateX(2px); }
-  38% { transform: translateX(-1px); color: #ff4d4d; }
-  46% { transform: none; }
-  100% { transform: none; color: #8fc1ff; }
 }
 @keyframes uc-cd-flash { 0%, 38% { color: #ff4d4d; } 100% { color: #c9a6ff; } }
 @media (prefers-reduced-motion: reduce) { .uc-cd-l.uc-cd-shake { animation: uc-cd-flash 1s ease-out; } .uc-cd-bar::after { transition: none; } }

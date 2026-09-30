@@ -514,8 +514,17 @@ const cdSfx = await ev(`(() => { const p = document.querySelector('.uc-ep-pane[d
   const bar = (k) => { const el = p.querySelector('.uc-cd[data-cd="' + k + '"]'); if (!el || el.hidden) return null; const cs = getComputedStyle(el.querySelector('.uc-cd-bar'), '::after'); return { label: el.querySelector('.uc-cd-l').textContent, t: el.querySelector('.uc-cd-t').textContent, w: parseFloat(cs.width), full: el.querySelector('.uc-cd-bar').getBoundingClientRect().width, bg: cs.backgroundImage, lc: getComputedStyle(el.querySelector('.uc-cd-l')).color }; };
   return { statusText: st?.hidden ? '' : (st?.textContent || ''), user: bar('user'), global: bar('global') }; })()`);
 check('cooldown SFX: žádný text „Cooldown N s“ v řádku stavu', cdSfx && !/Cooldown/.test(cdSfx.statusText), JSON.stringify(cdSfx?.statusText));
-check('cooldown SFX: pruh „Osobní cooldown“ s odpočtem, fialový', cdSfx?.user && cdSfx.user.label === 'Osobní cooldown' && /^\d+ s$/.test(cdSfx.user.t) && /gradient/.test(cdSfx.user.bg) && /124, 58, 237/.test(cdSfx.user.bg), JSON.stringify(cdSfx?.user));
-check('cooldown SFX: pruh „Globální cooldown“ zvlášť, modrý', cdSfx?.global && cdSfx.global.label === 'Globální cooldown' && /37, 99, 235/.test(cdSfx.global.bg), JSON.stringify(cdSfx?.global));
+// Jen JEDEN pruh = delší z osobního (8 s) a globálního (3 s) → „Osobní cooldown“, fialový; žádný druhý.
+check('cooldown SFX: jeden pruh „Osobní cooldown“ (delší), fialový', cdSfx?.user && cdSfx.user.label === 'Osobní cooldown' && /^\d+ s$/.test(cdSfx.user.t) && /124, 58, 237/.test(cdSfx.user.bg), JSON.stringify(cdSfx?.user));
+check('cooldown SFX: globální (kratší) se neukazuje', !cdSfx?.global && (await ev(`document.querySelectorAll('.uc-ep-pane[data-pane="sfx"] .uc-cd:not([hidden])').length`)) === 1, JSON.stringify(cdSfx?.global));
+const noteCd = await ev(`(() => { const b = document.getElementById('btn-sfx'); const el = b.querySelector('.uc-sb-cdbar'); const cs = el ? getComputedStyle(el) : null; return { has: !!el, display: cs?.display, top: cs?.top, p: b.style.getPropertyValue('--uc-sb-cdp'), cls: b.className }; })()`);
+check('cooldown SFX: fialový pásek nahoře na notě (dole odpočet odměny)', noteCd?.display === 'block' && parseFloat(noteCd.top) <= 2 && Number(noteCd.p) > 0 && Number(noteCd.p) <= 1, JSON.stringify(noteCd));
+// Sbalení sekce: klik na hlavičku schová mřížku, stav přežije překreslení panelu.
+const col = await ev(`(async () => { const p = document.querySelector('.uc-ep-pane[data-pane="sfx"]'); const sec = p.querySelector('.uc-sb-sec[data-sec="fav"]'); sec.querySelector('.uc-sb-h').click();
+  const a = { col: sec.classList.contains('collapsed'), grid: getComputedStyle(sec.querySelector('.uc-sb-grid')).display, exp: sec.querySelector('.uc-sb-h').getAttribute('aria-expanded') };
+  await window.ucSfx.reload(); await new Promise((r) => setTimeout(r, 250));
+  const sec2 = p.querySelector('.uc-sb-sec[data-sec="fav"]'); const b = { col: sec2.classList.contains('collapsed') }; sec2.querySelector('.uc-sb-h').click(); const c = { col: sec2.classList.contains('collapsed') }; return { a, b, c }; })()`);
+check('sbalení sekce: klik na hlavičku schová mřížku, po překreslení zůstane sbalená, další klik rozbalí', col && col.a.col && col.a.grid === 'none' && col.a.exp === 'false' && col.b.col && !col.c.col, JSON.stringify(col));
 // Pruh plynule ubývá (šířka po ~1,2 s menší, ne skokem na nulu).
 const w0 = cdSfx?.user?.w; await sleep(1200);
 const w1 = await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-ep-pane[data-pane="sfx"] .uc-cd[data-cd="user"] .uc-cd-bar'), '::after').width)`);
@@ -537,6 +546,7 @@ check('cooldown GIF: řádek odměny = název + odpočet konce odměny (jako SFX
 check('cooldown GIF: pruh „Osobní cooldown“ s odpočtem a délkou z cooldownSec', cdGif?.cd && cdGif.cd.label === 'Osobní cooldown' && /^\d+ s$/.test(cdGif.cd.t) && Number(cdGif.cd.p) > 0.2 && Number(cdGif.cd.p) < 0.35, JSON.stringify(cdGif?.cd));
 await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseenter'))`); await sleep(150);
 const tipCd = await ev(`(() => { const t = document.querySelector('.uc-ep > .uc-sb-tip:not(.hidden)'); if (!t) return null; const el = t.querySelector('.uc-cd[data-cd="user"]'); return { text: t.textContent, bar: !!el && !el.hidden, label: el?.querySelector('.uc-cd-l')?.textContent || '' }; })()`);
+check('cooldown GIF: fialový pásek nahoře na záložce GIFy i na ikoně emotů', await ev(`(() => { const t = document.querySelector('.uc-ep-tab[data-tab="gif"] .uc-ep-tab-cd'); const b = document.querySelector('#btn-emotes > .uc-ep-btn-cd'); return !!t && !t.hidden && parseFloat(getComputedStyle(t).top) <= 3 && !!b && !b.hidden && Number(document.getElementById('btn-emotes').style.getPropertyValue('--uc-ep-cdp')) < 0.4; })()`) === true);
 check('cooldown GIF: tooltip záložky má pruh „Osobní cooldown“ místo textu „Cooldown N s“', tipCd && tipCd.bar && tipCd.label === 'Osobní cooldown' && !/Cooldown \d/.test(tipCd.text), JSON.stringify(tipCd));
 await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
 await esc(); await sleep(300);
