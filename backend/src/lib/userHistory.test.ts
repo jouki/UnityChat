@@ -204,7 +204,7 @@ test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanál
   assert.deepEqual(Object.keys(b.latest).sort(), ['kick', 'twitch'], 'badge ze všech platforem účtu');
   assert.equal(b.latest.twitch.username, 'Spammer', 'kliknutá identita celá');
   assert.deepEqual([b.latest.kick.username, b.latest.kick.userId, b.latest.kick.id], ['', '', ''], 'jiná platforma bez loginu / id');
-  assert.equal(b.latest.kick.badgesRaw, 'vip/1');
+  assert.equal(b.latest.twitch.badgesRaw, 'vip/1');
   assert.deepEqual(b.donations, { total: { czk: 1550, byCurrency: { CZK: 1550 } }, count: 3 }, 'celková suma ze všech zdrojů, bez položek a rozpadu');
   assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '999' }, dd)).status, 404);
   assert.equal((await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: null, login: 'cizi' }, dd)).status, 404);
