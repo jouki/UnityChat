@@ -196,5 +196,15 @@ const hRows = await ev(`[...document.querySelectorAll('#chat .msg')].filter(e =>
 check('H stejný login: po echu přesně 3 zprávy (jedna na platformu), žádná optimistická nezbyla', Array.isArray(hRows) && hRows.length === 3 && hRows.map((r) => r.p).sort().join() === 'kick,twitch,youtube' && !hRows.some((r) => /^sent-/.test(r.id)), JSON.stringify(hRows));
 check('H echo dostalo id své platformy', Array.isArray(hRows) && ['twitch:echo-tw', 'kick:echo-ki', 'youtube:echo-yt'].every((k) => hRows.some((r) => `${r.p}:${r.id}` === k)), JSON.stringify(hRows));
 
+// ---- Filtry platforem přežijí obnovení panelu (pokyn usera 2026-09-30) ----
+await ev(`(() => { const b = document.querySelector('.fbtn[data-platform="youtube"]'); if (b.classList.contains('active')) b.click(); return true; })()`);
+const fSaved = await ev(`chrome.storage.local.get('uc_filters').then((r) => r.uc_filters)`);
+check('filtr: vypnutí YouTube se uloží', fSaved && fSaved.youtube === false && fSaved.twitch === true, JSON.stringify(fSaved));
+await boot();
+await sleep(300);
+const fAfter = await ev(`(() => ({ yt: document.querySelector('.fbtn[data-platform="youtube"]').classList.contains('active'), tw: document.querySelector('.fbtn[data-platform="twitch"]').classList.contains('active'), hidden: document.querySelector('.msg[data-msg-id="yt-1"]')?.classList.contains('hide-platform') }))()`);
+check('filtr: po obnovení panelu je YouTube dál vypnuté a jeho zprávy schované', fAfter && fAfter.yt === false && fAfter.tw === true && fAfter.hidden === true, JSON.stringify(fAfter));
+await ev(`chrome.storage.local.remove('uc_filters').then(() => true)`);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

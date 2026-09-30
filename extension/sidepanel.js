@@ -1716,6 +1716,12 @@ class UnityChat {
     this._startPinPoll();
     this._annivStart();
     try { const r = await chrome.storage.local.get('uc_send_platform'); if (['twitch', 'kick', 'youtube'].includes(r.uc_send_platform)) this._sendPlatform = r.uc_send_platform; } catch {}
+    // Uložené filtry platforem (klik na TW / YT / KI) — jinak vše zapnuté.
+    try {
+      const r = await chrome.storage.local.get('uc_filters');
+      const f = r.uc_filters;
+      if (f && typeof f === 'object') { for (const p of ['twitch', 'youtube', 'kick']) if (typeof f[p] === 'boolean') this.filters[p] = f[p]; this._applyFilters(); }
+    } catch { /* ignore */ }
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
     // Broadcast (mod / streamer) si pamatuje zvlášť — platí, jen dokud je role a aspoň dvě přihlášené platformy.
     try { this._broadcast = (await chrome.storage.local.get('uc_send_broadcast')).uc_send_broadcast === true; } catch {}
@@ -2250,6 +2256,8 @@ class UnityChat {
         const p = btn.dataset.platform;
         this.filters[p] = !this.filters[p];
         this._applyFilters();
+        // Filtry přežijí obnovení panelu (pokyn usera 2026-09-30).
+        try { chrome.storage.local.set({ uc_filters: { ...this.filters } }); } catch { /* ignore */ }
       });
     });
 
