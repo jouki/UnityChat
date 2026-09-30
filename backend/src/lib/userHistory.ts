@@ -262,8 +262,10 @@ export const PUBLIC_USER_FIELDS = ['platform', 'userId', 'login', 'displayName',
 
 /**
  * Veřejný Profil (rozhodnutí usera 2026-09-25: levý klik na jméno otevře Profil všem). Divák vidí jen to,
- * co ví i z chatu: jméno, přezdívku, badge a statistiku **jen v aktuálním kanálu** a **jen za identitu, na
- * kterou klikl** (jiné identity by prozradily propojené účty), a sumu QR donů spárovaných jistě (`matchedBy: 'uc'`).
+ * co ví i z chatu: jméno, přezdívku a statistiku **jen v aktuálním kanálu** a **jen za identitu, na kterou
+ * klikl** (jiné identity by prozradily propojené účty), a sumu QR donů spárovaných jistě (`matchedBy: 'uc'`).
+ * **Badge ze všech propojených platforem** (rozhodnutí usera 2026-09-30: karta má být napříč platformami stejná)
+ * — u ostatních platforem ale jen platforma + badge, bez loginu / id / id zprávy (ty by identitu prozradily).
  * Žádné identity, záložky kanálů, moderace, zprávy, dona podle jména ani jednotlivá dona. Stejná ochrana
  * proti procházení archivu: cíl musí mít zprávu v archivu aktuálního kanálu, jinak 404.
  */
@@ -277,14 +279,19 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
   const targets = await deps.resolveTargets(input.channel, input.platform, userId);
   if (!targets) return { status: 404, body: { ok: false, error: 'not_found' } };
   const primary = targets.primary;
-  const { byUc } = await mergeChannels(await deps.channelGroups([primary]), input.channel, deps.ucChannelOf);
-  const here = byUc.get(input.channel) ?? [];
   // Suma darů je veřejná a celková ze všech zdrojů (pokyn usera 2026-09-25): identity UC účtu, bez účtu
   // aspoň kliknutá identita (dona spárovaná podle jména). Strop veřejných volání Židolišty drží deps.donations.
   const ids = targets.accountId !== null ? await historyIdentities(targets, deps) : [primary];
-  const [name, latest, nick, donationItems] = await Promise.all([
+  // Statistika jen za kliknutou identitu; badge (latest) za všechny identity účtu v aktuálním kanálu.
+  const [{ byUc }, { byUc: byUcAll }] = await Promise.all([
+    mergeChannels(await deps.channelGroups([primary]), input.channel, deps.ucChannelOf),
+    mergeChannels(await deps.channelGroups(ids), input.channel, deps.ucChannelOf),
+  ]);
+  const here = byUc.get(input.channel) ?? [];
+  const hereAll = byUcAll.get(input.channel) ?? [];
+  const [name, latestAll, nick, donationItems] = await Promise.all([
     deps.latestName(primary.platform, primary.userId),
-    latestInChannel([primary], here, deps),
+    latestInChannel(ids, hereAll, deps),
     deps.nickname(primary.platform, primary.login),
     ids.length ? deps.donations(input.channel, ids, { public: true }).catch(() => null) : Promise.resolve(null),
   ]);
@@ -299,6 +306,9 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
     lastSeen: here.length ? Math.max(...here.map((g) => g.lastAt.getTime())) : null,
     total: here.reduce((s, g) => s + g.count, 0),
   };
+  // Ostatní platformy: jen badge (bez loginu, id účtu a id zprávy) — divák nemá vidět propojené účty.
+  const latest: Record<string, unknown> = {};
+  for (const [p, v] of Object.entries(latestAll)) latest[p] = p === primary.platform ? v : { platform: v.platform, id: '', username: '', userId: '', timestamp: v.timestamp, color: null, badgesRaw: v.badgesRaw };
   const body: Record<string, unknown> = { ok: true, view: 'public', user, latest };
   // Divák dostane jen celkovou sumu (žádné položky, texty, přezdívky ani rozpad na jisté / podle jména).
   if (donationItems?.length) {
