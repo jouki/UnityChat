@@ -63,12 +63,14 @@ const iso = (ms) => new Date(ms).toISOString();
 let mockGifLocked = false;
 // Odměna soundboardu: odemčená = nota v poli vidět (2026-09-27: jen s aktivní odměnou); §2 ji zamkne (zamčené zvuky).
 let mockSfxUnlocked = true;
+let mockSfxCooldown = null;   // { userReadyAt, globalReadyAt } (ISO) — pruhy cooldownu
+let mockGifCooldown = null;   // { until, sec } — GIF osobní cooldown
 const soundboard = () => ({
   ok: true, channel: 'robdiesalot', platform: 'twitch', serverNow: iso(Date.now()), loggedIn: true,
   tiers: [{ tier: 1, name: 'BASIC', position: 1 }],
   sounds: [{ id: 1, name: 'boom', displayName: null, tier: 1, emoji: '💥', icon: null, url: 'https://api-zidolista.jouki.cz/public/sfx/rob/e2e.mp3', durationMs: 1000, gainDb: 0 }],
   // Zamčeno (mockSfxUnlocked false): bez odemčeného tieru (záložka SFX se zamčenými zvuky) a zvuk v Oblíbených — test zatřesení zámku.
-  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: mockSfxUnlocked ? [{ tier: 1, startedAt: iso(Date.now() - 60000), expiresAt: iso(Date.now() + 3600000) }] : [], cooldown: { globalReadyAt: null, userReadyAt: null } },
+  me: { platform: 'twitch', userId: '42', login: 'tester', role: 'viewer', tiers: mockSfxUnlocked ? [{ tier: 1, startedAt: iso(Date.now() - 60000), expiresAt: iso(Date.now() + 3600000) }] : [], cooldown: mockSfxCooldown || { globalReadyAt: null, userReadyAt: null } },
   favorites: [1], recent: [],
 });
 s.onevent = async (d) => {
@@ -87,6 +89,7 @@ s.onevent = async (d) => {
   if (u.pathname.startsWith('/account/')) return json({ ok: true, email: null, emailVerified: false, warnings: [] });
   if (u.pathname.startsWith('/gifs/library')) return json({ ok: true, items: [], nextCursor: null });
   // GIF odměna zamčená (test 2026-09-27 body 2 a 6) — až od sekce „stavový řádek“, dřív 404 (stav neznámý).
+  if (u.pathname === '/gif/state' && mockGifCooldown) return json({ ok: true, allowed: true, cooldownUntil: mockGifCooldown.until, cooldownSec: mockGifCooldown.sec, serverNow: Date.now(), mode: 'approved', cooldownGlobalSec: 0, rewardUntil: Date.now() + 300000 });
   if (u.pathname === '/gif/state' && mockGifLocked) return json({ ok: true, allowed: false, cooldownUntil: null, cooldownSec: 0, serverNow: Date.now(), mode: 'approved', cooldownGlobalSec: 0 });
   if (u.pathname.startsWith('/gif') || u.pathname.startsWith('/moderation') || u.pathname.startsWith('/commands')) return json({ ok: false, error: 'e2e' }, 404);
   return call('Fetch.continueRequest', { requestId: rid }, sid);
@@ -501,6 +504,43 @@ const curMove = await ev(`(async () => { const g = document.querySelector('.uc-q
   return { from: Math.round(from), to: Math.round(to), between: xs.filter((x) => x > Math.min(from, to) + 1 && x < Math.max(from, to) - 1).length, end: xs[xs.length - 1], cur: g.querySelector('button.on').dataset.cur }; })()`);
 check('měna: přepnutí = plynulý přejezd (mezipolohy), konec na nové měně', curMove && curMove.cur === other && curMove.between >= 3 && Math.abs(curMove.end - curMove.to) <= 1, JSON.stringify(curMove));
 await ev(`document.querySelector('.uc-qd-cur button[data-cur="${c0?.cur || 'CZK'}"]').click()`);
+
+// ---- Cooldown jako pruh s odpočtem (pokyn usera 2026-09-30): osobní fialový, globální modrý, žádný text „Cooldown N s“ ----
+await esc(); await sleep(300);
+mockSfxCooldown = { userReadyAt: iso(Date.now() + 8000), globalReadyAt: iso(Date.now() + 3000) };
+await ev(`window.ucSfx.reload().then(() => true)`); await sleep(200);
+await realClick('#btn-sfx'); await sleep(400);
+const cdSfx = await ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="sfx"]'); const st = p.querySelector('.uc-sb-status');
+  const bar = (k) => { const el = p.querySelector('.uc-cd[data-cd="' + k + '"]'); if (!el || el.hidden) return null; const cs = getComputedStyle(el.querySelector('.uc-cd-bar'), '::after'); return { label: el.querySelector('.uc-cd-l').textContent, t: el.querySelector('.uc-cd-t').textContent, w: parseFloat(cs.width), full: el.querySelector('.uc-cd-bar').getBoundingClientRect().width, bg: cs.backgroundImage, lc: getComputedStyle(el.querySelector('.uc-cd-l')).color }; };
+  return { statusText: st?.hidden ? '' : (st?.textContent || ''), user: bar('user'), global: bar('global') }; })()`);
+check('cooldown SFX: žádný text „Cooldown N s“ v řádku stavu', cdSfx && !/Cooldown/.test(cdSfx.statusText), JSON.stringify(cdSfx?.statusText));
+check('cooldown SFX: pruh „Osobní cooldown“ s odpočtem, fialový', cdSfx?.user && cdSfx.user.label === 'Osobní cooldown' && /^\d+ s$/.test(cdSfx.user.t) && /gradient/.test(cdSfx.user.bg) && /124, 58, 237/.test(cdSfx.user.bg), JSON.stringify(cdSfx?.user));
+check('cooldown SFX: pruh „Globální cooldown“ zvlášť, modrý', cdSfx?.global && cdSfx.global.label === 'Globální cooldown' && /37, 99, 235/.test(cdSfx.global.bg), JSON.stringify(cdSfx?.global));
+// Pruh plynule ubývá (šířka po ~1,2 s menší, ne skokem na nulu).
+const w0 = cdSfx?.user?.w; await sleep(1200);
+const w1 = await ev(`parseFloat(getComputedStyle(document.querySelector('.uc-ep-pane[data-pane="sfx"] .uc-cd[data-cd="user"] .uc-cd-bar'), '::after').width)`);
+check('cooldown SFX: pruh ubývá plynule', typeof w0 === 'number' && typeof w1 === 'number' && w1 < w0 && w1 > 0, JSON.stringify({ w0, w1 }));
+// Klik na zvuk během osobního cooldownu → štítek se zatřese a zčervená.
+await realClick('.uc-ep-pane[data-pane="sfx"] .uc-sb-s'); await sleep(80);
+const shook = await ev(`(() => { const l = document.querySelector('.uc-ep-pane[data-pane="sfx"] .uc-cd[data-cd="user"] .uc-cd-l'); return { cls: l.classList.contains('uc-cd-shake'), color: getComputedStyle(l).color }; })()`);
+check('cooldown SFX: pokus poslat zvuk → štítek „Osobní cooldown“ se třese a je červený', shook?.cls === true && /255, 77, 77/.test(shook.color), JSON.stringify(shook));
+await esc(); await sleep(300);
+mockSfxCooldown = null; await ev(`window.ucSfx.reload().then(() => true)`);
+// GIF panel: odpočet odměny vpravo + pruh osobního cooldownu, tooltip záložky s pruhem místo textu.
+mockGifLocked = false; mockGifCooldown = { until: Date.now() + 9000, sec: 30 };
+await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
+await realClick('#btn-emotes'); await sleep(350);
+await realClick('.uc-ep-tab[data-tab="gif"]'); await sleep(400);
+const cdGif = await ev(`(() => { const p = document.querySelector('.uc-ep-pane[data-pane="gif"]'); const el = p.querySelector('.uc-cd[data-cd="user"]');
+  return { row: p.querySelector('.uc-gl-reward-t')?.textContent || '', time: p.querySelector('.uc-gl-reward-time')?.textContent || '', cd: el && !el.hidden ? { label: el.querySelector('.uc-cd-l').textContent, t: el.querySelector('.uc-cd-t').textContent, p: el.querySelector('.uc-cd-bar').style.getPropertyValue('--p') } : null }; })()`);
+check('cooldown GIF: řádek odměny = název + odpočet konce odměny (jako SFX), bez věty o cooldownu', cdGif && cdGif.row === 'Posílání GIFů' && /^\d+:\d\d$/.test(cdGif.time), JSON.stringify(cdGif));
+check('cooldown GIF: pruh „Osobní cooldown“ s odpočtem a délkou z cooldownSec', cdGif?.cd && cdGif.cd.label === 'Osobní cooldown' && /^\d+ s$/.test(cdGif.cd.t) && Number(cdGif.cd.p) > 0.2 && Number(cdGif.cd.p) < 0.35, JSON.stringify(cdGif?.cd));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseenter'))`); await sleep(150);
+const tipCd = await ev(`(() => { const t = document.querySelector('.uc-ep > .uc-sb-tip:not(.hidden)'); if (!t) return null; const el = t.querySelector('.uc-cd[data-cd="user"]'); return { text: t.textContent, bar: !!el && !el.hidden, label: el?.querySelector('.uc-cd-l')?.textContent || '' }; })()`);
+check('cooldown GIF: tooltip záložky má pruh „Osobní cooldown“ místo textu „Cooldown N s“', tipCd && tipCd.bar && tipCd.label === 'Osobní cooldown' && !/Cooldown \d/.test(tipCd.text), JSON.stringify(tipCd));
+await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').dispatchEvent(new MouseEvent('mouseleave'))`);
+await esc(); await sleep(300);
+mockGifCooldown = null;
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

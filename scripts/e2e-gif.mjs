@@ -1152,7 +1152,8 @@ check('G výběr → POST /chat/send s odkazem api.jouki.cz/media/gif/<id>, pane
   && posts.send.at(-1).text.startsWith(murl(hex(12))) && await until(`document.querySelector('.uc-ep').classList.contains('hidden')`, 1500), JSON.stringify(posts.send.at(-1)));
 check('G … zpráva s naším odkazem: štítek „Odesílám…“ bez procent (test2 bod 4)', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.tx')?.textContent.includes('/media/gif/') && m.querySelector('.uc-gif-st--sending .uc-gif-st-txt')?.textContent === 'Odesílám…' && !m.querySelector('.uc-gif-st-pct'))`, 3000));
 await ev(`document.getElementById('btn-emotes').click()`);
-check('G po odeslání cooldown v hlavičce („Další GIF můžeš poslat za …“), výběr zamčený', await until(`/^Další GIF můžeš poslat za /.test(document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward-t')?.textContent || '')`, 3000), JSON.stringify(await gl()));
+// Cooldown už není věta v hlavičce, ale pruh „Osobní cooldown“ s odpočtem pod ní (core/cooldown-bar.js, pokyn usera 2026-09-30).
+check('G po odeslání osobní cooldown jako pruh s odpočtem, výběr zamčený', await until(`(() => { const el = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-cd[data-cd="user"]'); return !!el && !el.hidden && el.querySelector('.uc-cd-l').textContent === 'Osobní cooldown' && /^\\d+ s$/.test(el.querySelector('.uc-cd-t').textContent); })()`, 3000), JSON.stringify(await gl()));
 await ev(`document.getElementById('btn-emotes').click()`);
 // Indikátor: konec odměny ze serveru → pásek pod tlačítkem emotů a na záložce, odpočet v hlavičce
 mock.gifState = { ok: true, allowed: true, cooldownUntil: null, cooldownSec: 60, serverNow: SN, rewardUntil: SN + 300_000, rewardTotalMs: 600_000 };
@@ -1162,8 +1163,10 @@ const ind = await ev(`(() => { const b = document.getElementById('btn-emotes'); 
 check('G indikátor: pásek pod tlačítkem emotů i na záložce GIFy (≈ 50 %)', ind?.timed && ind.bar && ind.tab && Math.abs(ind.p - 0.5) < 0.02 && Math.abs(ind.tabP - 0.5) < 0.02, JSON.stringify(ind));
 await ev(`document.getElementById('btn-emotes').click()`);
 // Kolo 4 bod 2: aktivní odměna = nahoře žádný text („Odměna ještě …“ pryč), jen pásek pod hlavičkou.
-check('G aktivní odměna: hlavička bez textu, pásek pod ní zůstává', await until(`(() => { const r = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward'); const b = r?.querySelector('.uc-gl-reward-bar');
-  return !!r && !r.hidden && getComputedStyle(r).display !== 'none' && !r.innerText.trim() && !!b && b.getBoundingClientRect().width > 0; })()`, 3000), JSON.stringify(await gl()));
+// Aktivní odměna se známým koncem: název odměny vlevo + odpočet vpravo (jako SFX), pásek pod ní; bez známého konce prázdná.
+check('G aktivní odměna: název + odpočet konce odměny, pásek pod ní zůstává, pruh cooldownu pryč', await until(`(() => { const r = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-reward'); const b = r?.querySelector('.uc-gl-reward-bar'); const cd = document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-cd[data-cd="user"]');
+  const t = (r?.querySelector('.uc-gl-reward-t')?.textContent || '').trim(); const time = r?.querySelector('.uc-gl-reward-time')?.textContent || '';
+  return !!r && !r.hidden && getComputedStyle(r).display !== 'none' && ((t === '' && !time) || (t === 'Posílání GIFů' && /^\\d+:\\d\\d$/.test(time))) && !!b && b.getBoundingClientRect().width > 0 && (!cd || cd.hidden); })()`, 3000), JSON.stringify(await gl()));
 await sleep(1200);
 const ind2 = await ev(`Number(document.getElementById('btn-emotes').style.getPropertyValue('--uc-ep-p'))`);
 check('G pásek ubývá s časem', ind2 < ind.p, `${ind.p} → ${ind2}`);
@@ -1222,7 +1225,7 @@ mock.gifState = () => ({ ok: true, allowed: true, cooldownUntil: Date.now() + 42
 await ev(`(async () => { window.ucGif.cd().reset(); await window.ucGif.cd().fetchState(); return true; })()`);
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseenter'))`);
 const tip4 = await tipOf(TIPSEL);
-check('T2 tooltip cooldown: „GIF odměna — cooldown“ + „Cooldown 42 s“ + řádek odměny', tip4?.title === 'GIF odměna — cooldown' && /^Cooldown 4\d s$/.test(tip4.cd || '') && tip4.rows.length === 1, JSON.stringify(tip4));
+check('T2 tooltip cooldown: „GIF odměna — cooldown“ + pruh „Osobní cooldown 4x s“ + řádek odměny', tip4?.title === 'GIF odměna — cooldown' && /^Osobní cooldown4\d s$/.test(tip4.cd || '') && tip4.rows.length === 1, JSON.stringify(tip4));
 await ev(`document.getElementById('btn-emotes').dispatchEvent(new MouseEvent('mouseleave'))`);
 
 // ---- test2 bod 4 + 4.1: tiché schválení (mod, cooldownSec 0) → cooldown ze serveru; cooldown notice → bez kolečka ----
@@ -1284,7 +1287,7 @@ await ev(`document.querySelector('.uc-ep-tab[data-tab="gif"]').click()`);
 check('G2 mod: taby GIFy | Zamítnuté GIFy + „Možné duplikáty (1)“', await until(`!!document.querySelector('.uc-ep-pane[data-pane="gif"] .uc-gl-dups')`, 6000)
   && (await gl())?.tabs && (await gl()).dups === 'Možné duplikáty (1)', JSON.stringify(await gl()));
 const g2r = await gl();
-check('G2 mod bez výjimky: hlavička jako u diváka (aktivní = bez textu), ne „Jako mod posíláš GIFy bez odměny.“', g2r?.reward === '' && !g2r.locked, JSON.stringify(g2r));
+check('G2 mod bez výjimky: hlavička jako u diváka (název odměny / prázdná), ne „Jako mod posíláš GIFy bez odměny.“', (g2r?.reward === '' || g2r?.reward === 'Posílání GIFů') && !g2r.locked, JSON.stringify(g2r));
 check('G2 náhled zamítnutého: 404 s prvním tokenem → nový token (POST access-token) → načteno', await until(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.src.includes(${JSON.stringify(`t=${goodTok}`)}) && i.complete && i.naturalWidth > 0)`, 8000),
   JSON.stringify({ token: posts.token, tok: posts.mediaTok }));
 check('G2 schválený GIF v duplikátu bez tokenu', await ev(`[...document.querySelectorAll('.uc-gl-dups img.uc-gif-media')].some(i => i.getAttribute('src') === ${JSON.stringify(murl(hex(11)))})`) === true);

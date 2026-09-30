@@ -10,6 +10,7 @@
 // „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
 import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
 import { canAutoFocus, refocusField } from './panel-morph.js';
+import { cooldownBarHtml, updateCooldownBar, shakeCooldownLabel, cooldownTotal, renderCooldownBars, COOLDOWN_BAR_CLASS } from './cooldown-bar.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
@@ -87,6 +88,30 @@ export function playableTiers(state, now) {
   return new Set([...unlockedTiers(state, now)].filter(([, t]) => t.available !== false && !t.paused).map(([tier]) => tier));
 }
 
+/** Osobní cooldown (jen můj, ms); 0 = žádný. */
+export function userCooldownLeft(state, now) {
+  return Math.max(0, (state?.me?.cooldown?.userReadyAt ?? 0) - now);
+}
+/** Globální cooldown chatu (ms); 0 = žádný. */
+export function globalCooldownLeft(state, now) {
+  return Math.max(0, (state?.me?.cooldown?.globalReadyAt ?? 0) - now);
+}
+// Délka cooldownů pro pruhy (server posílá jen konec): měří se od chvíle, kdy se konec objevil / posunul.
+const cdMems = { user: { until: null, start: 0 }, global: { until: null, start: 0 } };
+/** Cooldowny pro pruhy (panel i tooltip): [{ kind, remainingMs, totalMs }] jen s běžícími. */
+export function cooldownBars(state, now) {
+  const c = state?.me?.cooldown;
+  if (!c) return [];
+  const out = [];
+  for (const kind of ['global', 'user']) {
+    const until = kind === 'user' ? c.userReadyAt : c.globalReadyAt;
+    const total = cooldownTotal(cdMems[kind], until ?? null, now);
+    const rem = Math.max(0, (until ?? 0) - now);
+    if (rem > 0) out.push({ kind, remainingMs: rem, totalMs: total });
+  }
+  return out;
+}
+
 /** Zbývající cooldown v ms (globální nebo můj, co je delší); 0 = lze hned. */
 export function cooldownLeft(state, now) {
   const c = state?.me?.cooldown;
@@ -113,14 +138,14 @@ const tipRowTime = (r) => `${r.paused ? '⏸ ' : ''}${r.remainingMs === null || 
 export function renderIconTip(tip, s) {
   const rows = s.rows || [];
   const lines = s.lines || [];
-  const cdMs = s.cooldownMs > 0 ? s.cooldownMs : 0;
-  const sig = JSON.stringify([s.mode, s.title, lines, rows.map((r) => [r.nameHtml || r.name, r.progress === null || r.progress === undefined, !!r.paused]), cdMs > 0]);
+  const cds = (s.cooldowns || []).filter((c) => c && c.remainingMs > 0);
+  const sig = JSON.stringify([s.mode, s.title, lines, rows.map((r) => [r.nameHtml || r.name, r.progress === null || r.progress === undefined, !!r.paused]), cds.length > 0]);
   tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
   if (tip._ucTipSig !== sig) {
     tip._ucTipSig = sig;
     const l = lines.map((x) => `<div class="uc-sb-tip-l">${esc(x)}</div>`).join('');
     const r = rows.map((x) => `<div class="uc-sb-tip-r"><span>${x.nameHtml || esc(x.name)}</span><b></b>${x.progress === null || x.progress === undefined ? '' : '<i></i>'}</div>`).join('');
-    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${l}${r}${cdMs ? '<div class="uc-sb-tip-cd"></div>' : ''}`;
+    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${l}${r}${cds.length ? '<div class="uc-sb-tip-cd"></div>' : ''}`;
   }
   const els = tip.querySelectorAll('.uc-sb-tip-r');
   rows.forEach((x, i) => {
@@ -131,8 +156,8 @@ export function renderIconTip(tip, s) {
     const bar = el.querySelector('i');
     if (bar && x.progress !== null && x.progress !== undefined) bar.style.setProperty('--p', Number(x.progress).toFixed(4));
   });
-  const cd = tip.querySelector('.uc-sb-tip-cd');
-  if (cd) cd.textContent = `Cooldown ${formatRemaining(cdMs)}`;
+  // Cooldowny jako pruhy s odpočtem (core/cooldown-bar.js), ne prostý text (pokyn usera 2026-09-30).
+  renderCooldownBars(tip.querySelector('.uc-sb-tip-cd'), cds);
 }
 
 /**
@@ -208,6 +233,7 @@ export function soundboardIconState(state, now) {
     title: 'Sound efekty aktivní',
     rows,
     cooldownMs: cd,
+    cooldowns: cooldownBars(state, now),
     remainingMs: unlimited ? null : longest.remainingMs,
     progress: unlimited ? null : longest.progress,
   };
@@ -407,6 +433,7 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
       <label class="uc-sb-vol" title="Hlasitost náhledu (jen pro tebe)">${SPEAKER_SVG}<input type="range" min="0" max="100" step="1" aria-label="Hlasitost náhledu"></label>
     </div>
     <div class="uc-sb-status"></div>
+    ${cooldownBarHtml('global')}${cooldownBarHtml('user')}
     <div class="uc-sb-body"></div>
     <div class="uc-sb-foot"></div>
     ${requestApi ? '<div class="uc-sb-reqview"></div>' : ''}`;
@@ -414,6 +441,7 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
   const search = panel.querySelector('input[type="search"]');
   const volInput = panel.querySelector('.uc-sb-vol input');
   const statusEl = panel.querySelector('.uc-sb-status');
+  const cdEls = { global: panel.querySelector(`.${COOLDOWN_BAR_CLASS}[data-cd="global"]`), user: panel.querySelector(`.${COOLDOWN_BAR_CLASS}[data-cd="user"]`) };
   const body = panel.querySelector('.uc-sb-body');
   const foot = panel.querySelector('.uc-sb-foot');
   volInput.value = String(Math.round(vol * 100));
@@ -555,12 +583,15 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
     // Sdílený stavový řádek odměny (jako GIF panel): cooldown / zámek + „Odměna není aktivována“ / zmrazená odměna.
     // Nepřihlášený / bez účtu na platformě: výzva k přihlášení (klik = přihlášení, jako dřív klik na notu).
     if (s.mode === 'login' || s.mode === 'link') { mode = 'login'; html = rewardStatusHtml({ lock: true, html: `<button type="button" class="uc-sb-login" data-act="login">${esc(s.lines?.[0] || 'Přihlas se k UnityChatu.')}</button>` }); }
-    else if (s.mode === 'active' && s.cooldownMs > 0) { mode = 'cooldown'; html = rewardStatusHtml({ html: `Cooldown ${esc(formatRemaining(s.cooldownMs))}` }); }
+    // Cooldown už není text v řádku stavu — má vlastní pruhy pod ním (core/cooldown-bar.js, pokyn usera 2026-09-30).
     else if (s.mode === 'locked') { mode = 'locked'; html = rewardStatusHtml({ lock: true, html: esc(s.title) }); }
     else if (s.mode === 'paused') { mode = 'paused'; html = rewardStatusHtml({ html: `<b>${esc(s.title)}</b>${(s.lines || []).length ? ` ${s.lines.map(esc).join(' ')}` : ''}` }); }
     // Beze změny nepřepisovat (tik 1 s by zámku uprostřed zatřesení vyměnil prvek).
     if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; resumeShake(); }
     statusEl.className = `uc-sb-status ${REWARD_STATUS_CLASS}${mode ? ` ${REWARD_STATUS_CLASS}--${mode}` : ''}${html ? '' : ' hidden'}`;
+    // Globální i osobní cooldown jako pruhy s odpočtem (jen s odemčenou odměnou).
+    const bars = s.mode === 'active' ? cooldownBars(state, now()) : [];
+    for (const kind of ['global', 'user']) { const c = bars.find((b) => b.kind === kind); updateCooldownBar(cdEls[kind], c ? c.remainingMs : 0, c?.totalMs); }
     const d = state?.denied;
     if (d && Date.now() - d.at < DENIED_SHOW_MS) {
       const retry = d.retryAt ? ` · znovu za ${formatRemaining(d.retryAt - now())}` : '';
@@ -620,7 +651,11 @@ export function createSoundboard({ host, pane, embed, button, onIndicator, onTab
       shake.at = shakeLock(shakeTargets(shake));
       return;
     }
-    if (cooldownLeft(state, t) > 0) return;
+    if (cooldownLeft(state, t) > 0) {
+      // Během cooldownu: štítek (osobní, jinak globální) se zatřese a zčervená — jako zámek u zamčeného zvuku.
+      shakeCooldownLabel(userCooldownLeft(state, t) > 0 ? cdEls.user : cdEls.global);
+      return;
+    }
     log?.('Soundboard', `!se ${sound.name}`);
     onSend?.(sound);
   }

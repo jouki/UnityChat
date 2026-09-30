@@ -16,6 +16,7 @@ import { escapeAttr } from './html.js';
 import { actorLabel } from './user-history.js';
 import { formatRemaining, shakeLock, rewardStatusHtml, REWARD_STATUS_CLASS } from './soundboard.js';
 import { createSlideIndicator } from './slide-indicator.js';
+import { cooldownBarHtml, updateCooldownBar, shakeCooldownLabel, COOLDOWN_BAR_CLASS } from './cooldown-bar.js';
 import { canAutoFocus } from './panel-morph.js';
 import { gifCooldownText } from './gif-cooldown.js';
 
@@ -960,12 +961,14 @@ export function gifRewardView(st, now, { loggedIn = true } = {}) {
     return { mode: 'locked', canSend: false, cooldownMs: 0, remainingMs: null, progress: null, approvedOnly, text: GIF_REWARD_LOCKED_TEXT };
   }
   const cd = Number.isFinite(st.until) && st.until > now ? st.until - now : 0;
+  // Délka osobního cooldownu (pruh): cooldownSec ze stavu odměny.
+  const cdTotal = Number(st.sec) > 0 ? Number(st.sec) * 1000 : null;
   const total = Number.isFinite(st.rewardTotalMs) && st.rewardTotalMs > 0 ? st.rewardTotalMs : null;
   const progress = rem !== null && total ? clamp(rem / total, 0, 1) : null;
   // Celé věty s tečkou — hlavička panelu k nim přidává druhou větu (gifRewardHeadline).
   const text = cd > 0 ? `Další GIF můžeš poslat za ${formatRemaining(cd)}.`
     : rem !== null ? `Odměna ještě ${formatRemaining(rem)}.` : 'Odměna „Posílání GIFů“ je aktivní.';
-  return { mode: cd > 0 ? 'cooldown' : 'active', canSend: cd <= 0, cooldownMs: cd, remainingMs: rem, progress, approvedOnly, text };
+  return { mode: cd > 0 ? 'cooldown' : 'active', canSend: cd <= 0, cooldownMs: cd, cooldownTotalMs: cdTotal, remainingMs: rem, progress, approvedOnly, text };
 }
 
 export const GIF_APPROVED_ONLY_LINE = 'Teď jdou jen GIFy z knihovny.';
@@ -993,7 +996,7 @@ export function gifRewardTip(v) {
   // Titulek stejný jako hláška v panelu (a soundboard): „Odměna není aktivována“.
   if (v.mode === 'locked') return { mode: 'locked', title: GIF_REWARD_LOCKED_TEXT, lines };
   const rows = [{ name: 'Posílání GIFů', remainingMs: v.remainingMs ?? null, progress: v.progress ?? null }];
-  if (v.mode === 'cooldown') return { mode: 'cooldown', title: 'GIF odměna — cooldown', lines, rows, cooldownMs: v.cooldownMs };
+  if (v.mode === 'cooldown') return { mode: 'cooldown', title: 'GIF odměna — cooldown', lines, rows, cooldownMs: v.cooldownMs, cooldowns: [{ kind: 'user', remainingMs: v.cooldownMs, totalMs: v.cooldownTotalMs ?? null }] };
   return { mode: 'active', title: 'GIF odměna aktivní', lines, rows, cooldownMs: 0 };
 }
 
@@ -1239,6 +1242,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     </div>
     <div class="uc-gl-search"><input type="search" placeholder="Hledat GIF podle tagů…" autocomplete="off" spellcheck="false" aria-label="Hledat GIF"></div>
     <div class="uc-gl-reward" role="status"></div>
+    ${cooldownBarHtml('user')}
     <div class="uc-gl-msg" role="alert" hidden></div>
     <div class="uc-gl-body"></div>
     <div class="uc-gl-preview" role="dialog" aria-modal="true" aria-label="Náhled GIFu" hidden></div>
@@ -1253,6 +1257,7 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
   const body = pane.querySelector('.uc-gl-body');
   const confirmEl = pane.querySelector('.uc-gl-confirm');
   const previewEl = pane.querySelector('.uc-gl-preview');
+  const cdEl = pane.querySelector(`.${COOLDOWN_BAR_CLASS}`);
 
   const ch = () => String(channel?.() || '').toLowerCase();
 
@@ -1274,18 +1279,26 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
     // jinak by tik (1 s) zámek během zatřesení nahradil novým prvkem.
     const lock = st.tab !== 'rej' && v.mode === 'locked';
     const bar = v.progress !== null && st.tab === 'lib';
-    const sig = `${lock}|${bar}`;
+    // Odpočet konce odměny vpravo jako v SFX („BASIC … 2:55“, pokyn usera 2026-09-30): název odměny vlevo, čas vpravo.
+    const timed = st.tab === 'lib' && (v.mode === 'active' || v.mode === 'cooldown') && v.remainingMs !== null && v.remainingMs !== undefined;
+    const sig = `${lock}|${bar}|${timed}`;
     if (rewardEl._ucSig !== sig) {
       rewardEl._ucSig = sig;
-      rewardEl.innerHTML = `${rewardStatusHtml({ lock, textClass: 'uc-gl-reward-t' })}${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
+      rewardEl.innerHTML = `${rewardStatusHtml({ lock, textClass: 'uc-gl-reward-t' })}${timed ? '<span class="uc-gl-reward-time"></span>' : ''}${bar ? '<i class="uc-gl-reward-bar"></i>' : ''}`;
       // Přestavění během zatřesení → na novém zámku pokračovat od uplynulého času (neutnout ho).
       if (lock && st.shakeAt) shakeLock(rewardEl.querySelector('.uc-lock'), { startedAt: st.shakeAt });
     }
     rewardEl.querySelector('.uc-gl-reward-bar')?.style.setProperty('--p', v.progress?.toFixed(4) ?? '1');
-    rewardEl.querySelector('.uc-gl-reward-t').textContent = txt;
+    // Cooldown už není text v řádku (má pruh „Osobní cooldown“ pod ním); s odpočtem odměny je vlevo název odměny.
+    const rowText = timed ? 'Posílání GIFů' : (v.mode === 'cooldown' && st.tab === 'lib' ? '' : txt);
+    rewardEl.querySelector('.uc-gl-reward-t').textContent = rowText;
+    const timeEl = rewardEl.querySelector('.uc-gl-reward-time');
+    if (timeEl) timeEl.textContent = formatRemaining(v.remainingMs);
     // Aktivní odměna bez textu: zůstane jen tenký řádek s páskem (bez pásku nic).
-    rewardEl.classList.toggle('uc-gl-reward--bare', !txt && bar);
-    rewardEl.hidden = !txt && !bar;
+    rewardEl.classList.toggle('uc-gl-reward--bare', !rowText && bar);
+    rewardEl.hidden = !rowText && !bar;
+    // Osobní cooldown (core/cooldown-bar.js): štítek + odpočet + fialový pruh, délka z cooldownSec stavu odměny.
+    updateCooldownBar(cdEl, st.tab === 'lib' && v.mode === 'cooldown' ? v.cooldownMs : 0, v.cooldownTotalMs);
     pane.classList.toggle('uc-gl--locked', !v.canSend);
     // Pásek (jen se známým koncem odměny) + stav pro vlastní tooltip ikony emotů a záložky (test2 body 1 a 3).
     onIndicator?.({ progress: v.progress, title: v.text, tip: gifRewardTip(v) });
@@ -1920,8 +1933,8 @@ export function createGifPanel({ pane, api, channel, canModerate, reward, refres
       st.flash = true;
       paintReward();
       win.setTimeout(() => { st.flash = false; paintReward(); }, 1200);
-      // Cooldown (i globální cooldown chatu) → stejná hláška jako při odeslání z pole.
-      if (v.mode === 'cooldown') showMsg(`${gifCooldownText(true)} ${formatRemaining(v.cooldownMs)}`);
+      // Cooldown → štítek „Osobní cooldown“ se zatřese a zčervená (jako zámek), hláška jako při odeslání z pole.
+      if (v.mode === 'cooldown') { shakeCooldownLabel(cdEl); showMsg(`${gifCooldownText(true)} ${formatRemaining(v.cooldownMs)}`); }
       if (v.mode === 'unknown') refreshReward?.();
       return;
     }
