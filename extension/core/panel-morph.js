@@ -170,18 +170,24 @@ export function switchPanes(panel, from, to, { dir = 1, duration = MORPH_MS, eas
   // Příchozí záložka přejede z výšky odcházející na svou (jinak by obsah pod ní — patička — skočil hned, živě 2026-09-30).
   // Animace výšky startuje až v mikrotasku: volající (morphResize) si nejdřív změří panel s NOVÝM obsahem v přirozené
   // výšce a přejede na ni; kdyby výška běžela hned, změřil by ještě starou a okno by ji drželo do konce (živě 2026-09-30).
-  const th = to.getBoundingClientRect().height;
+  const tr = to.getBoundingClientRect();
+  const th = tr.height;
   const savedTo = to.style.cssText;
   panel.appendChild(ghost);
   const shift = Math.round(Math.max(12, Math.min(28, pr.width * 0.04)));
+  // Odcházející kopie se ořízne na oblast záložky (výška jede se záložkou) — nesmí přesahovat přes obsah pod ní (patičku).
+  const clipTo = Math.max(0, fr.height - th);
   const anims = [
-    ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-dir * shift}px)` }], { duration: Math.round(duration * 0.7), easing, fill: 'forwards' }),
+    ghost.animate([{ opacity: 1, transform: 'none', clipPath: 'inset(0 0 0 0)' }, { opacity: 0, transform: `translateX(${-dir * shift}px)`, clipPath: `inset(0 0 ${clipTo}px 0)` }], { duration: Math.round(duration * 0.7), easing, fill: 'forwards' }),
     to.animate([{ opacity: 0, transform: `translateX(${dir * shift}px)` }, { opacity: 1, transform: 'none' }], { duration, easing }),
   ];
   const startedAt = win.performance?.now?.() ?? Date.now();
   win.queueMicrotask(() => {
-    if (finished || Math.abs(fr.height - th) < 1) return;
-    Object.assign(to.style, { boxSizing: 'border-box', overflow: 'hidden' });
+    if (finished) return;
+    // Pevná konečná šířka: šířka panelu ještě přejíždí a obsah by se během toho přeskládával (zalomení → tlačítka dole
+    // by naskočila až na konci, živě 2026-09-30). Přesah vpravo ořízne panel (overflow hidden při morphResize).
+    Object.assign(to.style, { boxSizing: 'border-box', overflow: 'hidden', width: `${tr.width}px`, flexShrink: '0' });
+    if (Math.abs(fr.height - th) < 1) return;
     const late = (win.performance?.now?.() ?? Date.now()) - startedAt;
     anims.push(to.animate([{ height: `${fr.height}px` }, { height: `${th}px` }], { duration: Math.max(1, duration - late), easing, fill: 'forwards' }));
   });

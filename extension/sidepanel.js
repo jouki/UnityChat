@@ -5933,7 +5933,7 @@ class UnityChat {
       return url ? { url, title: (entry && typeof entry === 'object' && entry.title) || b.split('/')[0], global: core.isGlobalTwitchBadge(b) } : null;
     }).filter(Boolean);
     const mine = this.store.slice?.().find?.((m) => m?.platform === 'twitch' && m.donorCzk && String(m.username || '').toLowerCase() === login);
-    box.innerHTML = core.badgePreviewHtml({
+    core.renderBadgePreviewInto(box, {
       displayName: ($('input-nickname')?.value || '').trim() || this._accountName('twitch') || login,
       color: color ? core.readableColor?.(color) || color : '',
       badges,

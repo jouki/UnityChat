@@ -11,7 +11,7 @@
 <div id="wrap"></div>
 <div id="panel">
   <div class="tabs"><button id="ta">A</button><button id="tb">B</button></div>
-  <div class="pane" data-pane="a"><div class="row">1</div><div class="row">2</div><div class="row">3</div><div class="row">4</div><div class="row">5</div><div class="row">6</div><div class="row">7</div><div class="row">8</div></div>
+  <div class="pane" data-pane="a"><div class="row">1</div><div class="row">2</div><div class="row">3</div><div class="row">4</div><div class="row">Odznak podporovatele místo globálního odznaku Twitche (zalamuje se)</div><div class="row">6</div><div class="row">7</div><div class="row" id="btns" style="text-align:right"><button>Smazat</button> <button>Uložit</button></div></div>
   <div class="pane" data-pane="b" hidden><div class="row">x — tahle záložka je o dost širší než ta první, jako Rozhraní na webu</div><div class="row">y</div></div>
   <div class="foot">footer</div>
 </div>
@@ -26,7 +26,8 @@
     const dir = panes.indexOf(to) >= panes.indexOf(from) ? 1 : -1;
     window.samples = [];
     const t0 = performance.now();
-    const tick = () => { window.samples.push([Math.round(performance.now() - t0), Math.round(panel.getBoundingClientRect().bottom), Math.round(foot.getBoundingClientRect().bottom), Math.round(panel.getBoundingClientRect().width)]); if (performance.now() - t0 < 500) requestAnimationFrame(tick); };
+    const tick = () => { const g = panel.querySelector('.uc-morph-ghost'); const gr = g ? g.getBoundingClientRect() : null; const gc = g ? getComputedStyle(g).clipPath : ''; const vis = (el) => { const r = el.getBoundingClientRect(); const c = to.getBoundingClientRect(); return Math.round(Math.min(r.bottom, c.bottom) - Math.max(r.top, c.top)); };
+      window.samples.push([Math.round(performance.now() - t0), Math.round(panel.getBoundingClientRect().bottom), Math.round(foot.getBoundingClientRect().bottom), Math.round(panel.getBoundingClientRect().width), 'btnVis=' + (to.dataset.pane === 'a' ? vis(document.getElementById('btns')) : '-'), 'ghostClip=' + gc]); if (performance.now() - t0 < 500) requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
     morphResize(panel, () => switchPanes(panel, from, to, { dir }), { log: (t) => window.samples.push(['log', t]) });
   };

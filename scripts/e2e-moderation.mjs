@@ -143,16 +143,23 @@ await ev(`(() => { const c = document.getElementById('chk-devmode'); c.checked =
 check('mod + Dev mode: volby odznaku kanálu vidět', await until(`getComputedStyle(document.getElementById('row-donor-badge')).display !== 'none'`, 3000));
 // Volba účtu „místo globálního odznaku“ + náhled vlastní zprávy (core badgeReplaceHtml / badgePreviewHtml), jen s Twitchem.
 const br = await ev(`(async () => { const row = document.getElementById('badge-replace-row'); const q = (s) => row.querySelector(s);
+  // Vlastní odznaky Twitche v náhledu (role + globální): mapa odznaků + poslední zpráva uživatele.
+  window.__uc._twitchBadges['moderator/1'] = 'https://x/mod.png'; window.__uc._twitchBadges['glitchcon2020/1'] = 'https://x/glitch.png';
+  window.__uc._chatUsers.set('twitch:moduser', { name: 'ModUser', platform: 'twitch', badgesRaw: 'moderator/1,glitchcon2020/1' });
+  document.getElementById('input-nickname').dispatchEvent(new Event('input'));
   const pv = () => [...row.querySelectorAll('.uc-dbr-preview .bdg img')].map((i) => i.dataset.donorBadge ? 'UC' : (i.alt || '').replace(' (ukázka)', '')).join(',');
   const before = { hidden: row.hidden, inSettings: row.closest('.settings-pane')?.dataset.pane, afterColor: row.previousElementSibling?.classList.contains('color-row'), beforeSave: row.nextElementSibling?.classList.contains('save-row'), pv: pv(), name: q('.uc-dbr-preview .un')?.textContent, color: q('.uc-dbr-preview .un')?.style.color };
   document.getElementById('input-nickname').value = 'Modík'; document.getElementById('input-nickname').dispatchEvent(new Event('input'));
   document.getElementById('input-color-hex').value = '#00ff00'; document.getElementById('input-color-hex').dispatchEvent(new Event('input'));
   const live = { name: q('.uc-dbr-preview .un')?.textContent, color: q('.uc-dbr-preview .un')?.style.color };
-  const cb = q('[name="uc-badge-replace"]'); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); await new Promise((r) => setTimeout(r, 300));
-  return { before, live, pvOn: pv(), checked: cb.checked }; })()`);
-check('volba účtu: pod barvou jména, nad Uložit; náhled = odznak UC první + ukázkový globální odznak (GlitchCon 2020), jméno účtu', br?.before && !br.before.hidden && br.before.inSettings === 'account' && br.before.afterColor && br.before.beforeSave && br.before.pv === 'UC,GlitchCon 2020' && br.before.name === 'ModUser', JSON.stringify(br?.before));
+  const cb = q('[name="uc-badge-replace"]'); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true }));
+  const anim = { uc: q('.uc-dbr-preview img[data-donor-badge]')?.getAnimations().length, ghost: !!q('.uc-dbr-preview img[aria-hidden]')?.getAnimations().length, name: q('.uc-dbr-preview .un')?.getAnimations().length };
+  await new Promise((r) => setTimeout(r, 300));
+  return { before, live, pvOn: pv(), checked: cb.checked, anim }; })()`);
+check('náhled: změna volby animovaná (odznak UC přejede, globální vybledne, jméno se posune) — core renderBadgePreviewInto', br?.anim && br.anim.uc > 0 && br.anim.ghost === true && br.anim.name > 0, JSON.stringify(br?.anim));
+check('volba účtu: pod barvou jména, nad Uložit; náhled = odznak UC první + vlastní odznaky (role + globální), jméno účtu', br?.before && !br.before.hidden && br.before.inSettings === 'account' && br.before.afterColor && br.before.beforeSave && br.before.pv === 'UC,moderator,glitchcon2020' && br.before.name === 'ModUser', JSON.stringify(br?.before));
 check('náhled sleduje přezdívku a barvu při psaní', br?.live?.name === 'Modík' && /rgb\(0, 255, 0\)|#00ff00/i.test(br.live.color || ''), JSON.stringify(br?.live));
-check('zaškrtnutí → PUT /account/badge-prefs {replaceGlobal:true}, v náhledu odznak UC místo globálního', br?.checked === true && br.pvOn === 'UC' && badgePuts.length === 1 && badgePuts[0]?.replaceGlobal === true, JSON.stringify({ pvOn: br?.pvOn, badgePuts }));
+check('zaškrtnutí → PUT /account/badge-prefs {replaceGlobal:true}, v náhledu odznak UC na místě globálního (role zůstává)', br?.checked === true && br.pvOn === 'moderator,UC' && badgePuts.length === 1 && badgePuts[0]?.replaceGlobal === true, JSON.stringify({ pvOn: br?.pvOn, badgePuts }));
 const dbp = await ev(`(async () => { const row = document.getElementById('row-donor-badge'); const items = [...row.querySelectorAll('.uc-dbp-item')];
   const pics = () => items.map((i) => i.querySelector('img').dataset.donorBadge).join(',');
   const before = { hidden: row.hidden, disp: getComputedStyle(row).display, n: items.length, on: row.querySelector('.uc-dbp-item.on input')?.value, imgs: items.every((i) => i.querySelector('img')?.src.startsWith('data:image/svg+xml')), pics: pics(),

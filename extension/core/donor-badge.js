@@ -121,6 +121,58 @@ export function badgePreviewHtml({ displayName = '', color = '', badges = [], re
 }
 
 /**
+ * Náhled vykreslit do `box` s animací změny (FLIP): odznaky, které zůstávají, přejedou na nové místo (odznak UC na
+ * místo globálního), odebrané vyblednou na svém místě, nové se prolnou; jméno a text se posunou plynule. Bez
+ * předchozího obsahu / reduced motion / bez Web Animations jen přepíše HTML.
+ */
+export function renderBadgePreviewInto(box, opts, { duration = 220, easing = 'cubic-bezier(.2, .8, .2, 1)' } = {}) {
+  const html = badgePreviewHtml(opts);
+  const doc = box?.ownerDocument;
+  const win = doc?.defaultView;
+  let reduced = false;
+  try { reduced = !!win?.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch { /* ignore */ }
+  const keyOf = (el) => (el.matches('img') ? (el.dataset.donorBadge ? 'uc' : el.getAttribute('src')) : (el.classList.contains('un') ? 'un' : 'tx'));
+  const SEL = '.bdg img, .un, .tx';
+  const before = new Map();
+  for (const el of box?.querySelectorAll?.(SEL) || []) before.set(keyOf(el), { rect: el.getBoundingClientRect(), html: el.outerHTML });
+  box.innerHTML = html;
+  if (!before.size || reduced || typeof win?.Element?.prototype?.animate !== 'function') return false;
+  const br = box.getBoundingClientRect();
+  const savedPos = box.style.position;
+  if (win.getComputedStyle(box).position === 'static') box.style.position = 'relative';
+  const anims = [];
+  const after = new Map();
+  for (const el of box.querySelectorAll(SEL)) after.set(keyOf(el), el);
+  for (const [k, el] of after) {
+    const prev = before.get(k);
+    const r = el.getBoundingClientRect();
+    if (prev) {
+      const dx = prev.rect.left - r.left, dy = prev.rect.top - r.top;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) anims.push(el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration, easing }));
+    } else {
+      anims.push(el.animate([{ opacity: 0, transform: 'scale(0.6)' }, { opacity: 1, transform: 'none' }], { duration, easing }));
+    }
+  }
+  for (const [k, prev] of before) {
+    if (after.has(k) || !prev.html.startsWith('<img')) continue;
+    // Odebraný odznak: kopie na původním místě vybledne a zmenší se.
+    const tpl = doc.createElement('template');
+    tpl.innerHTML = prev.html;
+    const ghost = tpl.content.firstElementChild;
+    if (!ghost) continue;
+    ghost.removeAttribute('id');
+    ghost.setAttribute('aria-hidden', 'true');
+    Object.assign(ghost.style, { position: 'absolute', left: `${prev.rect.left - br.left - (box.clientLeft || 0)}px`, top: `${prev.rect.top - br.top - (box.clientTop || 0)}px`, width: `${prev.rect.width}px`, height: `${prev.rect.height}px`, margin: '0', pointerEvents: 'none' });
+    box.appendChild(ghost);
+    const a = ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(0.6)' }], { duration, easing, fill: 'forwards' });
+    a.finished.catch(() => {}).then(() => ghost.remove());
+    anims.push(a);
+  }
+  Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(() => { box.style.position = savedPos; });
+  return anims.length > 0;
+}
+
+/**
  * Výběr v nastavení (mod): varianty s náhledem + tempo, intenzita, odstupy, nahrazení globálního odznaku.
  * Hostitel poslouchá `change` na `[name^="uc-donor-"]` a čte hodnoty přes readDonorPickerPrefs.
  */
