@@ -263,6 +263,12 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       send: async (platform, text) => {
         try {
           const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
+          // Command (bez markeru) i Broadcastem: ingest ho podle hlášení označí jako UnityChat (zlaté logo) —
+          // stejně jako /chat/send (chybělo, hlášení usera 2026-09-30: „!multichat“ přes Broadcast bez loga).
+          if (text.startsWith('!')) {
+            const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: res.platformUserId, text });
+            if (hit) markUc(hit, req.log, { late: true });
+          }
           return { id: res.id ?? null, sentText: res.sentText ?? null };
         } catch (e) {
           // Twitch odmítl nejspíš první zprávu v kanálu → česká rada (jako /chat/send).
