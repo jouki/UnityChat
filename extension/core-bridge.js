@@ -18,6 +18,7 @@ import { EmoteManager } from './core/emotes.js';
 import * as announcement from './core/announcement.js';
 import * as reaction from './core/reaction.js';
 import * as emotePicker from './core/emote-picker.js';
+import * as panelMorph from './core/panel-morph.js';
 import * as mentions from './core/mentions.js';
 import * as colonEmotes from './core/colon-emotes.js';
 import * as emoteAutocomplete from './core/emote-autocomplete.js';
@@ -52,7 +53,7 @@ import * as heightAnim from './core/height-anim.js';
 import * as timeFmt from './core/time.js';
 import * as donorBadge from './core/donor-badge.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emoteAutocomplete, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...gifClientFetch, ...userSearch, ...anniversary, ...updateNotice, ...gifLightbox, ...heightAnim, ...timeFmt, ...donorBadge });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emoteAutocomplete, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...gifClientFetch, ...userSearch, ...anniversary, ...updateNotice, ...gifLightbox, ...heightAnim, ...timeFmt, ...donorBadge, ...panelMorph });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

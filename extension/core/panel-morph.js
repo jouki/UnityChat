@@ -105,6 +105,44 @@ export function morphPanels(from, to, { duration = MORPH_MS, easing = MORPH_EASI
   return Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => { finish(); return true; });
 }
 
+/**
+ * Změna velikosti jednoho panelu na místě (přepnutí záložky v nastavení, otevření / sbalení panelu v toku dokumentu):
+ * změří rámeček, provede `mutate()` (přepne obsah / třídu hidden), změří znovu a rozměr plynule přejede ze starého
+ * na nový (stejné tempo jako přetvoření mezi panely). Panel bez rozměru před mutací vyroste z výšky 0, `collapse`
+ * = sjede do výšky 0 a pak `done()` (host ho skryje). Inline styl se po doběhnutí vrátí. Vrací Promise<boolean>.
+ */
+export function morphResize(panel, mutate = () => {}, { duration = MORPH_MS, easing = MORPH_EASING, collapse = false, done = () => {}, log } = {}) {
+  settleMorph(panel);
+  const win = panel?.ownerDocument?.defaultView;
+  const ra = panel?.getBoundingClientRect?.();
+  if (!collapse) mutate();
+  const rb = collapse ? ra : panel.getBoundingClientRect?.();
+  const can = !reducedMotion(win) && typeof panel?.animate === 'function' && !!(ra?.width || rb?.width);
+  if (!can) { if (collapse) { mutate(); done(); } return Promise.resolve(false); }
+  const from = ra?.width ? ra : { left: rb.left, top: rb.top, width: rb.width, height: 0 };
+  const to = collapse ? { left: ra.left, top: ra.top, width: ra.width, height: 0 } : rb;
+  if (Math.abs(from.height - to.height) < 1 && Math.abs(from.width - to.width) < 1) { if (collapse) { mutate(); done(); } return Promise.resolve(false); }
+  const saved = panel.style.cssText;
+  const a = rectInParent(panel, from), b = rectInParent(panel, to);
+  Object.assign(panel.style, PIN, px(b), { overflow: 'hidden' });
+  if (collapse) { panel.classList.add('uc-morph-ghost'); panel.setAttribute('aria-hidden', 'true'); panel.style.pointerEvents = 'none'; }
+  log?.(`resize ${Math.round(from.width)}×${Math.round(from.height)} → ${Math.round(to.width)}×${Math.round(to.height)}`);
+  const anim = panel.animate([px(a), px(b)], { duration, easing, fill: 'forwards' });
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (running.get(panel) === finish) running.delete(panel);
+    win.clearTimeout(t);
+    if (collapse) { panel.classList.remove('uc-morph-ghost'); panel.removeAttribute('aria-hidden'); mutate(); done(); }
+    try { anim.cancel(); } catch { /* ignore */ }
+    panel.style.cssText = saved;
+  };
+  const t = win.setTimeout(finish, duration + 150);
+  running.set(panel, finish);
+  return anim.finished.catch(() => {}).then(() => { finish(); return true; });
+}
+
 /** Bod, ze kterého panel vyrůstá / do kterého se zavře: tlačítko (jeho pravý spodní roh) v souřadnicích panelu. */
 function growOrigin(panel, button) {
   const p = panel.getBoundingClientRect();

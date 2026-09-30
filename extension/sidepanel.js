@@ -2057,9 +2057,17 @@ class UnityChat {
       this._applyBarCollapsed(this.config.barCollapsed);
     });
     $('btn-settings').addEventListener('click', () => {
-      const opening = $('settings').classList.toggle('hidden') === false;
-      if (opening) this._settingsTabsUpdate?.();   // indikátor záložek se v zavřeném panelu nezměří
-      if (opening) this._refreshAccount();
+      // Otevření / zavření panelu v toku plynule (core morphResize: vyroste z výšky 0 / sjede do ní), jako panely u pole.
+      const el = $('settings');
+      const core = window.UC_CORE;
+      const opening = el.classList.contains('hidden') || core.isMorphGhost(el);
+      if (opening) {
+        core.morphResize(el, () => el.classList.remove('hidden'), { log: (t) => this._ucLog('Settings', t) });
+        this._settingsTabsUpdate?.();   // indikátor záložek se v zavřeném panelu nezměří
+        this._refreshAccount();
+      } else {
+        core.morphResize(el, () => el.classList.add('hidden'), { collapse: true, log: (t) => this._ucLog('Settings', t) });
+      }
     });
     // Pole pro psaní (jako web): badge + šipka → menu „Psát jako", bez přihlášení výzva.
     $('platform-btn').addEventListener('click', (e) => { e.stopPropagation(); this._togglePlatformMenu(); });
@@ -5195,7 +5203,9 @@ class UnityChat {
     const ind = window.UC_CORE.createSlideIndicator?.({ container: bar, getActive: () => bar.querySelector('.settings-tab.on') });
     const select = (tab, animate = true) => {
       for (const b of bar.querySelectorAll('.settings-tab')) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
-      for (const p of panes) p.hidden = p.dataset.pane !== tab;
+      // Přepnutí záložky: výška panelu přejede plynule (core/panel-morph.js morphResize, jako panel emotů / GIFů / SFX).
+      const swap = () => { for (const p of panes) p.hidden = p.dataset.pane !== tab; };
+      if (animate) window.UC_CORE.morphResize(document.getElementById('settings'), swap, { log: (t) => this._ucLog('Settings', t) }); else swap();
       ind?.update({ animate });
       try { localStorage.setItem('uc_settings_tab', tab); } catch { /* ignore */ }
     };
