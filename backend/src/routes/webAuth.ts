@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { BROADCASTER_SCOPES, CATEGORY_SCOPE, uniqScopes } from '../lib/broadcasterScopes.js';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
@@ -39,7 +40,9 @@ import type { Ingest } from '../ingest/index.js';
 const PlatformParam = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
 // `mod: true` = navíc žádat moderátorské scopes (mazání zpráv, bany) — mod se přihlašuje
 // vlastním účtem, aby mohl mazat/banovat z UnityChatu na platformách, kde to podporují.
-const StartBody = z.object({ returnTo: z.string().url().optional(), mod: z.boolean().optional() }).optional();
+// `streamer: true` = „Povolit správu kanálu“: navíc všechna oprávnění majitele kanálu (lib/broadcasterScopes.ts) —
+// jednou provždy (user 2026-09-30); kategorii streamu smí měnit jen token majitele, bot ne.
+const StartBody = z.object({ returnTo: z.string().url().optional(), mod: z.boolean().optional(), streamer: z.boolean().optional() }).optional();
 const ExchangeBody = z.object({ code: z.string().min(8).max(200) });
 const BroadcastBody = z.object({
   channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
@@ -108,7 +111,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
   const startLimiter = new RateLimiter(10, 0.2); // per IP: 10 startů, doplňuje 1 za 5 s
 
   // ---- start OAuth (web) ----
-  app.post<{ Params: { platform: string }; Body: { returnTo?: string; mod?: boolean } }>('/auth/:platform/start', async (req, reply) => {
+  app.post<{ Params: { platform: string }; Body: { returnTo?: string; mod?: boolean; streamer?: boolean } }>('/auth/:platform/start', async (req, reply) => {
     const params = PlatformParam.safeParse(req.params);
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     const body = StartBody.safeParse(req.body ?? {});
@@ -132,11 +135,12 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
 
     const stateInput: StateInput = { platform, kind: 'web', returnTo, webAccountId };
     const wantMod = body.data?.mod === true;
+    const wantStreamer = body.data?.streamer === true;
     if (platform === 'twitch') {
       if (!twitch.twitchConfigured()) { reply.code(503); return { ok: false, error: 'Twitch OAuth not configured' }; }
       // Twitch: jedno přihlášení žádá rovnou i moderátorské scopes (pokyn usera 2026-09-25 — žádné druhé
       // přihlášení pro mody). Kick zatím jen s `mod: true`, dokud nejsou scopes povolené v Kick dev app.
-      const scopes = [...twitch.WEB_SCOPES, ...twitch.MOD_SCOPES];
+      const scopes = uniqScopes(twitch.WEB_SCOPES, twitch.MOD_SCOPES, wantStreamer ? BROADCASTER_SCOPES.twitch : []);
       return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (platform === 'youtube') {
@@ -147,7 +151,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     if (!kick.kickConfigured()) { reply.code(503); return { ok: false, error: 'Kick OAuth not configured' }; }
     const pkce = kick.generatePkcePair();
     // Kick: moderátorské scopes jsou v Kick dev app povolené (2026-09-25) → rovnou při každém přihlášení.
-    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
+    const kickScopes = uniqScopes(kick.WEB_SCOPES, kick.MOD_SCOPES, wantStreamer ? BROADCASTER_SCOPES.kick : []);
     return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes) };
   });
 
@@ -171,7 +175,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
   app.get('/auth/me', { preHandler: requireWebSession }, async (req) => {
     const ids = await listIdentities(req.webAccountId!);
     const platforms: Record<string, unknown> = { twitch: null, youtube: null, kick: null };
-    for (const i of ids) platforms[i.platform] = { login: i.login, displayName: i.displayName, avatarUrl: i.avatarUrl };
+    // channelManage = streamer povolil správu kanálu (lib/broadcasterScopes.ts) — web/addon ukáže stav a tlačítko.
+    for (const i of ids) platforms[i.platform] = { login: i.login, displayName: i.displayName, avatarUrl: i.avatarUrl, channelManage: !!CATEGORY_SCOPE[i.platform] && i.scopes.includes(CATEGORY_SCOPE[i.platform]!) };
     // Nepotvrzená varování od moda (moderace část 2) — klient je ukáže hned po přihlášení.
     let warnings: Awaited<ReturnType<typeof pendingWarnings>> = [];
     try { warnings = await pendingWarnings(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: varování nenačtena'); }

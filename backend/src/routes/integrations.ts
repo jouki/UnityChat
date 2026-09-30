@@ -9,6 +9,7 @@
 //
 // Vše kromě /bot/link/:token chce X-Api-Key = ZIDOLISTA_API_KEY (stejný klíč jako /commands/invalidate).
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { BOT_EXTRA_SCOPES, uniqScopes } from '../lib/broadcasterScopes.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -225,7 +226,8 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     // consent okno než účet bota samotného — moderátorské scopes tam nepatří.
     if (t.platform === 'twitch') {
       if (!twitch.twitchConfigured()) return botErrorRedirect(reply, t.returnTo, 'Twitch OAuth not configured');
-      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : [...twitch.BOT_SCOPES, ...twitch.MOD_SCOPES];
+      // Bot: všechna oprávnění najednou (user 2026-09-30) — psaní, moderace, oznámení, shoutouty, nastavení chatu…
+      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : uniqScopes(twitch.BOT_SCOPES, twitch.MOD_SCOPES, BOT_EXTRA_SCOPES.twitch);
       return reply.redirect(twitch.buildAuthorizeUrl(signState(state), scopes), 302);
     }
     if (t.platform === 'youtube') {
@@ -237,7 +239,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     }
     if (!kick.kickConfigured()) return botErrorRedirect(reply, t.returnTo, 'Kick OAuth not configured');
     const pkce = kick.generatePkcePair();
-    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
+    const kickScopes = uniqScopes(kick.WEB_SCOPES, kick.MOD_SCOPES, BOT_EXTRA_SCOPES.kick);
     return reply.redirect(kick.buildAuthorizeUrl(signState({ ...state, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes), 302);
   });
 

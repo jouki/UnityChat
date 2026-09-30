@@ -307,6 +307,8 @@ export interface PublicIdentity {
   displayName: string | null;
   avatarUrl: string | null;
   platformUserId: string;
+  /** Udělená oprávnění (scopes) — klient z nich pozná „správa kanálu povolena“. */
+  scopes: string[];
 }
 
 export async function listIdentities(accountId: number): Promise<PublicIdentity[]> {
@@ -317,10 +319,11 @@ export async function listIdentities(accountId: number): Promise<PublicIdentity[
       displayName: webIdentities.displayName,
       avatarUrl: webIdentities.avatarUrl,
       platformUserId: webIdentities.platformUserId,
+      scopes: webIdentities.scopes,
     })
     .from(webIdentities)
     .where(and(eq(webIdentities.accountId, accountId), isNull(webIdentities.signedOutAt)));
-  return rows as PublicIdentity[];
+  return rows.map((r) => ({ ...r, scopes: r.scopes ?? [] })) as PublicIdentity[];
 }
 
 export interface DecryptedIdentity extends PublicIdentity {

@@ -11,7 +11,7 @@ function render(cond: ReturnType<typeof usernameEqualsCondition>) {
 }
 
 function ident(platform: 'twitch' | 'kick' | 'youtube', login: string): PublicIdentity {
-  return { platform, login, displayName: null, avatarUrl: null, platformUserId: '1' };
+  return { platform, login, displayName: null, avatarUrl: null, platformUserId: '1' , scopes: []};
 }
 
 function deps(over: Partial<AccountModDeps> & { ids: PublicIdentity[] }): AccountModDeps {
