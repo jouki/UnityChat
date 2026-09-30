@@ -141,7 +141,7 @@
 
 ## Changelog dokumentace
 ### 2026-09-30 večer (odznak podporovatele)
-- CLAUDE.md: milestone v3.41.113–118 (tooltip s datem, pauza GIFu, smazání druhým klikem, nastavení jako záložky Účet | Rozhraní, odznak dárce → podporovatele: volby tempo / intenzita / odstupy / nahrazení globálního odznaku Twitche, částka v tooltipu, odznak v hlavičce Profilu, vložené SVG místo souborů).
+- CLAUDE.md: milestone v3.41.113–119 (tooltip s datem, pauza GIFu, smazání druhým klikem, nastavení jako záložky Účet | Rozhraní, odznak dárce → podporovatele: volby tempo / intenzita / odstupy / nahrazení globálního odznaku Twitche, částka v tooltipu, odznak v hlavičce Profilu, vložené SVG místo souborů).
 - Memory: `project_donor_badge.md` (nový — zdroj dárců, prefs kanálu, animace, otevřené otázky pro usera), řádek v MEMORY.md, checkpoint doplněn.
 ### 2026-09-30 (session 2026-09-29/30, unitychat-8f)
 - CLAUDE.md: milestone v3.41.98–112 (zmínky bez zavináče + přezdívky, posuvníky, rezervovaná jména, announcement v historii, trvalé filtry, cooldown jako pruh, QR testmode pro moda, donaty podle ověřeného e-mailu, JoukiBOT zlatý, SE na Kicku v link filtru, broadcast commandů), UC_LOG tagy `Viewport` a `Mention`.
