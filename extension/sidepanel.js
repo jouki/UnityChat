@@ -8661,7 +8661,7 @@ class UnityChat {
     const poopBtn = document.createElement('button');
     poopBtn.className = 'msg-action-btn';
     poopBtn.dataset.act = 'poop';
-    poopBtn.title = 'Peepo poop (mod)';
+    poopBtn.title = 'Peepo poop';
     poopBtn.textContent = '\u{1F4A9}';
     poopBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -8683,7 +8683,8 @@ class UnityChat {
       if (!window.UC_CORE.confirmDeleteClick(delBtn)) return;
       this._deleteMessage(delBtn.closest('.msg'));
     });
-    actions.insertBefore(delBtn, poopBtn);
+    // Pořadí (pokyn usera 2026-09-30): 💩 první, koš hned za ním.
+    poopBtn.after(delBtn);
     // Odkrýt zprávu (mod, jen v UnityChatu) — vykreslené vždy vlevo od koše; CSS ukáže oko místo koše
     // (tj. hned vlevo od 💩), jen když má zpráva třídu .uc-deleted (smazaná / skrytá).
     const restoreBtn = document.createElement('button');
@@ -8695,7 +8696,7 @@ class UnityChat {
       e.stopPropagation();
       this._restoreDeleted(restoreBtn.closest('.msg'));
     });
-    actions.insertBefore(restoreBtn, delBtn);
+    delBtn.before(restoreBtn);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard

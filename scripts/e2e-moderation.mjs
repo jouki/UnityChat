@@ -109,7 +109,7 @@ await boot();
 check('A historie vykreslena', !!(await msgState('e2e-m1')));
 check('A body.uc-can-moderate z /moderation/me', await until(`document.body.classList.contains('uc-can-moderate')`));
 const order = await ev(`[...document.querySelector('.msg[data-msg-id="e2e-m1"] .msg-actions').children].map(b => b.dataset.act || b.title).join('|')`);
-check('A koš je hned vlevo od 💩 (oko pro smazanou zprávu ještě před ním, skryté)', /^restore\|delete\|poop\|/.test(order || ''), order);
+check('A 💩 první, koš hned za ním (oko pro smazanou zprávu před košem, skryté) — pokyn usera 2026-09-30', /^poop\|restore\|delete\|/.test(order || ''), order);
 check('A koš má title „Smazat zprávu" a je vidět', await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]'); return b.title === 'Smazat zprávu' && getComputedStyle(b).display !== 'none'; })()`) === true);
 const rowVis = () => ev(`(() => { const r = document.getElementById('row-deleted-style'); return !!r && !r.hidden && getComputedStyle(r).display !== 'none'; })()`);
 check('A nastavení „Smazané zprávy" vidí mod, jen 3 volby', await until(`!document.getElementById('row-deleted-style').hidden`, 3000) && await rowVis() === true
