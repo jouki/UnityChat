@@ -15,6 +15,7 @@ import { gifBans, gifDuplicates, gifMedia, gifRejections } from '../db/schema.js
 import { gifMediaUrl, MEDIA_ID_RE } from './gifIds.js';
 import { normalizeTags, MAX_TAGS, MAX_TAG_LEN, type GifKind } from './gifMedia.js';
 import { sequenceSimilarity, PHASH_MIN_SCORE } from './gifPhash.js';
+import { likePattern } from '../routes/chatLog.js';
 
 type Log = { info: (o: object, m: string) => void; warn: (o: object, m: string) => void };
 type Out = { status: number; body: Record<string, unknown> };
@@ -236,10 +237,13 @@ const lastUsedKey = sql`date_trunc('milliseconds', coalesce(${gifMedia.lastUsedA
 
 export const dbGifLibraryStore: GifLibraryStore = {
   async listLibrary(channel, o) {
+    // Hledání v tazích bez diakritiky a velikosti písmen (uc_fold jako Chat Log, sql/2026-09-25-chat-log-search.sql):
+    // „mikir“ najde „mikýř“ i „mikíř“. Víc slov = každé slovo musí sedět na některý tag (fulltext přes tagy).
+    const words = (o.q ?? '').split(' ').filter(Boolean).slice(0, 6);
     const rows = await db.select(libCols).from(gifMedia)
       .where(and(
         eq(gifMedia.channel, channel), eq(gifMedia.status, 'approved'),
-        o.q ? sql`exists (select 1 from unnest(${gifMedia.tags}) as t(tag) where position(${o.q} in t.tag) > 0)` : undefined,
+        ...words.map((w) => sql`exists (select 1 from unnest(${gifMedia.tags}) as t(tag) where uc_fold(t.tag) like uc_fold(${likePattern(w)}))`),
         o.after ? sql`(${gifMedia.useCount}, ${lastUsedKey}, ${gifMedia.id}) < (${o.after.useCount}, ${new Date(o.after.lastUsedMs).toISOString()}::timestamptz, ${o.after.id})` : undefined,
       ))
       .orderBy(desc(gifMedia.useCount), desc(lastUsedKey), desc(gifMedia.id))
