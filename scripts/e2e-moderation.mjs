@@ -58,6 +58,7 @@ const mock = {
   deletedContent: { 'twitch:e2e-m2': H('e2e-m2', 'tst Kappa', { twitchEmotes: '25:4-8', deleted: true, deletedReason: 'mod', replyTo: { username: 'Jiny', message: 'původní otázka', id: 'e2e-x0' } }) },
 };
 const posts = [];
+const prefPuts = [];
 const contentCalls = [];
 s.onevent = async (d) => {
   if (d.method !== 'Fetch.requestPaused') return;
@@ -81,6 +82,9 @@ s.onevent = async (d) => {
     const ids = (new URL(u).searchParams.get('ids') || '').split(',');
     return json({ ok: true, messages: Object.fromEntries(ids.filter((k) => mock.deletedContent[k]).map((k) => [k, mock.deletedContent[k]])) });
   }
+  // Nastavení kanálu (odznak dárce, routes/channelPrefs.ts).
+  if (u.includes('/channel/prefs')) return json({ ok: true, channel: 'robdiesalot', prefs: { donorBadge: mock.donorBadge || 'donor-coin' } });
+  if (u.includes('/moderation/channel-prefs')) { const b = q.postData ? JSON.parse(q.postData) : {}; prefPuts.push(b); mock.donorBadge = b?.prefs?.donorBadge || mock.donorBadge; return json({ ok: true, channel: 'robdiesalot', prefs: { donorBadge: mock.donorBadge } }); }
   if (u.includes('/moderation/delete')) {
     posts.push(q.postData ? JSON.parse(q.postData) : null);
     if (mock.deleteDelayMs) await sleep(mock.deleteDelayMs);
@@ -89,7 +93,7 @@ s.onevent = async (d) => {
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : mock.history(), nextBefore: null });
   return call('Fetch.continueRequest', { requestId: rid }, d.sessionId);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/nicknames/stream'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/nicknames/stream', '/channel/prefs'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -110,6 +114,15 @@ check('A historie vykreslena', !!(await msgState('e2e-m1')));
 check('A body.uc-can-moderate z /moderation/me', await until(`document.body.classList.contains('uc-can-moderate')`));
 const order = await ev(`[...document.querySelector('.msg[data-msg-id="e2e-m1"] .msg-actions').children].map(b => b.dataset.act || b.title).join('|')`);
 check('A 💩 první, koš hned za ním (oko pro smazanou zprávu před košem, skryté) — pokyn usera 2026-09-30', /^poop\|restore\|delete\|/.test(order || ''), order);
+// Nastavení: sekce Účet / Rozhraní, výběr odznaku dárce jen pro moda (core/donor-badge.js), PUT + překreslení.
+const secT = await ev(`[...document.querySelectorAll('#settings .settings-title')].map((t) => t.textContent.trim())`);
+check('nastavení má sekce Účet a Rozhraní a patičku s odkazy', Array.isArray(secT) && secT.join(',') === 'Účet,Rozhraní' && await ev(`!!document.querySelector('#settings .settings-foot .settings-links a[href*="privacy"]') && !!document.querySelector('#settings .settings-foot .kofi-link')`) === true, JSON.stringify(secT));
+const dbp = await ev(`(async () => { const row = document.getElementById('row-donor-badge'); const items = [...row.querySelectorAll('.uc-dbp-item')]; const before = { hidden: row.hidden, disp: getComputedStyle(row).display, n: items.length, on: row.querySelector('.uc-dbp-item.on input')?.value, imgs: items.every((i) => i.querySelector('img')?.src.includes('/icons/badges/donor/')) };
+  const inp = row.querySelector('input[value="money-bag"]'); inp.checked = true; inp.dispatchEvent(new Event('change', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 400));
+  return { before, on: row.querySelector('.uc-dbp-item.on input')?.value, status: document.getElementById('donor-badge-status')?.textContent }; })()`);
+check('mod: výběr odznaku dárce vidět, 4 varianty s náhledem, výchozí mince', dbp?.before && !dbp.before.hidden && dbp.before.disp !== 'none' && dbp.before.n === 4 && dbp.before.on === 'donor-coin' && dbp.before.imgs, JSON.stringify(dbp?.before));
+check('mod: změna odznaku → PUT /moderation/channel-prefs, vybraná karta a „Uloženo pro celý kanál“', dbp && dbp.on === 'money-bag' && prefPuts.length === 1 && prefPuts[0]?.prefs?.donorBadge === 'money-bag' && prefPuts[0]?.channel === 'robdiesalot' && dbp.status === 'Uloženo pro celý kanál', JSON.stringify({ dbp, prefPuts }));
 check('A koš má title „Smazat zprávu" a je vidět', await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]'); return b.title === 'Smazat zprávu' && getComputedStyle(b).display !== 'none'; })()`) === true);
 const rowVis = () => ev(`(() => { const r = document.getElementById('row-deleted-style'); return !!r && !r.hidden && getComputedStyle(r).display !== 'none'; })()`);
 check('A nastavení „Smazané zprávy" vidí mod, jen 3 volby', await until(`!document.getElementById('row-deleted-style').hidden`, 3000) && await rowVis() === true
@@ -181,6 +194,7 @@ mock.mod = false;
 const callsBeforeViewer = contentCalls.length;
 await boot();
 check('B body.uc-can-moderate pryč', await until(`!document.body.classList.contains('uc-can-moderate')`));
+check('B divák: výběr odznaku dárce schovaný', await ev(`getComputedStyle(document.getElementById('row-donor-badge')).display === 'none'`) === true);
 check('B koš u diváka schovaný', await ev(`getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]')).display === 'none'`) === true);
 const m2v = await msgState('e2e-m2');
 check('B divák nevidí nastavení „Smazané zprávy"', await rowVis() === false);

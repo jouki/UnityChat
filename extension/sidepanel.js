@@ -180,6 +180,10 @@ class NicknameManager {
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
       });
+      // Nastavení kanálu společné pro všechny (odznak dárce, routes/channelPrefs.ts).
+      this._eventSource.addEventListener('channel-prefs', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onChannelPrefs) this.onChannelPrefs(d); } catch {}
+      });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
           const d = JSON.parse(e.data);
@@ -1621,6 +1625,9 @@ class UnityChat {
       this._ucLog('QrDono', 'donate-config-change → reload');
     };   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
+    this.nicknames.onChannelPrefs = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._applyChannelPrefs(d.prefs, 'sse'); };
+    this._initDonorBadgePicker();
+    this._loadChannelPrefs();
     this.nicknames.onLoad = () => {
       if (this.config.username) {
         for (const p of ['twitch', 'youtube', 'kick']) {
@@ -5145,6 +5152,64 @@ class UnityChat {
   }
 
   /** Jsem na kanálu mod (podle účtu UnityChatu)? → body.uc-can-moderate + přebarvit smazané. */
+  // ---- Nastavení kanálu společné pro všechny (odznak dárce, core/donor-badge.js) ----
+  _donorAssetUrl(rel) { return chrome.runtime.getURL(`icons/${rel}`); }
+
+  _initDonorBadgePicker() {
+    const host = document.getElementById('donor-badge-picker');
+    if (!host || host._ucInit) return;
+    host._ucInit = true;
+    const core = window.UC_CORE;
+    host.innerHTML = core.donorBadgePickerHtml(this._channelPrefs?.donorBadge, (rel) => this._donorAssetUrl(rel));
+    host.addEventListener('change', async (e) => {
+      const input = e.target.closest?.('input[name="uc-donor-badge"]');
+      if (!input) return;
+      const status = document.getElementById('donor-badge-status');
+      const prev = this._channelPrefs?.donorBadge;
+      core.markDonorBadgePicker(host, input.value);
+      if (status) { status.textContent = 'Ukládám…'; status.className = 'nick-status'; }
+      try {
+        const j = await this._ucApi('/moderation/channel-prefs', { method: 'PUT', body: { channel: (this.config.channel || '').toLowerCase(), prefs: { donorBadge: input.value } } });
+        this._applyChannelPrefs(j.prefs, 'save');
+        if (status) { status.textContent = 'Uloženo pro celý kanál'; status.className = 'nick-status success'; setTimeout(() => { if (status.textContent === 'Uloženo pro celý kanál') status.textContent = ''; }, 2500); }
+      } catch (err) {
+        core.markDonorBadgePicker(host, prev);
+        if (status) { status.textContent = err?.error === 'not_mod' ? 'Odznak může měnit jen mod.' : 'Uložení se nepovedlo.'; status.className = 'nick-status error'; }
+        this._ucLog('Prefs', `donorBadge FAIL ${err?.status || 0} ${err?.error || err?.message || err}`);
+      }
+    });
+  }
+
+  async _loadChannelPrefs() {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) return;
+    try {
+      const r = await fetch(`${UC_API}/channel/prefs?channel=${encodeURIComponent(channel)}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j?.ok) this._applyChannelPrefs(j.prefs, 'load');
+    } catch (e) { this._ucLog('Prefs', `load FAIL ${e?.message || e}`); }
+  }
+
+  /** Nové hodnoty (load / SSE / uložení): výběr v nastavení + odznaky v chatu. */
+  _applyChannelPrefs(prefs, why) {
+    const core = window.UC_CORE;
+    const next = { donorBadge: core.donorBadgeVariant(prefs?.donorBadge) };
+    const changed = next.donorBadge !== this._channelPrefs?.donorBadge;
+    this._channelPrefs = next;
+    core.markDonorBadgePicker(document.getElementById('donor-badge-picker'), next.donorBadge);
+    if (changed) {
+      this._ucLog('Prefs', `donorBadge=${next.donorBadge} (${why})`);
+      // Už vykreslené odznaky dárce v chatu → nová varianta.
+      for (const img of document.querySelectorAll('img[data-donor-badge]')) {
+        const pic = img.closest('picture');
+        const still = pic?.querySelector('source');
+        if (still) still.srcset = this._donorAssetUrl(core.donorBadgePath(next.donorBadge, { still: true }));
+        img.src = this._donorAssetUrl(core.donorBadgePath(next.donorBadge));
+        img.dataset.donorBadge = next.donorBadge;
+      }
+    }
+  }
+
   async _loadModState() {
     const channel = (this.config.channel || '').toLowerCase();
     const seq = (this._modSeq = (this._modSeq || 0) + 1);
@@ -5168,6 +5233,9 @@ class UnityChat {
     // Volba vzhledu smazaných zpráv jen pro moda (divák má vždy zašedlé „Zpráva smazána“).
     const delRow = document.getElementById('row-deleted-style');
     if (delRow) delRow.hidden = !can;
+    // Odznak dárce (společný pro kanál) nastavuje jen mod.
+    const dbRow = document.getElementById('row-donor-badge');
+    if (dbRow) dbRow.hidden = !can;
     // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu) a dotažený se zahodí.
     if (!can) { this._deletedLoaderInst?.reset(); this._dropModContent(); }
     // Chybějící mod scopes účtu (core ModMenu: po 'bot' / 'error:no_actor' nabídne přihlášení s moderací).

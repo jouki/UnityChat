@@ -531,7 +531,28 @@ body.uc-dev .dev-only { display: block; }
 
 /* ---- Dev tools ---- */
 
-.dev-mode-row { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; margin-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
+.dev-mode-row { padding-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
+/* Sekce nastavení (Účet / Rozhraní) a patička — jako web (#settings-menu .pm-title / .st-foot). */
+.settings-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); opacity: 0.7; padding: 6px 0 0; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.settings-title:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+.setting-sub { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+.settings-foot { border-top: 1px solid rgba(255, 255, 255, 0.06); margin-top: 4px; padding-top: 8px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; font-size: 11px; }
+.settings-links { display: flex; flex-direction: column; gap: 2px; opacity: 0.7; line-height: 1.5; }
+.settings-links a { color: inherit; }
+.settings-foot .author-stack { align-items: flex-end; margin: 0; text-align: right; }
+/* Řádky jen pro moda (odznaky): body.uc-can-moderate je ukáže. */
+.uc-mod-only { display: none !important; }
+body.uc-can-moderate .uc-mod-only { display: flex !important; }
+/* Výběr odznaku dárce (core/donor-badge.js donorBadgePickerHtml). */
+.uc-dbp { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.uc-dbp-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-tertiary); cursor: pointer; font-size: 11px; color: var(--text-secondary); transition: border-color 0.15s ease, color 0.15s ease; }
+.uc-dbp-item:hover { border-color: rgba(255, 140, 0, 0.45); }
+.uc-dbp-item.on { border-color: var(--accent); color: var(--text-primary); box-shadow: 0 0 0 1px rgba(255, 140, 0, 0.35) inset; }
+.uc-dbp-item input { position: absolute; opacity: 0; pointer-events: none; }
+.uc-dbp-pic { display: inline-flex; width: 28px; height: 28px; }
+.uc-dbp-img { width: 28px; height: 28px; display: block; }
+.uc-dbp-name { white-space: nowrap; }
+.uc-donor-badge { width: 20px; height: 20px; }
 .dev-mode-row label { font-size: 10px; color: var(--text-muted); opacity: 0.4; }
 .dev-mode-row label:hover { opacity: 0.7; }
 .kofi-link { font-size: 11px; color: var(--text-muted); opacity: 0.55; text-decoration: none; transition: opacity 0.15s; }

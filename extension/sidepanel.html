@@ -50,6 +50,8 @@
         <input type="text" id="input-yt-channel" value="robdiesalot" placeholder="Název kanálu nebo @handle" spellcheck="false" autocomplete="off" readonly title="Nastaveno automaticky z aktivního tabu">
       </div>
     </details>
+    <!-- Sekce nastavení (pokyn usera 2026-09-30): Účet (e-mail, profil, odznaky) / Rozhraní (vzhled, chování) / patička. -->
+    <div class="settings-title">Účet</div>
     <!-- Email účtu (core/email-verify.js createEmailSettings). -->
     <div id="email-settings" class="setting-row"></div>
     <div class="setting-row">
@@ -69,6 +71,13 @@
       </div>
       <span id="nickname-status" class="nick-status"></span>
     </div>
+    <!-- Odznak dárce (core/donor-badge.js): jen mod / streamer, společný pro celý kanál (routes/channelPrefs.ts). -->
+    <div class="setting-row uc-mod-only" id="row-donor-badge" hidden>
+      <label>Odznak dárce <span class="setting-sub">(společný pro celý kanál)</span></label>
+      <div id="donor-badge-picker"></div>
+      <span id="donor-badge-status" class="nick-status"></span>
+    </div>
+    <div class="settings-title">Rozhraní</div>
     <div class="setting-row">
       <label for="input-layout">Velikost layoutu</label>
       <select id="input-layout">
@@ -135,12 +144,6 @@
         <input type="checkbox" id="chk-devmode">
         Dev mode
       </label>
-      <div class="author-stack">
-        <a href="https://jouki.cz" target="_blank" rel="noopener" class="author-link" title="Autor: Jouki — jouki.cz">
-          <span class="author-by">by</span> <span class="author-name">Jouki</span>
-        </a>
-        <a href="https://ko-fi.com/jouki" target="_blank" rel="noopener" class="kofi-link" title="Support on Ko-fi">☕ Kup mi Ko-fičko</a>
-      </div>
     </div>
     <div id="dev-tools" class="setting-row dev-tools hidden">
       <!-- Záloha: stará cesta odesílání přes otevřenou kartu se streamem (bez přihlášení). -->
@@ -151,6 +154,16 @@
       <button id="btn-dump-cache">Stáhnout message cache</button>
       <button id="btn-dump-nicknames">Stáhnout nickname cache</button>
       <button id="btn-clear-cache">Smazat message cache</button>
+    </div>
+    <!-- Patička: odkazy vlevo, autor + Ko-fi vpravo (stejně jako web). -->
+    <div class="settings-foot">
+      <div class="settings-links"><a href="https://jouki.cz/UnityChat/privacy" target="_blank" rel="noopener">Ochrana soukromí</a><a href="https://jouki.cz/UnityChat/terms" target="_blank" rel="noopener">Podmínky</a></div>
+      <div class="author-stack">
+        <a href="https://jouki.cz" target="_blank" rel="noopener" class="author-link" title="Autor: Jouki — jouki.cz">
+          <span class="author-by">by</span> <span class="author-name">Jouki</span>
+        </a>
+        <a href="https://ko-fi.com/jouki" target="_blank" rel="noopener" class="kofi-link" title="Support on Ko-fi">☕ Kup mi Ko-fičko</a>
+      </div>
     </div>
   </div>
 

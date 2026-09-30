@@ -50,8 +50,9 @@ import * as updateNotice from './core/update-notice.js';
 import * as gifLightbox from './core/gif-lightbox.js';
 import * as heightAnim from './core/height-anim.js';
 import * as timeFmt from './core/time.js';
+import * as donorBadge from './core/donor-badge.js';
 
-window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emoteAutocomplete, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...gifClientFetch, ...userSearch, ...anniversary, ...updateNotice, ...gifLightbox, ...heightAnim, ...timeFmt });
+window.UC_CORE = Object.freeze({ ChatStore, ...colors, ...html, makeLog, TwitchProvider, KickProvider, EmoteManager, ...announcement, ...reaction, ...emotePicker, ...mentions, ...colonEmotes, ...emoteAutocomplete, ...emotePreview, ...soundboard, ...sfxRequest, ...loginModal, ...slideIn, ...ucReply, ...qrDono, ...emailVerify, ...toolDock, ...slideIndicator, ...emoteRetry, ...moderation, ...modMenu, ...accountWarnings, ...mentionNotify, ...userHistory, ...gif, ...gifLinks, ...gifCooldown, ...gifLibrary, ...gifHost, ...gifClientFetch, ...userSearch, ...anniversary, ...updateNotice, ...gifLightbox, ...heightAnim, ...timeFmt, ...donorBadge });
 window.EmoteManager = EmoteManager;
 window.TwitchProvider = TwitchProvider;
 window.KickProvider = KickProvider;

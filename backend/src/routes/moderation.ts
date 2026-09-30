@@ -48,6 +48,7 @@ import type { Platform } from '../lib/zidolista.js';
 import { RateLimiter, toModeratedContent, toRestoredMessage, type ClientRow, type ClientMessage } from './chat.js';
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
+import channelPrefsRoutes from './channelPrefs.js';
 import { userSearchRoutes } from './userSearch.js';
 import { dbUserSearchDeps } from '../lib/userSearch.js';
 import { accountIdentities, accountOf } from '../lib/moderationTargets.js';
@@ -587,6 +588,9 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
     if (out.status === 200) req.log.info({ accountId: g.accountId, channel: g.channel, platform: body.data.platform, result: out.body.result }, 'moderation restore');
     return reply.code(out.status).send(out.body);
   });
+
+  // ---- nastavení kanálu společné pro všechny (odznak dárce) — routes/channelPrefs.ts, stejná brána moda ----
+  await channelPrefsRoutes(app, { requireSession: requireWebSession, modGate: (req, reply, ch) => modGate(req, reply, ch) });
 
   // ---- přejmenování: mod nastaví/smaže divákovi přezdívku (bez 10s limitu /nicknames) ----
   app.put('/moderation/nickname', { preHandler: requireWebSession }, async (req, reply) => {

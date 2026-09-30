@@ -583,6 +583,14 @@ export const accountDonatePrefs = pgTable('account_donate_prefs', {
 });
 
 // Stažení GIFu prohlížečem odesílatele (spec 2026-09-29 §5): předvolba účtu ask | always | never. Ručně SQL.
+/** Nastavení kanálu společné pro všechny (odznak dárce…) — sql/2026-09-30-channel-prefs.sql, routes/channelPrefs.ts. */
+export const channelPrefs = pgTable('channel_prefs', {
+  channel: text('channel').primaryKey(),
+  prefs: jsonb('prefs').notNull().default({}),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const accountGifPrefs = pgTable('account_gif_prefs', {
   accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
   clientFetch: text('client_fetch').notNull().default('ask'),
