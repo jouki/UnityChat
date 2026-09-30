@@ -3,7 +3,7 @@
 <style>
   body { margin: 0; background: #111; color: #ddd; font: 13px sans-serif; }
   #wrap { position: relative; height: 60px; }
-  #panel { position: absolute; right: 8px; top: 60px; width: 320px; background: #222; border: 1px solid #444; border-radius: 8px; padding: 6px; }
+  #panel { position: absolute; right: 8px; top: 60px; min-width: 260px; background: #222; border: 1px solid #444; border-radius: 8px; padding: 6px; }
   .pane[hidden] { display: none; }
   .row { padding: 6px 8px; }
   .foot { border-top: 1px solid #444; padding: 6px 8px; }
@@ -12,7 +12,7 @@
 <div id="panel">
   <div class="tabs"><button id="ta">A</button><button id="tb">B</button></div>
   <div class="pane" data-pane="a"><div class="row">1</div><div class="row">2</div><div class="row">3</div><div class="row">4</div><div class="row">5</div><div class="row">6</div><div class="row">7</div><div class="row">8</div></div>
-  <div class="pane" data-pane="b" hidden><div class="row">x</div><div class="row">y</div></div>
+  <div class="pane" data-pane="b" hidden><div class="row">x — tahle záložka je o dost širší než ta první, jako Rozhraní na webu</div><div class="row">y</div></div>
   <div class="foot">footer</div>
 </div>
 <script type="module">
@@ -26,7 +26,7 @@
     const dir = panes.indexOf(to) >= panes.indexOf(from) ? 1 : -1;
     window.samples = [];
     const t0 = performance.now();
-    const tick = () => { window.samples.push([Math.round(performance.now() - t0), Math.round(panel.getBoundingClientRect().bottom), Math.round(foot.getBoundingClientRect().bottom)]); if (performance.now() - t0 < 500) requestAnimationFrame(tick); };
+    const tick = () => { window.samples.push([Math.round(performance.now() - t0), Math.round(panel.getBoundingClientRect().bottom), Math.round(foot.getBoundingClientRect().bottom), Math.round(panel.getBoundingClientRect().width)]); if (performance.now() - t0 < 500) requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
     morphResize(panel, () => switchPanes(panel, from, to, { dir }), { log: (t) => window.samples.push(['log', t]) });
   };
