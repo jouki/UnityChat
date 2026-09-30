@@ -9,6 +9,7 @@
 //
 // Vše kromě /bot/link/:token chce X-Api-Key = ZIDOLISTA_API_KEY (stejný klíč jako /commands/invalidate).
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { BOT_EXTRA_SCOPES, BROADCASTER_SCOPES, uniqScopes } from '../lib/broadcasterScopes.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -18,7 +19,7 @@ import { signState, type StateInput } from '../lib/session.js';
 import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
-import type { IdentityInfo, TokenSet } from '../lib/webAuth.js';
+import { storeIdentityForOwner, type IdentityInfo, type TokenSet } from '../lib/webAuth.js';
 import { SHARED, upsertBotIdentity, deleteBotIdentity, botStatus, upsertChannelGrant, deleteChannelGrant } from '../lib/botIdentities.js';
 import { workspaceBySlug, workspacesSource, type Platform } from '../lib/zidolista.js';
 import { sendAsBot, BotSendError } from '../lib/botSend.js';
@@ -125,7 +126,9 @@ export async function completeBotCallback(req: FastifyRequest, reply: FastifyRep
       return reply.redirect(`${returnTo}#bot_error=${encodeURIComponent(`wrong_account:${identity.login}`)}`, 302);
     }
     await upsertChannelGrant(workspace, platform, identity);
-    req.log.info({ platform, workspace, login: identity.login }, 'bot channel grant saved');
+    // Tokeny majitele kanálu k jeho účtu UnityChatu (kategorie streamu z commandů Židolišty — lib/channelManage.ts).
+    const accountId = await storeIdentityForOwner(platform, identity, tokens);
+    req.log.info({ platform, workspace, login: identity.login, accountId, scopes: tokens.scopes.length }, 'bot channel grant saved + owner tokens stored');
     return reply.redirect(`${returnTo}#bot_channel_granted=${platform}:${encodeURIComponent(identity.login)}`, 302);
   }
   const expect = String(payload.expectLogin || '').replace(/^@/, '').toLowerCase();
@@ -201,9 +204,10 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     if (!isAllowedBotReturnTo(body.data.returnTo)) return reply.code(400).send({ ok: false, error: 'returnTo origin not allowed' });
     if (workspace !== SHARED && !(await workspaceBySlug(workspace))) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
     if (kind === 'broadcaster') {
+      // Souhlas streamera (Twitch i Kick, 2026-10-01): účet kanálu workspace, všechna oprávnění majitele kanálu.
       if (workspace === SHARED) return reply.code(400).send({ ok: false, error: 'broadcaster grant needs a workspace' });
-      if (body.data.platform !== 'twitch') return reply.code(400).send({ ok: false, error: 'broadcaster grant is twitch only' });
-      if (!(await workspaceBySlug(workspace))?.channels.twitch) return reply.code(400).send({ ok: false, error: 'workspace has no twitch channel' });
+      if (body.data.platform === 'youtube') return reply.code(400).send({ ok: false, error: 'broadcaster grant is twitch or kick' });
+      if (!(await workspaceBySlug(workspace))?.channels[body.data.platform]) return reply.code(400).send({ ok: false, error: `workspace has no ${body.data.platform} channel` });
     }
     sweepLinkTokens();
     const token = randomBytes(24).toString('base64url');
@@ -225,7 +229,9 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     // consent okno než účet bota samotného — moderátorské scopes tam nepatří.
     if (t.platform === 'twitch') {
       if (!twitch.twitchConfigured()) return botErrorRedirect(reply, t.returnTo, 'Twitch OAuth not configured');
-      const scopes = t.kind === 'broadcaster' ? twitch.BROADCASTER_BOT_SCOPES : [...twitch.BOT_SCOPES, ...twitch.MOD_SCOPES];
+      // Bot: všechna oprávnění najednou (user 2026-09-30) — psaní, moderace, oznámení, shoutouty, nastavení chatu…
+      // Streamer: channel:bot (odznak bota) + všechna oprávnění majitele kanálu (kategorie…, lib/broadcasterScopes.ts) — jednou provždy.
+      const scopes = t.kind === 'broadcaster' ? uniqScopes(twitch.BROADCASTER_BOT_SCOPES, twitch.WEB_SCOPES, twitch.MOD_SCOPES, BROADCASTER_SCOPES.twitch) : uniqScopes(twitch.BOT_SCOPES, twitch.MOD_SCOPES, BOT_EXTRA_SCOPES.twitch);
       return reply.redirect(twitch.buildAuthorizeUrl(signState(state), scopes), 302);
     }
     if (t.platform === 'youtube') {
@@ -237,7 +243,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     }
     if (!kick.kickConfigured()) return botErrorRedirect(reply, t.returnTo, 'Kick OAuth not configured');
     const pkce = kick.generatePkcePair();
-    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
+    const kickScopes = t.kind === 'broadcaster' ? uniqScopes(kick.WEB_SCOPES, kick.MOD_SCOPES, BROADCASTER_SCOPES.kick) : uniqScopes(kick.WEB_SCOPES, kick.MOD_SCOPES, BOT_EXTRA_SCOPES.kick);
     return reply.redirect(kick.buildAuthorizeUrl(signState({ ...state, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes), 302);
   });
 

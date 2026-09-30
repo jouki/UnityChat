@@ -114,6 +114,19 @@ export async function fetchUser(accessToken: string): Promise<KickUserInfo> {
   };
 }
 
+// App access token (client credentials) — veřejná čtení (kategorie). Cache do expirace.
+let appToken: { token: string; exp: number } | null = null;
+export async function getAppAccessToken(fetchImpl: typeof fetch = fetch): Promise<string> {
+  if (appToken && appToken.exp - 60_000 > Date.now()) return appToken.token;
+  const body = new URLSearchParams({ client_id: config.KICK_CLIENT_ID, client_secret: config.KICK_CLIENT_SECRET, grant_type: 'client_credentials' });
+  const resp = await fetchImpl(TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(), signal: AbortSignal.timeout(10_000) });
+  if (!resp.ok) throw new Error(`Kick app token failed: ${resp.status}`);
+  const j = (await resp.json()) as { access_token: string; expires_in: number };
+  appToken = { token: j.access_token, exp: Date.now() + j.expires_in * 1000 };
+  return appToken.token;
+}
+export function invalidateAppAccessToken(): void { appToken = null; }
+
 export function kickConfigured(): boolean {
   return Boolean(config.KICK_CLIENT_ID && config.KICK_CLIENT_SECRET);
 }

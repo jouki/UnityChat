@@ -149,6 +149,8 @@
 - Memory: checkpoint aktualizován (stav 2026-09-30), `project_qr_dono.md` (testmode pro moda, e-mail ↔ Židolišta), `project_zidolista_bot.md` (JoukiBOT zlatý podle ID), `feedback_patterns.md` (Chrome: `scrollbar-width` vypíná `::-webkit-scrollbar`; deploy backendu = 502 na pár sekund).
 ### 2026-09-29 (stažení GIFu prohlížečem odesílatele)
 - CLAUDE.md: milestone v3.41.89–91 (host blokující IP serveru → výzva ke stažení prohlížečem, `POST /gif/client-upload`, předvolba účtu `account_gif_prefs`, karta moda se štítkem „· z prohlížeče odesílatele“ u čekající žádosti).
+### 2026-09-30 (kategorie streamu přes command)
+- Memory `project_channel_category.md` + MEMORY.md: kategorii mění jen token majitele kanálu; UC `broadcasterScopes`/`channelManage`/`integrationChannel`, web tlačítko, Židolišta `category.set`; čeká Robovo povolení a Kick scopes v dev app.
 ### 2026-09-28 (rich text v Židolištce)
 - Memory `project_zidolista_rich_text.md` + řádek v MEMORY.md: jeden renderer `server/static/richText.js` (commandy + lišty + kopie na webu hlídaná testem), escape `\`, proměnné doslova; core `richTextToHtml` (v3.41.89) escape umí. Deploy serveru Židolišty potřebuje `static/` i v build stage Dockerfile.
 ### 2026-09-27 (výročí na Twitchi)

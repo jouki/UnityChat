@@ -5770,7 +5770,8 @@ class UnityChat {
     const current = await this._ucSessionToken();
     const headers = { 'Content-Type': 'application/json' };
     if (current) headers.Authorization = `Bearer ${current}`;   // napojit na existující účet
-    // mod: true = navíc moderátorské scopes (mazání zpráv) — backend /auth/:platform/start.
+    // mod: true = navíc moderátorské scopes (mazání zpráv) — backend /auth/:platform/start. (Správa kanálu streamera
+    // se povoluje ze Židolišty, ne z UnityChatu — rozhodnutí usera 2026-10-01.)
     const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify(mod ? { returnTo, mod: true } : { returnTo }) });
     const sj = await start.json().catch(() => ({}));
     if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
