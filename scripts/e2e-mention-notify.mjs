@@ -121,6 +121,10 @@ const b3 = await bare('e2e-b3', 'čau kamo jak je');
 check('„kamo“ jako celé slovo se barví', b3 && b3.spans.join() === 'kamo', JSON.stringify(b3));
 const b4 = await bare('e2e-b4', 'chat je na www.robdiesalot.com/chat a robdiesalot.com');
 check('jméno uvnitř adresy se nebarví', b4 && !b4.spans.some((t) => /robdiesalot/i.test(t)), JSON.stringify(b4));
+// Moje UC přezdívka bez zavináče (mapa přezdívek: notifyme → „Notík“) se obarví mou barvou a zpráva dostane štítek.
+await ev(`(() => { window.__uc.nicknames._map.set('twitch:notifyme', { nickname: 'Notík', color: '#ff8400' }); return true; })()`);
+const b6 = await bare('e2e-b6', 'to řekl Notík včera');
+check('přezdívka bez zavináče: zvýraznění + štítek Mentions you + barva jména', b6?.hl === true && b6.spans.join() === 'Notík' && (await ev(`document.querySelector('.msg[data-msg-id="e2e-b6"] .msg-tag')?.textContent`)) === 'Mentions you', JSON.stringify(b6));
 const b5 = await bare('e2e-b5', 'mrkni na notifyme.cz/profil');
 check('moje jméno uvnitř adresy zprávu nezvýrazní', b5?.hl === false, JSON.stringify(b5));
 

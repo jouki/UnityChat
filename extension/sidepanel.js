@@ -7831,18 +7831,19 @@ class UnityChat {
       for (const match of window.UC_CORE.bareWords(text)) {
         const word = match.word;
         const lname = word.toLowerCase();
-        const entry = this._chatUsers.get(`${platform}:${lname}`)
-          || this._chatUsers.get(lname);
-        // Require a chatter entry — and skip the message author itself
-        // (their own username appears literally inside the message body
-        // on /me lines, no need to "mention" themselves).
-        if (!entry || !entry.color) continue;
+        // Slovo = login známého uživatele, nebo UC přezdívka („Jouki“ → jouki728; víc loginů → ten z chatu) → barva jména.
+        const known = this._chatUsers.has(`${platform}:${lname}`) || this._chatUsers.has(lname);
+        const login = known ? lname : (this.nicknames?.resolveNickname(lname, platform) || this.nicknames?.resolveNickname(lname) || null);
+        if (!login) continue;
+        const entry = this._chatUsers.get(`${platform}:${login}`) || this._chatUsers.get(login);
+        const color = this.nicknames?.getColor(platform, login) || entry?.color || null;
+        if (!color) continue;
         if (!frag) frag = document.createDocumentFragment();
         if (match.index > last) frag.appendChild(document.createTextNode(text.substring(last, match.index)));
         const span = document.createElement('span');
         span.className = 'mention bare';
-        span.dataset.mentionUser = lname;
-        const sanitized = this.emotes._sc(this.nicknames?.getColor(platform, lname) || entry.color);
+        span.dataset.mentionUser = login;
+        const sanitized = this.emotes._sc(color);
         if (sanitized) span.style.color = readableColor(sanitized);
         span.textContent = word;
         frag.appendChild(span);
