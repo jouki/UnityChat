@@ -578,11 +578,11 @@ Statická install stránka na `jouki.cz/UnityChat` (case-insensitive). Nasazena 
 ### Struktura repa `jouki/jouki.cz`
 - `jouki-cz/index.html` — root page (jouki.cz, under-construction CRT estetika)
 - `unitychat/index.html` — hlavní install page (Orbitron + JetBrains Mono, gaming HUD)
-- `unitychat/preview.html` — iframe mockup (načítá `extension/sidepanel.css` pro pixel-accurate rendering)
+- `unitychat/preview.html` — iframe mockup (načítá skutečné `sidepanel.css` + `composer.css` + `qr-dono.css` z `extension/`; **přepsán 2026-09-30 podle panelu v3.42**: hlavička s logem a ikonami, filtry s kontrolkami, pole s výběrem platformy + QR / soundboard / emoty, zlaté logo, odznak podporovatele, odpověď napříč platformami). Ověření: `scripts`-like sonda ve scratchpadu není v repu — render lokálně přes headless Chrome s mapováním assetů na `extension/`.
 - `unitychat/dev/` — dev install page
 - `unitychat/privacy/index.html` — **bilingvální (CS/EN) privacy policy** pro Google OAuth verifikaci (`youtube.readonly` sensitive scope). URL `jouki.cz/UnityChat/privacy` (+`?lang=en`). Live od 2026-06-24.
 - `nginx.conf` — routing (case-insensitive `/UnityChat`, `/UnityChat/dev`, `/UnityChat/privacy`, download area, `/dev-api/` proxy na :3001)
-- `Dockerfile` — base dir `/`, klonuje public UnityChat (master+dev), zipuje obě `extension/` složky, kopíruje sidepanel.css + icons
+- `Dockerfile` — base dir `/`, klonuje public UnityChat (master+dev), zipuje obě `extension/` složky, kopíruje sidepanel.css + composer.css + qr-dono.css + icons
 
 ### Dockerfile build kontext (repo jouki/jouki.cz)
 ```dockerfile
