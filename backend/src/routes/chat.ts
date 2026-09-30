@@ -9,6 +9,7 @@ import { verifyUcReply } from '../lib/ucReplyVerify.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { ownsHandle } from './nicknames.js';
 import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, gifMessageState, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
+import { announcementsBetween, type AnnouncementPayload } from './announcements.js';
 
 /**
  * Historie chatu pro panel (spec 2026-09-19 §3.2). Zprávy plní ingest
@@ -47,6 +48,10 @@ export interface ClientMessage {
   segments?: unknown[];
   /** Schválený GIF (moderace část 4): syntetická zpráva `gif-<id>`, médium z našeho serveru. */
   gif?: GifMediaView;
+  /** Odpověď potlačená kvůli UnityChat announcementu (lib/anncHides.ts) — klient nevykreslí. */
+  anncHidden?: boolean;
+  /** Announcement jako položka historie (announcementMessage). */
+  ucAnnouncement?: unknown;
   /**
    * Jen GIFy schválené před 2026-09-26: nahrazuje původní zprávu (`<platform>:<messageId>`) na jejím místě.
    * Nové schválené GIFy jdou na konec chatu (čas schválení) a nesou jen `gifOrigin`.
@@ -151,6 +156,8 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
   const gifId = goneGifs?.size || goneGifs?.unavailable?.size ? gifMediaIdFromRaw(row.contentRaw) : null;
   if (gifId && goneGifs!.has(gifId)) return { ...meta, deleted: true, deletedReason: GIF_REMOVED_REASON };
   const out = toClientContent(row, historical);
+  // Odpověď na command potlačená kvůli announcementu (lib/anncHides.ts): klient ji nevykreslí (jako živě).
+  if ((row.contentRaw as Record<string, unknown> | null)?.anncHidden) out.anncHidden = true;
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
   if (gif) {
@@ -169,6 +176,11 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
  * kontroly smazání/skrytí a bez GIFu. Volá ho toClientMessage (nesmazaná zpráva) a jen pro mody
  * `GET /moderation/deleted-content` (toModeratedContent) — nikdy ho neposílat nemodovi u smazané zprávy.
  */
+/** Announcement jako položka historie: klient ho pozná podle `ucAnnouncement` a vykreslí announcement, ne zprávu. */
+export function announcementMessage(id: string, at: Date, payload: AnnouncementPayload): ClientMessage {
+  return { platform: 'unitychat', id: `annc-${id}`, username: 'UnityChat', userId: '', message: '', timestamp: at.getTime(), historical: true, ucAnnouncement: payload } as ClientMessage;
+}
+
 export function toClientContent(row: ClientRow, historical = true): ClientMessage {
   const out = toClientMessageBase(row, historical);
   // Odpověď napříč platformami (UnityChat) — jen když platforma sama odpověď nenese.
@@ -501,9 +513,18 @@ export default async function chatRoutes(app: FastifyInstance) {
     const oldest = page[page.length - 1];
     // GIFy odebrané z knihovny / zahozené → smazané bez média (dávkově, jeden dotaz na stránku).
     const gone = await gifMediaGone(page);
+    const list: ClientMessage[] = page.reverse().map((r) => toClientMessage(r, true, gone));
+    // UnityChat Announcementy ve stejném rozmezí časů jako stránka (na první stránce až do teď) — mezi zprávy podle času.
+    try {
+      const fromMs = oldest ? oldest.sentAt.getTime() : Date.now() - 24 * 3600_000;
+      const toMs = cursor ? cursor.sentAtMs : Date.now();
+      const anncs = await announcementsBetween(channel, fromMs, toMs);
+      for (const a of anncs) list.push(announcementMessage(a.id, a.at, a.payload));
+      if (anncs.length) list.sort((x, y) => x.timestamp - y.timestamp);
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'history: announcements nedostupné'); }
     return {
       ok: true,
-      messages: page.reverse().map((r) => toClientMessage(r, true, gone)),
+      messages: list,
       nextBefore: hasMore && oldest ? encodeCursor(oldest.sentAt.getTime(), oldest.id) : null,
     };
   });

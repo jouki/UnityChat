@@ -3,6 +3,10 @@ import { broadcast } from '../sse/bus.js';
 import { botLogins } from './commands.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { getWorkspaces } from '../lib/zidolista.js';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { announcements, messages } from '../db/schema.js';
+import { anncHides, ANNC_BOT_BEHIND_MS } from '../lib/anncHides.js';
 
 /**
  * POST /announcements — UnityChat Announcement ze Židolišty (RobJewsALot).
@@ -10,8 +14,10 @@ import { getWorkspaces } from '../lib/zidolista.js';
  * Command v Židolištce může mít jako odpověď honosnou zprávu s videem a
  * textem, kterou vidí jen uživatelé UnityChatu (addon + robdiesalot.com/chat).
  * Židolišta ji po spuštění commandu pošle sem (X-Api-Key = ZIDOLISTA_API_KEY),
- * backend ji jen ověří a rozešle přes SSE `announcement` na /nicknames/stream.
- * Nic se neukládá — je to živá událost, historie ji nemá.
+ * backend ji ověří, rozešle přes SSE `announcement` na /nicknames/stream a ULOŽÍ (tabulka announcements,
+ * 2026-09-30) — /chat/history ji vrací mezi zprávami (`ucAnnouncement`), takže po obnovení nezmizí. Potlačenou
+ * odpověď bota / commandu označí server v ingestu (lib/anncHides.ts → content_raw.anncHidden), historie ji
+ * pošle s `anncHidden: true` a klienti ji nevykreslí — stejně jako živě.
  *
  * Tělo (kontrakt dohodnutý se session RobJewsALot 2026-09-22):
  *   { id, workspace: 'rob', command?, text?, media?: { url (https), kind: 'video'|'image',
@@ -79,6 +85,27 @@ export function validateAnnouncement(body: unknown, workspaces: Map<string, stri
   return { ok: true, values: channels.map((channel) => ({ ...base, channel })) };
 }
 
+/** Zprávy botů těsně PŘED announcementem (bot odpověděl dřív, než Židolišta poslala announcement) → anncHidden. */
+async function hideEarlierBotReplies(channel: string, logins: string[], atMs: number, anncId: string): Promise<void> {
+  for (const login of logins) {
+    const [row] = await db.select({ id: messages.id, raw: messages.contentRaw }).from(messages)
+      .where(and(eq(messages.channel, channel), sql`lower(${messages.platformUsername}) = ${login}`, gte(messages.sentAt, new Date(atMs - ANNC_BOT_BEHIND_MS)), lte(messages.sentAt, new Date(atMs + 1000))))
+      .orderBy(desc(messages.sentAt)).limit(1);
+    if (!row) continue;
+    const raw = (row.raw && typeof row.raw === 'object' ? row.raw : {}) as Record<string, unknown>;
+    if (raw.anncHidden) continue;
+    await db.update(messages).set({ contentRaw: { ...raw, anncHidden: anncId } }).where(eq(messages.id, row.id));
+  }
+}
+
+/** Announcementy kanálu v časovém rozmezí (pro /chat/history), vzestupně. */
+export async function announcementsBetween(channel: string, fromMs: number, toMs: number, limit = 50): Promise<Array<{ id: string; at: Date; payload: AnnouncementPayload }>> {
+  const rows = await db.select({ id: announcements.id, at: announcements.at, payload: announcements.payload }).from(announcements)
+    .where(and(eq(announcements.channel, channel), gte(announcements.at, new Date(fromMs)), lte(announcements.at, new Date(toMs))))
+    .orderBy(desc(announcements.at)).limit(limit);
+  return rows.reverse().map((r) => ({ id: r.id, at: r.at, payload: r.payload as AnnouncementPayload }));
+}
+
 export default async function announcementRoutes(app: FastifyInstance) {
   app.post('/announcements', async (req, reply) => {
     if (!inboundAuthorized(req, reply)) return reply;
@@ -87,7 +114,16 @@ export default async function announcementRoutes(app: FastifyInstance) {
     for (const w of await getWorkspaces({ log: app.log })) if (w.channels.twitch) workspaces.set(w.channels.twitch, w.slug);
     const v = validateAnnouncement(req.body, workspaces);
     if (!v.ok) return reply.code(v.error === 'unknown_workspace' ? 404 : 400).send({ ok: false, error: v.error });
-    for (const value of v.values) broadcast('announcement', value);
+    for (const value of v.values) {
+      broadcast('announcement', value);
+      const hide = anncHides.remember(value);
+      try {
+        await db.insert(announcements).values({ id: value.id, channel: value.channel, workspace: value.workspace, at: new Date(value.at), payload: value })
+          .onConflictDoNothing({ target: [announcements.id, announcements.channel] });
+        // Bot rychlejší než announcement: jeho poslední zpráva nejvýš 5 s před ním už může být v DB → označit.
+        if (hide?.botLogins.length) await hideEarlierBotReplies(value.channel, hide.botLogins, hide.atMs, value.id);
+      } catch (e) { app.log.warn({ err: (e as Error).message, id: value.id }, 'announcement: uložení selhalo (v historii nebude)'); }
+    }
     app.log.info({ id: v.values[0].id, channels: v.values.map((x) => x.channel), command: v.values[0].command, media: !!v.values[0].media, hideReply: !!v.values[0].chatReply?.hideInUnityChat, hideBots: v.values[0].hideBotReplies, hideObs: v.values[0].hideInBrowserSource }, 'announcement: broadcast');
     return reply.code(202).send({ ok: true, channels: v.values.map((x) => x.channel) });
   });

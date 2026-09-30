@@ -240,6 +240,23 @@ export const gifAccessTokens = pgTable('gif_access_tokens', {
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 });
 
+/** UnityChat Announcement (POST /announcements) v historii chatu — sql/2026-09-30-announcements.sql. */
+export const announcements = pgTable(
+  'announcements',
+  {
+    id: text('id').notNull(),
+    channel: text('channel').notNull(),
+    workspace: text('workspace').notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.id, t.channel] }),
+    channelAtIdx: index('announcements_channel_at_idx').on(t.channel, t.at),
+  }),
+);
+
 export const gifRequests = pgTable(
   'gif_requests',
   {

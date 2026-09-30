@@ -5519,7 +5519,12 @@ class UnityChat {
   // ---- Messages ----
 
   // ---- UnityChat Announcement (command v Židolištce s videem, SSE `announcement`) ----
-  _addAnnouncement(payload) {
+  /**
+   * UnityChat Announcement: živě ze SSE, nebo z historie (`historical`, položka /chat/history s ucAnnouncement —
+   * po obnovení nezmizí, pokyn usera 2026-09-30). Z historie se nic neskrývá (potlačené odpovědi označil server
+   * `anncHidden`) a vkládá se podle času jako zpráva.
+   */
+  _addAnnouncement(payload, { historical = false } = {}) {
     const core = window.UC_CORE;
     const a = core.normalizeAnnouncement(payload);
     if (!a) { this._ucLog('Annc', 'neplatný payload'); return false; }
@@ -5527,13 +5532,13 @@ class UnityChat {
     if (this._anncSeen.has(a.id)) return false;
     this._anncSeen.add(a.id);
     if (!this._pendingReplies) this._pendingReplies = [];
-    if (a.chatReply?.hideInUnityChat) {
+    if (!historical && a.chatReply?.hideInUnityChat) {
       const now = Date.now();
       this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
       this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
     }
     // Odpověď cizího bota (StreamElements…): už vykreslenou skrýt, jinak počkat na ni.
-    if (a.hideBotReplies.length) {
+    if (!historical && a.hideBotReplies.length) {
       const now = Date.now();
       this._pendingBotReplies = (this._pendingBotReplies || []).filter((p) => p.until > now);
       for (const login of core.hideRecentBotReplies(this.chatEl, a.hideBotReplies, now)) this._pendingBotReplies.push({ login, until: now + core.ANNC_BOT_AHEAD_MS });
@@ -5549,6 +5554,14 @@ class UnityChat {
     if (tx) this._processMentions(tx, 'twitch');
     let replay = null;
     el.querySelector('.ua-media')?.addEventListener('click', (e) => { e.stopPropagation(); replay?.(); });
+    if (historical) {
+      // Starší stránka → před první dosavadní uzel; boot → na konec; jinak podle času mezi zprávy.
+      if (this._prependCursor) this.chatEl.insertBefore(el, this._prependCursor);
+      else if (this._bootLoading) this.chatEl.appendChild(el);
+      else { const anchor = this._firstNewerMsgEl(a.at); if (anchor) this.chatEl.insertBefore(el, anchor); else this.chatEl.appendChild(el); }
+      replay = core.wireAnnouncementVideo(el, { autoplay: false });
+      return true;
+    }
     if (this._parkedBottom.length) { this._parkedBottom.push(el); return true; }
     if (!this.autoScroll) {
       if (this._unreadCount === 0) { const sep = document.createElement('div'); sep.id = 'unread-separator'; sep.className = 'unread-sep'; sep.textContent = 'Nové zprávy'; this.chatEl.appendChild(sep); }
@@ -8109,6 +8122,8 @@ class UnityChat {
   // Returns {ids, content} — callers mutate them directly. Returns null if
   // the platform/channel can't be resolved (let the caller skip dedup).
   _addMessage(msg) {
+    // Odpověď na command potlačená serverem kvůli announcementu (lib/anncHides.ts) — nevykreslit ani z historie.
+    if (msg?.anncHidden) { this._ucLog('Annc', `skryta odpověď (server) ${msg.platform}:${msg.id}`); return; }
     msg = window.UC_CORE.withTwitchDefaultColor(msg);
     // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
     // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.
@@ -8778,6 +8793,8 @@ class UnityChat {
       // reconcile: nic z toho — historické zprávy se zařadí podle času mezi živé.
       try {
         for (const m of list) {
+          // Announcement uložený na serveru (routes/announcements.ts) → vykreslit na svém místě v historii.
+          if (m.ucAnnouncement) { if (this._addAnnouncement(m.ucAnnouncement, { historical: true })) added++; continue; }
           const beforeLen = this.store.length;
           this._addMessage(m);
           if (this.store.length > beforeLen) added++;

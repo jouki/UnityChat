@@ -45,7 +45,8 @@ import { publishDeleted } from './lib/messageDeletes.js';
 import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
 import { isBotAccount, isSharedBotId } from './lib/botIdentities.js';
-import { workspaceForChannelSync } from './lib/zidolista.js';
+import { anncHides } from './lib/anncHides.js';
+import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
 import { deletePlatformMessage, deleteOwnMessageAsSender } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
 import { registryPlatformChannel } from './lib/platformChannels.js';
@@ -237,6 +238,11 @@ const ingest = createIngest({
     if (ucSends.match(m)) markUc(m, app.log);
     // Sdílený bot UnityChatu (JoukiBOT) píše přes UnityChat vždy → zlaté logo i bez markeru (shoda jen podle id účtu).
     else if (!m.isUnitychatUser && isSharedBotId(m.platform, m.platformUserId)) markUc(m, app.log);
+    // Odpověď na command, místo které uživatel UnityChatu vidí announcement → anncHidden (lib/anncHides.ts);
+    // v historii i /chat/stream jde bez vykreslení. UC kanál z registru (platformní kanál Kicku / YouTube).
+    const ucCh = workspaceForChannelSync(m.platform as WsPlatform, m.channel)?.channels.twitch || m.channel;
+    const hid = anncHides.match(m, ucCh);
+    if (hid) { m.contentRaw = { ...(m.contentRaw || {}), anncHidden: hid }; app.log.info({ platform: m.platform, id: m.platformMessageId, annc: hid }, 'announcement: odpověď potlačena'); }
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
     const rep = ucReplies.take(m);
     if (rep?.data) attachUcReply(m, rep.data, app.log);
