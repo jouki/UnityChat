@@ -398,3 +398,36 @@ export function applyModTag(el, text) {
   tag.textContent = text;
   el.classList.add('uc-mod-tagged');
 }
+
+// ---- Smazání až druhým klikem (pokyn usera 2026-09-30): první klik koš „natáhne“ (zčervená, title „Klikni znovu“),
+// druhý do ARM_MS potvrdí; jinak se sám vrátí. Pojistka proti nechtěnému smazání z hover akcí. ----
+export const DELETE_ARM_MS = 3000;
+export const DELETE_ARM_TITLE = 'Klikni znovu pro smazání';
+export const DELETE_TITLE = 'Smazat zprávu';
+
+/**
+ * @param {HTMLElement} btn  koš (.msg-action-btn[data-act="delete"])
+ * @returns {boolean} true = potvrzeno (smazat), false = teprve natažené
+ */
+export function confirmDeleteClick(btn, { ms = DELETE_ARM_MS, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  if (!btn) return true;
+  if (btn.classList.contains('uc-del-armed')) { disarmDelete(btn, clearTimer); return true; }
+  btn.classList.add('uc-del-armed');
+  btn.dataset.prevTitle = btn.title || DELETE_TITLE;
+  btn.title = DELETE_ARM_TITLE;
+  btn._ucDisarm = setTimer(() => disarmDelete(btn, clearTimer), ms);
+  // Myš pryč z akcí = zrušit (ať koš nezůstane natažený, až se sem člověk vrátí).
+  const host = btn.closest('.msg-actions') || btn.parentElement;
+  if (host && !host._ucDisarmBound) {
+    host._ucDisarmBound = true;
+    host.addEventListener('mouseleave', () => { for (const b of host.querySelectorAll('.uc-del-armed')) disarmDelete(b, clearTimer); });
+  }
+  return false;
+}
+
+export function disarmDelete(btn, clearTimer = clearTimeout) {
+  if (!btn) return;
+  if (btn._ucDisarm) { clearTimer(btn._ucDisarm); btn._ucDisarm = null; }
+  btn.classList.remove('uc-del-armed');
+  btn.title = btn.dataset.prevTitle || DELETE_TITLE;
+}

@@ -72,6 +72,10 @@
 .msg-action-btn[data-act="delete"] { display: none; }
 body.uc-can-moderate .msg-action-btn[data-act="delete"] { display: flex; }
 body.uc-can-moderate .msg-action-btn[data-act="delete"]:hover { color: #ff9a9d; }
+/* Natažený koš (první klik): červený, mírně zvětšený — druhý klik do 3 s smaže (core confirmDeleteClick). */
+.msg-action-btn[data-act="delete"].uc-del-armed, body.uc-can-moderate .msg-action-btn[data-act="delete"].uc-del-armed:hover { color: #fff; background: #d0342c; animation: uc-del-arm 0.6s ease-in-out infinite alternate; }
+@keyframes uc-del-arm { from { box-shadow: 0 0 0 0 rgba(208, 52, 44, 0.55); } to { box-shadow: 0 0 0 4px rgba(208, 52, 44, 0); } }
+@media (prefers-reduced-motion: reduce) { .msg-action-btn[data-act="delete"].uc-del-armed { animation: none; } }
 /* Zpráva smazaná / skrytá serverem: místo koše oko „Odkrýt zprávu (jen v UnityChatu)“ — přepíná se jen třídou
    .uc-deleted--restorable (applyDeleted / clearDeleted), takže po odkrytí (i přes SSE od jiného moda) se vrátí
    koš. Zprávy ztlumené jen po timeoutu / banu tu třídu nemají (server je smazané nemá) → koš zůstává. */

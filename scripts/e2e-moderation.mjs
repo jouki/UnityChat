@@ -135,6 +135,14 @@ check('A mod + strike: dotažený text přeškrtnutý + ztlumený + štítek', m
 const strikeEmote = await ev(`(() => { const w = document.querySelector('.msg[data-msg-id="e2e-m2"] .tx .emote-stack, .msg[data-msg-id="e2e-m2"] .tx .uc-strike-emote'); if (!w) return null; const a = getComputedStyle(w, '::after'); return { img: !!w.querySelector('img.emote'), after: a.content, h: a.height, pos: a.position, dec: getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m2"] .tx')).textDecorationLine, op: getComputedStyle(document.querySelector('.msg[data-msg-id="e2e-m2"] .tx')).opacity }; })()`);
 check('A mod + strike: čára i přes emote (::after přes obal emotu) + text line-through', strikeEmote?.img && strikeEmote.after !== 'none' && strikeEmote.h === '2px' && strikeEmote.pos === 'absolute' && strikeEmote.dec.includes('line-through'), JSON.stringify(strikeEmote));
 check('A mod: ztlumení (.tx opacity 0.5)', strikeEmote?.op === '0.5', JSON.stringify(strikeEmote));
+// Smazání až druhým klikem (pokyn usera 2026-09-30): první klik koš natáhne (červený, title „Klikni znovu“), nic nesmaže.
+await ev(`document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]').click()`);
+await sleep(150);
+const armed = await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]'); return { armed: b.classList.contains('uc-del-armed'), title: b.title, deleted: b.closest('.msg').classList.contains('uc-deleted'), posts: ${posts.length} }; })()`);
+check('A první klik na koš jen natáhne (nic nesmaže, title „Klikni znovu pro smazání“)', armed?.armed === true && armed.title === 'Klikni znovu pro smazání' && !armed.deleted && posts.length === 0, JSON.stringify(armed));
+// Malý tooltip s datem u času zprávy.
+const tsTip = await ev(`(() => { const ts = document.querySelector('.msg[data-msg-id="e2e-m1"] .ts'); return ts?.getAttribute('data-tooltip') || ''; })()`);
+check('čas zprávy má tooltip s celým datem (den, datum, čas)', /^(po|út|st|čt|pá|so|ne) \d{1,2}\. \d{1,2}\. \d{4}, \d\d:\d\d:\d\d$/.test(tsTip), tsTip);
 await ev(`document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]').click()`);
 await until(`document.querySelector('.msg[data-msg-id="e2e-m1"]').classList.contains('uc-deleted--strike')`, 3000);
 const m1mod = await msgState('e2e-m1');
@@ -212,7 +220,8 @@ check('B událost z cizího kanálu / bez kanálu ignorována', (await msgState(
 mock.mod = true; mock.deleteStatus = 403;
 await boot();
 await until(`document.body.classList.contains('uc-can-moderate')`);
-await ev(`document.querySelector('.msg[data-msg-id="e2e-m3"] [data-act=delete]').click()`);
+// Dvojí klik (pojistka proti nechtěnému smazání).
+await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m3"] [data-act=delete]'); b.click(); b.click(); return true; })()`);
 await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('Mazat můžou jen modi'))`, 4000);
 const m3r = await msgState('e2e-m3');
 check('C 403 → optimistické smazání vráceno', m3r?.cls === '' && m3r.text.includes('třetí zpráva'), JSON.stringify(m3r));
@@ -222,7 +231,7 @@ check('C 403 → hláška „Mazat můžou jen modi."', await ev(`[...document.q
 mock.deleteStatus = 403; mock.deleteDelayMs = 2000;
 await boot();
 await until(`document.body.classList.contains('uc-can-moderate')`);
-await ev(`document.querySelector('.msg[data-msg-id="e2e-m3"] [data-act=delete]').click()`);
+await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m3"] [data-act=delete]'); b.click(); b.click(); return true; })()`);
 mock.sse.push(['message-deleted', { channel: 'robdiesalot', platform: 'twitch', messageId: 'e2e-m3', by: 'twitch:jinymod', reason: 'mod', at: new Date().toISOString() }]);
 await until(`[...document.querySelectorAll('#chat .sys')].some(s => s.textContent.includes('Mazat můžou jen modi'))`, 6000);
 const m3d = await msgState('e2e-m3');

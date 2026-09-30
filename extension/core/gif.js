@@ -1376,3 +1376,59 @@ export class GifRequests {
   }
 }
 
+
+// ---- Pauza animace GIFu ve zprávě (pokyn usera 2026-09-30) ----
+// Tlačítko v hover akcích zprávy (místo kopírování, u GIFu není co kopírovat). <video> se pozastaví / pustí; <img>
+// (animovaný GIF / WebP) se „zmrazí“ tak, že se aktuální snímek vykreslí do <canvas> na jeho místě a obrázek se
+// schová (prohlížeč neumí animaci obrázku zastavit). Návrat = canvas pryč, obrázek zpátky (animace běží dál).
+export const GIF_PAUSE_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+export const GIF_PLAY_ICON_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+export const GIF_PAUSE_TITLE = 'Zastavit animaci';
+export const GIF_PLAY_TITLE = 'Přehrát animaci';
+
+/** Je GIF ve zprávě pozastavený? */
+export function isGifPaused(msgEl) {
+  const m = msgEl?.querySelector?.('.uc-gif-media');
+  if (!m) return false;
+  return m.tagName === 'VIDEO' ? m.paused : !!m.parentElement?.querySelector(':scope > canvas.uc-gif-still');
+}
+
+/**
+ * Přepnout pauzu GIFu ve zprávě. Vrací nový stav (true = pozastaveno), null = bez média / ještě nenačtené.
+ * @param {HTMLElement} msgEl
+ */
+export function toggleGifPause(msgEl) {
+  const m = msgEl?.querySelector?.('.uc-gif-media');
+  if (!m) return null;
+  const wrap = m.parentElement;
+  if (m.tagName === 'VIDEO') {
+    if (m.paused) { m.play?.().catch?.(() => {}); wrap?.classList.remove('uc-gif--paused'); return false; }
+    m.pause(); wrap?.classList.add('uc-gif--paused'); return true;
+  }
+  const still = wrap?.querySelector(':scope > canvas.uc-gif-still');
+  if (still) { still.remove(); m.style.visibility = ''; wrap.classList.remove('uc-gif--paused'); return false; }
+  if (!m.complete || !m.naturalWidth) return null;
+  const doc = m.ownerDocument;
+  const c = doc.createElement('canvas');
+  const r = m.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width || m.width || m.naturalWidth));
+  const h = Math.max(1, Math.round(r.height || m.height || m.naturalHeight));
+  c.width = w; c.height = h;
+  c.className = 'uc-gif-still';
+  c.style.width = `${w}px`; c.style.height = `${h}px`;
+  try { c.getContext('2d').drawImage(m, 0, 0, w, h); } catch { return null; }
+  // Obrázek zůstává v toku (drží rozměr karty), jen není vidět; canvas leží přes něj.
+  m.style.visibility = 'hidden';
+  m.after(c);
+  wrap.classList.add('uc-gif--paused');
+  return true;
+}
+
+/** Ikona + title tlačítka podle stavu. */
+export function setGifPauseButton(btn, paused) {
+  if (!btn) return;
+  btn.innerHTML = paused ? GIF_PLAY_ICON_SVG : GIF_PAUSE_ICON_SVG;
+  btn.title = paused ? GIF_PLAY_TITLE : GIF_PAUSE_TITLE;
+  btn.setAttribute('aria-label', btn.title);
+  btn.classList.toggle('uc-gif-paused', !!paused);
+}

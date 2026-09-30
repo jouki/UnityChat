@@ -8,6 +8,8 @@
   max-width: min(100%, 400px);
   line-height: 0;
 }
+/* Pauza GIFu: canvas s aktuálním snímkem leží přes obrázek (core toggleGifPause) → karta potřebuje kotvu. */
+.uc-gif--card { position: relative; }
 .uc-gif-media {
   display: block;
   max-width: 100%;

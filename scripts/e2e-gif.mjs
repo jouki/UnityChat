@@ -1470,5 +1470,24 @@ mock.sse.push(['gif-media', { channel: 'robdiesalot', mediaId: MEDIA.ok, state: 
 check('H gif-media unavailable → místo GIFu „[GIF nedostupný]“, text zůstává', await until(`document.querySelector('.msg[data-msg-id="gif-5"] .uc-gif--unavailable .uc-gif-fallback')?.textContent === '[GIF nedostupný]'`, 6000)
   && (await gm('gif-5'))?.text === 'z historie' && !(await gm('gif-5')).img, JSON.stringify(await gm('gif-5')));
 
+// ---- GIF zpráva: kopírování pryč, pauza / přehrání animace (pokyn usera 2026-09-30) ----
+// Bere první zprávu s načteným GIFem (obrázek), která v chatu po předchozích krocích je.
+await ev(`window.ucGif.add({ platform: 'twitch', id: 'gif-pause-1', username: 'Divak', userId: 'u77', message: '', timestamp: Date.now(), gif: { url: ${JSON.stringify(murl(MEDIA.ok))}, kind: 'gif', width: 50, height: 50 } })`);
+await until(`(() => { const i = document.querySelector('.msg[data-msg-id="gif-pause-1"] img.uc-gif-media'); return !!i && i.complete && i.naturalWidth > 0; })()`, 5000);
+const pz = await ev(`(async () => { try {
+  const img = document.querySelector('.msg[data-msg-id="gif-pause-1"] img.uc-gif-media');
+  if (!img) return { noImg: true, n: document.querySelectorAll('.msg.has-gif img.uc-gif-media').length };
+  const el = img.closest('.msg');
+  const copy = el.querySelector('[data-act="copy"]'); const btn = el.querySelector('[data-act="gifpause"]'); if (!btn) return { noBtn: true };
+  const before = { id: el.dataset.msgId, copy: getComputedStyle(copy).display, pause: getComputedStyle(btn).display, title: btn.title };
+  btn.click(); await new Promise((r) => setTimeout(r, 50));
+  const paused = { still: !!el.querySelector('canvas.uc-gif-still'), imgHidden: getComputedStyle(img).visibility, title: btn.title, cls: btn.classList.contains('uc-gif-paused') };
+  btn.click(); await new Promise((r) => setTimeout(r, 50));
+  const resumed = { still: !!el.querySelector('canvas.uc-gif-still'), imgHidden: getComputedStyle(img).visibility, title: btn.title };
+  return { before, paused, resumed }; } catch (e) { return { err: String(e) }; } })()`);
+check('GIF zpráva: kopírování schované, tlačítko pauzy vidět', pz?.before && pz.before.copy === 'none' && pz.before.pause !== 'none' && pz.before.title === 'Zastavit animaci', JSON.stringify(pz));
+check('GIF pauza: snímek do canvasu, obrázek schovaný, ikona play', pz?.paused && pz.paused.still && pz.paused.imgHidden === 'hidden' && pz.paused.title === 'Přehrát animaci' && pz.paused.cls, JSON.stringify(pz?.paused));
+check('GIF play: canvas pryč, obrázek zpátky, ikona pauzy', pz?.resumed && !pz.resumed.still && pz.resumed.imgHidden === 'visible' && pz.resumed.title === 'Zastavit animaci', JSON.stringify(pz?.resumed));
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

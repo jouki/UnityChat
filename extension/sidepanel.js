@@ -8511,6 +8511,8 @@ class UnityChat {
     ts.className = 'ts';
     const d = new Date(msg.timestamp);
     ts.textContent = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    // Malý tooltip s celým datem (core/time.js, pokyn usera 2026-09-30) — stejný mechanismus jako u log platforem.
+    ts.setAttribute('data-tooltip', window.UC_CORE.formatDateTooltip(msg.timestamp));
     el.appendChild(ts);
 
     // Badges (platforma + 7TV) — stejná funkce kreslí badge v Profilu.
@@ -8607,6 +8609,18 @@ class UnityChat {
       setTimeout(() => { copyBtn.innerHTML = copySvg; }, 1500);
     });
     actions.appendChild(copyBtn);
+    // GIF: místo kopírování (není co kopírovat, CSS koš/copy skryje u .has-gif) pauza / přehrání animace (core/gif.js).
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'msg-action-btn';
+    pauseBtn.dataset.act = 'gifpause';
+    window.UC_CORE.setGifPauseButton(pauseBtn, false);
+    pauseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = pauseBtn.closest('.msg');
+      const paused = window.UC_CORE.toggleGifPause(host);
+      if (paused !== null) window.UC_CORE.setGifPauseButton(pauseBtn, paused);
+    });
+    actions.appendChild(pauseBtn);
 
     // Pin button (jen Twitch zprávy; jen pokud viewer je mod/broadcaster).
     // Mod status se detekuje z IRC badge na vlastní zprávě — takže button se
@@ -8665,6 +8679,8 @@ class UnityChat {
       + '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
     delBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      // První klik koš natáhne (zčervená), až druhý do 3 s smaže (core confirmDeleteClick, pokyn usera 2026-09-30).
+      if (!window.UC_CORE.confirmDeleteClick(delBtn)) return;
       this._deleteMessage(delBtn.closest('.msg'));
     });
     actions.insertBefore(delBtn, poopBtn);
@@ -9312,8 +9328,9 @@ function _initPlatformBadgeTooltip() {
   }
 
   document.body.addEventListener('mouseover', (e) => {
-    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip]');
+    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip], .ts[data-tooltip]');
     if (!badge || badge === currentBadge) return;
+    tooltip.classList.toggle('small', badge.classList.contains('ts'));
     show(badge);
   });
 
