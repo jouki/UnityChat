@@ -547,6 +547,11 @@ body:not(.uc-dev) .uc-mod-only.dev-only { display: none !important; }
 .settings-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); opacity: 0.7; padding: 6px 0 0; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
 .settings-title:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
 .setting-sub { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+/* Streamer — správa kanálu: řádek na identitu (platforma · jméno) + tlačítko / potvrzení. */
+.setting-hint { font-size: 11px; color: var(--text-muted); line-height: 1.35; margin-bottom: 6px; }
+.streamer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 12px; color: var(--text-secondary); }
+.streamer-row .streamer-ok { color: #00e676; font-size: 11px; }
+.streamer-row .btn-nick { padding: 4px 10px; font-size: 11px; }
 .settings-foot { border-top: 1px solid rgba(255, 255, 255, 0.06); margin-top: 4px; padding-top: 8px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; font-size: 11px; }
 .settings-links { display: flex; flex-direction: column; gap: 2px; opacity: 0.7; line-height: 1.5; }
 .settings-links a { color: inherit; }
