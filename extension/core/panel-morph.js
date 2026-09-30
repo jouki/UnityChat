@@ -143,6 +143,51 @@ export function morphResize(panel, mutate = () => {}, { duration = MORPH_MS, eas
   return anim.finished.catch(() => {}).then(() => { finish(); return true; });
 }
 
+/**
+ * Přepnutí obsahu záložek uvnitř panelu (nastavení Účet | Rozhraní): odcházející obsah odjede do strany a vybledne
+ * (jako statická kopie bez id a bez interakce — původní panel záložky se schová hned, ať DOM sedí s daty), příchozí
+ * přijede z druhé strany a prolne se. `dir` = 1 (další záložka vpravo) / -1. Volat uvnitř `mutate` morphResize —
+ * výška panelu pak přejede na nový obsah. Bez animace (reduced motion / bez API) jen přepne `hidden`. Vrací Promise<boolean>.
+ */
+export function switchPanes(panel, from, to, { dir = 1, duration = MORPH_MS, easing = MORPH_EASING } = {}) {
+  if (!from || !to || from === to) { if (to) to.hidden = false; if (from && from !== to) from.hidden = true; return Promise.resolve(false); }
+  const win = panel?.ownerDocument?.defaultView;
+  const pr = panel?.getBoundingClientRect?.(), fr = from.getBoundingClientRect?.();
+  if (reducedMotion(win) || typeof to.animate !== 'function' || !pr?.width || !fr?.width) { from.hidden = true; to.hidden = false; return Promise.resolve(false); }
+  settleMorph(to);
+  // Statická kopie odcházejícího obsahu: bez id (žádné duplicity pro dotazy), neklikatelná, pro čtečky neviditelná.
+  const ghost = from.cloneNode(true);
+  ghost.removeAttribute('id');
+  for (const el of ghost.querySelectorAll('[id]')) el.removeAttribute('id');
+  ghost.classList.add('uc-morph-ghost');
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.inert = true;
+  Object.assign(ghost.style, { position: 'absolute', top: `${fr.top - pr.top - (panel.clientTop || 0)}px`, left: `${fr.left - pr.left - (panel.clientLeft || 0)}px`, width: `${fr.width}px`, margin: '0', pointerEvents: 'none' });
+  const savedPanelPos = panel.style.position;
+  if (win.getComputedStyle(panel).position === 'static') panel.style.position = 'relative';
+  from.hidden = true;
+  to.hidden = false;
+  panel.appendChild(ghost);
+  const shift = Math.round(Math.max(12, Math.min(28, pr.width * 0.04)));
+  const anims = [
+    ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-dir * shift}px)` }], { duration: Math.round(duration * 0.7), easing, fill: 'forwards' }),
+    to.animate([{ opacity: 0, transform: `translateX(${dir * shift}px)` }, { opacity: 1, transform: 'none' }], { duration, easing }),
+  ];
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (running.get(to) === finish) running.delete(to);
+    win.clearTimeout(t);
+    for (const a of anims) { try { a.cancel(); } catch { /* ignore */ } }
+    ghost.remove();
+    panel.style.position = savedPanelPos;
+  };
+  const t = win.setTimeout(finish, duration + 150);
+  running.set(to, finish);
+  return Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => { finish(); return true; });
+}
+
 /** Bod, ze kterého panel vyrůstá / do kterého se zavře: tlačítko (jeho pravý spodní roh) v souřadnicích panelu. */
 function growOrigin(panel, button) {
   const p = panel.getBoundingClientRect();

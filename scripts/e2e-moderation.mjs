@@ -120,13 +120,16 @@ check('A 💩 první, koš hned za ním (oko pro smazanou zprávu před košem, 
 const secT = await ev(`(async () => { document.getElementById('btn-settings').click();
   const st = document.getElementById('settings'); const openAnim = st.getAnimations().length; await new Promise((r) => setTimeout(r, 400));
   const tabs = [...document.querySelectorAll('#settings .settings-tab')].map((t) => t.textContent.trim());
-  const vis = () => [...document.querySelectorAll('#settings .settings-pane')].filter((p) => !p.hidden).map((p) => p.dataset.pane);
-  const a = vis(); document.querySelector('#settings .settings-tab[data-tab="ui"]').click(); const tabAnim = st.getAnimations().length; await new Promise((r) => setTimeout(r, 50)); const b = vis();
+  const vis = () => [...document.querySelectorAll('#settings .settings-pane:not(.uc-morph-ghost)')].filter((p) => !p.hidden).map((p) => p.dataset.pane);
+  const a = vis(); document.querySelector('#settings .settings-tab[data-tab="ui"]').click(); const tabAnim = st.getAnimations().length;
+  const paneAnim = st.querySelector('.settings-pane[data-pane="ui"]').getAnimations().length; const ghost = st.querySelector('.uc-morph-ghost'); const ghostOk = !!ghost && ghost.hasAttribute('aria-hidden') && !ghost.querySelector('[id]');
+  await new Promise((r) => setTimeout(r, 50)); const b = vis(); await new Promise((r) => setTimeout(r, 450)); const ghostGone = !st.querySelector('.uc-morph-ghost');
   const ind = !!document.querySelector('#settings .settings-tabs .uc-slide-ind'); const saved = localStorage.getItem('uc_settings_tab');
   document.querySelector('#settings .settings-tab[data-tab="account"]').click();
   const foot = !!document.querySelector('#settings .settings-foot .settings-links a[href*="privacy"]') && !!document.querySelector('#settings .settings-foot .kofi-link');
-  return { tabs, a, b, ind, saved, foot, openAnim, tabAnim }; })()`);
+  return { tabs, a, b, ind, saved, foot, openAnim, tabAnim, paneAnim, ghostOk, ghostGone }; })()`);
 check('nastavení: otevření i přepnutí záložky mění výšku panelu plynule (core morphResize, jako panely u pole)', secT && secT.openAnim > 0 && secT.tabAnim > 0, JSON.stringify({ o: secT?.openAnim, t: secT?.tabAnim }));
+check('nastavení: obsah záložky přijede (animace nové) a starý odjede jako kopie bez id, po doběhnutí pryč (core switchPanes)', secT && secT.paneAnim > 0 && secT.ghostOk === true && secT.ghostGone === true, JSON.stringify({ p: secT?.paneAnim, g: secT?.ghostOk, gone: secT?.ghostGone }));
 check('nastavení: záložky Účet | Rozhraní přepínají panely (posuvné zvýraznění, volba uložená), patička s odkazy', secT && secT.tabs.join(',') === 'Účet,Rozhraní' && secT.a.join() === 'account' && secT.b.join() === 'ui' && secT.ind && secT.saved === 'ui' && secT.foot, JSON.stringify(secT));
 // Instance UnityChat není globální → zachytit přes prototyp při dalším logu (stejně jako e2e-mention-notify.mjs).
 await ev(`(() => { const o = UnityChat.prototype._ucLog; UnityChat.prototype._ucLog = function (...a) { window.__uc = this; return o.apply(this, a); }; return true; })()`);

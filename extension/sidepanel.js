@@ -5206,9 +5206,12 @@ class UnityChat {
     const ind = window.UC_CORE.createSlideIndicator?.({ container: bar, getActive: () => bar.querySelector('.settings-tab.on') });
     const select = (tab, animate = true) => {
       for (const b of bar.querySelectorAll('.settings-tab')) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
-      // Přepnutí záložky: výška panelu přejede plynule (core/panel-morph.js morphResize, jako panel emotů / GIFů / SFX).
-      const swap = () => { for (const p of panes) p.hidden = p.dataset.pane !== tab; };
-      if (animate) window.UC_CORE.morphResize(document.getElementById('settings'), swap, { log: (t) => this._ucLog('Settings', t) }); else swap();
+      // Přepnutí záložky: obsah odjede / přijede (core switchPanes) a výška panelu přejede plynule (morphResize).
+      const panelEl = document.getElementById('settings');
+      const from = panes.find((p) => !p.hidden), to = panes.find((p) => p.dataset.pane === tab);
+      const dir = panes.indexOf(to) >= panes.indexOf(from) ? 1 : -1;
+      const swap = () => { if (animate && from && to && from !== to) window.UC_CORE.switchPanes(panelEl, from, to, { dir }); else for (const p of panes) p.hidden = p.dataset.pane !== tab; };
+      if (animate) window.UC_CORE.morphResize(panelEl, swap, { log: (t) => this._ucLog('Settings', t) }); else swap();
       ind?.update({ animate });
       try { localStorage.setItem('uc_settings_tab', tab); } catch { /* ignore */ }
     };
