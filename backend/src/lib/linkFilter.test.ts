@@ -82,6 +82,11 @@ test('isKnownBot: SE/Nightbot/Streamlabs, extraBots, vlastní login bota, bot id
   assert.equal(isKnownBot({ ...base, platform: 'kick', login: 'nightbot' }), false, 'SE/Nightbot jen na Twitchi');
   assert.equal(isKnownBot({ ...base, platform: 'youtube', login: 'StreamElements' }), false);
   assert.equal(isKnownBot({ ...base, platform: 'kick', login: 'moobot' }), true, 'extraBots platí všude');
+  // Kick: jméno se zavináčem + oficiální účet podle ID (hlášení 2026-09-29: SE na Kicku smazán link filtrem).
+  assert.equal(isKnownBot({ ...base, platform: 'kick', login: '@moobot' }), true, 'zavináč ze jména Kicku nevadí');
+  assert.equal(isKnownBot({ ...base, platform: 'kick', login: '@StreamElements', userId: '55807129' }), true, 'SE na Kicku podle ID účtu');
+  assert.equal(isKnownBot({ ...base, platform: 'kick', login: '@StreamElements', userId: '999' }), false, 'cizí účet se jménem SE ne');
+  assert.equal(isKnownBot({ ...base, platform: 'youtube', login: 'StreamElements', userId: 'UCjerlCIbLPQwSnYlClkjDXg' }), true);
 });
 
 // ---- createLinkFilter (ingest onLive) ----

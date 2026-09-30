@@ -131,9 +131,15 @@ export function _expireLinkFilterForTest(slug: string): void { const h = setting
 
 /**
  * Známí boti Twitche (login je tam jedinečný a jejich). Na Kicku/YouTube si stejné jméno může vzít kdokoli,
- * proto tam neplatí — tam jen extraBots (nastavuje streamer v Židolištce) a identity botů workspace.
+ * proto tam podle jména neplatí — tam jen extraBots (nastavuje streamer v Židolištce), identity botů workspace
+ * a známí boti podle ID účtu (KNOWN_BOT_IDS), které napodobit nejde.
  */
 export const KNOWN_BOTS = ['streamelements', 'nightbot', 'streamlabs'] as const;
+/** Oficiální účty známých botů na Kicku / YouTube podle ID (z ověřených zpráv v archivu, 2026-09-30). */
+export const KNOWN_BOT_IDS: Record<string, Record<string, string>> = {
+  kick: { '55807129': 'streamelements' },
+  youtube: { 'UCjerlCIbLPQwSnYlClkjDXg': 'streamelements' },
+};
 
 export interface BotCheck {
   platform: Platform;
@@ -146,8 +152,10 @@ export interface BotCheck {
 }
 
 export function isKnownBot(p: BotCheck): boolean {
-  const l = p.login.toLowerCase();
+  // Kick posílá jméno i se zavináčem („@StreamElements“) — bez něj, jinak by extra boti ze Židolišty nikdy neseděli.
+  const l = p.login.toLowerCase().replace(/^@/, '');
   if (p.platform === 'twitch' && (KNOWN_BOTS as readonly string[]).includes(l)) return true;
+  if (p.userId && KNOWN_BOT_IDS[p.platform]?.[String(p.userId)]) return true;
   if (p.extraBots.includes(l)) return true;
   if (p.ws.bot.ownLogins?.[p.platform] === l) return true;
   return p.isBotAccount(p.platform, p.ws.slug, p.userId, l);
