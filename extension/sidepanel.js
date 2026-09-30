@@ -8253,8 +8253,6 @@ class UnityChat {
   _badgesEl(msg) {
     const bdg = document.createElement('span');
     bdg.className = 'bdg';
-    // Dárce za posledních 30 dní (server `donor`, lib/donors.ts) → odznak dárce (varianta kanálu, core/donor-badge.js).
-    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, null, { amountCzk: msg.donorCzk }));
     const badgeCount = Object.keys(this._twitchBadges).length;
     // Volba autora „odznak podporovatele místo globálního odznaku Twitche“ (server `donorReplace`, lib/badgePrefs.ts):
     // zůstanou jen odznaky role / sub, globální nahradí odznak UC.
@@ -8278,6 +8276,9 @@ class UnityChat {
     }
     const b7 = msg?.platform === 'twitch' && msg.username ? this._chatUsers.get(`twitch:${String(msg.username).toLowerCase()}`)?._badge7tv : null;
     if (b7?.url) bdg.appendChild(this._badge7tvImg(b7));
+    // Podporovatel (server `donor`, lib/donors.ts) → odznak UC jako poslední (pokyn usera 2026-09-30); s volbou „místo
+    // globálního“ jsou globální odznaky vynechané výš, takže stojí na jejich místě za rolí / subem.
+    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, null, { amountCzk: msg.donorCzk }));
     return bdg.children.length ? bdg : null;
   }
 

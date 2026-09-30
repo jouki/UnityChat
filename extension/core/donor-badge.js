@@ -3,7 +3,7 @@
 // (Účet → Odznak podporovatele, jen v dev módu), uloženo na serveru (routes/channelPrefs.ts), změna jde všem SSE
 // `channel-prefs`. Tam se nastavuje i tempo animace, intenzita a odstup mezi animacemi.
 // Individuální volba každého účtu s propojeným Twitchem (lib/badgePrefs.ts, `PUT /account/badge-prefs`): odznak UC
-// u vlastních zpráv má vlastní slot, nebo nahradí globální odznak Twitche (role / sub zůstávají). Server ji dává
+// u vlastních zpráv má vlastní slot (poslední v řadě), nebo nahradí globální odznak Twitche (role / sub zůstávají). Server ji dává
 // zprávě jako `donorReplace`; klient podle toho vynechá globální odznaky (stripGlobalTwitchBadges). Pod volbou je
 // náhled vlastní zprávy (badgePreviewHtml) — bez vlastního globálního odznaku ukáže ukázkový (GlitchCon 2020).
 // Vykreslení: <img data-donor-badge> se statickým SVG (data URL); animaci řídí DonorMotion (installDonorMotion):
@@ -100,7 +100,7 @@ export function badgeReplaceHtml({ checked = false, disabled = false } = {}) {
  * Náhled vlastní zprávy jako v chatu (stejné třídy .msg / .pi / .ts / .bdg / .un / .tx → sidepanel.css):
  * `badges` = [{ url, title, global }] z vlastních odznaků Twitche (hostitel podle badgesRaw a své mapy odznaků);
  * bez globálního odznaku se přidá ukázkový (SAMPLE_GLOBAL_BADGE). `replace` = volba účtu; odznak UC se kreslí vždy
- * (ať je vidět chování), ve vlastním slotu první, jinak na místě globálního odznaku.
+ * (ať je vidět chování): ve vlastním slotu jako poslední (pokyn usera 2026-09-30), jinak na místě globálního odznaku.
  */
 export function badgePreviewHtml({ displayName = '', color = '', badges = [], replace = false, donorBadge = DONOR_BADGE_DEFAULT, amountCzk = null, text = 'Takhle bude vypadat moje zpráva.' } = {}) {
   const list = badges.filter((b) => b?.url);
@@ -112,9 +112,9 @@ export function badgePreviewHtml({ displayName = '', color = '', badges = [], re
     // Globální odznaky pryč, odznak UC na místě prvního z nich.
     let placed = false;
     for (const b of list) { if (b.global) { if (!placed) { bdg += uc; placed = true; } } else bdg += img(b); }
-    if (!placed) bdg = uc + bdg;
+    if (!placed) bdg += uc;
   } else {
-    bdg = uc + list.map(img).join('');
+    bdg = list.map(img).join('') + uc;
   }
   const name = displayName || 'Já';
   return `<div class="msg uc-badge-preview"><span class="pi tw" data-tooltip="Twitch">TW</span><span class="ts">12:34</span><span class="bdg">${bdg}</span><span class="un"${color ? ` style="color:${escapeAttr(color)}"` : ''}>${escapeHtml(name)}</span> <span class="tx">${escapeHtml(text)}</span></div>`;
@@ -134,6 +134,9 @@ export function renderBadgePreviewInto(box, opts, { duration = 220, easing = 'cu
   const keyOf = (el) => (el.matches('img') ? (el.dataset.donorBadge ? 'uc' : el.getAttribute('src')) : (el.classList.contains('un') ? 'un' : 'tx'));
   const SEL = '.bdg img, .un, .tx';
   const before = new Map();
+  // Rozběhnuté animace z předchozí změny nejdřív zrušit (transform by zkreslil změřené pozice „před“).
+  for (const el of box?.querySelectorAll?.('*') || []) for (const a of el.getAnimations?.() || []) { try { a.cancel(); } catch { /* ignore */ } }
+  for (const el of box?.querySelectorAll?.('img[aria-hidden]') || []) el.remove();
   for (const el of box?.querySelectorAll?.(SEL) || []) before.set(keyOf(el), { rect: el.getBoundingClientRect(), html: el.outerHTML });
   box.innerHTML = html;
   if (!before.size || reduced || typeof win?.Element?.prototype?.animate !== 'function') return false;
