@@ -13,19 +13,39 @@ import { broadcast } from '../sse/bus.js';
 
 export const DONOR_BADGE_VARIANTS = ['qr-patron', 'donor-coin', 'money-bag', 'support-card'] as const;
 export const DONOR_BADGE_DEFAULT = 'donor-coin';
-export type ChannelPrefs = { donorBadge: (typeof DONOR_BADGE_VARIANTS)[number] };
+const DONOR_SPEEDS = [1.5, 2.2, 3] as const;
+const DONOR_STRENGTHS = [0.6, 1, 1.3] as const;
+const DONOR_GAP_MAX = 120;
+/** Odznak dárce: varianta, tempo (s), intenzita, odstup mezi animacemi (s), nahrazení globálního odznaku Twitche. */
+export type ChannelPrefs = { donorBadge: (typeof DONOR_BADGE_VARIANTS)[number]; donorSpeed: number; donorStrength: number; donorGapMin: number; donorGapMax: number; donorReplaceGlobal: boolean };
+const DEFAULT_PREFS: ChannelPrefs = { donorBadge: DONOR_BADGE_DEFAULT, donorSpeed: 3, donorStrength: 1, donorGapMin: 2, donorGapMax: 6, donorReplaceGlobal: false };
 
 const Channel = z.string().transform((s) => s.toLowerCase().replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9_]{1,40}$/));
 const PrefsBody = z.object({
   channel: Channel.optional(),
-  prefs: z.object({ donorBadge: z.enum(DONOR_BADGE_VARIANTS).optional() }).strict(),
+  prefs: z.object({
+    donorBadge: z.enum(DONOR_BADGE_VARIANTS).optional(),
+    donorSpeed: z.number().optional(), donorStrength: z.number().optional(),
+    donorGapMin: z.number().min(0).max(DONOR_GAP_MAX).optional(), donorGapMax: z.number().min(0).max(DONOR_GAP_MAX).optional(),
+    donorReplaceGlobal: z.boolean().optional(),
+  }).strict(),
 }).strict();
 
 /** Uložené hodnoty + výchozí (čistá funkce). Neznámé klíče / hodnoty se zahodí. */
 export function normalizePrefs(raw: unknown): ChannelPrefs {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const db = String(r.donorBadge ?? '');
-  return { donorBadge: (DONOR_BADGE_VARIANTS as readonly string[]).includes(db) ? (db as ChannelPrefs['donorBadge']) : DONOR_BADGE_DEFAULT };
+  const num = (v: unknown, min: number, max: number, d: number) => { const n = Number(v); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d; };
+  const pick = <T extends readonly number[]>(v: unknown, list: T, d: number) => (list as readonly number[]).includes(Number(v)) ? Number(v) : d;
+  const gapMin = num(r.donorGapMin, 0, DONOR_GAP_MAX, DEFAULT_PREFS.donorGapMin);
+  return {
+    donorBadge: (DONOR_BADGE_VARIANTS as readonly string[]).includes(db) ? (db as ChannelPrefs['donorBadge']) : DONOR_BADGE_DEFAULT,
+    donorSpeed: pick(r.donorSpeed, DONOR_SPEEDS, DEFAULT_PREFS.donorSpeed),
+    donorStrength: pick(r.donorStrength, DONOR_STRENGTHS, DEFAULT_PREFS.donorStrength),
+    donorGapMin: gapMin,
+    donorGapMax: Math.max(gapMin, num(r.donorGapMax, 0, DONOR_GAP_MAX, DEFAULT_PREFS.donorGapMax)),
+    donorReplaceGlobal: r.donorReplaceGlobal === true,
+  };
 }
 
 export async function readChannelPrefs(channel: string): Promise<ChannelPrefs> {

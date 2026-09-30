@@ -137,10 +137,10 @@ export function publicDonationSum(items: DonationItem[], names: Array<string | n
   return { czk, count };
 }
 
-/** Poslední zpráva identity → jen to, co hlavička potřebuje na badge (žádný text — ani u smazané zprávy). */
-export function latestView(row: Message): Pick<ClientMessage, 'platform' | 'id' | 'username' | 'userId' | 'timestamp' | 'color' | 'badgesRaw'> {
+/** Poslední zpráva identity → jen to, co hlavička potřebuje na badge (žádný text — ani u smazané zprávy); vč. odznaku dárce. */
+export function latestView(row: Message): Pick<ClientMessage, 'platform' | 'id' | 'username' | 'userId' | 'timestamp' | 'color' | 'badgesRaw' | 'donor' | 'donorCzk'> {
   const c = toClientContent(row, true);
-  return { platform: c.platform, id: c.id, username: c.username, userId: c.userId, timestamp: c.timestamp, color: c.color ?? null, badgesRaw: c.badgesRaw ?? '' };
+  return { platform: c.platform, id: c.id, username: c.username, userId: c.userId, timestamp: c.timestamp, color: c.color ?? null, badgesRaw: c.badgesRaw ?? '', ...(c.donor ? { donor: true, ...(c.donorCzk ? { donorCzk: c.donorCzk } : {}) } : {}) };
 }
 
 /** Skupiny (platforma, kanál) → záložky podle UC kanálu. Aktuální kanál vždy první (i s 0), ostatní jen s count>0, od posledně aktivního. */
@@ -308,7 +308,7 @@ export async function buildPublicSummary(input: Omit<SummaryInput, 'accountId'>,
   };
   // Ostatní platformy: jen badge (bez loginu, id účtu a id zprávy) — divák nemá vidět propojené účty.
   const latest: Record<string, unknown> = {};
-  for (const [p, v] of Object.entries(latestAll)) latest[p] = p === primary.platform ? v : { platform: v.platform, id: '', username: '', userId: '', timestamp: v.timestamp, color: null, badgesRaw: v.badgesRaw };
+  for (const [p, v] of Object.entries(latestAll)) latest[p] = p === primary.platform ? v : { platform: v.platform, id: '', username: '', userId: '', timestamp: v.timestamp, color: null, badgesRaw: v.badgesRaw, ...(v.donor ? { donor: true, ...(v.donorCzk ? { donorCzk: v.donorCzk } : {}) } : {}) };
   const body: Record<string, unknown> = { ok: true, view: 'public', user, latest };
   // Divák dostane jen celkovou sumu (žádné položky, texty, přezdívky ani rozpad na jisté / podle jména).
   if (donationItems?.length) {

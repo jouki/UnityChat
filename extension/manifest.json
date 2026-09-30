@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "UnityChat",
-  "version": "3.41.117",
+  "version": "3.41.118",
   "description": "Sjednocený chat z Twitch, YouTube a Kick v jednom panelu",
   "permissions": [
     "sidePanel",
@@ -90,8 +90,7 @@
       "resources": [
         "icons/icon16.png",
         "icons/icon48.png",
-        "icons/icon128.png",
-        "icons/badges/donor/*"
+        "icons/icon128.png"
       ],
       "matches": [
         "*://*.twitch.tv/*",

@@ -5155,7 +5155,6 @@ class UnityChat {
 
   /** Jsem na kanálu mod (podle účtu UnityChatu)? → body.uc-can-moderate + přebarvit smazané. */
   // ---- Nastavení kanálu společné pro všechny (odznak dárce, core/donor-badge.js) ----
-  _donorAssetUrl(rel) { return chrome.runtime.getURL(`icons/${rel}`); }
 
   /** Záložky nastavení (Účet | Rozhraní): přepnutí panelu, posuvné zvýraznění, uložená volba. */
   _initSettingsTabs() {
@@ -5177,21 +5176,23 @@ class UnityChat {
     this._settingsTabsUpdate = () => ind?.update({ animate: false });
   }
 
+  /** Výběr odznaku dárce v nastavení (mod): varianta + tempo, intenzita, odstupy, nahrazení globálního odznaku → PUT celých prefs. */
   _initDonorBadgePicker() {
     const host = document.getElementById('donor-badge-picker');
     if (!host || host._ucInit) return;
     host._ucInit = true;
     const core = window.UC_CORE;
-    host.innerHTML = core.donorBadgePickerHtml(this._channelPrefs?.donorBadge, (rel) => this._donorAssetUrl(rel));
+    host.innerHTML = core.donorBadgePickerHtml(this._channelPrefs);
+    this._donorMotion = core.installDonorMotion({ root: document.body, prefs: () => this._channelPrefs });
     host.addEventListener('change', async (e) => {
-      const input = e.target.closest?.('input[name="uc-donor-badge"]');
-      if (!input) return;
+      if (!e.target.closest?.('[name^="uc-donor-"]')) return;
       const status = document.getElementById('donor-badge-status');
-      const prev = this._channelPrefs?.donorBadge;
-      core.markDonorBadgePicker(host, input.value);
+      const prev = this._channelPrefs;
+      const prefs = core.readDonorPickerPrefs(host);
+      core.markDonorBadgePicker(host, prefs);
       if (status) { status.textContent = 'Ukládám…'; status.className = 'nick-status'; }
       try {
-        const j = await this._ucApi('/moderation/channel-prefs', { method: 'PUT', body: { channel: (this.config.channel || '').toLowerCase(), prefs: { donorBadge: input.value } } });
+        const j = await this._ucApi('/moderation/channel-prefs', { method: 'PUT', body: { channel: (this.config.channel || '').toLowerCase(), prefs } });
         this._applyChannelPrefs(j.prefs, 'save');
         if (status) { status.textContent = 'Uloženo pro celý kanál'; status.className = 'nick-status success'; setTimeout(() => { if (status.textContent === 'Uloženo pro celý kanál') status.textContent = ''; }, 2500); }
       } catch (err) {
@@ -5212,22 +5213,25 @@ class UnityChat {
     } catch (e) { this._ucLog('Prefs', `load FAIL ${e?.message || e}`); }
   }
 
-  /** Nové hodnoty (load / SSE / uložení): výběr v nastavení + odznaky v chatu. */
+  /** Nové hodnoty (load / SSE / uložení): výběr v nastavení + odznaky v chatu (varianta hned, animace od dalšího cyklu). */
   _applyChannelPrefs(prefs, why) {
     const core = window.UC_CORE;
-    const next = { donorBadge: core.donorBadgeVariant(prefs?.donorBadge) };
-    const changed = next.donorBadge !== this._channelPrefs?.donorBadge;
+    const next = core.normalizeDonorPrefs(prefs);
+    const changed = JSON.stringify(next) !== JSON.stringify(this._channelPrefs || null);
+    const prevReplace = this._channelPrefs?.donorReplaceGlobal ?? false;
     this._channelPrefs = next;
-    core.markDonorBadgePicker(document.getElementById('donor-badge-picker'), next.donorBadge);
+    core.markDonorBadgePicker(document.getElementById('donor-badge-picker'), next);
     if (changed) {
-      this._ucLog('Prefs', `donorBadge=${next.donorBadge} (${why})`);
-      // Už vykreslené odznaky dárce v chatu → nová varianta.
-      for (const img of document.querySelectorAll('img[data-donor-badge]')) {
-        const pic = img.closest('picture');
-        const still = pic?.querySelector('source');
-        if (still) still.srcset = this._donorAssetUrl(core.donorBadgePath(next.donorBadge, { still: true }));
-        img.src = this._donorAssetUrl(core.donorBadgePath(next.donorBadge));
-        img.dataset.donorBadge = next.donorBadge;
+      this._ucLog('Prefs', `${JSON.stringify(next)} (${why})`);
+      core.repaintDonorBadges(document, next);
+      this._donorMotion?.refresh();
+      // „Nahradit globální odznak Twitche“ mění sadu odznaků → zprávy dárců v chatu překreslit celé (.bdg).
+      if (prevReplace !== next.donorReplaceGlobal) {
+        for (const img of document.querySelectorAll('#chat .msg img[data-donor-badge]')) {
+          const el = img.closest('.msg'); const old = img.closest('.bdg');
+          const m = el?.dataset.msgId ? this.store.get(el.dataset.msgId) : null;
+          if (m && old) { const fresh = this._badgesEl(m); if (fresh) old.replaceWith(fresh); }
+        }
       }
     }
   }
@@ -8137,9 +8141,11 @@ class UnityChat {
     const bdg = document.createElement('span');
     bdg.className = 'bdg';
     // Dárce za posledních 30 dní (server `donor`, lib/donors.ts) → odznak dárce (varianta kanálu, core/donor-badge.js).
-    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, (rel) => this._donorAssetUrl(rel)));
+    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, null, { amountCzk: msg.donorCzk }));
     const badgeCount = Object.keys(this._twitchBadges).length;
-    for (const badge of String(msg?.badgesRaw || '').split(',')) {
+    // Volba kanálu „nahradit globální odznak Twitche“: dárci zůstanou jen odznaky role / sub, globální nahradí odznak UC.
+    const raw = msg?.donor && msg.platform === 'twitch' && this._channelPrefs?.donorReplaceGlobal ? window.UC_CORE.stripGlobalTwitchBadges(msg.badgesRaw) : String(msg?.badgesRaw || '');
+    for (const badge of raw.split(',')) {
       if (!badge) continue;
       const entry = this._badgeEntry(msg.platform, badge);
       const url = entry && typeof entry === 'object' ? entry.url : entry;

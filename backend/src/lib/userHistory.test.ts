@@ -4,6 +4,8 @@ import { buildSummary, buildPublicSummary, publicDonationSum, makeWindowBudget, 
 import type { DonationItem } from './zidolista.js';
 import type { Message } from '../db/schema.js';
 import type { Platform } from './zidolista.js';
+import { _setWorkspacesForTest } from './zidolista.js';
+import { _setDonorsForTest, _resetDonorsForTest } from './donors.js';
 
 const d = (s: string) => new Date(s);
 
@@ -193,10 +195,16 @@ test('buildPublicSummary: jen veřejná pole, statistika jen aktuálního kanál
     messagesPage: async (scope) => [row(6, scope[0].platform, scope[0].userId, scope[0].channels[0], '2026-09-25T10:00:00Z', { contentRaw: { badges: 'vip/1' } })],
     donations: async () => [don('a', 1000, 'CZK', 'uc', 1, 1000, 'SpAmMeR'), don('b', 300, 'CZK', 'uc', 1, 300, 'anonym'), don('c', 250, 'CZK', 'nickname', 1, 250, 'spammer')],
   });
+  // Dárce za 30 dní (lib/donors.ts) → `donor` i v hlavičce Profilu (odznak UC u všech platforem účtu).
+  _setWorkspacesForTest([{ slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robdiesalot-kick', youtube: null }, bot: { mode: 'shared', displayName: 'JoukiBOT' } }]);
+  _setDonorsForTest('rob', ['kick:7']);
   const out = await buildPublicSummary({ channel: 'robdiesalot', platform: 'twitch', userId: '1' }, dd);
+  _resetDonorsForTest();
   assert.equal(out.status, 200);
   const b = out.body as Record<string, any>;
   assert.deepEqual(Object.keys(b).sort(), ['donations', 'latest', 'ok', 'user', 'view']);
+  assert.equal(b.latest.kick.donor, true, 'odznak dárce v hlavičce i u jiné platformy účtu');
+  assert.equal(b.latest.twitch.donor, undefined);
   assert.equal(b.view, 'public');
   assert.deepEqual(Object.keys(b.user).sort(), ['color', 'displayName', 'firstSeen', 'lastSeen', 'login', 'nickname', 'platform', 'total', 'userId']);
   assert.equal(b.user.total, 5, 'jen Twitch identita v robdiesalot (Kick propojeného účtu se nepočítá)');

@@ -562,6 +562,13 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .uc-dbp-img { width: 28px; height: 28px; display: block; }
 .uc-dbp-name { white-space: nowrap; }
 .uc-donor-badge { width: 20px; height: 20px; }
+/* Volby animace odznaku (tempo, intenzita, odstupy) + nahrazení globálního odznaku Twitche. */
+.uc-dbp-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.uc-dbp-opt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.uc-dbp-opt select, .uc-dbp-opt input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 12px; }
+.uc-dbp-opt select:focus, .uc-dbp-opt input:focus { outline: none; border-color: var(--accent); }
+.uc-dbp-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; cursor: pointer; line-height: 1.3; }
+.uc-dbp-check input { margin: 0; accent-color: var(--accent); }
 .dev-mode-row label { font-size: 10px; color: var(--text-muted); opacity: 0.4; }
 .dev-mode-row label:hover { opacity: 0.7; }
 .kofi-link { font-size: 11px; color: var(--text-muted); opacity: 0.55; text-decoration: none; transition: opacity 0.15s; }

@@ -146,7 +146,7 @@ check('zpráva z Twitche bez barvy má výchozí barvu podle jména (ne bílou)'
 // Zpráva dárce (server `donor: true`) → odznak dárce (core/donor-badge.js, varianta kanálu; bez načtených prefs výchozí mince).
 const dn = await ev(`(() => { window.__uc._addMessage({ platform: 'twitch', id: 'e2e-donor', username: 'Darce', userId: 'u55', message: 'ahoj', color: '#00ff00', timestamp: Date.now(), donor: true });
   const img = document.querySelector('.msg[data-msg-id="e2e-donor"] .bdg img[data-donor-badge]'); return { has: !!img, v: img?.dataset.donorBadge, src: img?.getAttribute('src') || '', alt: img?.alt }; })()`);
-check('zpráva dárce má odznak dárce (soubor z rozšíření)', dn && dn.has && /icons[/]badges[/]donor[/][a-z-]+[/]animated[.]svg$/.test(dn.src) && dn.alt === 'Dárce', JSON.stringify(dn));
+check('zpráva dárce má odznak dárce (vložené SVG, tooltip „Podporovatel“)', dn && dn.has && dn.src.startsWith('data:image/svg+xml') && dn.alt === 'Podporovatel', JSON.stringify(dn));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);
