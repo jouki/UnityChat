@@ -1,8 +1,8 @@
-import { normalizeYoutubeAction } from './normalize.js';
+import { normalizeYoutubeAction, normalizeYoutubeDelete } from './normalize.js';
 import { noopLog, type Logger } from './twitch.js';
-import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
 
-interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; onlineCheckMs?: number; minPollMs?: number }
+interface Opts { fetchImpl?: typeof fetch; log?: Logger; liveCheckMs?: number; onlineCheckMs?: number; minPollMs?: number; onDelete?: (d: IngestDelete) => void }
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36';
 // SOCS=CAI: bez něj YouTube ze serverové IP přesměruje na consent stránku
@@ -96,11 +96,14 @@ export class YouTubeListener implements IngestListener {
   private usePageRefresh = false;
   private apiFails = 0;
   private seen = new Set<string>();
+  /** Už nahlášená smazání — page refresh vrací tytéž akce pořád dokola, onDelete má jít jednou. */
+  private seenDeletes = new Set<string>();
   private readonly fetchImpl: typeof fetch;
   private readonly log: Logger;
   private readonly liveCheckMs: number;
   private readonly onlineCheckMs: number;
   private readonly minPollMs: number;
+  private readonly onDelete?: (d: IngestDelete) => void;
 
   constructor(
     private readonly handle: string,
@@ -114,6 +117,7 @@ export class YouTubeListener implements IngestListener {
     this.liveCheckMs = opts.liveCheckMs ?? 10000;
     this.onlineCheckMs = opts.onlineCheckMs ?? 30000;
     this.minPollMs = opts.minPollMs ?? 1500;
+    this.onDelete = opts.onDelete;
   }
 
   status() { return this.st; }
@@ -277,6 +281,16 @@ export class YouTubeListener implements IngestListener {
 
   private processActions(actions: unknown[]) {
     for (const a of actions) {
+      const delId = normalizeYoutubeDelete(a);
+      if (delId) {
+        if (this.seenDeletes.has(delId)) continue;
+        this.seenDeletes.add(delId);
+        if (this.seenDeletes.size > 2000) this.seenDeletes = new Set([...this.seenDeletes].slice(-1000));
+        if (this.onDelete) {
+          try { this.onDelete({ platform: 'youtube', channel: this.handle, messageId: delId }); } catch (err) { this.log.error({ err }, 'youtube ingest: onDelete threw'); }
+        }
+        continue;
+      }
       const m = normalizeYoutubeAction(a, this.handle);
       if (!m || this.seen.has(m.platformMessageId)) continue;
       this.seen.add(m.platformMessageId);

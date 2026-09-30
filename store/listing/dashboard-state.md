@@ -35,6 +35,11 @@ Nahrává CI (`scripts/build-store.ps1` → `scripts/cws.mjs release`) při push
 změn (od v3.38.67 žádné stripování). Oprávnění v manifestu:
 `sidePanel, storage, tabs, scripting, cookies, downloads` + 19 host permissions.
 
+⚠️ **v3.44.5 přidává oprávnění `notifications`** (opt-in oznámení na @zmínky).
+Pole „Vysvětlení oprávnění → notifications" **musí být vyplněné v dashboardu PŘED
+mergem do master** — text je v `permissions-justification.md` (sekce `notifications`).
+Po vyplnění sem doplnit text do „Vysvětlení oprávnění" níže a tuto poznámku smazat.
+
 ## Karta „Záznam v obchodě"
 **Název**
 ```
@@ -150,6 +155,11 @@ and never sent anywhere except to Twitch itself.
 The panel has a "save debug log" button. When the user clicks it, the
 extension writes its in-memory diagnostic log to the Downloads folder so the
 user can attach it to a bug report. Nothing is downloaded without that click.
+```
+
+**notifications** (696 znaků) — ⚠️ ZATÍM NEVYPLNĚNO (přibude s v3.44.5)
+```
+Optional and off by default. When the user turns on "Notify on mentions" in the panel settings, the extension shows a local notification when someone in the chat @mentions the user or replies directly to the user's message while the panel is in the background (hidden or not focused). The notification contains only the author's name, the message text and the platform and channel, all taken from the chat already displayed in the panel. Clicking it focuses the browser window with the panel. Notifications are created locally with chrome.notifications; nothing is sent to our server or to any third party, and no notification is shown for other messages or while the user is looking at the chat.
 ```
 
 **Oprávnění pro hostitele** (982 znaků, limit 1 000)

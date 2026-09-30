@@ -11,7 +11,9 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  real,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 const bytea = customType<{ data: Buffer; default: false }>({
   dataType() {
@@ -63,6 +65,12 @@ export const messages = pgTable(
     replyToMessageId: text('reply_to_message_id'),
     sentAt: timestamp('sent_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedBy: text('deleted_by'),
+    deletedReason: text('deleted_reason'),
+    // „Jen UC skrýt“ — na platformě zpráva zůstává, klientům UC jde bez obsahu (hidden: true).
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
+    hiddenBy: text('hidden_by'),
   },
   (t) => ({
     platformMessageUnique: uniqueIndex('messages_platform_message_unique').on(
@@ -72,8 +80,215 @@ export const messages = pgTable(
     channelSentIdx: index('messages_channel_sent_idx').on(t.channel, t.sentAt),
     platformUsernameIdx: index('messages_platform_username_idx').on(t.platform, t.platformUsername),
     userIdIdx: index('messages_user_id_idx').on(t.userId),
+    // Chat historie uživatele (lib/userHistory.ts) — ručně sql/2026-09-25-user-history-index.sql
+    // (tam navíc INCLUDE (channel), které Drizzle neumí popsat; tabulky se spravují ručním SQL).
+    platformUserSentIdx: index('messages_platform_user_sent_idx').on(t.platform, t.platformUserId, t.sentAt.desc()),
   }),
 );
+
+export const moderationActions = pgTable(
+  'moderation_actions',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),
+    accountId: bigint('account_id', { mode: 'number' }).references(() => webAccounts.id, {
+      onDelete: 'set null',
+    }),
+    actor: text('actor').notNull(),
+    action: text('action').notNull(),
+    platform: text('platform').notNull(),
+    targetLogin: text('target_login'),
+    targetMessageId: text('target_message_id'),
+    params: jsonb('params').notNull().default({}),
+    result: jsonb('result').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    channelCreatedIdx: index('moderation_actions_channel_idx').on(t.channel, t.createdAt),
+  }),
+);
+
+// Moderace část 2 (backend/sql/2026-09-25-moderation-2.sql, ručně SQL).
+// Známé bany/timeouty: vlastní akce + Twitch CLEARCHAT. until null = permanentní; unban řádek maže.
+export const moderationBans = pgTable(
+  'moderation_bans',
+  {
+    channel: text('channel').notNull(),
+    platform: text('platform').notNull(),
+    targetUserId: text('target_user_id').notNull(),
+    targetLogin: text('target_login').notNull(),
+    until: timestamp('until', { withTimezone: true }),
+    youtubeBanId: text('youtube_ban_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.platform, t.targetUserId], name: 'moderation_bans_pkey' }) }),
+);
+
+// Permit odkazů (nabídka moda) — čte filtr odkazů v části 3.
+export const linkPermits = pgTable(
+  'link_permits',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),
+    platform: text('platform').notNull(),
+    targetUserId: text('target_user_id').notNull(),
+    targetLogin: text('target_login').notNull(),
+    until: timestamp('until', { withTimezone: true }).notNull(),
+    by: text('by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ targetIdx: index('link_permits_target_idx').on(t.channel, t.platform, t.targetUserId) }),
+);
+
+// Varování uživatele UnityChatu (napříč platformami), musí potvrdit.
+export const accountWarnings = pgTable('account_warnings', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  channel: text('channel').notNull(),
+  reason: text('reason').notNull(),
+  by: text('by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+});
+
+// Moderace část 4 — odměna „Posílání GIFů" (backend/sql/2026-09-25-gif-requests.sql, ručně SQL).
+// Médium stažené serverem (≤ 10 MB) drží DB (bytea): kontejner backendu nemá trvalý svazek.
+export const gifMedia = pgTable('gif_media', {
+  id: text('id').primaryKey(),                       // náhodných 16 B hex (neuhodnutelné, /media/gif/:id)
+  kind: text('kind').notNull(),                      // gif | webp | mp4
+  contentType: text('content_type').notNull(),
+  bytes: bytea('bytes').notNull(),
+  size: integer('size').notNull(),
+  sha256: text('sha256').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // GIF knihovna (backend/sql/2026-09-26-gif-library.sql): kanál, dedup URL, stav, počítadla použití.
+  channel: text('channel'),                          // UC kanál (knihovna je per kanál)
+  sourceUrlNorm: text('source_url_norm'),            // normalizovaná URL zdroje (lib/gifMedia.ts normalizeSourceUrl)
+  source: text('source').notNull().default('server'),   // server | client (stažení prohlížečem odesílatele, spec 2026-09-29 §7)
+  // pending | approved | rejected | withdrawn (zahozeno, zprávy nechat) | purging (zahozeno i se zprávami, smaže se
+  // v purge_at) | unavailable (stažený GIF, soubor smazán; řádek zůstává kvůli štítku ve zprávách a dedupu)
+  status: text('status').notNull().default('pending'),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  rejectedAt: timestamp('rejected_at', { withTimezone: true }),
+  rejectedBy: text('rejected_by'),
+  vault: boolean('vault').notNull().default(false),  // zamítnutý, ale retence 14 dní se na něj nevztahuje
+  useCount: integer('use_count').notNull().default(0),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  // Task 2 (backend/sql/2026-09-26-gif-phash.sql): tagy, perceptuální hash, kontrola duplikátů.
+  tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+  phash: text('phash').array(),                      // dHashy (16 hex) z 8 snímků; null = nespočítáno / selhalo
+  phashAt: timestamp('phash_at', { withTimezone: true }),          // pokus o hash (i neúspěšný); null = čeká
+  dupCheckedAt: timestamp('dup_checked_at', { withTimezone: true }), // porovnáno s médii kanálu
+  // „Trvale zahodit“ (backend/sql/2026-09-27-gif-purge.sql): kdy a kým, kdy se smaže (jen purging) a stav před
+  // zahozením (obnova: approved zpět do knihovny, rejected zpět do zamítnutých).
+  purgedAt: timestamp('purged_at', { withTimezone: true }),
+  purgedBy: text('purged_by'),
+  purgeAt: timestamp('purge_at', { withTimezone: true }),
+  statusBeforePurge: text('status_before_purge'),
+});
+export type GifMediaRow = typeof gifMedia.$inferSelect;
+
+// Návrhy duplikátů (perceptuální hash, jen v rámci kanálu): a = starší („první"), b = novější („druhý").
+export const gifDuplicates = pgTable('gif_duplicates', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  channel: text('channel').notNull(),
+  a: text('a').notNull(),
+  b: text('b').notNull(),
+  score: real('score').notNull(),
+  status: text('status').notNull().default('pending'), // pending | kept_both
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decidedBy: text('decided_by'),
+});
+export type GifDuplicate = typeof gifDuplicates.$inferSelect;
+
+// Kolikrát byl GIF zamítnut uživateli (3.+ pokus = automaticky zamítnuto).
+export const gifRejections = pgTable(
+  'gif_rejections',
+  {
+    channel: text('channel').notNull(),
+    mediaId: text('media_id').notNull(),
+    platform: text('platform').notNull(),
+    userId: text('user_id').notNull(),
+    count: integer('count').notNull().default(0),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.mediaId, t.platform, t.userId], name: 'gif_rejections_pkey' }) }),
+);
+
+// „Automaticky zahazovat 12 h" (GIF od všech).
+export const gifBans = pgTable(
+  'gif_bans',
+  {
+    channel: text('channel').notNull(),
+    mediaId: text('media_id').notNull(),
+    until: timestamp('until', { withTimezone: true }).notNull(),
+    by: text('by'),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.mediaId], name: 'gif_bans_pkey' }) }),
+);
+
+// Tokeny pro zamítnutá média (/media/gif/:id?t=) — v DB jen SHA-256 hash.
+export const gifAccessTokens = pgTable('gif_access_tokens', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  accountId: bigint('account_id', { mode: 'number' }),
+  integrationSlug: text('integration_slug'),
+  tokenHash: text('token_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+});
+
+/** UnityChat Announcement (POST /announcements) v historii chatu — sql/2026-09-30-announcements.sql. */
+export const announcements = pgTable(
+  'announcements',
+  {
+    id: text('id').notNull(),
+    channel: text('channel').notNull(),
+    workspace: text('workspace').notNull(),
+    at: timestamp('at', { withTimezone: true }).notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.id, t.channel] }),
+    channelAtIdx: index('announcements_channel_at_idx').on(t.channel, t.at),
+  }),
+);
+
+export const gifRequests = pgTable(
+  'gif_requests',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    channel: text('channel').notNull(),              // UC kanál (Twitch login streamera)
+    workspace: text('workspace').notNull(),
+    platform: text('platform').notNull(),
+    platformChannel: text('platform_channel').notNull(), // messages.channel původní zprávy
+    userId: text('user_id').notNull(),
+    login: text('login').notNull(),
+    messageId: text('message_id').notNull(),         // původní zpráva s odkazem (smazaná)
+    textWithoutLink: text('text_without_link').notNull().default(''),
+    mediaId: text('media_id'),
+    kind: text('kind').notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    meta: jsonb('meta').notNull().default({}),       // { displayName, sentAt, color, badges, auto?, instant?, previouslyRejected? }
+    status: text('status').notNull().default('pending'), // pending | approved | rejected | expired | deleted
+    decidedBy: text('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    pendingIdx: index('gif_requests_pending_idx').on(t.status, t.expiresAt),
+    channelIdx: index('gif_requests_channel_idx').on(t.channel, t.createdAt),
+    mediaIdx: index('gif_requests_media_idx').on(t.mediaId),
+    // GET /gif/held (audit C1, sql/2026-09-27-gif-audit.sql): žádosti podle původní zprávy.
+    messageIdx: index('gif_requests_message_idx').on(t.platform, t.messageId, t.id.desc()),
+  }),
+);
+export type GifRequest = typeof gifRequests.$inferSelect;
 
 export const events = pgTable(
   'events',
@@ -114,6 +329,8 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+export type ModerationAction = typeof moderationActions.$inferSelect;
+export type NewModerationAction = typeof moderationActions.$inferInsert;
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type PlatformIdentity = typeof platformIdentities.$inferSelect;
@@ -319,6 +536,10 @@ export const botChannelGrants = pgTable(
 export const rawProfiles = pgTable('raw_profiles', {
   id: text('id').primaryKey(),
   settings: jsonb('settings').notNull().$type<Record<string, unknown>>(),
+  // Kanál, ke kterému je instance připojená (seznam pro streamera a mody, úpravy jen s rolí); NULL = jen odkaz s id.
+  // SQL backend/sql/2026-09-28-raw-profiles-channel.sql
+  channel: text('channel'),
+  claimedBy: integer('claimed_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -358,6 +579,28 @@ export const emailSendLog = pgTable('email_send_log', {
 export const accountDonatePrefs = pgTable('account_donate_prefs', {
   accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
   lastNickname: text('last_nickname'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Stažení GIFu prohlížečem odesílatele (spec 2026-09-29 §5): předvolba účtu ask | always | never. Ručně SQL.
+/** Nastavení kanálu společné pro všechny (odznak dárce…) — sql/2026-09-30-channel-prefs.sql, routes/channelPrefs.ts. */
+export const channelPrefs = pgTable('channel_prefs', {
+  channel: text('channel').primaryKey(),
+  prefs: jsonb('prefs').notNull().default({}),
+  updatedBy: text('updated_by'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const accountGifPrefs = pgTable('account_gif_prefs', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  clientFetch: text('client_fetch').notNull().default('ask'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Odznak podporovatele — volba účtu „místo globálního odznaku Twitche“ (lib/badgePrefs.ts, SQL 2026-09-30-account-badge-prefs.sql).
+export const accountBadgePrefs = pgTable('account_badge_prefs', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  replaceGlobal: boolean('replace_global').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

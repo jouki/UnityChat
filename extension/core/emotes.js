@@ -23,6 +23,16 @@ export function ytRunFullText(run) {
   } catch { return run.text; }
 }
 
+/** Twitch posílá pozice emotů v kódových bodech Unicode, JS řetězce indexují UTF-16 —
+ *  emoji (2 jednotky) před emotem by pozici posunulo. Vrací převodník cp → UTF-16 index. */
+export function cpToUtf16(text) {
+  const map = [];
+  let u = 0;
+  for (const ch of text) { map.push(u); u += ch.length; }
+  map.push(u);
+  return (cp) => (cp >= 0 && cp < map.length ? map[cp] : -1);
+}
+
 export class EmoteManager {
   /**
    * opts.log(tag, text) — logování (addon: UC_LOG), opts.fetch — injekce pro
@@ -463,10 +473,12 @@ export class EmoteManager {
       const range = part.substring(ci + 1).split(',')[0];
       const dash = range.indexOf('-');
       if (dash === -1) continue;
-      const s = parseInt(range.substring(0, dash), 10) - offset;
-      const e = parseInt(range.substring(dash + 1), 10) - offset;
-      if (isNaN(s) || isNaN(e) || s < 0 || e >= text.length) continue;
-      const name = text.substring(s, e + 1);
+      const cs = parseInt(range.substring(0, dash), 10) - offset;
+      const ce = parseInt(range.substring(dash + 1), 10) - offset;
+      const toU = cpToUtf16(text);
+      const s = toU(cs), e1 = toU(ce + 1);
+      if (isNaN(cs) || isNaN(ce) || s < 0 || e1 < 0 || e1 <= s) continue;
+      const name = text.substring(s, e1);
       // Sanity check: real Twitch emote names are alphanumeric (with
       // some punctuation). Skip if the slice would learn a fragment of
       // a regular word — happens when offset is wrong (we'd teach
@@ -667,6 +679,7 @@ export class EmoteManager {
     if (!tag) return [{ type: 'text', value: text }];
 
     const positions = [];
+    const toU = cpToUtf16(text);
     for (const part of tag.split('/')) {
       if (!part) continue;
       const ci = part.indexOf(':');
@@ -675,14 +688,13 @@ export class EmoteManager {
       for (const range of part.substring(ci + 1).split(',')) {
         const dash = range.indexOf('-');
         if (dash === -1) continue;
-        const s = parseInt(range.substring(0, dash), 10) - offset;
-        const e = parseInt(range.substring(dash + 1), 10) - offset;
-        // Skip positions that got shifted entirely off the trimmed text
-        // (shouldn't happen for emotes — the stripped prefix is plain
-        // "@name " text — but guard anyway).
-        if (!isNaN(s) && !isNaN(e) && s >= 0 && e >= 0 && e < text.length + 1) {
-          positions.push({ id, start: s, end: e + 1 });
-        }
+        const cs = parseInt(range.substring(0, dash), 10) - offset;
+        const ce = parseInt(range.substring(dash + 1), 10) - offset;
+        // Pozice jsou v kódových bodech → převést na UTF-16 (emoji před emotem).
+        // Pozice mimo text (posunutý reply prefix) přeskočit.
+        const s = isNaN(cs) ? -1 : toU(cs);
+        const end = isNaN(ce) ? -1 : toU(ce + 1);
+        if (s >= 0 && end > s) positions.push({ id, start: s, end });
       }
     }
 

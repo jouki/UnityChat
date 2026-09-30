@@ -4,10 +4,17 @@
 // odeslání commandu, oblíbené a přihlášení řeší hostitel přes callbacky.
 //
 // UnityChat NIKDY nepřehrává SE jako reakci na command (zvuk je slyšet ze streamu);
-// jediné přehrávání tady je lokální náhled po kliku na repráček.
+// jediné přehrávání tady je lokální náhled po kliku na repráček (se zesílením gainDb).
+//
+// Návrhy zvuků (core/sfx-request.js): s option `requestApi` je vedle hledání tlačítko
+// „Navrhnout zvuk“, které v panelu místo seznamu zvuků ukáže formulář návrhu.
+import { createSfxRequest, SFX_REQUEST_BUTTON_SVG } from './sfx-request.js';
+import { canAutoFocus, refocusField } from './panel-morph.js';
+import { cooldownBarHtml, updateCooldownBar, shakeCooldownLabel, cooldownTotal, renderCooldownBars, pickCooldown, cooldownProgress, COOLDOWN_BAR_CLASS } from './cooldown-bar.js';
 
 export const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', youtube: 'YouTube' };
 
+const CHEVRON_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 6l4 4 4-4"/></svg>';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const ms = (iso) => { const t = Date.parse(iso ?? ''); return Number.isNaN(t) ? null : t; };
 
@@ -82,6 +89,30 @@ export function playableTiers(state, now) {
   return new Set([...unlockedTiers(state, now)].filter(([, t]) => t.available !== false && !t.paused).map(([tier]) => tier));
 }
 
+/** Osobní cooldown (jen můj, ms); 0 = žádný. */
+export function userCooldownLeft(state, now) {
+  return Math.max(0, (state?.me?.cooldown?.userReadyAt ?? 0) - now);
+}
+/** Globální cooldown chatu (ms); 0 = žádný. */
+export function globalCooldownLeft(state, now) {
+  return Math.max(0, (state?.me?.cooldown?.globalReadyAt ?? 0) - now);
+}
+// Délka cooldownů pro pruhy (server posílá jen konec): měří se od chvíle, kdy se konec objevil / posunul.
+const cdMems = { user: { until: null, start: 0 }, global: { until: null, start: 0 } };
+/** Cooldowny pro pruhy (panel i tooltip): [{ kind, remainingMs, totalMs }] jen s běžícími. */
+export function cooldownBars(state, now) {
+  const c = state?.me?.cooldown;
+  if (!c) return [];
+  const out = [];
+  for (const kind of ['global', 'user']) {
+    const until = kind === 'user' ? c.userReadyAt : c.globalReadyAt;
+    const total = cooldownTotal(cdMems[kind], until ?? null, now);
+    const rem = Math.max(0, (until ?? 0) - now);
+    if (rem > 0) out.push({ kind, remainingMs: rem, totalMs: total });
+  }
+  return out;
+}
+
 /** Zbývající cooldown v ms (globální nebo můj, co je delší); 0 = lze hned. */
 export function cooldownLeft(state, now) {
   const c = state?.me?.cooldown;
@@ -97,6 +128,78 @@ export function formatRemaining(msLeft) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
+/** Čas v řádku tooltipu: odpočet, „bez omezení“, u pozastaveného ⏸. */
+const tipRowTime = (r) => `${r.paused ? '⏸ ' : ''}${r.remainingMs === null || r.remainingMs === undefined ? (r.paused ? 'pozastaveno' : 'bez omezení') : formatRemaining(r.remainingMs)}`;
+
+/**
+ * Obsah vlastního tooltipu ikony (nota soundboardu, ikona emotů / záložka GIFy): stav `s` = { mode, title, lines?,
+ * rows?: [{ name, nameHtml?, remainingMs|null, progress|null, paused? }], cooldownMs? }. Stejná struktura jako minule
+ * → jen texty a pásky (bez přestavění prvků, nebliká, pásek plynule ubývá); jinak nový obsah.
+ */
+export function renderIconTip(tip, s) {
+  const rows = s.rows || [];
+  const lines = s.lines || [];
+  const cds = (s.cooldowns || []).filter((c) => c && c.remainingMs > 0);
+  const sig = JSON.stringify([s.mode, s.title, lines, rows.map((r) => [r.nameHtml || r.name, r.progress === null || r.progress === undefined, !!r.paused]), cds.length > 0]);
+  tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
+  if (tip._ucTipSig !== sig) {
+    tip._ucTipSig = sig;
+    const l = lines.map((x) => `<div class="uc-sb-tip-l">${esc(x)}</div>`).join('');
+    const r = rows.map((x) => `<div class="uc-sb-tip-r"><span>${x.nameHtml || esc(x.name)}</span><b></b>${x.progress === null || x.progress === undefined ? '' : '<i></i>'}</div>`).join('');
+    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${l}${r}${cds.length ? '<div class="uc-sb-tip-cd"></div>' : ''}`;
+  }
+  const els = tip.querySelectorAll('.uc-sb-tip-r');
+  rows.forEach((x, i) => {
+    const el = els[i];
+    if (!el) return;
+    const b = el.querySelector('b');
+    if (b) b.textContent = tipRowTime(x);
+    const bar = el.querySelector('i');
+    if (bar && x.progress !== null && x.progress !== undefined) bar.style.setProperty('--p', Number(x.progress).toFixed(4));
+  });
+  // Cooldowny jako pruhy s odpočtem (core/cooldown-bar.js), ne prostý text (pokyn usera 2026-09-30).
+  renderCooldownBars(tip.querySelector('.uc-sb-tip-cd'), cds);
+}
+
+/**
+ * Vlastní tooltip ikony (sdílený soundboardem, ikonou emotů a boční záložkou GIFy — test2 body 1 a 3): prvek `.uc-sb-tip`
+ * v `host` (position: relative). `place(anchor)`: 'above' = nad ikonou, zarovnaný na její pravý okraj; 'side' = vedle
+ * ikony vpravo (svislé záložky). Nativní `title` kotvy se nepoužívá (každou sekundu přepsaný title bliká).
+ */
+export function createIconTip({ host, placement = 'above' } = {}) {
+  const doc = host.ownerDocument;
+  const tip = doc.createElement('div');
+  tip.className = 'uc-sb-tip hidden';
+  tip.setAttribute('role', 'tooltip');
+  host.appendChild(tip);
+  let anchor = null;
+  const place = () => {
+    if (!anchor?.getBoundingClientRect || !host.getBoundingClientRect) return;
+    const h = host.getBoundingClientRect();
+    const a = anchor.getBoundingClientRect();
+    if (placement === 'side') {
+      Object.assign(tip.style, { left: `${Math.round(a.right - h.left + 6)}px`, top: `${Math.round(a.top - h.top)}px`, right: 'auto', bottom: 'auto', marginBottom: '0' });
+    } else {
+      tip.style.right = `${Math.max(4, Math.round(h.right - a.right))}px`;
+    }
+  };
+  return {
+    el: tip,
+    get open() { return !tip.classList.contains('hidden'); },
+    /** Ukázat u `anchorEl` se stavem `s` (null = skrýt). */
+    show(anchorEl, s) {
+      anchor = anchorEl;
+      if (!s) { this.hide(); return; }
+      renderIconTip(tip, s);
+      place();
+    },
+    /** Nový stav (tik) — jen když je otevřený. */
+    update(s) { if (!this.open) return; if (!s) { this.hide(); return; } renderIconTip(tip, s); },
+    hide() { tip.classList.add('hidden'); },
+    destroy() { tip.remove(); },
+  };
+}
+
 /**
  * Stav tlačítka noty:
  *   hidden — kanál nemá žádné zvuky;
@@ -106,13 +209,19 @@ export function formatRemaining(msLeft) {
  *   active — aspoň jeden tier odemčený.
  * `progress` (0–1) a `remainingMs` podle tieru, který vyprší nejpozději; null = bez omezení.
  */
+/** Režimy, ve kterých se panel otevře (přihlášený divák; bez odměny jsou zvuky zamčené). */
+export const PANEL_MODES = new Set(['active', 'locked', 'paused']);
+/** Nota v poli pro psaní jen s odemčenou odměnou (i pozastavenou); jinak se sbalí (záložka SFX v panelu zůstává). */
+export const NOTE_MODES = new Set(['active', 'paused']);
+
 export function soundboardIconState(state, now) {
   if (!state || !state.sounds.length) return { mode: 'hidden' };
   if (!state.loggedIn) return { mode: 'login', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
   // Sound efekty fungují stejně ze všech platforem — výzva je obecná, ne „připoj Twitch" (pokyn usera 2026-09-24).
   if (!state.me) return { mode: 'link', title: 'Soundboard', lines: ['Přihlas se k UnityChatu, ať vidíš, jestli máš sound efekty odemčené.'] };
   const unlocked = unlockedTiers(state, now);
-  if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: ['Sound efekty se odemykají milestony Židolišty.'] };
+  // Jen první věta (spec 2026-09-27 §2); stejná hláška jako GIF panel (gif-library GIF_REWARD_LOCKED_TEXT).
+  if (!unlocked.size) return { mode: 'locked', title: 'Odměna není aktivována', lines: [] };
   const rows = sortTiers(state, [...unlocked.keys()]).map((tier) => [tier, unlocked.get(tier)]).map(([tier, t]) => ({ tier, name: tierLabel(state, tier), nameHtml: tierLabelHtml(state, tier), ...tierTime(t, now) }));
   // Všechno zmrazené: ikona neaktivní jako u zamčené odměny, tooltip ukáže zastavený čas.
   if (!playableTiers(state, now).size) return { mode: 'paused', title: 'Odměna je pozastavená', lines: ['Streamer časovač zastavil, sound efekty teď nejdou pustit.'], rows, cooldownMs: 0, remainingMs: null, progress: null };
@@ -125,6 +234,7 @@ export function soundboardIconState(state, now) {
     title: 'Sound efekty aktivní',
     rows,
     cooldownMs: cd,
+    cooldowns: cooldownBars(state, now),
     remainingMs: unlimited ? null : longest.remainingMs,
     progress: unlimited ? null : longest.progress,
   };
@@ -186,6 +296,12 @@ export function soundIconHtml(s) {
   return emoji ? `<span class="uc-sb-em">${esc(emoji)}</span>` : '';
 }
 
+/** Zesílení v dB → násobek amplitudy (0 dB = 1; neplatné = 1). Rozsah ±30 dB jako Židolišta (výsledná hlasitost zvuku + tieru). */
+export function gainFactor(gainDb) {
+  const g = Number(gainDb);
+  return Number.isFinite(g) ? 10 ** (Math.max(-30, Math.min(30, g)) / 20) : 1;
+}
+
 /** Hledání: bez diakritiky a velikosti písmen, začátek jména má přednost. */
 export function searchSounds(sounds, query) {
   const norm = (s) => String(s || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -228,9 +344,51 @@ const DENIED_SHOW_MS = 8000;
 /** SVG osminové noty pro tlačítko (stejné v addonu i na webu). */
 // viewBox posunutý o střed tvaru noty (bbox 8–19 × 2,2–20 → střed 13,5 / 11,1), ať je v tlačítku vycentrovaná.
 export const SOUNDBOARD_BUTTON_SVG = '<svg viewBox="1.5 -0.9 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M13 3.2a1 1 0 0 1 1.45-.9c2.9 1.45 4.55 3.4 4.55 6.2 0 1.02-.23 2.03-.66 2.93a1 1 0 1 1-1.8-.86c.3-.63.46-1.36.46-2.07 0-1.53-.72-2.73-2-3.73V16.5a3.5 3.5 0 1 1-2-3.16V3.2Z"/></svg>';
+/** Ikona boční záložky SFX v panelu emotů (stejná nota, menší). */
+/** Výchozí hlasitost náhledu zvuků (než si ji uživatel nastaví). */
+export const SFX_DEFAULT_VOLUME = 0.5;
+export const SFX_TAB_SVG = SOUNDBOARD_BUTTON_SVG.replace('width="18" height="18"', 'width="16" height="16"');
 const SPEAKER_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M11 5 6.5 8.5H3v7h3.5L11 19V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.3 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const STAR_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-const LOCK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>';
+/** Ikona zámku (soundboard: hlavička tieru a hláška; GIF panel: hláška odměny). */
+export const LOCK_ICON_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1Zm2 0h6V8a3 3 0 0 0-6 0v2Z"/></svg>';
+const LOCK_SVG = LOCK_ICON_SVG;
+
+/**
+ * Stavový řádek odměny — sdílený soundboardem (`.uc-sb-status`) a GIF panelem (`.uc-gl-reward`), bod 6 testu
+ * 2026-09-27: kontejner dostane `REWARD_STATUS_CLASS` + `--<mode>` (locked | cooldown | active | paused | login | info),
+ * obsah = volitelný zámek (shakeLock) a hned za ním text, oba vlevo. `html` musí být už escapované.
+ */
+export const REWARD_STATUS_CLASS = 'uc-reward-status';
+export function rewardStatusHtml({ lock = false, html = '', textClass = '' } = {}) {
+  return `${lock ? `<span class="uc-lock">${LOCK_ICON_SVG}</span>` : ''}<span class="uc-reward-status-t${textClass ? ` ${textClass}` : ''}">${html}</span>`;
+}
+
+/** Délka zatřesení zámku (ms) — musí sedět s animací .uc-lock-shake v soundboard.css. */
+export const LOCK_SHAKE_MS = 1000;
+
+/**
+ * Zamčené: zámek se zatřese a zčervená, za ~1 s plynule zešedne (klik na zamčený zvuk, GIF bez odměny — spec
+ * 2026-09-27 §2). CSS animace .uc-lock-shake (soundboard.css); opakovaný klik ji spustí znovu od začátku.
+ * `startedAt` (Date.now() začátku) = pokračovat v rozběhnutém zatřesení na novém prvku (po přestavění panelu),
+ * ne začínat znovu. Vrací čas začátku (pro pozdější pokračování).
+ */
+export function shakeLock(els, { startedAt = null } = {}) {
+  const t0 = startedAt ?? Date.now();
+  const elapsed = Math.max(0, Date.now() - t0);
+  for (const el of [els].flat(Infinity)) {
+    if (!el?.classList || elapsed >= LOCK_SHAKE_MS) continue;
+    el.classList.remove('uc-lock-shake');
+    void el.offsetWidth;   // restart animace
+    el.style.animationDelay = elapsed ? `-${elapsed}ms` : '';
+    el.classList.add('uc-lock-shake');
+    if (!el._ucShakeEnd) {
+      el._ucShakeEnd = () => { el.classList.remove('uc-lock-shake'); el.style.animationDelay = ''; };
+      el.addEventListener('animationend', el._ucShakeEnd);
+    }
+  }
+  return t0;
+}
 
 /**
  * Soundboard: tlačítko `button` (nota) otevírá panel vložený do `host` (#input-area).
@@ -242,74 +400,131 @@ const LOCK_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentC
  * @param {(platform?: string) => void} [o.onLogin]                přihlásit / připojit platformu
  * @param {{ load(): number|null, save(v: number): void }} [o.volume]   hlasitost náhledu 0–1
  * @param {(tag: string, text: string) => void} [o.log]
+ * @param {{ prepare(url: string): Promise<object>, submit(b: object): Promise<object>, list(): Promise<object> }} [o.requestApi]
+ *        API návrhů zvuků (core/sfx-request.js); bez něj tlačítko „Navrhnout zvuk“ není.
  */
-export function createSoundboard({ host, button, onSend, onFavorite, onLogin, volume, log }) {
+/**
+ * Soundboard = záložka SFX v panelu emotů (core/emote-picker.js, 2026-09-27): obsah se vykreslí do `pane`, panel
+ * otevírá / zavírá hostitel přes `embed`. Nota v poli (`button`) je zkratka na tu záložku a je vidět jen s odemčenou
+ * odměnou (třída `uc-sb-na` → dock ji animovaně sbalí, core/tool-dock.js `collapse`).
+ * @param {object} o
+ * @param {HTMLElement} o.host    kontejner pole pro psaní (tooltip noty, náhled názvu zvuku)
+ * @param {HTMLElement} o.pane    záložka panelu emotů, do které se soundboard vykreslí
+ * @param {{ open(): void, close(): void, isShown(): boolean, frame(): HTMLElement }} o.embed
+ *        otevřít / zavřít panel na záložce SFX, je záložka vidět, celý panel (kotva náhledu názvu zvuku)
+ * @param {(v: { progress: number|null, tip: object|null } | null) => void} [o.onIndicator]  pásek + tooltip záložky
+ * @param {(hidden: boolean) => void} [o.onTabHidden]  kanál bez zvuků → záložku schovat
+ * @returns objekt s `show()` / `hide()` pro panel emotů (mount záložky) + update / onSse / open / close …
+ */
+export function createSoundboard({ host, pane, embed, button, onIndicator, onTabHidden, onSend, onFavorite, onLogin, volume, log, requestApi }) {
   const doc = host.ownerDocument;
   const win = doc.defaultView;
   let state = null;
-  let vol = 0.6;
-  try { const v = Number(volume?.load?.()); if (v >= 0 && v <= 1) vol = v; } catch { /* ignore */ }
+  // Výchozí hlasitost náhledu 50 % (pokyn usera 2026-09-28); uložená hodnota jen když opravdu existuje —
+  // web vrací null (Number(null) = 0 → dřív začínal na nule).
+  let vol = SFX_DEFAULT_VOLUME;
+  try { const raw = volume?.load?.(); const v = Number(raw); if (raw !== null && raw !== undefined && raw !== '' && v >= 0 && v <= 1) vol = v; } catch { /* ignore */ }
 
   const panel = doc.createElement('div');
-  panel.className = 'uc-sb hidden';
-  panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', 'Soundboard');
+  panel.className = 'uc-sb uc-sb--pane';
   panel.innerHTML = `
     <div class="uc-sb-top">
       <input type="search" placeholder="Najdi zvuk…" autocomplete="off" spellcheck="false" aria-label="Hledat zvuk">
+      ${requestApi ? `<button type="button" class="uc-sb-reqbtn uc-tool-btn" title="Navrhnout zvuk" aria-label="Navrhnout zvuk">${SFX_REQUEST_BUTTON_SVG}</button>` : ''}
       <label class="uc-sb-vol" title="Hlasitost náhledu (jen pro tebe)">${SPEAKER_SVG}<input type="range" min="0" max="100" step="1" aria-label="Hlasitost náhledu"></label>
     </div>
     <div class="uc-sb-status"></div>
+    ${cooldownBarHtml('user')}
     <div class="uc-sb-body"></div>
-    <div class="uc-sb-foot"></div>`;
-  host.appendChild(panel);
+    <div class="uc-sb-foot"></div>
+    ${requestApi ? '<div class="uc-sb-reqview"></div>' : ''}`;
+  pane.appendChild(panel);
   const search = panel.querySelector('input[type="search"]');
   const volInput = panel.querySelector('.uc-sb-vol input');
   const statusEl = panel.querySelector('.uc-sb-status');
+  const cdEl = panel.querySelector(`.${COOLDOWN_BAR_CLASS}`);
   const body = panel.querySelector('.uc-sb-body');
   const foot = panel.querySelector('.uc-sb-foot');
   volInput.value = String(Math.round(vol * 100));
+  // Vyplněná část dráhy (zlatý gradient v Chromiu, soundboard.css .uc-sb-vol; Firefox má ::-moz-range-progress).
+  const paintVol = () => volInput.style.setProperty('--uc-vol', `${volInput.value}%`);
+  paintVol();
 
-  const tip = doc.createElement('div');
-  tip.className = 'uc-sb-tip hidden';
-  tip.setAttribute('role', 'tooltip');
-  host.appendChild(tip);
+  // Vlastní tooltip (sdílený s ikonou emotů a záložkou GIFy — createIconTip).
+  const iconTip = createIconTip({ host });
+  const tip = iconTip.el;
 
-  button.innerHTML = `${SOUNDBOARD_BUTTON_SVG}<span class="uc-sb-bar"></span>`;
+  button.innerHTML = `${SOUNDBOARD_BUTTON_SVG}<span class="uc-sb-cdbar"></span><span class="uc-sb-bar"></span>`;
   button.classList.add('uc-sb-btn');
   button.setAttribute('aria-haspopup', 'dialog');
   button.setAttribute('aria-expanded', 'false');
   button.removeAttribute('title');   // vlastní tooltip
 
   const now = () => Date.now() + (state?.offsetMs || 0);
-  const audio = new win.Audio();
-  audio.preload = 'none';
+  // Náhled: zvuk bez zesílení hraje obyčejný <audio> (jako dřív, bez CORS). Zvuk s gainDb ≠ 0
+  // hraje druhý prvek přes Web Audio GainNode (i nad 100 %) — ten potřebuje crossOrigin
+  // (soubory Židolišty mají CORS *), jinak by MediaElementSource hrál ticho. Graf vzniká
+  // až při prvním takovém náhledu (gesto uživatele).
+  const plainAudio = new win.Audio();
+  plainAudio.preload = 'none';
+  let boostAudio = null, gainNode = null, actx = null;
+  let audio = plainAudio;   // právě použitý prvek
+  const pauseAll = () => { plainAudio.pause(); boostAudio?.pause(); };
+  /** Prvek pro zvuk + nastavení hlasitosti; bez Web Audio zesílení jen do 100 %. */
+  function audioFor(sound) {
+    const f = gainFactor(sound?.gainDb);
+    if (f !== 1 && win.AudioContext) {
+      try {
+        if (!boostAudio) {
+          const el = new win.Audio();
+          el.preload = 'none';
+          el.crossOrigin = 'anonymous';
+          const ctx = new win.AudioContext();
+          const g = ctx.createGain();
+          ctx.createMediaElementSource(el).connect(g).connect(ctx.destination);
+          boostAudio = el; actx = ctx; gainNode = g;
+        }
+        gainNode.gain.value = vol * f;
+        boostAudio.volume = 1;
+        actx.resume?.().catch(() => {});
+        return boostAudio;
+      } catch (e) { log?.('Soundboard', `Web Audio nejde: ${e?.message || e}`); }
+    }
+    plainAudio.volume = Math.min(1, vol * f);
+    return plainAudio;
+  }
 
   // ---- tlačítko + tooltip ----
   let tipOpen = false;
+  let tabHidden = null;
   function renderButton() {
     const s = soundboardIconState(state, now());
     button.classList.toggle('hidden', s.mode === 'hidden');
+    // Bez odemčené odměny se nota sbalí (dock), záložka SFX v panelu zůstává.
+    button.classList.toggle('uc-sb-na', !NOTE_MODES.has(s.mode));
     button.classList.toggle('uc-sb-off', s.mode !== 'active');
     button.classList.toggle('uc-sb-cd', s.mode === 'active' && s.cooldownMs > 0);
     button.setAttribute('aria-label', s.mode === 'active' ? 'Soundboard' : `Soundboard: ${s.title}`);
     button.style.setProperty('--uc-sb-p', s.mode === 'active' && s.progress !== null ? String(s.progress) : '1');
     button.classList.toggle('uc-sb-timed', s.mode === 'active' && s.progress !== null);
-    // Ikona je aktivní jen s odemčeným tierem; vypršení během otevřeného panelu ho zavře.
-    if (s.mode !== 'active' && isOpen()) close();
+    // Pásek cooldownu nahoře na notě (dole je odpočet odměny) — fialový, delší z osobního / globálního.
+    const cdp = s.mode === 'active' ? cooldownProgress(pickCooldown(s.cooldowns)) : null;
+    button.classList.toggle('uc-sb-cdtimed', cdp !== null);
+    button.style.setProperty('--uc-sb-cdp', cdp === null ? '1' : cdp.toFixed(4));
     if (tipOpen) renderTip(s);
+    // Záložka SFX: pásek odměny + tooltip (na smajlíku ne — buttonIndicator: false); kanál bez zvuků záložku schová.
+    const hide = s.mode === 'hidden';
+    if (hide !== tabHidden) { tabHidden = hide; onTabHidden?.(hide); }
+    onIndicator?.(hide ? null : { progress: s.mode === 'active' && s.progress !== null ? s.progress : null, tip: s });
+    if (isOpen()) renderStatus();
     return s;
   }
   function renderTip(s = soundboardIconState(state, now())) {
     if (s.mode === 'hidden') { hideTip(); return; }
-    const lines = (s.lines || []).map((l) => `<div class="uc-sb-tip-l">${esc(l)}</div>`).join('');
-    const rows = (s.rows || []).map((r) => `<div class="uc-sb-tip-r"><span>${r.nameHtml || esc(r.name)}</span><b>${r.paused ? '⏸ ' : ''}${r.remainingMs === null ? (r.paused ? 'pozastaveno' : 'bez omezení') : esc(formatRemaining(r.remainingMs))}</b>${r.progress === null ? '' : `<i style="--p:${r.progress.toFixed(4)}"></i>`}</div>`).join('');
-    const cd = s.cooldownMs > 0 ? `<div class="uc-sb-tip-cd">Cooldown ${esc(formatRemaining(s.cooldownMs))}</div>` : '';
-    tip.className = `uc-sb-tip uc-sb-tip-${s.mode}`;
-    tip.innerHTML = `<div class="uc-sb-tip-t">${esc(s.title)}</div>${lines}${rows}${cd}`;
+    renderIconTip(tip, s);
   }
   function showTip() { if (isOpen()) return; tipOpen = true; renderTip(); }
-  function hideTip() { tipOpen = false; tip.classList.add('hidden'); }
+  function hideTip() { tipOpen = false; iconTip.hide(); }
 
   // ---- panel ----
   const favSet = () => new Set(state?.favorites || []);
@@ -319,19 +534,39 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     const label = soundLabel(s);
     const why = unlocked.get(s.tier)?.paused ? 'je pozastavený' : 'není odemčený';
     return `<div class="${cls}" data-id="${s.id}" data-why="${locked ? esc(`${tierLabel(state, s.tier)} ${why}`) : ''}">
-      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
+      <button type="button" class="uc-sb-play" data-act="send"${locked ? ' aria-disabled="true"' : ''}>${locked ? `<span class="uc-lock uc-sb-slock">${LOCK_SVG}</span>` : ''}${soundIconHtml(s)}<span class="uc-sb-n">${esc(label)}</span></button>
       <button type="button" class="uc-sb-pv" data-act="preview" title="Přehrát jen pro sebe" aria-label="Náhled ${esc(label)}">${SPEAKER_SVG}</button>
       <button type="button" class="uc-sb-fav${favs.has(s.id) ? ' on' : ''}" data-act="fav" title="${favs.has(s.id) ? 'Odebrat z oblíbených' : 'Přidat do oblíbených'}" aria-label="Oblíbené ${esc(label)}">${STAR_SVG}</button>
     </div>`;
   }
+  // Sbalené sekce (klik na hlavičku, pokyn usera 2026-09-30): stav si pamatuje prohlížeč (localStorage, per kanál).
+  const COLLAPSE_KEY = 'uc_sfx_collapsed';
+  const collapsed = new Set((() => { try { return JSON.parse(win.localStorage?.getItem(COLLAPSE_KEY) || '[]'); } catch { return []; } })());
+  const saveCollapsed = () => { try { win.localStorage?.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ } };
+  const collapseId = (key) => `${state?.channel || ''}|${key}`;
+  function toggleSection(sec) {
+    const key = sec.dataset.sec;
+    if (!key || key === 'search') return;
+    const id = collapseId(key);
+    const on = !collapsed.has(id);
+    if (on) collapsed.add(id); else collapsed.delete(id);
+    saveCollapsed();
+    sec.classList.toggle('collapsed', on);
+    sec.querySelector('.uc-sb-h')?.setAttribute('aria-expanded', String(!on));
+    hideHover();
+  }
+
   function section(key, head, list, ctx, extra = '') {
     if (!list.length) return '';
-    return `<div class="uc-sb-sec" data-sec="${esc(key)}"><div class="uc-sb-h">${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, ctx)).join('')}</div></div>`;
+    const col = key !== 'search' && collapsed.has(collapseId(key));
+    // Hlavička = tlačítko sbalení (šipka vlevo); štítek času / zámku zůstává vpravo a klik na něj sekci taky sbalí.
+    return `<div class="uc-sb-sec${col ? ' collapsed' : ''}" data-sec="${esc(key)}"><div class="uc-sb-h" role="button" tabindex="0" aria-expanded="${!col}" title="${col ? 'Rozbalit' : 'Sbalit'}"><span class="uc-sb-chev" aria-hidden="true">${CHEVRON_SVG}</span>${head}${extra}</div><div class="uc-sb-grid">${list.map((s) => soundBtn(s, ctx)).join('')}</div></div>`;
   }
 
   /** Hlavička sekce tieru: zamčeno / pozastaveno se zamrzlým časem / bez omezení / odpočet + pruh. */
   function tierBadge(u, t) {
-    if (!u) return `<span class="uc-sb-lock">${LOCK_SVG} zamčeno</span>`;
+    // Jen ikona zámku, bez slova „zamčeno“ (spec 2026-09-27 §2).
+    if (!u) return `<span class="uc-sb-lock uc-lock" title="Zamčeno" aria-label="Zamčeno" role="img">${LOCK_SVG}</span>`;
     const tt = tierTime(u, t);
     const bar = tt.progress === null ? '' : `<i class="uc-sb-hbar${tt.paused ? ' paused' : ''}" style="--p:${tt.progress.toFixed(4)}"></i>`;
     if (tt.paused) return `<span class="uc-sb-time paused">⏸ ${tt.remainingMs === null ? 'pozastaveno' : esc(formatRemaining(tt.remainingMs))}</span>${bar}`;
@@ -363,14 +598,24 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     }
     body.scrollTop = top;
     renderStatus();
+    resumeShake();
   }
 
   function renderStatus() {
     const s = soundboardIconState(state, now());
-    let html = '';
-    if (s.mode === 'active' && s.cooldownMs > 0) html = `<span class="uc-sb-cdtxt">Cooldown ${esc(formatRemaining(s.cooldownMs))}</span>`;
-    statusEl.innerHTML = html;
-    statusEl.classList.toggle('hidden', !html);
+    let html = '', mode = '';
+    // Sdílený stavový řádek odměny (jako GIF panel): cooldown / zámek + „Odměna není aktivována“ / zmrazená odměna.
+    // Nepřihlášený / bez účtu na platformě: výzva k přihlášení (klik = přihlášení, jako dřív klik na notu).
+    if (s.mode === 'login' || s.mode === 'link') { mode = 'login'; html = rewardStatusHtml({ lock: true, html: `<button type="button" class="uc-sb-login" data-act="login">${esc(s.lines?.[0] || 'Přihlas se k UnityChatu.')}</button>` }); }
+    // Cooldown už není text v řádku stavu — má vlastní pruhy pod ním (core/cooldown-bar.js, pokyn usera 2026-09-30).
+    else if (s.mode === 'locked') { mode = 'locked'; html = rewardStatusHtml({ lock: true, html: esc(s.title) }); }
+    else if (s.mode === 'paused') { mode = 'paused'; html = rewardStatusHtml({ html: `<b>${esc(s.title)}</b>${(s.lines || []).length ? ` ${s.lines.map(esc).join(' ')}` : ''}` }); }
+    // Beze změny nepřepisovat (tik 1 s by zámku uprostřed zatřesení vyměnil prvek).
+    if (statusEl._ucHtml !== html) { statusEl._ucHtml = html; statusEl.innerHTML = html; resumeShake(); }
+    statusEl.className = `uc-sb-status ${REWARD_STATUS_CLASS}${mode ? ` ${REWARD_STATUS_CLASS}--${mode}` : ''}${html ? '' : ' hidden'}`;
+    // Jeden pruh cooldownu = delší z osobního / globálního (jen s odemčenou odměnou).
+    const c = s.mode === 'active' ? pickCooldown(cooldownBars(state, now())) : null;
+    updateCooldownBar(cdEl, c ? c.remainingMs : 0, c?.totalMs, c?.kind);
     const d = state?.denied;
     if (d && Date.now() - d.at < DENIED_SHOW_MS) {
       const retry = d.retryAt ? ` · znovu za ${formatRemaining(d.retryAt - now())}` : '';
@@ -379,42 +624,62 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     } else if (foot.classList.contains('err')) { foot.textContent = ''; foot.classList.remove('err'); }
   }
 
-  function open() {
-    if (soundboardIconState(state, now()).mode !== 'active') return;
+  // Panel (otevření, animace, přetvoření, klik mimo, Esc) řídí panel emotů; soundboard jen reaguje na zobrazení záložky.
+  /** Záložka SFX se ukázala (otevření panelu / přepnutí záložky). */
+  function show() {
     hideTip();
+    lastSig = '';
     renderPanel();
-    panel.classList.remove('hidden');
-    button.classList.add('active');
-    button.setAttribute('aria-expanded', 'true');
-    const touch = typeof win.matchMedia === 'function' && win.matchMedia('(pointer: coarse)').matches;
-    if (!touch) { search.focus(); search.select(); }
+    if (canAutoFocus(doc)) { search.focus(); search.select(); }
   }
-  function close() {
-    if (panel.classList.contains('hidden')) return;
-    panel.classList.add('hidden');
-    button.classList.remove('active');
-    button.setAttribute('aria-expanded', 'false');
-    audio.pause();
+  /** Záložka SFX zmizela (zavření panelu / jiná záložka). */
+  function hide() {
+    pauseAll();
     hideHover();
+    showList();
   }
-  const isOpen = () => !panel.classList.contains('hidden');
+  const open = () => embed.open();
+  const close = () => embed.close();
+  const isOpen = () => !!embed.isShown();
   const toggle = () => (isOpen() ? close() : open());
 
   function preview(sound) {
     try {
       if (audio.dataset.id === String(sound.id) && !audio.paused) { audio.pause(); audio.currentTime = 0; return; }
+      pauseAll();
+      audio = audioFor(sound);
       audio.dataset.id = String(sound.id);
       audio.src = sound.url;
-      audio.volume = vol;
       audio.currentTime = 0;
       audio.play().catch((e) => log?.('Soundboard', `náhled ${sound.name} selhal: ${e?.message || e}`));
     } catch (e) { log?.('Soundboard', `náhled ${sound.name} selhal: ${e?.message || e}`); }
   }
 
-  function send(sound) {
+  // Rozběhnuté zatřesení zámku (klik na zamčený zvuk): přestavění panelu / hlášky (tik, SSE) ho nesmí utnout —
+  // na nových prvcích pokračuje od uplynulého času (shakeLock startedAt).
+  let shake = null;   // { at, id, sec }
+  const shakeTargets = (sh) => [statusEl.querySelector('.uc-lock'),
+    body.querySelector(`.uc-sb-sec[data-sec="${sh.sec}"] .uc-sb-s[data-id="${sh.id}"] .uc-lock`)];
+  function resumeShake() {
+    if (!shake) return;
+    if (Date.now() - shake.at >= LOCK_SHAKE_MS) { shake = null; return; }
+    for (const el of shakeTargets(shake)) if (el && !el.classList.contains('uc-lock-shake')) shakeLock(el, { startedAt: shake.at });
+  }
+
+  function send(sound, card = null) {
     const t = now();
-    if (!playableTiers(state, t).has(sound.tier)) return;
-    if (cooldownLeft(state, t) > 0) return;
+    if (!playableTiers(state, t).has(sound.tier)) {
+      // Zamčený (i pozastavený) zvuk: zatřást zámkem u zvuku samotného a v hlášce panelu (je vždy vidět) — ne
+      // v hlavičce tieru, která může být mimo obraz (Oblíbené / Často používané) — spec 2026-09-27 §2.
+      shake = { at: Date.now(), id: sound.id, sec: card?.closest('.uc-sb-sec')?.dataset.sec || '' };
+      shake.at = shakeLock(shakeTargets(shake));
+      return;
+    }
+    if (cooldownLeft(state, t) > 0) {
+      // Během cooldownu: štítek pruhu se zatřese a zčervená — jako zámek u zamčeného zvuku.
+      shakeCooldownLabel(cdEl);
+      return;
+    }
     log?.('Soundboard', `!se ${sound.name}`);
     onSend?.(sound);
   }
@@ -432,13 +697,31 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     }
   }
 
+  // ---- návrh zvuku (místo seznamu, zpět šipkou) ----
+  const reqBtn = panel.querySelector('.uc-sb-reqbtn');
+  const reqView = panel.querySelector('.uc-sb-reqview');
+  let request = null;
+  function showRequest() {
+    if (!requestApi) return;
+    if (!state?.loggedIn) { close(); onLogin?.(); return; }
+    pauseAll();
+    hideHover();
+    request ??= createSfxRequest({ host: reqView, api: requestApi, log, onBack: () => { showList(); if (canAutoFocus(doc)) search.focus(); } });
+    panel.classList.add('uc-sb-req-on');
+    request.open();
+  }
+  function showList() {
+    if (!panel.classList.contains('uc-sb-req-on')) return;
+    panel.classList.remove('uc-sb-req-on');
+    request?.close();
+  }
+  reqBtn?.addEventListener('click', (e) => { e.stopPropagation(); showRequest(); });
+
   // ---- události ----
   button.addEventListener('mousedown', (e) => e.preventDefault());   // neukrást fokus textarea
   button.addEventListener('click', (e) => {
     e.stopPropagation();
-    const s = soundboardIconState(state, now());
-    if (s.mode === 'login' || s.mode === 'link') { hideTip(); onLogin?.(); return; }
-    if (s.mode !== 'active') return;   // odměna není aktivní: ikona je deaktivovaná, vysvětlí to tooltip
+    hideTip();
     toggle();
   });
   button.addEventListener('mouseenter', showTip);
@@ -449,7 +732,8 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   search.addEventListener('input', renderPanel);
   search.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Escape') close();
+    // Esc: zavřít a fokus zpět do pole pro psaní (jako emoty; na dotyku ne — klávesnice).
+    if (e.key === 'Escape') { close(); refocusField(button); }
     else if (e.key === 'Enter') {
       // Enter = první odemčený zvuk ve výsledcích.
       e.preventDefault();
@@ -460,7 +744,10 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   });
   volInput.addEventListener('input', () => {
     vol = Math.min(1, Math.max(0, Number(volInput.value) / 100));
-    audio.volume = vol;
+    paintVol();
+    const cur = state?.sounds.find((s) => String(s.id) === audio.dataset.id);
+    if (cur && !audio.paused) audioFor(cur);
+    else { plainAudio.volume = vol; if (gainNode) gainNode.gain.value = vol; }
     try { volume?.save?.(vol); } catch { /* ignore */ }
   });
   // Hover nad panelem: celý název zvuku (v mřížce se zkracuje) + délka, pod tím `!se jméno`
@@ -479,9 +766,12 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     const why = card.dataset.why;
     hover.innerHTML = `<div class="uc-sb-hover-t">${soundIconHtml(sound)}<span class="uc-sb-hover-n">${esc(soundLabel(sound))}</span>${dur ? `<span class="uc-sb-hover-d">(${esc(dur)})</span>` : ''}</div>`
       + `<div class="uc-sb-hover-s${why ? ' locked' : ''}">${why ? esc(why) : `!se ${esc(sound.name)}`}</div>`;
-    hover.style.left = `${panel.offsetLeft}px`;
-    hover.style.width = `${panel.offsetWidth}px`;
-    hover.style.bottom = `calc(100% + ${panel.offsetHeight + 12}px)`;
+    // Nad celý panel emotů (soundboard je jeho záložka): souřadnice vůči `host` (position: relative).
+    const fr = (embed.frame?.() || panel).getBoundingClientRect();
+    const hr = host.getBoundingClientRect();
+    hover.style.left = `${Math.round(fr.left - hr.left)}px`;
+    hover.style.width = `${Math.round(fr.width)}px`;
+    hover.style.bottom = `${Math.round(hr.bottom - fr.top + 12)}px`;
     hover.classList.remove('hidden');
   }
   function hideHover() { hoverId = null; hover.classList.add('hidden'); }
@@ -491,20 +781,22 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
   body.addEventListener('scroll', hideHover, { passive: true });
 
   panel.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  panel.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('uc-sb-h')) { e.preventDefault(); const sec = e.target.closest('.uc-sb-sec'); if (sec) toggleSection(sec); }
+  });
   panel.addEventListener('click', (e) => {
+    const h = e.target.closest('.uc-sb-h');
+    if (h && !e.target.closest('[data-act]')) { const sec = h.closest('.uc-sb-sec'); if (sec) toggleSection(sec); return; }
     const b = e.target.closest('[data-act]');
     if (!b) return;
+    if (b.dataset.act === 'login') { close(); onLogin?.(); return; }
     const card = b.closest('.uc-sb-s');
     const sound = card && state.sounds.find((s) => s.id === Number(card.dataset.id));
     if (!sound) return;
     if (b.dataset.act === 'preview') preview(sound);
     else if (b.dataset.act === 'fav') toggleFav(sound);
-    else if (b.dataset.act === 'send') send(sound);
+    else if (b.dataset.act === 'send') send(sound, card);
   });
-  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target)) close(); };
-  const onDocKey = (e) => { if (e.key === 'Escape' && isOpen()) close(); };
-  doc.addEventListener('mousedown', onDocDown);
-  doc.addEventListener('keydown', onDocKey);
 
   // Tik 1 s: odpočty, progress, vypršení tieru a cooldownu. Jen když je co počítat.
   let lastSig = '';
@@ -527,6 +819,9 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
     renderStatus();
   }, 1000);
 
+  // Bez dat (ještě nenačteno / kanál bez zvuků): nota i záložka schované.
+  renderButton();
+
   return {
     /** Nová odpověď GET /soundboard. */
     update(raw) {
@@ -543,11 +838,20 @@ export function createSoundboard({ host, button, onSend, onFavorite, onLogin, vo
       if (isOpen()) renderPanel();
     },
     open, close, toggle, isOpen,
+    /** Mount záložky panelu emotů: zobrazení / skrytí záložky. */
+    show, hide,
+    /** Otevřít rovnou formulář návrhu zvuku (s option requestApi). */
+    openRequest() { if (!isOpen()) open(); if (isOpen()) showRequest(); },
+    /** SSE sfx-request → obnovit „Moje návrhy“ (jen když jde o můj návrh nebo je formulář otevřený). */
+    onSfxRequest(data) {
+      if (data?.channel && state?.channel && data.channel !== state.channel) return;
+      request?.onSse(data);
+    },
     destroy() {
+      request?.destroy();
+      actx?.close?.().catch(() => {});
       win.clearInterval(timer);
-      doc.removeEventListener('mousedown', onDocDown);
-      doc.removeEventListener('keydown', onDocKey);
-      audio.pause();
+      pauseAll();
       panel.remove();
       tip.remove();
       hover.remove();

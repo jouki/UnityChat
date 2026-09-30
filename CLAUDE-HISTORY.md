@@ -140,6 +140,28 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-30 večer (odznak podporovatele)
+- CLAUDE.md: milestone v3.41.113–127 (tooltip s datem, pauza GIFu, smazání druhým klikem, nastavení jako záložky Účet | Rozhraní, odznak dárce → podporovatele: volby tempo / intenzita / odstupy / nahrazení globálního odznaku Twitche, částka v tooltipu, odznak v hlavičce Profilu, vložené SVG místo souborů).
+- Memory: `feedback_web_port_rule.md` — před pushem do UnityChat-web i `cd web && npm test` (Web CI padalo od v3.41.114, mail každých 15 min ze sync akce).
+- Memory: `project_donor_badge.md` (nový — zdroj dárců, prefs kanálu, animace, otevřené otázky pro usera), řádek v MEMORY.md, checkpoint doplněn.
+### 2026-09-30 (session 2026-09-29/30, unitychat-8f)
+- CLAUDE.md: milestone v3.41.98–112 (zmínky bez zavináče + přezdívky, posuvníky, rezervovaná jména, announcement v historii, trvalé filtry, cooldown jako pruh, QR testmode pro moda, donaty podle ověřeného e-mailu, JoukiBOT zlatý, SE na Kicku v link filtru, broadcast commandů), UC_LOG tagy `Viewport` a `Mention`.
+- Memory: checkpoint aktualizován (stav 2026-09-30), `project_qr_dono.md` (testmode pro moda, e-mail ↔ Židolišta), `project_zidolista_bot.md` (JoukiBOT zlatý podle ID), `feedback_patterns.md` (Chrome: `scrollbar-width` vypíná `::-webkit-scrollbar`; deploy backendu = 502 na pár sekund).
+### 2026-09-29 (stažení GIFu prohlížečem odesílatele)
+- CLAUDE.md: milestone v3.41.89–91 (host blokující IP serveru → výzva ke stažení prohlížečem, `POST /gif/client-upload`, předvolba účtu `account_gif_prefs`, karta moda se štítkem „· z prohlížeče odesílatele“ u čekající žádosti).
+### 2026-09-28 (rich text v Židolištce)
+- Memory `project_zidolista_rich_text.md` + řádek v MEMORY.md: jeden renderer `server/static/richText.js` (commandy + lišty + kopie na webu hlídaná testem), escape `\`, proměnné doslova; core `richTextToHtml` (v3.41.89) escape umí. Deploy serveru Židolišty potřebuje `static/` i v build stage Dockerfile.
+### 2026-09-27 (výročí na Twitchi)
+- CLAUDE.md: milestone v3.41.63–65 (výročí; review: bez DOM zálohy, výročí se nepočítají jako zprávy), ingest ukládá USERNOTICE výročí, UC_LOG tagy `Anniversary` + `UserNotice`.
+
+### 2026-09-27 (session unitychat-8f)
+
+- **CLAUDE.md** — milestone v3.41.43–53 (GIF náhled, dvě varianty zahození, úpravy po testu, závěrečný audit). Memory `project_gif_library.md` přepsaná na stav po auditu.
+
+### 2026-09-26 (session unitychat-8f)
+
+- **CLAUDE.md** — milestone v3.41.38–42 (GIF knihovna: backend, core, addon, web, OBS). Memory `project_gif_library.md` + index.
+
 ### 2026-09-24 (session unitychat-8f)
 
 - **CLAUDE.md** — milestone v3.40.26–28 (Kick badge, slide-in animace, odpovědi napříč platformami, odhlášení všech platforem).

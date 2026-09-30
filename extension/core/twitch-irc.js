@@ -3,7 +3,7 @@
 // přes opts. Tělo 1:1 ze sidepanel.js v3.39.18 (plán web v0.1, Task 3).
 //
 // Callbacky: onMessage(msg), onStatus(state, detail?), onRoomId(id),
-// onClear(user), onClearMsg(id). Tvar msg beze změny (platform 'twitch', id,
+// onClear({user, userId, banDuration}), onClearMsg(id). Tvar msg beze změny (platform 'twitch', id,
 // username, userId, message, timestamp = tmi-sent-ts, color, badgesRaw,
 // twitchEmotes, firstMsg, isAction, replyTo, …).
 import { twitchDefaultColor } from './colors.js';
@@ -128,7 +128,9 @@ export class TwitchProvider {
       replyTo = {
         username: replyUser,
         message: body,
-        id: tags['reply-parent-msg-id'] || null
+        id: tags['reply-parent-msg-id'] || null,
+        // Login autora citace (Profil otevírá podle loginu; display name může být jiný).
+        login: tags['reply-parent-user-login'] || null
       };
     }
 
@@ -354,6 +356,43 @@ export class TwitchProvider {
         isAnnouncement: true,
         announcementColor: ann,
       });
+      return;
+    }
+    if (msgId === 'modiversary') {
+      // Moderátorské výročí (podklad docs/superpowers/specs/2026-09-27-twitch-vyroci-research.md §3):
+      // msg-param-months = celkem měsíců moderátorem, trailing = text uživatele (volitelný), emoty v `emotes`.
+      let body = '';
+      const uni = rest.indexOf('USERNOTICE');
+      if (uni !== -1) {
+        const after = rest.substring(uni + 10);
+        const ci = after.indexOf(':');
+        if (ci !== -1) body = after.substring(ci + 1);
+      }
+      const username = tags['display-name'] || tags.login || '?';
+      const ircColor = tags.color;
+      this.onMessage?.({
+        platform: 'twitch',
+        username,
+        message: body,
+        color: ircColor || twitchDefaultColor(username),
+        _needsColorLookup: !ircColor,
+        userId: tags['user-id'] || null,
+        timestamp: Number(tags['tmi-sent-ts']) || Date.now(),
+        id: tags.id || crypto.randomUUID(),
+        badgesRaw: tags.badges || '',
+        twitchEmotes: tags.emotes || null,
+        isModiversary: true,
+        modMonths: parseInt(tags['msg-param-months'] || '0', 10) || 0,
+      });
+      return;
+    }
+    // Neznámý typ (nevykresluje se): zalogovat jen msg-id a názvy tagů — žádné hodnoty ani text (osobní data),
+    // každý typ jednou za běh panelu. Tak zachytíme formáty, které zatím neznáme.
+    if (!this._loggedNotices) this._loggedNotices = new Set();
+    const key = msgId || '(bez msg-id)';
+    if (!this._loggedNotices.has(key) && this._loggedNotices.size < 100) {
+      this._loggedNotices.add(key);
+      this._log('UserNotice', `neznámý msg-id=${key} tagy=${Object.keys(tags).sort().join(',')}`);
     }
   }
 
@@ -381,7 +420,7 @@ export class TwitchProvider {
     const banDuration = tags['ban-duration']
       ? parseInt(tags['ban-duration'], 10) || null
       : null;
-    this.onClear?.({ user: targetUser, banDuration });
+    this.onClear?.({ user: targetUser, userId: tags['target-user-id'] || null, banDuration });
   }
 
   // CLEARMSG — single message deletion. Tags: target-msg-id, login.

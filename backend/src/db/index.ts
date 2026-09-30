@@ -20,6 +20,11 @@ export async function pingDb(): Promise<boolean> {
   }
 }
 
+/** LISTEN na kanál pg_notify; postgres.js po výpadku spojení poslech obnoví sám. */
+export async function listenDb(channel: string, onNotify: (payload: string) => void): Promise<void> {
+  await client.listen(channel, onNotify);
+}
+
 export async function closeDb(): Promise<void> {
   await client.end({ timeout: 5 });
 }

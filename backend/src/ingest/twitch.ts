@@ -1,5 +1,19 @@
-import { normalizeTwitchPrivmsg } from './normalize.js';
-import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import { normalizeTwitchPrivmsg, normalizeTwitchUsernotice, parseIrcLine, unknownUsernotice } from './normalize.js';
+import type { IngestDelete, IngestListener, IngestMessage, IngestUserModeration, PlatformStatus } from './types.js';
+import type { IrcLine } from './normalize.js';
+
+/**
+ * CLEARCHAT → timeout/ban konkrétního uživatele. Bez `target-user-id` (vyčištění celého chatu) nebo
+ * bez loginu v trailing → null. `ban-duration` = timeout v s, chybí = permanentní ban.
+ */
+export function clearchatToUserModeration(p: IrcLine, channel: string): IngestUserModeration | null {
+  if (p.command !== 'CLEARCHAT') return null;
+  const userId = p.tags['target-user-id'];
+  const login = p.trailing.trim().toLowerCase();
+  if (!userId || !login) return null;
+  const d = Number(p.tags['ban-duration']);
+  return { platform: 'twitch', channel: channel.toLowerCase(), userId, login, durationSec: Number.isFinite(d) && d > 0 ? d : null };
+}
 
 export interface Logger {
   info(o: object, msg: string): void;
@@ -8,13 +22,17 @@ export interface Logger {
 }
 export const noopLog: Logger = { info() {}, warn() {}, error() {} };
 
-interface Opts { WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number }
+interface Opts {
+  WebSocketCtor?: typeof WebSocket; log?: Logger; reconnectBaseMs?: number;
+  onDelete?: (d: IngestDelete) => void;
+  onUserModerated?: (d: IngestUserModeration) => void;
+}
 
 /**
  * Anonymní IRC posluchač (justinfan) — port TwitchProvider z extension
- * (sidepanel.js), bez UI: jen PRIVMSG → onMessage. USERNOTICE (raid, sub…)
- * se zatím neukládá — klient je renderuje živě a v historii by potřeboval
- * vlastní render cestu; přidá se, až bude klientská část hotová.
+ * (sidepanel.js), bez UI: PRIVMSG → onMessage. Z USERNOTICE jen výročí (text
+ * uživatele volitelný; sub / resub / modiversary, normalizeTwitchUsernotice); raid a dary
+ * klient renderuje živě z vlastního IRC.
  */
 export class TwitchListener implements IngestListener {
   private ws: WebSocket | null = null;
@@ -26,6 +44,10 @@ export class TwitchListener implements IngestListener {
   private readonly Ctor: typeof WebSocket;
   private readonly log: Logger;
   private readonly baseMs: number;
+  private readonly onDelete?: (d: IngestDelete) => void;
+  private readonly onUserModerated?: (d: IngestUserModeration) => void;
+  /** Neznámé typy USERNOTICE už zalogované (každý jednou). */
+  private readonly loggedNotices = new Set<string>();
 
   constructor(
     private readonly channel: string,
@@ -35,6 +57,8 @@ export class TwitchListener implements IngestListener {
     this.Ctor = opts.WebSocketCtor ?? WebSocket;
     this.log = opts.log ?? noopLog;
     this.baseMs = opts.reconnectBaseMs ?? 1000;
+    this.onDelete = opts.onDelete;
+    this.onUserModerated = opts.onUserModerated;
   }
 
   status() { return this.st; }
@@ -80,6 +104,40 @@ export class TwitchListener implements IngestListener {
       for (const line of data.split('\r\n')) {
         if (!line) continue;
         if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); continue; }
+        // Příkaz z parsovaných IRC dat, ne podřetězcem — PRIVMSG s textem obsahujícím
+        // "CLEARMSG" by se jinak tiše zahodila (viz code review 2026-09-25).
+        const clearmsg = parseIrcLine(line);
+        if (clearmsg?.command === 'CLEARMSG') {
+          const id = clearmsg.tags['target-msg-id'];
+          if (id && this.onDelete) {
+            try { this.onDelete({ platform: 'twitch', channel: this.channel, messageId: id }); } catch (err) { this.log.error({ err }, 'twitch ingest: onDelete threw'); }
+          }
+          continue;
+        }
+        // CLEARCHAT (timeout/ban odjinud) — opět podle parsovaného příkazu, nikdy podřetězcem.
+        if (clearmsg?.command === 'CLEARCHAT') {
+          const um = clearchatToUserModeration(clearmsg, this.channel);
+          if (um && this.onUserModerated) {
+            try { this.onUserModerated(um); } catch (err) { this.log.error({ err }, 'twitch ingest: onUserModerated threw'); }
+          }
+          continue;
+        }
+        // USERNOTICE: výročí (sub / resub / modiversary, text uživatele volitelný) → log + /chat/stream jako zpráva;
+        // raid a dary jen živě u klienta. Neznámý typ → info log (msg-id + názvy tagů), každý typ jednou.
+        if (clearmsg?.command === 'USERNOTICE') {
+          const n = normalizeTwitchUsernotice(clearmsg, this.channel);
+          if (n) {
+            this.last = n.sentAt;
+            try { this.onMessage(n); } catch (err) { this.log.error({ err }, 'twitch ingest: onMessage threw'); }
+            continue;
+          }
+          const unk = unknownUsernotice(clearmsg);
+          if (unk && !this.loggedNotices.has(unk.msgId) && this.loggedNotices.size < 200) {
+            this.loggedNotices.add(unk.msgId);
+            this.log.info({ channel: this.channel, ...unk }, 'twitch ingest: neznámý USERNOTICE');
+          }
+          continue;
+        }
         if (!line.includes('PRIVMSG')) continue;
         const m = normalizeTwitchPrivmsg(line, this.channel);
         if (!m) continue;

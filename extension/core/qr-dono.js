@@ -5,6 +5,8 @@
 // Přezdívka je vidět vždy (předvyplněná: UC přezdívka → poslední z dona → jméno z platformy).
 // E-mail zadá divák sám, jen dokud účet nemá ověřený; ověření kódem (core/email-verify.js).
 import { startEmailVerification } from './email-verify.js';
+import { registerPanel, panelShown, refocusField } from './panel-morph.js';
+import { createSlideIndicator } from './slide-indicator.js';
 
 export const CONFIRM_TOOLTIP = 'Abychom mohli autorizovat, že jsou platby skutečně od tebe, potřebujeme ověřit tvůj email. V budoucnu díky tomu získáš přístup a <strong>výhody</strong> pro nadcházející funkce.';
 
@@ -74,10 +76,12 @@ export function donoErrorText(err, cur) {
     case 'czk_not_configured': return 'Platby v Kč zatím nejsou nastavené.';
     case 'donate_not_configured': return 'Donate zatím není nastavený.';
     case 'invalid_test_token': return 'Neplatný testovací token.';
+    case 'not_mod': return 'Test bez tokenu je jen pro moderátory kanálu. Zadej testovací token.';
+    case 'mod_test_not_allowed': return 'Test bez tokenu se nepovedl. Zadej testovací token.';
     case 'platform_not_linked': return 'Na téhle platformě nejsi přihlášený.';
     case 'email_required': return 'Vyplň platný e-mail.';
     case 'rate_limited': return 'Moc pokusů za sebou, zkus to za chvíli.';
-    case 'zidolista_unavailable': return 'Server donací je teď nedostupný, zkus to znovu.';
+    case 'zidolista_unavailable': return 'Server donatů je teď nedostupný, zkus to znovu.';
     default: return err?.error || err?.message || 'Něco se nepovedlo.';
   }
 }
@@ -105,6 +109,7 @@ export const QR_DONO_BUTTON_SVG = QR_SVG_ICON;
  * @param {HTMLElement} o.host
  * @param {HTMLElement} o.button
  * @param {{ config(): Promise<object>, testToken(t: string): Promise<{valid:boolean}>,
+ *           modTest?(): Promise<{allowed:boolean, role:string|null}>,   test bez tokenu pro moda (server ověří roli)
  *           createIntent(body: object): Promise<object>, intentStatus(id: string): Promise<object>,
  *           profile(): Promise<object>, emailStart(email: string): Promise<object>, emailVerify(code: string): Promise<object> }} o.api
  *        Chyby hází s `.error` / `.minAmount` z odpovědi serveru.
@@ -120,6 +125,9 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   let cfg = null, cfgSig = null, cur = 'CZK';
   try { const c = currency?.load?.(); if (c === 'CZK' || c === 'EUR') cur = c; } catch { /* ignore */ }
   let testMode = false, testValid = false, tokenTimer = null, tokenSeq = 0;
+  // Mod / streamer kanálu: test bez tokenu. Token se do klienta neposílá — server jen potvrdí roli a při
+  // odeslání ji ověří znovu. Ruční token (test z účtu, který mod není) má přednost.
+  let modTestOk = false;
   let publicId = null, pollTimer = null, versionTimer = null, sampleAudio = null, paidShown = false;
   let ringRaf = null, ringStart = 0, ringPeriod = 0;
   let profile = null, verifier = null;
@@ -241,7 +249,8 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   // ---- stav formuláře ----
   function setError(msg) { const e = $('.uc-qd-err'); e.textContent = msg || ''; e.hidden = !msg; }
-  const CFG_CHANGED = 'Nastavení donací se změnilo — zkontroluj částku a hlas.';
+  const CFG_CHANGED = 'Nastavení donatů se změnilo — zkontroluj částku a hlas.';
+  const CFG_UNAVAILABLE = 'Server donatů je nedostupný, zkouším znovu…';
   /** Upozornění na změnu nastavení platí jen pro rozpracovaný formulář — po otevření / návratu pryč. */
   function clearConfigNotice() { if ($('.uc-qd-err').textContent === CFG_CHANGED) setError(''); }
   function setNotice(c) {
@@ -279,9 +288,14 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     f.amount.focus();
     L(`min ${cc.minAmount} ${cur}`);
   }
+  // Přepínač měny: zvýraznění přejede z jedné měny na druhou (core/slide-indicator.js), ne skokem.
+  let curSlide = null;
   function renderCurrency() {
     const c = CURRENCIES[cur];
-    for (const b of panel.querySelectorAll('.uc-qd-cur button')) { const on = b.dataset.cur === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+    const group = panel.querySelector('.uc-qd-cur');
+    for (const b of group.querySelectorAll('button')) { const on = b.dataset.cur === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
+    if (!curSlide) curSlide = createSlideIndicator({ container: group, getActive: () => group.querySelector('button.on'), className: 'uc-slide-ind--cur' });
+    curSlide.update();
     $('.uc-qd-sym').textContent = c.sym;
     f.amount.step = String(c.step);
     const cc = currencyConfig(cfg, cur);
@@ -327,13 +341,15 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       const sig = configSignature(c);
       const changed = cfgSig !== null && sig !== cfgSig;
       cfg = c; cfgSig = sig;
+      // Opakované načtení po výpadku se povedlo → hláška o nedostupném serveru pryč (dřív visela, hlášeno 2026-09-28).
+      if ($('.uc-qd-err').textContent === CFG_UNAVAILABLE) setError('');
       renderVoices(); renderCurrency();
       // Změna nastavení (dashboard / !mindono) během otevřeného formuláře: data zůstanou,
       // jen se přepočítá minimum a hlasy (web tu ukazuje overlay s reloadem, tady netřeba).
       if (changed) { L('config změněn'); setError(CFG_CHANGED); }
     } catch (e) {
       L(`config fail ${e?.error || e?.message || e}`);
-      setError('Server donací je nedostupný, zkouším znovu…');
+      setError(CFG_UNAVAILABLE);
       win.setTimeout(() => { if (isOpen()) loadConfig(); }, 5000);
     }
   }
@@ -345,6 +361,18 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     $('.uc-qd-test').hidden = false;
     f.ttoken.focus();
     L('testmode odkryt');
+    void checkModTest();
+  }
+  async function checkModTest() {
+    if (!api.modTest || !identity?.()) return;
+    try {
+      const r = await api.modTest();
+      modTestOk = r?.allowed === true;
+      L(`modTest allowed=${modTestOk} role=${r?.role || '-'}`);
+    } catch (e) { modTestOk = false; L(`modTest fail ${e?.error || e?.message || e}`); }
+    $('.uc-qd-test').classList.toggle('uc-qd-test--mod', modTestOk);
+    f.ttoken.placeholder = modTestOk ? 'ověřeno jako moderátor — token není potřeba' : 'testovací token';
+    if (modTestOk && !f.ttoken.value.trim()) setTestValid(true);
   }
   function setTestValid(v) {
     testValid = v;
@@ -404,7 +432,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       nickname: values.nickname.trim(), ...(profile?.verified ? {} : { email: values.email.trim() }),
       currency: cur, amount: parseAmount(values.amount), message: values.message.trim(), ttsVoice: values.voice,
       ttsLanguage: cfg?.languages?.[0]?.code || 'cs',
-      ...(testMode && testValid ? { testToken: f.ttoken.value.trim(), markTest: f.marktest.checked, markPaid: f.markpaid.checked } : {}),
+      ...(testMode && testValid ? {
+        ...(f.ttoken.value.trim() ? { testToken: f.ttoken.value.trim() } : { modTest: true }),
+        markTest: f.marktest.checked, markPaid: f.markpaid.checked,
+      } : {}),
     };
     try {
       const res = await api.createIntent(body);
@@ -519,9 +550,12 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
 
   // ---- otevření / zavření ----
   function open() {
+    morph.settle();   // rozběhnuté zavírání dokončit, ať panel po otevření neschová
     panel.classList.remove('hidden');
     button.classList.add('active');
     button.setAttribute('aria-expanded', 'true');
+    // Z nuly vyroste z tlačítka; jiný otevřený panel u pole (emoty, soundboard) se do tohohle přetvoří (test2 bod 5).
+    morph.opened();
     clearConfigNotice();
     renderCurrency();
     // Změna při zavřeném panelu se jen tiše načte — upozornění patří jen k rozpracovanému formuláři.
@@ -534,9 +568,10 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     panel.focus();
     if (!$('.uc-qd-res').hidden && publicId) poll();
   }
-  function close() {
-    if (panel.classList.contains('hidden')) return;
-    panel.classList.add('hidden');
+  /** `instant` = bez animace (přetvoření do jiného panelu ho volá po doběhnutí). */
+  function close({ instant = false } = {}) {
+    if (!isOpen()) return;
+    morph.hide(() => panel.classList.add('hidden'), { instant });
     button.classList.remove('active');
     button.setAttribute('aria-expanded', 'false');
     win.clearInterval(versionTimer);
@@ -545,10 +580,11 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
     stopSample();
     if (verifier) closeVerify();
   }
-  const isOpen = () => !panel.classList.contains('hidden');
+  const isOpen = () => panelShown(panel);
+  const morph = registerPanel({ panel, button, isOpen, close: () => close({ instant: true }), log: L });
 
   // ---- události ----
-  button.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
+  button.addEventListener('click', (e) => { e.stopPropagation(); morph.settle(); isOpen() ? close() : open(); });
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   f.amount.addEventListener('input', () => { f.amount.classList.remove('invalid'); updateCzk(); });
   for (const k of ['nickname', 'email']) f[k].addEventListener('input', () => f[k].classList.remove('invalid'));
@@ -557,7 +593,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   f.ttoken.addEventListener('input', () => {
     win.clearTimeout(tokenTimer);
     const t = f.ttoken.value.trim();
-    if (!t) { tokenSeq++; setTestValid(false); return; }
+    if (!t) { tokenSeq++; setTestValid(modTestOk); return; }
     tokenTimer = win.setTimeout(() => checkToken(t), 500);   // debounce jako web
   });
   panel.addEventListener('click', (e) => {
@@ -591,23 +627,25 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   });
   // Tajné gesto: „testmode“ napsané do aktivního panelu mimo pole formuláře.
   panel.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { close(); return; }
+    // Esc: zavřít a fokus zpět do pole pro psaní (jako emoty; na dotyku ne — klávesnice).
+    if (e.key === 'Escape') { close(); refocusField(button); return; }
     if (e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || e.altKey) return;
     // preventDefault: poslední „e“ by jinak spadlo do pole tokenu, kam se po odkrytí přesune fokus.
     if (detectTestmode(e.key)) { e.preventDefault(); revealTestMode(); }
   });
-  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target)) close(); };
+  const onDocDown = (e) => { if (isOpen() && !panel.contains(e.target) && !button.contains(e.target) && !morph.isSwitch(e.target)) close(); };
   doc.addEventListener('mousedown', onDocDown);
 
   return {
     open, close, isOpen,
-    toggle: () => (isOpen() ? close() : open()),
+    toggle: () => { morph.settle(); return isOpen() ? close() : open(); },
     /** SSE donate-config-change (webhook Židolišty) → config hned, ne až za 10 s. Zavřený panel nic nedělá. */
     reloadConfig: () => { if (isOpen() && !form.hidden) loadConfig(); },
     /** Změna přihlášení / platformy u hostitele → překreslit „Tipuješ jako…“ a načíst profil. */
     refreshIdentity: () => { renderWho(); if (isOpen()) loadProfile(); },
     destroy() {
-      close();
+      close({ instant: true });
+      morph.unregister();
       doc.removeEventListener('mousedown', onDocDown);
       panel.remove();
     },

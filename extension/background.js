@@ -106,6 +106,15 @@ function isPlatformTab(tab) {
 }
 
 
+// Nová verze z obchodu je stažená a čeká na restart rozšíření (Chrome ji sám nasadí, až bude rozšíření nečinné —
+// s otevřeným panelem nikdy). Panel rozsvítí tlačítko obnovení; klik = chrome.runtime.reload() → instalace.
+// Stav v storage.session: panel otevřený později ho uvidí taky (core/update-notice.js, pokyn usera 2026-09-27).
+chrome.runtime.onUpdateAvailable?.addListener((details) => {
+  ucLog('Update', `k dispozici ${details?.version || '?'} (běží ${chrome.runtime.getManifest().version})`);
+  chrome.storage.session?.set({ uc_update_ready: details?.version || true }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'UC_UPDATE_READY', version: details?.version || null }).catch(() => {});
+});
+
 // Při instalaci/updatu injektovat content scripty do už otevřených tabů
 // Seznam souborů bere z manifestu (content_scripts) — jediný zdroj pravdy, včetně sdíleného
 // content/uc-header-button.js, který musí jít před skript platformy.
@@ -174,10 +183,38 @@ async function dumpLogs() {
   }
 }
 
+// Klik na oznámení o @zmínce (vytváří ho panel, id `ucm|<windowId>|<tabId>|<seq>`):
+// fokus okna s panelem, v tab režimu (Opera) i karty UnityChatu, v Chromu pokus
+// otevřít postranní panel (sidePanel.open synchronně, dokud platí gesto uživatele).
+chrome.notifications?.onClicked?.addListener((id) => {
+  if (!String(id).startsWith('ucm|')) return;
+  const [, w, t] = String(id).split('|');
+  const windowId = w ? Number(w) : null;
+  const tabId = t ? Number(t) : null;
+  if (HAS_SIDE_PANEL && windowId != null && tabId == null) {
+    chrome.sidePanel.open({ windowId }).catch((e) => ucLog('Notify', 'sidePanel.open failed:', e.message));
+  }
+  if (tabId != null) chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  if (windowId != null) chrome.windows.update(windowId, { focused: true }).catch((e) => ucLog('Notify', 'focus failed:', e.message));
+  chrome.notifications.clear(id).catch?.(() => {});
+  ucLog('Notify', 'clicked', id);
+});
+
 // ---- Message handlers ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log dump
   // Text logu pro panel (Firefox si ukládá sám — blob: URL uspané background stránky zaniká).
+  // Panel žádá kontrolu nové verze v obchodě (při otevření a každou hodinu; Chrome ji sám omezuje).
+  if (msg.type === 'CHECK_UPDATE') {
+    try {
+      chrome.runtime.requestUpdateCheck?.((status, details) => {
+        ucLog('Update', `kontrola: ${status}${details?.version ? ' ' + details.version : ''}`);
+        sendResponse({ ok: true, status, version: details?.version || null });
+      });
+      if (!chrome.runtime.requestUpdateCheck) sendResponse({ ok: false });
+    } catch (e) { sendResponse({ ok: false, error: e.message }); }
+    return true;
+  }
   if (msg.type === 'GET_LOGS') {
     _hydrateLogs().then(() => sendResponse({ ok: true, text: _logs.join('\n') }));
     return true;
@@ -303,6 +340,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     fetchPins(msg.channel)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  // Výročí (moderátorské + předplatné) — GQL s cookie Twitche, viz annivStatus / annivShare / annivDismiss.
+  if (msg.type === 'ANNIV_STATUS' || msg.type === 'ANNIV_SHARE' || msg.type === 'ANNIV_DISMISS') {
+    // Jen z vlastní stránky rozšíření (panel / UC tab v Opeře), ne z content scriptu na cizí stránce.
+    if (!String(sender.url || '').startsWith(chrome.runtime.getURL(''))) { sendResponse({ ok: false, code: 'UNKNOWN' }); return; }
+    const fn = msg.type === 'ANNIV_STATUS' ? () => annivStatus(msg.channel) : msg.type === 'ANNIV_SHARE' ? () => annivShare(msg) : () => annivDismiss(msg);
+    fn().then(sendResponse).catch((e) => { ucLog('Anniversary', `${msg.type} výjimka: ${e.message}`); sendResponse({ ok: false, code: 'UNKNOWN', error: e.message }); });
     return true;
   }
 
@@ -916,6 +962,148 @@ async function fetchPins(channel) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+// ---- Výročí na Twitchi (moderátorské + předplatné) ----
+// Podklad docs/superpowers/specs/2026-09-27-twitch-vyroci-research.md. Interní GQL s first-party cookie
+// `auth-token` (stejně jako fetchPins / twReply); Helix ekvivalent neexistuje. Operace Twitche jdou nejdřív
+// jako persisted query (hash z podkladu), při PersistedQueryNotFound znovu s plným textem dotazu.
+// Proměnné vždy parametrizované. Token ani cookie se nikdy nelogují.
+const ANNIV_OPS = {
+  ModiversaryStatusQuery: {
+    hash: '811a62815487547845c1da820f8f9a927ef90f348bf818b3b6c6753246f3aaa0',
+    query: 'query ModiversaryStatusQuery($channelID: ID!, $userID: ID!) { userModiversary(channelID: $channelID, userID: $userID) { hasMilestoneAlert canSendUserNotice months } }',
+  },
+  SendUserModiversaryNotice: {
+    hash: '9c88807e41898569ff4526052ae554f1fc11c8db070271c1ce8a7a2f354fc4ab',
+    query: 'mutation SendUserModiversaryNotice($input: SendUserModiversaryNoticeInput!) { sendUserModiversaryNotice(input: $input) { modiversary { hasMilestoneAlert canSendUserNotice months } error } }',
+  },
+  DismissUserModiversaryCallout: {
+    hash: '3db262a9371deb31d414b5558e89d01ab56324baea67620c5dae330927426cf1',
+    query: 'mutation DismissUserModiversaryCallout($input: DismissUserModiversaryCalloutInput!) { dismissUserModiversaryCallout(input: $input) { modiversary { hasMilestoneAlert canSendUserNotice months } error } }',
+  },
+  Chat_ShareResub_UseResubToken: {
+    hash: 'f54cd09bc04ee2afbf5bce0ec473a1ba7dfb7771711117affd1c14f2e8105118',
+    query: 'mutation Chat_ShareResub_UseResubToken($input: UseChatNotificationTokenInput!) { useChatNotificationToken(input: $input) { isSuccess } }',
+  },
+  // Vlastní (malé) dotazy — plný Chat_ShareResub_ChannelData nese velké fragmenty, které addon nepotřebuje.
+  UcAnnivContext: {
+    query: 'query UcAnnivContext($login: String!) { currentUser { id login } user(login: $login) { id } }',
+  },
+  UcAnnivResub: {
+    query: 'query UcAnnivResub($login: String!) { user(login: $login) { id self { resubNotification { id cumulativeTenureMonths months streakTenureMonths isGiftSubscription gifter { id login displayName } } } } }',
+  },
+};
+
+/** Client-Integrity challenge v odpovědi (extensions.challenge.type) nebo chyba „failed integrity check“. */
+function annivIntegrity(res) {
+  if (res?.extensions?.challenge?.type === 'integrity') return true;
+  return (res?.errors || []).some((e) => /integrity/i.test(String(e?.message || '')));
+}
+
+/**
+ * Jedna GQL operace: persisted hash → při PersistedQueryNotFound plný dotaz. Vrací
+ * { status, data, errors, extensions, via: 'hash' | 'query' }. Log `Anniversary`: operace, cesta, HTTP,
+ * chyby a extensions (bez tokenu, bez textu zprávy).
+ */
+async function annivGql(token, op, variables) {
+  const def = ANNIV_OPS[op];
+  const headers = { 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json', Authorization: 'OAuth ' + token };
+  const call = async (body, via) => {
+    const r = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
+    let j = null;
+    try { j = await r.json(); } catch { /* ne-JSON */ }
+    const res = Array.isArray(j) ? j[0] : j;
+    return { status: r.status, data: res?.data ?? null, errors: res?.errors || null, extensions: res?.extensions || null, via };
+  };
+  let res = null;
+  if (def.hash) {
+    res = await call({ operationName: op, variables, extensions: { persistedQuery: { version: 1, sha256Hash: def.hash } } }, 'hash');
+    const notFound = (res.errors || []).some((e) => /PersistedQueryNotFound/i.test(String(e?.message || '')));
+    if (!notFound) { annivLog(op, res); return res; }
+  }
+  res = await call({ operationName: op, query: def.query, variables }, 'query');
+  annivLog(op, res);
+  return res;
+}
+
+function annivLog(op, res) {
+  const errs = (res.errors || []).map((e) => String(e?.message || '').slice(0, 120));
+  ucLog('Anniversary', `${op} via=${res.via} http=${res.status}${errs.length ? ' errors=' + JSON.stringify(errs) : ''}${res.extensions ? ' extensions=' + JSON.stringify(res.extensions).slice(0, 300) : ''}`);
+}
+
+async function annivToken() {
+  const c = await chrome.cookies.get({ url: 'https://www.twitch.tv', name: 'auth-token' });
+  return c?.value || null;
+}
+
+/**
+ * Stav výročí přihlášeného uživatele v kanálu: { ok, loggedIn, userId, channelId, resub, modiversary }.
+ * resub = user.self.resubNotification (výzva ke sdílení, dokud ji Twitch nezruší), modiversary jen když
+ * hasMilestoneAlert && canSendUserNotice && months > 0 (stejná podmínka jako Twitch).
+ */
+async function annivStatus(channelLogin) {
+  const login = String(channelLogin || '').toLowerCase();
+  if (!/^[a-z0-9_]{1,40}$/.test(login)) return { ok: false, error: 'bad_channel' };
+  const token = await annivToken();
+  if (!token) { ucLog('Anniversary', `status ${login}: bez cookie Twitche`); return { ok: true, loggedIn: false }; }
+  const ctx = await annivGql(token, 'UcAnnivContext', { login });
+  const me = ctx.data?.currentUser;
+  const channelId = ctx.data?.user?.id || null;
+  if (!me?.id) return ctx.errors ? { ok: false, error: 'gql' } : { ok: true, loggedIn: false };
+  if (!channelId) return { ok: false, error: 'no_channel' };
+  const [rs, mv] = await Promise.all([
+    annivGql(token, 'UcAnnivResub', { login }).catch((e) => ({ errors: [{ message: e.message }] })),
+    annivGql(token, 'ModiversaryStatusQuery', { channelID: channelId, userID: me.id }).catch((e) => ({ errors: [{ message: e.message }] })),
+  ]);
+  const rn = rs.data?.user?.self?.resubNotification || null;
+  const um = mv.data?.userModiversary || null;
+  const resub = rn?.id ? {
+    id: String(rn.id),
+    months: Number(rn.cumulativeTenureMonths) || Number(rn.months) || 0,
+    streak: Number(rn.streakTenureMonths) || 0,
+    isGift: !!rn.isGiftSubscription,
+    gifter: rn.gifter?.displayName || rn.gifter?.login || null,
+  } : null;
+  const modiversary = um && um.hasMilestoneAlert && um.canSendUserNotice && Number(um.months) > 0 ? { months: Number(um.months) } : null;
+  ucLog('Anniversary', `status ${login}: resub=${resub ? `${resub.months}m streak=${resub.streak} gift=${resub.isGift}` : '-'} mod=${um ? `${um.months}m alert=${!!um.hasMilestoneAlert} canSend=${!!um.canSendUserNotice}` : '-'}`);
+  return { ok: true, loggedIn: true, userId: String(me.id), channelId: String(channelId), channelLogin: login, resub, modiversary };
+}
+
+/**
+ * Sdílení: kind 'mod' → SendUserModiversaryNotice { channelID, noticeMessage }, 'resub' →
+ * useChatNotificationToken { channelLogin, message, includeStreak, tokenID = resubNotification.id }.
+ * Vrací { ok } | { ok:false, code } | { ok:false, integrity:true }.
+ */
+async function annivShare(m) {
+  const token = await annivToken();
+  if (!token) return { ok: false, code: 'not_logged_in' };
+  const text = String(m.text || '').slice(0, 500);
+  let res;
+  if (m.kind === 'mod') {
+    if (!m.channelId || !text.trim()) return { ok: false, code: m.channelId ? 'empty' : 'UNKNOWN' };
+    res = await annivGql(token, 'SendUserModiversaryNotice', { input: { channelID: String(m.channelId), noticeMessage: text } });
+    if (annivIntegrity(res)) return { ok: false, integrity: true };
+    const p = res.data?.sendUserModiversaryNotice;
+    if (p && !p.error && !res.errors) { ucLog('Anniversary', 'mod výročí sdíleno'); return { ok: true }; }
+    return { ok: false, code: p?.error || 'UNKNOWN' };
+  }
+  if (m.kind === 'resub') {
+    if (!m.tokenId || !m.channelLogin) return { ok: false, code: 'resub_failed' };
+    res = await annivGql(token, 'Chat_ShareResub_UseResubToken', { input: { channelLogin: String(m.channelLogin).toLowerCase(), message: text, includeStreak: !!m.includeStreak, tokenID: String(m.tokenId) } });
+    if (annivIntegrity(res)) return { ok: false, integrity: true };
+    if (res.data?.useChatNotificationToken?.isSuccess === true) { ucLog('Anniversary', `resub výročí sdíleno streak=${!!m.includeStreak}`); return { ok: true }; }
+    return { ok: false, code: 'resub_failed' };
+  }
+  return { ok: false, code: 'UNKNOWN' };
+}
+
+/** Křížek u moderátorského výročí → DismissUserModiversaryCallout { channelID } (Twitch chybu ignoruje, my ji jen logujeme). */
+async function annivDismiss(m) {
+  const token = await annivToken();
+  if (!token || !m.channelId) return { ok: false };
+  const res = await annivGql(token, 'DismissUserModiversaryCallout', { input: { channelID: String(m.channelId) } });
+  return { ok: !res.errors && !res.data?.dismissUserModiversaryCallout?.error, integrity: annivIntegrity(res) };
 }
 
 // Mapování sekund → Twitch enum

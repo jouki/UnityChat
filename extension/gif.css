@@ -1,0 +1,515 @@
+/* Odměna „Posílání GIFů" (extension/core/gif.js) — sdílené addonem i webem.
+   Médium ve zprávě (.uc-gif) + karty ke schválení / stav odesílatele (.uc-gif-stack). */
+
+/* ---- GIF ve zprávě: 100 %, nejvýš šířka chatu a 400 × 250 px, poměr zachován ---- */
+.uc-gif {
+  display: block;
+  margin: 4px 0 2px;
+  max-width: min(100%, 400px);
+  line-height: 0;
+}
+/* Pauza GIFu: canvas s aktuálním snímkem leží přes obrázek (core toggleGifPause) → karta potřebuje kotvu. */
+.uc-gif--card { position: relative; }
+.uc-gif-media {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+/* Neznámé rozměry (MP4 bez tkhd): omezit rámečkem, poměr drží prohlížeč. */
+.uc-gif--nosize .uc-gif-media {
+  max-width: min(100%, 400px);
+  max-height: 250px;
+  width: auto;
+}
+/* Médium se nenačetlo (404 = odebráno z knihovny / zahozeno) → ztlumený štítek „GIF odebrán“, bez odkazu. */
+.uc-gif-fallback {
+  display: inline-block;
+  line-height: 1.4;
+  font-size: 12px;
+  font-style: italic;
+  opacity: .6;
+}
+/* Soubor staženého GIFu smazán ze serveru → štítek „[GIF nedostupný]“ (zpráva s textem zůstává); GIF odebraný
+   z knihovny / zahozený („GIF odebrán“ — 404 i odkrytá zpráva) má stejný štítek (kolo 4 bod 3). */
+.uc-gif--unavailable .uc-gif-fallback, .uc-gif--removed .uc-gif-fallback {
+  font-style: normal;
+  padding: 1px 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  opacity: .75;
+}
+
+/* ---- GIF ve zprávě chatu jako karta (pokyn usera 2026-09-28): vycentrovaný, zaoblený rámeček, jemný stín;
+   nejvýš 400 × 250 px (createGifMedia). Kliknutím náhled v plné velikosti (core/gif-lightbox.js, v OBS ne). ---- */
+.msg .uc-gif.uc-gif--card {
+  width: fit-content;
+  max-width: min(100%, 412px);
+  margin: 6px auto 3px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
+  box-sizing: border-box;
+}
+.msg .uc-gif .uc-gif-media { border-radius: 8px; margin: 0 auto; }
+/* GIF na výšku: rám 4:3 (výška = výška GIFu, v úzkém chatu menší), GIF uprostřed, po stranách ambient. */
+.uc-gif-stage {
+  position: relative; overflow: hidden; border-radius: 8px;
+  width: var(--uc-gif-stage-w, 333px); max-width: 100%; aspect-ratio: 4 / 3;
+  display: flex; align-items: center; justify-content: center;
+  background: #0b0b0e;
+}
+.uc-gif-amb {
+  position: absolute; inset: -12%; width: 124%; height: 124%; object-fit: cover;
+  filter: blur(18px) brightness(0.5) saturate(1.25); pointer-events: none;
+}
+.uc-gif-stage .uc-gif-media {
+  position: relative; height: 100% !important; width: auto !important; max-width: 100%;
+  border-radius: 0; box-shadow: 0 0 18px rgba(0, 0, 0, 0.55);
+}
+body:not(.uc-raw) .msg .uc-gif .uc-gif-media { cursor: zoom-in; transition: filter 120ms ease; }
+body:not(.uc-raw) .msg .uc-gif .uc-gif-media:hover { filter: brightness(1.08); }
+/* Náhled v plné velikosti přes celé okno / panel. */
+.uc-gif-lb {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(6, 6, 9, 0.86); backdrop-filter: blur(2px);
+  cursor: zoom-out; outline: none;
+  animation: uc-gif-lb-in 160ms ease both;
+}
+.uc-gif-lb--out { animation: uc-gif-lb-out 160ms ease both; }
+.uc-gif-lb-media {
+  max-width: min(92vw, 100%); max-height: 88vh; width: auto; height: auto;
+  border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  animation: uc-gif-lb-zoom 180ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes uc-gif-lb-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes uc-gif-lb-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes uc-gif-lb-zoom { from { transform: scale(0.92); } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .uc-gif-lb, .uc-gif-lb--out, .uc-gif-lb-media { animation: none; } }
+
+/* Smazaná / skrytá zpráva: GIF se neukazuje (text nahrazuje štítek), u dim/strike jen ztlumený. */
+.uc-deleted--label .uc-gif,
+.uc-deleted--hide .uc-gif { display: none; }
+.uc-deleted--dim .uc-gif,
+.uc-deleted--strike .uc-gif { opacity: .45; }
+
+/* ---- Karty ke schválení (mod) a stav odesílatele — nad polem pro psaní, u spodku chatu ---- */
+.uc-gif-stack {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  /* #chat-wrapper má isolation: isolate → číslo platí jen uvnitř chatu. Pod „↓ Nové zprávy“ (10),
+     reakcí (40), načítáním (50) i Chat historií (9000). */
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 70%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Zásobník je jen tak vysoký jako karty → klikatelný celý (i posuvník při rozbalení). Vzhled posuvníku: sidepanel.css. */
+}
+.uc-gif-card[hidden], .uc-gif-more[hidden] { display: none; }
+.uc-gif-more {
+  align-self: center;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 12px;
+  background: var(--bg-secondary, #18181b);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  color: var(--accent-light, #ffc800);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.uc-gif-more:hover { background: var(--bg-hover, #26262c); }
+.uc-gif-card {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 8px;
+  background: var(--bg-secondary, #18181b);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  color: var(--text-primary, #efeff1);
+  font-size: 12px;
+  transition: border-color .2s, background-color .2s, opacity .3s;
+}
+.uc-gif-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.uc-gif-card-pi { flex: 0 0 auto; display: inline-flex; font-size: 10px; color: var(--text-secondary, #adadb8); }
+.uc-gif-card-pi img { width: 16px; height: 16px; display: block; }
+.uc-gif-card-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.uc-gif-card-kind { color: var(--text-secondary, #adadb8); white-space: nowrap; }
+.uc-gif-card-src { font-weight: 400; opacity: .8; color: var(--text-secondary, #adadb8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.uc-gif-timer {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: rgba(255, 140, 0, 0.15);
+  color: var(--accent-light, #ffc800);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.uc-gif-card-text { margin-top: 4px; overflow-wrap: anywhere; line-height: 1.35; }
+.uc-gif-card-media .uc-gif { margin: 6px 0 0; }
+.uc-gif-card-status { margin-top: 6px; font-weight: 700; color: var(--text-secondary, #adadb8); }
+.uc-gif-card-err { margin-top: 6px; color: #ff9a9d; }
+.uc-gif-card-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.uc-gif-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border, #2f2f35);
+  border-radius: 6px;
+  background: var(--bg-tertiary, #1f1f23);
+  color: var(--text-primary, #efeff1);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.uc-gif-btn:hover { background: var(--bg-hover, #26262c); }
+.uc-gif-btn:disabled { opacity: .5; cursor: default; }
+.uc-gif-btn--approve { background: #1f7a3d; border-color: transparent; color: #fff; }
+.uc-gif-btn--approve:hover { background: #26914a; }
+.uc-gif-btn--reject { color: #ff9a9d; }
+.uc-gif-card--busy .uc-gif-card-actions { cursor: progress; }
+
+/* Rozhodnuto: krátký efekt (zelená / červená / šedá), pak karta zmizí. */
+.uc-gif-card--approved { border-color: #2fbf5b; background: #12301c; }
+.uc-gif-card--approved .uc-gif-card-status { color: #6ee08f; }
+.uc-gif-card--rejected { border-color: #e5484d; background: #3a1517; }
+.uc-gif-card--rejected .uc-gif-card-status { color: #ff9a9d; }
+.uc-gif-card--expired,
+.uc-gif-card--closed { border-color: var(--border, #2f2f35); opacity: .85; }
+.uc-gif-card--own.uc-gif-card--pending { border-style: dashed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .uc-gif-card { transition: none; }
+}
+
+/* ---- Původní zpráva čeká na schválení (gif_request): v UnityChatu se nevykresluje vůbec ---- */
+.msg.uc-gif-held, .uc-uh-msg.uc-gif-held { display: none !important; }
+
+/* ---- Bublina cooldownu nad polem pro psaní (core/gif-cooldown.js) ----
+   Kolečko = komponenta odpočtu QR dona (.uc-qd-ring z qr-dono.css), tady jen větší a s číslem sekund. */
+.uc-gif-cd {
+  position: absolute;
+  right: 10px;
+  bottom: 100%;
+  z-index: 31;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 5px 8px 5px 12px;
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 999px;
+  background: #141417;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
+  color: var(--text-secondary, #adadb8);
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.uc-gif-cd[hidden] { display: none; }
+.uc-gif-cd .uc-gif-cd-ring { width: 24px; height: 24px; }
+.uc-gif-cd .uc-gif-cd-ring em { font-weight: 700; font-variant-numeric: tabular-nums; }
+.uc-gif-cd--long .uc-gif-cd-ring em { font-size: 8px; }
+/* Pokus o odeslání během cooldownu: červený text, kolečko i okraj pole. */
+.uc-gif-cd--blocked { border-color: #e5484d; color: #ff6b70; }
+.uc-gif-cd--blocked .uc-gif-cd-ring { --accent: #ff5a5f; }
+#msg-input.uc-gif-input-blocked,
+#msg-input.uc-gif-input-blocked:focus,
+.uc-gif-input-blocked { border-color: #e5484d !important; box-shadow: 0 0 0 1px rgba(229, 72, 77, 0.35); }
+
+/* =====================================================================================================
+   GIF knihovna (2026-09-26, core/gif.js GifRequests FIFO + core/gif-library.js)
+   ===================================================================================================== */
+
+/* ---- FIFO karta moda: jen nejstarší čekající + „+N čeká“, hláška „Už rozhodl X“, zámek tlačítek ---- */
+.uc-gif-slot:empty { display: none; }
+div.uc-gif-more { cursor: default; }
+.uc-gif-notice {
+  align-self: center;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary, #efeff1);
+  font-size: 12px;
+  font-weight: 700;
+}
+.uc-gif-notice[hidden] { display: none; }
+.uc-gif-notice--approved { border-color: #2fbf5b; color: #6ee08f; }
+.uc-gif-notice--rejected { border-color: #e5484d; color: #ff9a9d; }
+.uc-gif-notice--error { border-color: #f5a524; color: #ffc46b; }
+/* Split „Zamítnout ▾“ + nabídka trestu (spec 2026-09-27-gif-review-upravy §2). */
+.uc-gif-split { display: inline-flex; }
+.uc-gif-split > .uc-gif-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.uc-gif-split-more { padding: 5px 7px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: rgba(255, 154, 157, .25); }
+.uc-gif-split-more[aria-expanded="true"] { background: var(--bg-hover, #26262c); }
+.uc-gif-rmenu { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border, #2f2f35); }
+.uc-gif-rmenu[hidden] { display: none; }
+.uc-gif-rmenu-row.uc-mm-custom { flex-wrap: wrap; margin: 0; padding: 0; border: 0; gap: 6px; }
+.uc-gif-rmenu-label { flex: 1 1 100%; font-size: 12px; font-weight: 700; color: var(--text-secondary, #adadb8); }
+.uc-gif-rmenu-dur { display: inline-flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.uc-gif-rmenu-dur .uc-mm-unit { flex: 0 0 30px; }
+.uc-gif-rmenu .uc-mm-unit[aria-pressed="true"] { border-color: #ff8c00; background: rgba(255, 140, 0, 0.28); color: #ffc46b; }
+.uc-gif-rmenu .uc-gif-btn { padding: 4px 10px; }
+.uc-gif-btn--danger { color: #fff; background: #a3262b; border-color: transparent; }
+.uc-gif-btn--danger:hover { background: #c02f35; }
+.uc-gif-rmenu-ban { align-self: flex-start; }
+.uc-gif-card-prev { margin-top: 4px; color: #f5a524; font-size: 11px; font-weight: 700; }
+.uc-gif-card-prev::before { content: '⚠ '; }
+.uc-gif-card-prev[hidden], .uc-gif-btn[hidden] { display: none; }
+.uc-gif-btn--ban { margin-right: auto; color: #f5a524; font-weight: 600; font-size: 11px; }
+/* Zámek po změně karty (1 s jiný mod, 0,3 s po vlastním kliku): tlačítka ztlumená. */
+.uc-gif-card--locked .uc-gif-btn:disabled { opacity: .45; cursor: wait; }
+
+/* ---- Štítek u vlastní GIF zprávy (odesílatel): kolečko %, peach „Schvalování moderátorem ( )“, červený ---- */
+/* Vlastní GIF zpráva „Zamítnuto moderátorem“ / „Vypršelo“: odesílatel (i mod) ji nevidí jako smazanou — jen mírně
+   ztlumený text bez živého odkazu + červený štítek. Nové GIFy nejsou povolené (uc-gif-na): smazaná zpráva pro
+   všechny se štítkem místo „Smazáno“ — odkaz taky neživý, ztlumení dává vzhled smazané (user 2026-09-27). */
+.uc-gif-own-final .tx a { pointer-events: none; color: inherit; text-decoration: none; cursor: default; }
+.uc-gif-own-final:not(.uc-deleted) > .tx { opacity: .6; }
+.uc-gif-st {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0 1px;
+  padding: 2px 9px 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.uc-gif-st--progress { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); }
+/* Náš odkaz (GIF z knihovny): krátký stav bez procent, kolečko až s fází stahování (test2 bod 4). */
+.uc-gif-st--sending { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); padding-left: 9px; }
+.uc-gif-st--sending .uc-gif-st-txt { animation: uc-gif-st-pulse 1.8s ease-in-out infinite; }
+.uc-gif-st-ring { width: 16px; height: 16px; }
+.uc-gif-st-ring i { -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px); mask: radial-gradient(circle, transparent 5px, #000 5.5px); }
+.uc-gif-st-pct { font-variant-numeric: tabular-nums; min-width: 3.2em; }
+.uc-gif-st--pending { background: rgba(255, 170, 120, 0.16); border: 1px solid rgba(255, 170, 120, 0.45); color: #ffbe98; padding-left: 9px; }
+.uc-gif-st-wait { display: inline-flex; align-items: center; gap: 1px; }
+.uc-gif-st-spin {
+  display: inline-block; width: 8px; height: 8px; margin: 0 2px;
+  border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: uc-gif-st-spin 0.9s linear infinite;
+}
+@keyframes uc-gif-st-spin { to { transform: rotate(360deg); } }
+.uc-gif-st--pending .uc-gif-st-txt { animation: uc-gif-st-pulse 1.8s ease-in-out infinite; }
+@keyframes uc-gif-st-pulse { 50% { opacity: .6; } }
+.uc-gif-st-warn { display: inline-flex; cursor: help; }
+.uc-gif-st-warn[hidden] { display: none; }
+.uc-gif-st--rejected, .uc-gif-st--expired, .uc-gif-st--not_allowed, .uc-gif-st--denied { background: rgba(229, 72, 77, 0.14); border: 1px solid rgba(229, 72, 77, 0.55); color: #ff8a8e; padding-left: 9px; }
+@media (prefers-reduced-motion: reduce) {
+  .uc-gif-st-spin, .uc-gif-st--pending .uc-gif-st-txt, .uc-gif-st--sending .uc-gif-st-txt { animation: none; }
+}
+
+/* ---- Výzva ke stažení GIFu prohlížečem (spec 2026-09-29, core gif-library.js fáze client_fetch) ---- */
+.uc-gif-st--client_fetch { border-radius: 10px; padding: 5px 9px; flex-wrap: wrap; background: rgba(255, 140, 0, 0.12); color: var(--text, #efeff1); font-weight: 600; max-width: 100%; }
+.uc-gif-cf-actions { display: inline-flex; gap: 6px; align-items: center; }
+.uc-gif-cf-btn { border: 1px solid rgba(255, 140, 0, 0.6); background: rgba(255, 140, 0, 0.18); color: inherit; border-radius: 999px; padding: 1px 9px; font: inherit; cursor: pointer; }
+.uc-gif-cf-btn:hover { background: rgba(255, 140, 0, 0.32); }
+.uc-gif-cf-no { border-color: rgba(255, 255, 255, 0.25); background: transparent; }
+.uc-gif-cf-rem { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; opacity: .85; }
+.uc-gif-st--client_declined, .uc-gif-st--client_expired, .uc-gif-st--client_failed { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary, #adadb8); }
+.uc-gif-st--client_failed { color: #ff9a9d; }
+
+/* ---- Panel emotů se svislými bočními záložkami (Emoty | GIFy) — core/emote-picker.js tabs ---- */
+.uc-ep.uc-ep--tabs { flex-direction: row; width: min(420px, calc(100% - 20px)); height: min(400px, 62vh); }
+.uc-ep-side {
+  flex: 0 0 52px; display: flex; flex-direction: column; gap: 4px; padding: 6px 4px;
+  border-right: 1px solid var(--border, #2f2f35); background: var(--bg-secondary, #18181b);
+}
+.uc-ep-tab {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 2px 7px; border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--text-secondary, #9a9aa6); font: inherit; font-size: 10px; font-weight: 700; cursor: pointer;
+}
+.uc-ep-tab:hover { background: var(--bg-hover, #26262c); color: var(--text-primary, #efeff1); }
+.uc-ep-tab.on { color: var(--accent-light, #ffc800); background: var(--bg-tertiary, #1f1f23); border-color: rgba(255, 140, 0, 0.45); }
+/* Posuvný výběr (core/slide-indicator.js): zvýraznění kreslí indikátor, který mezi záložkami přejede. */
+/* Vrstvy během přejezdu (test 2026-09-27 kolo 4 bod 1): záložka nemá vlastní vrstvu (z-index auto), takže její
+   pozadí (hover) leží POD indikátorem; obsah záložky (ikona, text, pásek) je NAD ním. Dřív měla záložka z-index 1
+   a indikátor přejížděl pod pozadím neaktivní záložky. */
+.uc-ep-side.uc-slide-host, .uc-gl-tabs.uc-slide-host { isolation: isolate; }
+.uc-ep-side.uc-slide-host > .uc-slide-ind, .uc-gl-tabs.uc-slide-host > .uc-slide-ind { z-index: 1; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab, .uc-gl-tabs.uc-slide-host > .uc-gl-tab { z-index: auto; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab > *, .uc-gl-tabs.uc-slide-host > .uc-gl-tab > * { position: relative; z-index: 2; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab > .uc-ep-tab-bar { position: absolute; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab.on, .uc-ep-side.uc-slide-host > .uc-ep-tab.on:hover { background: transparent; border-color: transparent; }
+/* Časový pásek odměny (jako soundboard .uc-sb-bar) na záložce i pod tlačítkem emotů. */
+.uc-ep-tab-bar { position: absolute; left: 5px; right: 5px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-tab-bar[hidden], .uc-ep-btn-bar[hidden] { display: none; }
+.uc-ep-tab-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
+.uc-ep-btn-bar { position: absolute; left: 3px; right: 3px; bottom: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-btn-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-ep-p, 1) * 100%); border-radius: inherit; background: var(--accent-gradient); transition: width 1s linear; }
+/* Pásek cooldownu NAHOŘE (fialový) na ikoně emotů a záložce GIFy; dole zůstává odpočet odměny (pokyn usera 2026-09-30). */
+.uc-ep-tab-cd { position: absolute; left: 5px; right: 5px; top: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-tab-cd::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
+.uc-ep-btn-cd { position: absolute; left: 3px; right: 3px; top: 1px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); }
+.uc-ep-btn-cd::after { content: ''; position: absolute; inset: 0; width: calc(var(--uc-ep-cdp, 1) * 100%); border-radius: inherit; background: linear-gradient(90deg, #7c3aed, #c084fc); transition: width 1s linear; }
+.uc-ep-tab-cd[hidden], .uc-ep-btn-cd[hidden] { display: none; }
+.uc-ep-side.uc-slide-host > .uc-ep-tab > .uc-ep-tab-cd { position: absolute; }
+.uc-ep-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.uc-ep-pane[hidden] { display: none; }
+
+/* ---- Záložka GIFy (core/gif-library.js createGifPanel) ---- */
+.uc-gl { position: relative; overflow: hidden; }
+.uc-gl-tabs { display: flex; gap: 4px; padding: 6px 8px 0; }
+.uc-gl-tabs[hidden] { display: none; }
+.uc-gl-tab {
+  flex: 1; padding: 5px 6px; border: 1px solid var(--border, #2f2f35); border-radius: 5px; background: var(--bg-secondary, #18181b);
+  color: var(--text-secondary, #9a9aa6); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.uc-gl-tab.on { color: var(--accent-light, #ffc800); border-color: rgba(255, 140, 0, 0.55); }
+.uc-gl-tabs.uc-slide-host > .uc-gl-tab { position: relative; }
+.uc-gl-tabs.uc-slide-host > .uc-gl-tab.on { background: transparent; border-color: transparent; }
+.uc-gl-tabs > .uc-slide-ind { border-radius: 5px; border-color: rgba(255, 140, 0, 0.55); background: var(--bg-secondary, #18181b); }
+/* Hlavička odměny = sdílený stavový řádek .uc-reward-status (soundboard.css, core rewardStatusHtml); tady jen záblesk a pásek. */
+/* Aktivní odměna: bez textu, jen pásek (test 2026-09-27 kolo 4 bod 2). */
+.uc-gl-reward.uc-gl-reward--bare { padding: 0; height: 7px; }
+.uc-gl-reward.uc-gl-reward--bare .uc-gl-reward-t { display: none; }
+.uc-gl-reward--flash { animation: uc-gl-flash 0.4s ease-in-out 3; }
+@keyframes uc-gl-flash { 50% { background: rgba(229, 72, 77, 0.25); } }
+.uc-gl-reward-bar { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.uc-gl-reward-bar::after { content: ''; position: absolute; inset: 0; width: calc(var(--p, 1) * 100%); background: var(--accent-gradient); transition: width 1s linear; }
+.uc-gl-search { padding: 6px 8px; }
+.uc-gl-search[hidden] { display: none; }
+.uc-gl-search input {
+  width: 100%; box-sizing: border-box; padding: 6px 9px; background: var(--bg-secondary, #18181b);
+  border: 1px solid var(--border, #2f2f35); border-radius: 5px; color: var(--text-primary, #efeff1); font: inherit; font-size: 13px; outline: none;
+}
+.uc-gl-search input:focus { border-color: var(--accent, #ff8c00); }
+.uc-gl-msg { margin: 6px 8px 4px; padding: 4px 8px; border-radius: 5px; background: rgba(255, 255, 255, 0.06); font-size: 12px; color: var(--text-primary, #efeff1); }
+.uc-gl-msg[hidden] { display: none; }
+.uc-gl-body { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.uc-gl-h {
+  position: sticky; top: 0; z-index: 1; padding: 8px 0 4px; background: var(--bg-tertiary, #1f1f23);
+  color: var(--text-secondary, #9a9aa6); font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+}
+.uc-gl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.uc-gl-i { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.uc-gl-pick {
+  display: flex; align-items: center; justify-content: center; height: 84px; padding: 2px; overflow: hidden;
+  border: 1px solid transparent; border-radius: 6px; background: var(--bg-secondary, #18181b); cursor: pointer;
+}
+.uc-gl-pick:hover { border-color: rgba(255, 140, 0, 0.55); }
+.uc-gl-pick--static { cursor: default; }
+.uc-gl--locked .uc-gl-pick:not(.uc-gl-pick--static) { opacity: .55; cursor: not-allowed; }
+.uc-gl-media.uc-gif { margin: 0; max-width: 100%; }
+.uc-gl-media .uc-gif-media { max-height: 78px; width: auto !important; max-width: 100%; object-fit: contain; }
+.uc-gl-more {
+  position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px;
+  background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s;
+}
+.uc-gl-i:hover .uc-gl-more, .uc-gl-more:focus-visible { opacity: 1; }
+/* Streamer: Zamítnuté / Stažené / Ke smazání rozmazané, oko v rohu zaostří (test2 bod 2; rozmazání jako Profil moda). */
+.uc-gl-i--blurable .uc-gl-media .uc-gif-media { transition: filter .2s; }
+.uc-gl-i--blur .uc-gl-media .uc-gif-media { filter: blur(10px) saturate(.7); }
+.uc-gl-i--blurable .uc-gl-pick { overflow: hidden; }
+.uc-gl-eye {
+  position: absolute; top: 3px; left: 3px; z-index: 2; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 5px; background: rgba(0, 0, 0, 0.65); color: #fff; cursor: pointer;
+}
+.uc-gl-eye:hover, .uc-gl-eye:focus-visible { background: rgba(0, 0, 0, 0.85); color: var(--accent-light, #ffc800); }
+.uc-gl-menu {
+  position: absolute; top: 27px; right: 3px; z-index: 3; display: flex; flex-direction: column; min-width: 150px;
+  padding: 4px; border: 1px solid var(--border, #2f2f35); border-radius: 6px; background: var(--bg-tertiary, #1f1f23); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+}
+.uc-gl-menu[hidden] { display: none; }
+.uc-gl-menu button { padding: 6px 8px; border: none; border-radius: 4px; background: transparent; color: var(--text-primary, #efeff1); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.uc-gl-menu button:hover { background: var(--bg-hover, #26262c); }
+.uc-gl-menu .uc-gl-danger { color: #ff9a9d; }
+.uc-gl-meta { font-size: 10px; color: var(--text-secondary, #9a9aa6); line-height: 1.3; }
+.uc-gl-i--vault .uc-gl-meta { color: #9ecbff; }
+.uc-gl-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.uc-gl-acts .uc-gif-btn { padding: 3px 7px; font-size: 11px; }
+.uc-gl-grid--rej { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.uc-gl-dups { margin-bottom: 6px; }
+.uc-gl-dup { padding: 6px; margin-bottom: 6px; border: 1px dashed rgba(255, 140, 0, 0.5); border-radius: 6px; }
+.uc-gl-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.uc-gl-pair-i { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.uc-gl-pair-cap { font-size: 10px; color: var(--text-secondary, #9a9aa6); text-align: center; }
+.uc-gl-pair-i--rejected .uc-gl-pair-cap { color: #ff9a9d; }
+.uc-gl-dup-score { margin: 4px 0; font-size: 11px; font-weight: 700; color: var(--accent-light, #ffc800); }
+.uc-gl-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary, #9a9aa6); font-size: 12px; }
+.uc-gl-retry, .uc-gl-moreload {
+  margin: 8px auto 0; display: block; padding: 4px 12px; border: 1px solid var(--border, #2f2f35); border-radius: 12px;
+  background: var(--bg-secondary, #18181b); color: var(--text-primary, #efeff1); font: inherit; font-size: 12px; cursor: pointer;
+}
+.uc-gl-confirm { position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center; padding: 10px; background: rgba(0, 0, 0, 0.6); }
+.uc-gl-confirm[hidden] { display: none; }
+.uc-gl-confirm-box { max-width: 300px; max-height: 100%; overflow-y: auto; padding: 12px; border: 1px solid #e5484d; border-radius: 8px; background: var(--bg-tertiary, #1f1f23); font-size: 13px; }
+.uc-gl-confirm-box p { margin: 6px 0 0; color: var(--text-secondary, #9a9aa6); font-size: 12px; line-height: 1.4; }
+.uc-gl-confirm-acts { margin-top: 10px; justify-content: flex-end; }
+.uc-gl-confirm-acts .uc-gif-btn { padding: 4px 9px; }
+
+/* ---- Náhled GIFu (překryv nad GIF panelem): ×, klik mimo, Esc ---- */
+.uc-gl-preview { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 10px; background: rgba(0, 0, 0, 0.72); }
+.uc-gl-preview[hidden] { display: none; }
+.uc-gl-preview-box {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; max-height: 100%;
+  padding: 26px 12px 10px; overflow-y: auto; border: 1px solid rgba(255, 140, 0, 0.45); border-radius: 8px;
+  background: var(--bg-tertiary, #1f1f23); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+.uc-gl-preview-x {
+  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0; border: none; border-radius: 5px;
+  background: transparent; color: var(--text-secondary, #9a9aa6); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.uc-gl-preview-x:hover, .uc-gl-preview-x:focus-visible { background: var(--bg-hover, #26262c); color: var(--text-primary, #efeff1); }
+.uc-gl-preview-media .uc-gif { margin: 0; max-width: 100%; }
+.uc-gl-preview-info { display: flex; flex-direction: column; align-items: center; gap: 5px; max-width: 100%; text-align: center; }
+.uc-gl-preview-dim { font-size: 12px; font-weight: 700; color: var(--text-primary, #efeff1); font-variant-numeric: tabular-nums; }
+.uc-gl-preview-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.uc-gl-preview-tags--none { font-size: 11px; font-style: italic; color: var(--text-secondary, #9a9aa6); }
+.uc-gl-tag { padding: 1px 7px; border-radius: 999px; background: rgba(255, 140, 0, 0.14); color: var(--accent-light, #ffc800); font-size: 11px; }
+.uc-gl-preview-meta { font-size: 11px; color: var(--text-secondary, #9a9aa6); }
+.uc-gl-pick--preview { cursor: zoom-in; font: inherit; color: inherit; }
+/* Duplikáty: nabídka ⋯ u každého z dvojice. */
+.uc-gl-pair-i { position: relative; }
+.uc-gl-pair-i:hover .uc-gl-more { opacity: 1; }
+.uc-gl-pair-i .uc-gl-pick { width: 100%; box-sizing: border-box; }
+/* Zamítnuté → Stažené GIFy / Ke smazání. */
+.uc-gl-grid--disc { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.uc-gl-i--purging .uc-gl-meta { color: #ffbe98; }
+/* Dotyk bez hoveru: ⋯ vidět vždy (Náhled je i pro diváka). */
+@media (hover: none) { .uc-gl-more { opacity: .85; } }
+@media (prefers-reduced-motion: reduce) { .uc-gl-reward--flash { animation: none; outline: 1px solid #e5484d; } }
+/* OBS (raw režim webu): štítek „GIF odebrán“ (médium se nenačetlo = odebráno / zahozeno) se na streamu neukazuje,
+   stejně jako zprávy gif_removed (audit F16). Od kola 4 (bod 4c) se celá taková zpráva v OBS skryje, i s „[GIF nedostupný]“. */
+body.uc-raw .uc-gif--failed:not(.uc-gif--unavailable) { display: none; }
+/* Kolo 4 bod 4c: zpráva s GIFem, který je pryč (unavailable / odebraný / 404), se v OBS nevykreslí vůbec — jinak z ní
+   zbylo jen „jméno:“ (core GIF_GONE_CLASS). Stejně jako smazané zprávy. */
+body.uc-raw .msg.uc-gif-gone { display: none; }
+
+/* ---- Streamer: karta ke schválení zabalená do záložky ⌃⌃ (core/gif.js streamer), GIF rozmazaný ---- */
+.uc-gif-toggle {
+  align-self: center; display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 12px 3px; border: 1px solid var(--border, #2f2f35); border-bottom: none; border-radius: 8px 8px 0 0;
+  background: var(--bg-tertiary, #1c1c21); color: var(--accent-light, #ffb347); font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.35);
+}
+.uc-gif-toggle[hidden] { display: none; }
+.uc-gif-toggle:hover { background: var(--bg-hover, #26262c); }
+.uc-gif-toggle-ico { transition: transform 180ms ease; }
+.uc-gif-toggle.open .uc-gif-toggle-ico { transform: rotate(180deg); }
+.uc-gif-stack.uc-gif-stack--collapsed { bottom: 0; }
+.uc-gif-stack--collapsed > :not(.uc-gif-toggle) { display: none; }
+.uc-gif-card--blur .uc-gif-card-media { cursor: pointer; }
+.uc-gif-card--blur .uc-gif-card-media :is(img, video) { filter: blur(14px); transition: filter 160ms ease; }
+.uc-gif-card--blur.uc-gif-focused .uc-gif-card-media :is(img, video) { filter: none; }
+@media (prefers-reduced-motion: reduce) { .uc-gif-toggle-ico, .uc-gif-card--blur .uc-gif-card-media :is(img, video) { transition: none; } }

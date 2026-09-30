@@ -1,0 +1,450 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve, dirname } from 'node:path';
+import { classifyGifUrl, gifCandidate, textWithoutLink, isBlockedIp, assertPublicUrl, sniffKind, mediaSize, pickOgMedia, resolveGif, contentTypeOk, GifError, GIF_MAX_BYTES, GIF_MAX_DIM, GIF_MAX_FRAMES, normalizeSourceUrl, pageTags, normalizeTags, MAX_TAGS, MAX_TAG_LEN, createBlockedHosts, pickOgDescriptor, sameSite, describeGifSource, type Transport, type TransportResponse, type LookupAll, imgurRef } from './gifMedia.js';
+
+// ---- vzorky médií ----
+const gif = (w = 320, h = 240): Buffer => { const b = Buffer.alloc(32); b.write('GIF89a', 0, 'latin1'); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return b; };
+const webpX = (w: number, h: number): Buffer => { const b = Buffer.alloc(40); b.write('RIFF', 0, 'latin1'); b.write('WEBP', 8, 'latin1'); b.write('VP8X', 12, 'latin1'); b.writeUIntLE(w - 1, 24, 3); b.writeUIntLE(h - 1, 27, 3); return b; };
+const mp4 = (w: number, h: number): Buffer => {
+  const ftyp = Buffer.alloc(16); ftyp.writeUInt32BE(16, 0); ftyp.write('ftypisom', 4, 'latin1');
+  const tkhd = Buffer.alloc(92); tkhd.writeUInt32BE(92, 0); tkhd.write('tkhd', 4, 'latin1'); tkhd.writeUInt32BE(w << 16, 84); tkhd.writeUInt32BE(h << 16, 88);
+  return Buffer.concat([ftyp, Buffer.from([0, 0, 0, 8]), Buffer.from('free', 'latin1'), tkhd]);
+};
+
+test('classifyGifUrl: stránky Tenor/Giphy/Imgur/7TV, média CDN, přímé soubory, .gifv → .mp4', () => {
+  assert.deepEqual(classifyGifUrl('https://tenor.com/view/cat-dance-gif-123'), { url: 'https://tenor.com/view/cat-dance-gif-123', mode: 'page' });
+  assert.equal(classifyGifUrl('https://tenor.com/cs/view/cat-gif-1')?.mode, 'page');
+  assert.equal(classifyGifUrl('https://tenor.com/pt-BR/view/cat-gif-1')?.mode, 'page');
+  assert.equal(classifyGifUrl('https://tenor.com/search/cat'), null);
+  assert.equal(classifyGifUrl('https://media1.tenor.com/m/abc/cat.gif')?.mode, 'direct');
+  assert.equal(classifyGifUrl('https://media.tenor.com/abcAAAAC/x')?.mode, 'direct');
+  assert.equal(classifyGifUrl('https://giphy.com/gifs/cat-abc123')?.mode, 'page');
+  assert.equal(classifyGifUrl('https://giphy.com/explore/cat'), null);
+  assert.equal(classifyGifUrl('https://media3.giphy.com/media/abc/giphy.gif')?.mode, 'direct');
+  assert.equal(classifyGifUrl('https://i.giphy.com/abc.webp')?.mode, 'direct');
+  assert.deepEqual(classifyGifUrl('https://i.imgur.com/AbCdE12.gifv'), { url: 'https://i.imgur.com/AbCdE12.mp4', mode: 'direct' });
+  assert.equal(classifyGifUrl('https://imgur.com/gallery/AbCdE12')?.mode, 'page');
+  // Novější adresy Imgur <slug>-<ID> (galerie i album), fragment se ignoruje (2026-09-28).
+  assert.equal(classifyGifUrl('https://imgur.com/gallery/hold-breath-jVjKCJJ#/t/joke')?.mode, 'page');
+  assert.equal(classifyGifUrl('https://imgur.com/a/nazev-alba-8as1KiG')?.mode, 'page');
+  assert.deepEqual(imgurRef('https://imgur.com/gallery/hold-breath-jVjKCJJ#/t/joke'), { kind: 'gallery', id: 'jVjKCJJ' });
+  assert.deepEqual(imgurRef('https://imgur.com/a/8as1KiG'), { kind: 'album', id: '8as1KiG' });
+  assert.deepEqual(imgurRef('https://m.imgur.com/AbCdE12'), { kind: 'image', id: 'AbCdE12' });
+  assert.equal(imgurRef('https://imgur.com/gallery/'), null);
+  assert.equal(imgurRef('https://imgur.com/a/x'), null);
+  assert.equal(classifyGifUrl('https://i.imgur.com/AbCdE12.png'), null);
+  assert.deepEqual(classifyGifUrl('https://7tv.app/emotes/01F7JCJ0D80007RBBSW6MHGEVC'), { url: 'https://cdn.7tv.app/emote/01F7JCJ0D80007RBBSW6MHGEVC/4x.webp', mode: 'direct' });
+  assert.equal(classifyGifUrl('https://neco.cz/obrazek.GIF?x=1')?.mode, 'direct');
+  assert.equal(classifyGifUrl('neco.cz/video.mp4')?.url, 'https://neco.cz/video.mp4');
+  assert.equal(classifyGifUrl('https://neco.cz/obrazek.png'), null);
+  assert.equal(classifyGifUrl('https://neco.cz/'), null);
+  assert.equal(classifyGifUrl('ftp://neco.cz/a.gif'), null);
+});
+
+test('gifCandidate: první GIF odkaz ve zprávě (i bez schématu, s interpunkcí), text bez odkazu', () => {
+  const c = gifCandidate('koukni tohle: https://tenor.com/view/cat-gif-1. lol');
+  assert.equal(c?.url, 'https://tenor.com/view/cat-gif-1');
+  assert.equal(c?.token, 'https://tenor.com/view/cat-gif-1.');
+  assert.equal(textWithoutLink('koukni tohle: https://tenor.com/view/cat-gif-1. lol', c!.token), 'koukni tohle: lol');
+  assert.equal(gifCandidate('ahoj neco.cz/x a giphy.com/gifs/abc-1')?.url, 'https://giphy.com/gifs/abc-1');
+  assert.equal(gifCandidate('ahoj seznam.cz'), null);
+  assert.equal(gifCandidate('bez odkazu'), null);
+});
+
+test('isBlockedIp: privátní, loopback, link-local, CGNAT, mapped IPv6 blokované; veřejné ne', () => {
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '::1', '::', 'fe80::1', 'fd00::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:10.0.0.1', '64:ff9b::a00:1', 'nesmysl']) {
+    assert.equal(isBlockedIp(ip), true, ip);
+  }
+  for (const ip of ['8.8.8.8', '151.101.1.1', '2606:4700::1111', '::ffff:8.8.8.8']) assert.equal(isBlockedIp(ip), false, ip);
+});
+
+test('assertPublicUrl: DNS na privátní adresu, IP literál, port, přihlašovací údaje → blocked/bad_url', async () => {
+  const dns = (map: Record<string, string[]>): LookupAll => async (h) => (map[h] ?? []).map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+  const lookup = dns({ 'ok.cz': ['8.8.8.8'], 'evil.cz': ['8.8.8.8', '10.0.0.5'], 'rebind.cz': ['::ffff:192.168.0.1'] });
+  await assertPublicUrl(new URL('https://ok.cz/a.gif'), lookup);
+  await assert.rejects(assertPublicUrl(new URL('https://evil.cz/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+  await assert.rejects(assertPublicUrl(new URL('https://rebind.cz/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+  await assert.rejects(assertPublicUrl(new URL('http://127.0.0.1/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+  await assert.rejects(assertPublicUrl(new URL('http://[::1]/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+  await assert.rejects(assertPublicUrl(new URL('https://ok.cz:8080/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+  await assert.rejects(assertPublicUrl(new URL('https://u:p@ok.cz/a.gif'), lookup), (e: GifError) => e.code === 'bad_url');
+  await assert.rejects(assertPublicUrl(new URL('https://nic.cz/a.gif'), lookup), (e: GifError) => e.code === 'blocked');
+});
+
+test('sniffKind + mediaSize + contentTypeOk', () => {
+  assert.equal(sniffKind(gif()), 'gif');
+  assert.equal(sniffKind(webpX(10, 20)), 'webp');
+  assert.equal(sniffKind(mp4(10, 20)), 'mp4');
+  assert.equal(sniffKind(Buffer.from('<!doctype html><html>')), null);
+  assert.deepEqual(mediaSize(gif(498, 280), 'gif'), { width: 498, height: 280 });
+  assert.deepEqual(mediaSize(webpX(640, 360), 'webp'), { width: 640, height: 360 });
+  assert.deepEqual(mediaSize(mp4(480, 270), 'mp4'), { width: 480, height: 270 });
+  assert.deepEqual(mediaSize(Buffer.from('GIF89a'), 'gif'), { width: null, height: null });
+  assert.equal(contentTypeOk('image/gif', 'gif'), true);
+  assert.equal(contentTypeOk('application/octet-stream', 'mp4'), true);
+  assert.equal(contentTypeOk('video/mp4', 'gif'), false);
+  assert.equal(contentTypeOk('text/html', 'gif'), false);
+});
+
+test('pickOgMedia: og:video MP4 přednostně, jinak og:image, entity + relativní URL', () => {
+  const base = new URL('https://tenor.com/view/x');
+  const html = `<head><meta property="og:image" content="https://media1.tenor.com/a.gif"><meta property="og:video" content="https://media1.tenor.com/a.mp4?x=1&amp;y=2"></head>`;
+  assert.equal(pickOgMedia(html, base), 'https://media1.tenor.com/a.mp4?x=1&y=2');
+  assert.equal(pickOgMedia(`<meta content="/img/a.gif" property="og:image" />`, base), 'https://tenor.com/img/a.gif');
+  assert.equal(pickOgMedia(`<meta property="og:video" content="https://x/a.webm"><meta property="og:image" content="https://x/a.gif">`, base), 'https://x/a.gif');
+  assert.equal(pickOgMedia('<title>nic</title>', base), null);
+});
+
+// ---- falešný transport ----
+type Route = { status?: number; headers?: Record<string, string>; body?: Buffer | Buffer[] };
+function fakeTransport(routes: Record<string, Route>, seen: Array<{ url: string; headers: Record<string, string> }> = []): Transport {
+  return async (url, headers) => {
+    seen.push({ url: url.toString(), headers });
+    const r = routes[url.toString()];
+    if (!r) return { status: 404, headers: {}, body: (async function* () {})(), dispose() {} } satisfies TransportResponse;
+    const chunks = Array.isArray(r.body) ? r.body : r.body ? [r.body] : [];
+    return { status: r.status ?? 200, headers: r.headers ?? {}, body: (async function* () { for (const c of chunks) yield c; })(), dispose() {} };
+  };
+}
+const publicDns: LookupAll = async () => [{ address: '8.8.8.8', family: 4 }];
+
+test('resolveGif: Tenor stránka → og:video MP4, médium s Accept image/*,video/*', async () => {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+  const transport = fakeTransport({
+    'https://tenor.com/view/cat-gif-1': { headers: { 'content-type': 'text/html; charset=utf-8' }, body: Buffer.from('<meta property="og:image" content="https://media1.tenor.com/m/a/cat.gif"><meta property="og:video" content="https://media1.tenor.com/m/a/cat.mp4">') },
+    'https://media1.tenor.com/m/a/cat.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(498, 280) },
+  }, seen);
+  const r = await resolveGif({ url: 'https://tenor.com/view/cat-gif-1', mode: 'page' }, { transport, lookupAll: publicDns });
+  assert.equal(r.kind, 'mp4');
+  assert.equal(r.contentType, 'video/mp4');
+  assert.deepEqual([r.width, r.height], [498, 280]);
+  assert.equal(seen[1].headers.Accept, 'image/*,video/*');
+  assert.match(seen[0].headers.Accept, /text\/html/);
+  assert.equal(r.tags, undefined, 'stránka bez titulku a klíčových slov → bez tagů');
+});
+
+test('pageTags: Tenor (og:title + keywords), Giphy (… GIF by X - Find & Share on GIPHY), JSON-LD; normalizace', () => {
+  const tenor = `<head><meta property="og:title" content="Cat Dance GIF - Cat Dance Funny - Discover &amp; Share GIFs">
+    <meta name="keywords" content="Cat,Dance,Funny,GIF,Animated GIF,cat"></head>`;
+  assert.deepEqual(pageTags(tenor), ['cat dance', 'cat', 'dance', 'funny']);
+  const giphy = `<meta property="og:title" content="Happy Dance GIF by Originals - Find &amp; Share on GIPHY">
+    <meta name="keywords" content="Happy Dance GIF by Originals, Originals, happy, dance, #Party, GIF, Animated GIF">
+    <script type="application/ld+json">{"@type":"ImageObject","keywords":["Party","Celebrate"],"author":{"keywords":"Hype, party"}}</script>`;
+  assert.deepEqual(pageTags(giphy), ['happy dance', 'originals', 'happy', 'dance', 'party', 'celebrate', 'hype']);
+  assert.deepEqual(pageTags('<meta name="keywords" content=\'Don&#39;t, Stop\'>'), ["don't", 'stop']);
+  assert.deepEqual(pageTags('<script type="application/ld+json">{nesmysl</script>'), []);
+  assert.deepEqual(pageTags(''), []);
+});
+
+test('normalizeTags: malá písmena, bez # a duplicit, obecná slova pryč, ≤ 40 znaků, ≤ 20 tagů, ne-řetězce pryč', () => {
+  assert.deepEqual(normalizeTags(['  Ahoj   Světe ', '#ahoj světe', 'GIF', 'Sticker', 42, null, '', 'ok']), ['ahoj světe', 'ok']);
+  assert.equal(normalizeTags(['x'.repeat(60)])[0].length, MAX_TAG_LEN);
+  assert.equal(normalizeTags(Array.from({ length: 30 }, (_, i) => `tag${i}`)).length, MAX_TAGS);
+  assert.equal(MAX_TAGS, 20);
+  assert.equal(MAX_TAG_LEN, 40);
+});
+
+test('resolveGif: stránka Tenor s titulkem a klíčovými slovy → tagy v médiu (bez požadavku navíc)', async () => {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+  const transport = fakeTransport({
+    'https://tenor.com/view/cat-gif-2': { headers: { 'content-type': 'text/html' }, body: Buffer.from('<meta property="og:title" content="Cat Jam GIF - Cat Jam - Discover &amp; Share GIFs"><meta name="keywords" content="Cat,Jam"><meta property="og:image" content="https://media1.tenor.com/m/b/cat.gif">') },
+    'https://media1.tenor.com/m/b/cat.gif': { headers: { 'content-type': 'image/gif' }, body: gif() },
+  }, seen);
+  const r = await resolveGif({ url: 'https://tenor.com/view/cat-gif-2', mode: 'page' }, { transport, lookupAll: publicDns });
+  assert.deepEqual(r.tags, ['cat jam', 'cat', 'jam']);
+  assert.equal(seen.length, 2);
+  const direct = await resolveGif({ url: 'https://media1.tenor.com/m/b/cat.gif', mode: 'direct' }, { transport, lookupAll: publicDns });
+  assert.equal(direct.tags, undefined);
+});
+
+test('resolveGif: přímý Tenor GIF, který bez Accept vrací HTML → s Accept čistý GIF; HTML → bad_type', async () => {
+  const url = 'https://media1.tenor.com/m/a/cat.gif';
+  const accepting: Transport = async (_u, headers) => {
+    const img = /image\//.test(headers.Accept);
+    return { status: 200, headers: { 'content-type': img ? 'image/gif' : 'text/html' }, body: (async function* () { yield img ? gif(220, 124) : Buffer.from('<html>'); })(), dispose() {} };
+  };
+  const r = await resolveGif({ url, mode: 'direct' }, { transport: accepting, lookupAll: publicDns });
+  assert.deepEqual([r.kind, r.width, r.height], ['gif', 220, 124]);
+  const html = fakeTransport({ [url]: { headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>') } });
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: html, lookupAll: publicDns }), (e: GifError) => e.code === 'bad_type');
+});
+
+test('SEC-7: limit rozměrů a snímků — nad 2048 px (hlavička i sonda) nebo nad 600 snímků = too_large, před uložením', async () => {
+  const url = 'https://media1.tenor.com/m/b/cat.gif';
+  const tr = (body: Buffer) => fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body } });
+  // Hlavička stačí: obří logická obrazovka se odmítne i bez sondy (sharp / ffprobe).
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif(4096, 100)), lookupAll: publicDns }), (e: GifError) => e.code === 'too_large');
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif(20_000, 100)), lookupAll: publicDns }), (e: GifError) => e.code === 'too_large', 'i nad 16384 (dřív null = bez kontroly)');
+  const probed: string[] = [];
+  const probe = (p: { width: number | null; height: number | null; frames: number | null }) => async (_b: Buffer, kind: string) => { probed.push(kind); return p; };
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: 240, frames: GIF_MAX_FRAMES + 1 }) }), (e: GifError) => e.code === 'too_large');
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: GIF_MAX_DIM + 1, frames: 2 }) }), (e: GifError) => e.code === 'too_large');
+  const ok = await resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: probe({ width: 320, height: 240, frames: GIF_MAX_FRAMES }) });
+  assert.deepEqual([ok.width, ok.height], [320, 240]);
+  assert.deepEqual(probed, ['gif', 'gif', 'gif']);
+  // Sonda nemá nástroj (null) → jen hlavička.
+  assert.equal((await resolveGif({ url, mode: 'direct' }, { transport: tr(gif()), lookupAll: publicDns, probe: async () => null })).width, 320);
+  assert.equal(GIF_MAX_DIM, 2048);
+  assert.equal(GIF_MAX_FRAMES, 600);
+});
+
+test('resolveGif: limit velikosti (Content-Length i streamem), magic bytes, špatný typ', async () => {
+  const url = 'https://x.cz/a.gif';
+  const big = fakeTransport({ [url]: { headers: { 'content-type': 'image/gif', 'content-length': String(GIF_MAX_BYTES + 1) }, body: gif() } });
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: big, lookupAll: publicDns }), (e: GifError) => e.code === 'too_large');
+  const chunk = Buffer.alloc(1024 * 1024);
+  const stream = fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body: [gif(), ...Array(11).fill(chunk)] } });
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: stream, lookupAll: publicDns }), (e: GifError) => e.code === 'too_large');
+  const png = fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body: Buffer.from('\x89PNG\r\n\x1a\n0000', 'latin1') } });
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: png, lookupAll: publicDns }), (e: GifError) => e.code === 'bad_magic');
+  const wrong = fakeTransport({ [url]: { headers: { 'content-type': 'video/mp4' }, body: gif() } });
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport: wrong, lookupAll: publicDns }), (e: GifError) => e.code === 'bad_type');
+});
+
+test('resolveGif: přesměrování se znovu ověřuje (na privátní adresu → blocked), max 3', async () => {
+  const lookupAll: LookupAll = async (h) => [{ address: h === 'internal.cz' ? '10.0.0.1' : '8.8.8.8', family: 4 }];
+  const toInternal = fakeTransport({ 'https://x.cz/a.gif': { status: 302, headers: { location: 'http://internal.cz/secret.gif' } } });
+  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport: toInternal, lookupAll }), (e: GifError) => e.code === 'blocked');
+  const toMeta = fakeTransport({ 'https://x.cz/a.gif': { status: 301, headers: { location: 'http://169.254.169.254/latest' } } });
+  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport: toMeta, lookupAll }), (e: GifError) => e.code === 'blocked');
+  const loop = fakeTransport({
+    'https://x.cz/1.gif': { status: 302, headers: { location: '/2.gif' } },
+    'https://x.cz/2.gif': { status: 302, headers: { location: '/3.gif' } },
+    'https://x.cz/3.gif': { status: 302, headers: { location: '/4.gif' } },
+    'https://x.cz/4.gif': { status: 302, headers: { location: '/5.gif' } },
+  });
+  await assert.rejects(resolveGif({ url: 'https://x.cz/1.gif', mode: 'direct' }, { transport: loop, lookupAll }), (e: GifError) => e.code === 'too_many_redirects');
+  const ok = fakeTransport({
+    'https://x.cz/1.gif': { status: 302, headers: { location: '/2.gif' } },
+    'https://x.cz/2.gif': { headers: { 'content-type': 'image/gif' }, body: gif() },
+  });
+  assert.equal((await resolveGif({ url: 'https://x.cz/1.gif', mode: 'direct' }, { transport: ok, lookupAll })).kind, 'gif');
+});
+
+test('resolveGif: stránka bez og médií → no_media; HTTP chyba → http_<status>', async () => {
+  const t = fakeTransport({ 'https://giphy.com/gifs/a-1': { headers: { 'content-type': 'text/html' }, body: Buffer.from('<title>x</title>') } });
+  await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/a-1', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'no_media');
+  await assert.rejects(resolveGif({ url: 'https://giphy.com/gifs/b-2', mode: 'page' }, { transport: t, lookupAll: publicDns }), (e: GifError) => e.code === 'http_404');
+});
+
+test('normalizeSourceUrl: bez utm_* a sledovacích parametrů, bez fragmentu, schéma a host malými písmeny, parametry seřazené', () => {
+  assert.equal(normalizeSourceUrl('HTTPS://Tenor.COM/view/cat-gif-1?utm_source=x&utm_medium=y#top'), 'https://tenor.com/view/cat-gif-1');
+  assert.equal(normalizeSourceUrl('https://x.cz/a.gif?b=2&a=1&fbclid=zz'), 'https://x.cz/a.gif?a=1&b=2');
+  assert.equal(normalizeSourceUrl('https://x.cz:443/A.gif'), 'https://x.cz/A.gif', 'cesta zůstává, výchozí port pryč');
+  assert.equal(normalizeSourceUrl('https://x.cz/a.gif?x=1'), normalizeSourceUrl('https://X.cz/a.gif?x=1&utm_campaign=q#f'));
+  assert.notEqual(normalizeSourceUrl('http://x.cz/a.gif'), normalizeSourceUrl('https://x.cz/a.gif'), 'jiné schéma = jiná URL');
+  assert.equal(normalizeSourceUrl('nesmysl'), null);
+  assert.equal(normalizeSourceUrl('ftp://x.cz/a.gif'), null);
+});
+
+test('classifyGifUrl: odkaz na naše médium (/media/gif/<32 hex>) = mode own + mediaId; cizí host ne', () => {
+  const id = 'ab'.repeat(16);
+  const own = ['api.jouki.cz'];
+  assert.deepEqual(classifyGifUrl(`https://api.jouki.cz/media/gif/${id}`, own), { url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own', mediaId: id });
+  assert.equal(classifyGifUrl(`api.jouki.cz/media/gif/${id}?t=x`, own)?.mode, 'own');
+  // Token moda vložený omylem do chatu (audit L13) → server ho zneplatní; URL média bez query.
+  const leaked = classifyGifUrl(`https://api.jouki.cz/media/gif/${id}?t=TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT`, own);
+  assert.deepEqual(leaked, { url: `https://api.jouki.cz/media/gif/${id}`, mode: 'own', mediaId: id, leakedToken: 'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT' });
+  assert.equal(classifyGifUrl(`https://api.jouki.cz/media/gif/${id}?t=<x>`, own)?.leakedToken, undefined, 'nesmysl není token');
+  assert.equal(classifyGifUrl(`https://evil.cz/media/gif/${id}`, own), null);
+  assert.equal(classifyGifUrl('https://api.jouki.cz/media/gif/kratke', own), null);
+  assert.equal(gifCandidate(`hele https://api.jouki.cz/media/gif/${id}`, own)?.mediaId, id);
+});
+
+test('resolveGif: průběh stahování — bajty s velikostí (Content-Length), pak bez ní', async () => {
+  const url = 'https://x.cz/a.gif';
+  const body = [gif(), Buffer.alloc(100), Buffer.alloc(100)];
+  const total = body.reduce((n, b) => n + b.length, 0);
+  const ev: unknown[] = [];
+  await resolveGif({ url, mode: 'direct' }, { transport: fakeTransport({ [url]: { headers: { 'content-type': 'image/gif', 'content-length': String(total) }, body } }), lookupAll: publicDns, onProgress: (e) => ev.push(e) });
+  assert.deepEqual(ev, [
+    { phase: 'download', loaded: 32, total }, { phase: 'download', loaded: 132, total }, { phase: 'download', loaded: 232, total },
+  ]);
+  const ev2: Array<{ total: number | null }> = [];
+  await resolveGif({ url, mode: 'direct' }, { transport: fakeTransport({ [url]: { headers: { 'content-type': 'image/gif' }, body } }), lookupAll: publicDns, onProgress: (e) => ev2.push(e as { total: number | null }) });
+  assert.ok(ev2.length === 3 && ev2.every((e) => e.total === null));
+});
+
+// Klient (bublina cooldownu) rozpoznává GIF odkazy kopií v extension/core/gif-links.js — musí dát stejný výsledek.
+test('gifCandidate / classifyGifUrl: core/gif-links.js = backend (vědomá kopie)', async () => {
+  const corePath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../extension/core/gif-links.js');
+  if (!existsSync(corePath)) return; // Docker image (jen backend/)
+  const core = (await import(pathToFileURL(corePath).href)) as { gifCandidate: typeof gifCandidate; classifyGifUrl: typeof classifyGifUrl; hasGifLink: (t: string) => boolean };
+  const texts = [
+    'koukni tohle: https://tenor.com/view/cat-gif-1. lol', 'ahoj neco.cz/x a giphy.com/gifs/abc-1', 'ahoj seznam.cz', 'bez odkazu', '',
+    'https://media1.tenor.com/m/abc/cat.gif', 'i.imgur.com/AbCdE12.gifv', 'https://7tv.app/emotes/01F7JCJ0D80007RBBSW6MHGEVC', 'neco.cz/video.mp4',
+    'https://neco.cz/obrazek.png', 'https://imgur.com/gallery/AbCdE12', '(https://giphy.com/gifs/x-1)', 'ftp://neco.cz/a.gif', 'www.tenor.com/cs/view/a-1',
+    'https://tenor.com/search/cat', 'mail@tenor.com', 'https://media3.giphy.com/media/abc/giphy.gif!', '🔥https://i.giphy.com/abc.webp',
+  ];
+  for (const t of texts) {
+    assert.deepEqual(core.gifCandidate(t), gifCandidate(t), t);
+    assert.equal(core.hasGifLink(t), gifCandidate(t) !== null, t);
+  }
+});
+
+test('giphyId: ID z každého tvaru odkazu Giphy; kanonická URL přímého média (dedup)', async () => {
+  const { giphyId, classifyGifUrl, gifCandidate } = await import('./gifMedia.js');
+  const V1 = 'https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExN3VrZzJwMTNsZm12aGltODZ6bGVxZHh6dTYxaDZ5c2dzdmkzYXp1NCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QOcpXsHPGpvax1E6FH/giphy.gif';
+  for (const u of [V1, 'https://media.giphy.com/media/QOcpXsHPGpvax1E6FH/giphy.gif', 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp', 'https://i.giphy.com/media/QOcpXsHPGpvax1E6FH/200w.gif',
+    'https://giphy.com/gifs/cat-happy-QOcpXsHPGpvax1E6FH', 'https://giphy.com/stickers/dog-QOcpXsHPGpvax1E6FH', 'https://giphy.com/embed/QOcpXsHPGpvax1E6FH']) {
+    assert.equal(giphyId(u), 'QOcpXsHPGpvax1E6FH', u);
+  }
+  assert.equal(giphyId('https://giphy.com/explore/cat'), null);
+  assert.equal(giphyId('https://tenor.com/view/cat-gif-1'), null);
+  assert.deepEqual(classifyGifUrl(V1), { url: 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp', mode: 'direct' });
+  // Slepené odkazy bez mezery → první GIF zvlášť, token = celý slepený text.
+  const glued = `${V1}https://i.4pcdn.org/pol/1562850136932.gif`;
+  const c = gifCandidate(`koukej ${glued}`, []);
+  assert.equal(c?.url, 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp');
+  assert.equal(c?.token, glued);
+});
+
+test('resolveGif Giphy: .gif přes limit → WebP; WebP přes limit → MP4; bez kanonických variant původní adresa', async () => {
+  const big = { headers: { 'content-type': 'image/gif', 'content-length': String(20 * 1024 * 1024) }, body: gif(10, 10) };
+  const V = 'https://media.giphy.com/media/QOcpXsHPGpvax1E6FH/giphy.gif';
+  const a = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: big, 'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp': { headers: { 'content-type': 'image/webp' }, body: webpX(480, 270) } }), lookupAll: publicDns });
+  assert.equal(a.kind, 'webp');
+  const b = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: big,
+    'https://i.giphy.com/QOcpXsHPGpvax1E6FH.webp': { headers: { 'content-type': 'image/webp', 'content-length': String(20 * 1024 * 1024) }, body: webpX(480, 270) },
+    'https://i.giphy.com/QOcpXsHPGpvax1E6FH.mp4': { headers: { 'content-type': 'video/mp4' }, body: mp4(480, 270) } }), lookupAll: publicDns });
+  assert.equal(b.kind, 'mp4');
+  const c = await resolveGif({ url: V, mode: 'direct' }, { transport: fakeTransport({ [V]: { headers: { 'content-type': 'image/gif' }, body: gif(10, 10) } }), lookupAll: publicDns });
+  assert.equal(c.kind, 'gif', 'kanonické varianty 404 → původní soubor');
+});
+
+test('blockedHosts: 429 mimo challenge → host si zapamatuje, kód host_blocked; bez registru zůstává http_429', async () => {
+  const transport = fakeTransport({ 'https://i.imgur.com/a.mp4': { status: 429, headers: {}, body: Buffer.from('') } });
+  await assert.rejects(resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport, lookupAll: publicDns }), (e: GifError) => e.code === 'http_429');
+  const blocked = createBlockedHosts({ now: () => 1000 });
+  await assert.rejects(resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: blocked }), (e: GifError) => e.code === 'host_blocked');
+  assert.equal(blocked.isBlocked('i.imgur.com'), true);
+  assert.equal(blocked.isBlocked('I.IMGUR.com.'), true, 'velikost písmen a koncová tečka nevadí');
+  assert.equal(blocked.isBlocked('imgur.com'), false, 'klíč = přesný host, ne registrované jméno (review I3)');
+  assert.equal(blocked.isBlocked('tenor.com'), false);
+});
+
+test('blockedHosts (review I3): přesný host — mark(imgur.com) neblokuje i.imgur.com; 403 = host_blocked bez zápisu', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  assert.equal(blocked.isBlocked('i.imgur.com'), false);
+  assert.equal(blocked.isBlocked('imgur.com'), true);
+  const b2 = createBlockedHosts();
+  const transport = fakeTransport({ 'https://x.cz/a.gif': { status: 403, headers: {}, body: Buffer.from('') } });
+  await assert.rejects(resolveGif({ url: 'https://x.cz/a.gif', mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: b2 }), (e: GifError) => e.code === 'host_blocked');
+  assert.equal(b2.isBlocked('x.cz'), false, '403 se neučí');
+  assert.equal(b2.size, 0);
+});
+
+// ---- review C1: známý blokující host — unlocker jen pro stránku ----
+const ogPage = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">');
+const countingUnlocker = (body: Buffer) => {
+  const u = { fetches: [] as string[], reports: [] as Array<[string, string | null]>, timeoutMs: 25_000,
+    fetch: async (url: URL) => { u.fetches.push(url.toString()); return { status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield body; })(), dispose() {} }; },
+    report: (url: URL, code: string | null) => { u.reports.push([url.toString(), code]); } };
+  return u;
+};
+
+test('C1: známý blokující host → page: unlocker přesně 1× (stránka), médium bez unlockeru, host_blocked s popisem z og; report se nevolá', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  blocked.mark('i.imgur.com');
+  const direct: string[] = [];
+  const transport: Transport = async (url) => { direct.push(url.toString()); return { status: 429, headers: {}, body: (async function* () {})(), dispose() {} }; };
+  const unlocker = countingUnlocker(ogPage);
+  const progress: string[] = [];
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker, onProgress: (e) => progress.push(e.phase) }); }
+  catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.deepEqual(err?.descriptor, { url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com' });
+  assert.deepEqual(unlocker.fetches, ['https://imgur.com/a/8as1KiG'], 'unlocker jen pro stránku');
+  assert.deepEqual(direct, [], 'známé hosty se přímo nevolají');
+  assert.deepEqual(unlocker.reports, [], 'host_blocked nejde do negativní cache');
+  assert.deepEqual(progress, ['unlock'], 'průběh unlock i ve větvi známého hosta (review I4)');
+});
+
+test('C1: médium na cizím místě než stránka → host_blocked bez popisu', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  const transport = fakeTransport({ 'https://evil.example/a.mp4': { status: 429, headers: {}, body: Buffer.from('') } });
+  const unlocker = countingUnlocker(Buffer.from('<meta property="og:video" content="https://evil.example/a.mp4">'));
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://imgur.com/a/x', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker }); } catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.equal(err?.descriptor, undefined);
+});
+
+test('C1: známý blokující host → direct: host_blocked, unlocker 0×, report 0×', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('i.imgur.com');
+  const unlocker = countingUnlocker(ogPage);
+  let err: GifError | null = null;
+  try { await resolveGif({ url: 'https://i.imgur.com/a.mp4', mode: 'direct' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }); } catch (e) { err = e as GifError; }
+  assert.equal(err?.code, 'host_blocked');
+  assert.equal(err?.descriptor, undefined);
+  assert.deepEqual(unlocker.fetches, []);
+  assert.deepEqual(unlocker.reports, []);
+});
+
+test('blockedHosts: známý host → přímé stažení se přeskočí (transport se nevolá) a jde se přes unlocker; TTL 24 h', async () => {
+  let t = 1000;
+  const blocked = createBlockedHosts({ now: () => t });
+  blocked.mark('imgur.com');
+  const direct: string[] = [];
+  const transport: Transport = async (url) => { direct.push(url.toString()); return { status: 429, headers: {}, body: (async function* () {})(), dispose() {} }; };
+  const page = Buffer.from('<meta property="og:video" content="https://i.imgur.com/auBmmCk.mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">');
+  const unlocker = { timeoutMs: 25_000, fetch: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield page; })(), dispose() {} }), report() {} };
+  const d = await describeGifSource({ url: 'https://imgur.com/a/8as1KiG', mode: 'page' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker });
+  assert.deepEqual(d, { url: 'https://i.imgur.com/auBmmCk.mp4', kind: 'mp4', width: 640, height: 360, host: 'i.imgur.com' });
+  assert.deepEqual(direct, [], 'blokovaný host se přímo nevolá');
+  t += 24 * 3_600_000 + 1;
+  assert.equal(blocked.isBlocked('imgur.com'), false, 'po TTL znovu naostro');
+});
+
+test('describeGifSource: direct = adresa + typ z přípony bez rozměrů; médium na cizím místě než stránka → null; bez og → null', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('imgur.com');
+  const d = await describeGifSource({ url: 'https://i.imgur.com/x.gif', mode: 'direct' }, { lookupAll: publicDns, blockedHosts: blocked });
+  assert.deepEqual(d, { url: 'https://i.imgur.com/x.gif', kind: 'gif', width: null, height: null, host: 'i.imgur.com' });
+  const mk = (html: string) => ({ timeoutMs: 25_000, fetch: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: (async function* () { yield Buffer.from(html); })(), dispose() {} }), report() {} });
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked, unlocker: mk('<meta property="og:video" content="https://evil.example/a.mp4">') }), null);
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked, unlocker: mk('<title>nic</title>') }), null);
+  assert.equal(await describeGifSource({ url: 'https://imgur.com/a/x', mode: 'page' }, { lookupAll: publicDns, blockedHosts: blocked }), null, 'bez unlockeru stránku nepřečte');
+});
+
+test('pickOgDescriptor: og:video přednostně s rozměry, jinak og:image; sameSite', () => {
+  const base = new URL('https://imgur.com/a/x');
+  assert.deepEqual(pickOgDescriptor('<meta property="og:image" content="https://i.imgur.com/a.gif"><meta property="og:image:width" content="10"><meta property="og:image:height" content="20">', base), { url: 'https://i.imgur.com/a.gif', kind: 'gif', width: 10, height: 20, host: 'i.imgur.com' });
+  assert.deepEqual(pickOgDescriptor('<meta property="og:video" content="https://i.imgur.com/a.mp4">', base), { url: 'https://i.imgur.com/a.mp4', kind: 'mp4', width: null, height: null, host: 'i.imgur.com' });
+  assert.equal(sameSite(new URL('https://imgur.com/a'), new URL('https://i.imgur.com/b.mp4')), true);
+  assert.equal(sameSite(new URL('https://tenor.com/v'), new URL('https://media.tenor.com/x.gif')), true);
+  assert.equal(sameSite(new URL('https://imgur.com/a'), new URL('https://evil.example/a.mp4')), false);
+});
+
+test('fix 1: přímé stažení narazí na Cloudflare challenge → odpověď unlockeru (i 403/429) se NEPOČÍTÁ jako host_blocked', async () => {
+  const url = 'https://x.cz/a.gif';
+  const blocked = createBlockedHosts();
+  const transport = fakeTransport({ [url]: { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: Buffer.from('') } });
+  const unlocker = { timeoutMs: 25_000, fetch: async () => ({ status: 403, headers: {}, body: (async function* () {})(), dispose() {} }), report() {} };
+  await assert.rejects(resolveGif({ url, mode: 'direct' }, { transport, lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403', 'stejné chování jako bez blockedHosts — ne host_blocked');
+  assert.equal(blocked.isBlocked('x.cz'), false, 'odpověď Bright Data neznamená, že NÁS blokuje cílový server');
+});
+
+test('fix 3: blokovaný host → jen jedno volání unlockeru (stránka), i když jeho odpověď sama vypadá jako Cloudflare challenge', async () => {
+  const blocked = createBlockedHosts();
+  blocked.mark('x.cz');
+  let calls = 0;
+  const unlocker = { timeoutMs: 25_000, fetch: async () => { calls++; return { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: (async function* () {})(), dispose() {} }; }, report() {} };
+  await assert.rejects(resolveGif({ url: 'https://x.cz/stranka', mode: 'page' }, { transport: fakeTransport({}), lookupAll: publicDns, blockedHosts: blocked, unlocker }), (e: GifError) => e.code === 'http_403');
+  assert.equal(calls, 1, 'Cloudflare větev se u známého blokujícího hosta znovu nespouští');
+});
+
+test('fix 2: pickOgDescriptor a pickOgMedia se shodnou na og:video bez přípony + og:video:type video/mp4', () => {
+  const base = new URL('https://x.cz/a');
+  const html = '<meta property="og:video" content="https://x.cz/video"><meta property="og:video:type" content="video/mp4"><meta property="og:video:width" content="640"><meta property="og:video:height" content="360">';
+  assert.equal(pickOgMedia(html, base), 'https://x.cz/video');
+  assert.deepEqual(pickOgDescriptor(html, base), { url: 'https://x.cz/video', kind: 'mp4', width: 640, height: 360, host: 'x.cz' });
+});

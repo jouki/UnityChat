@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { UcSendRegistry, SEND_TTL_MS, RECENT_TTL_MS } from './ucSends.js';
+import { UcSendRegistry, GifReviewRegistry, SEND_TTL_MS, RECENT_TTL_MS } from './ucSends.js';
 import type { IngestMessage } from '../ingest/types.js';
 
 const msg = (o: Partial<IngestMessage>): IngestMessage => ({
@@ -48,4 +48,23 @@ test('ucReplies: odpověď napříč platformami nese data; najde i zprávu s ma
   const plain = new UcSendRegistry(() => t);
   plain.match(msg({ platformMessageId: 'm1', content: 'x', isUnitychatUser: true }));
   assert.equal(plain.report({ platform: 'twitch', channel: 'robdiesalot', userId: 'u1', text: 'x' }), null, 'commandy si zprávy s markerem nepamatují');
+});
+
+test('gifReviews: hlášení před zprávou (/chat/send) → requested; po zprávě (/chat/uc-sent) → lateRequested jednou', () => {
+  let t = 1000; const r = new GifReviewRegistry(() => t);
+  const gif = 'hele https://tenor.com/view/cat-gif-1 ⠀';
+  r.report({ platform: 'twitch', channel: 'robdiesalot', userId: 'u1', text: 'hele https://tenor.com/view/cat-gif-1' });
+  assert.equal(r.requested(msg({ content: gif })), true, 'marker se ignoruje');
+  assert.equal(r.requested(msg({ content: gif, platformMessageId: 'id2' })), false, 'spotřebováno');
+  // Pozdní hlášení: zpráva napřed (requested ji zapamatuje), hlášení potom.
+  assert.equal(r.requested(msg({ content: 'a https://giphy.com/gifs/x-1', platformMessageId: 'id3' })), false);
+  assert.equal(r.lateRequested({ platform: 'twitch', platformMessageId: 'id3' }), false);
+  r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'tonner', text: 'a https://giphy.com/gifs/x-1' });
+  assert.equal(r.lateRequested({ platform: 'twitch', platformMessageId: 'id3' }), true);
+  assert.equal(r.lateRequested({ platform: 'twitch', platformMessageId: 'id3' }), false, 'jednou');
+  // Pozdní hlášení po okně RECENT_TTL_MS → nic.
+  r.requested(msg({ content: 'b https://giphy.com/gifs/x-2', platformMessageId: 'id4' }));
+  t += RECENT_TTL_MS + 1;
+  r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'tonner', text: 'b https://giphy.com/gifs/x-2' });
+  assert.equal(r.lateRequested({ platform: 'twitch', platformMessageId: 'id4' }), false);
 });

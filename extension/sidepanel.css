@@ -273,6 +273,14 @@ body.layout-large #settings details summary { font-size: 15px; }
   letter-spacing: 0.5px;
 }
 
+/* Krátká poznámka pod volbou (např. zakázaná oznámení prohlížeče) */
+.setting-note {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #ff8a80;
+}
+.setting-note.hidden { display: none; }
+
 .setting-row input[type="text"],
 .setting-row select {
   background: var(--bg-tertiary);
@@ -477,21 +485,14 @@ body.layout-large #settings details summary { font-size: 15px; }
   padding-bottom: 10px;
 }
 
-/* Řádek s body a bity z Twitche jen s přihlášeným Twitch účtem (pokyn usera 2026-09-24). */
-body.uc-no-twitch-login #tw-credits .tc-pill { display: none !important; }
-body.uc-no-twitch-login:not(.uc-dev):not(.uc-dono) #tw-credits { display: none !important; }
-/* QR dono tlačítko (kanál s dary = body.uc-dono, Dev mode vždy): úzký chat → v řádku s body
-   z Twitche (bez pill je řádek jen s ním), široký → v poli pro psaní (core/tool-dock.js). */
-body.uc-dev #tw-credits.hidden, body.uc-dono #tw-credits.hidden { display: flex; }
-#tw-credits .uc-tool-btn {
-  display: inline-flex; align-items: center; justify-content: center; margin-left: auto;
-  width: 26px; height: 24px; padding: 0; border-radius: 6px; cursor: pointer;
-  background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary);
-}
-#tw-credits .uc-tool-btn svg { width: 16px; height: 16px; }
+/* Řádek s body a bity z Twitche jen s přihlášeným Twitch účtem (pokyn usera 2026-09-24). QR dono už v něm
+   není — všechny ikony jsou v poli pro psaní (core/tool-dock.js, spec 2026-09-27 §3). */
+body.uc-no-twitch-login #tw-credits { display: none !important; }
 .dev-only { display: none; }
 body.uc-signed-out #email-settings { display: none; }
 body.uc-dev .dev-only { display: block; }
+/* Řádek jen pro moda v Dev mode (odznak podporovatele): bez Dev mode schovaný i modovi. */
+body:not(.uc-dev) .uc-mod-only.dev-only { display: none !important; }
 /* Bez přihlášení: celé pole pro psaní pryč, zůstane výzva #login-cta. */
 #input-area .msg-input-wrap.hidden { display: none !important; }
 
@@ -532,7 +533,50 @@ body.uc-dev .dev-only { display: block; }
 
 /* ---- Dev tools ---- */
 
-.dev-mode-row { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px; margin-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
+.dev-mode-row { padding-top: 4px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; }
+/* Záložky nastavení (Účet | Rozhraní): posuvné zvýraznění jako jinde (core/slide-indicator.js). */
+.settings-tabs { display: flex; gap: 4px; padding: 0 0 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.settings-tab { flex: 1; padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.on { color: var(--text-primary); }
+.settings-tabs.uc-slide-host > .settings-tab { position: relative; z-index: 1; }
+.settings-tabs > .uc-slide-ind { border-radius: 6px; }
+.settings-pane { display: flex; flex-direction: column; gap: 8px; }
+.settings-pane[hidden] { display: none; }
+/* Sekce nastavení (Účet / Rozhraní) a patička — jako web (#settings-menu .pm-title / .st-foot). */
+.settings-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); opacity: 0.7; padding: 6px 0 0; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.settings-title:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+.setting-sub { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+.settings-foot { border-top: 1px solid rgba(255, 255, 255, 0.06); margin-top: 4px; padding-top: 8px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; font-size: 11px; }
+.settings-links { display: flex; flex-direction: column; gap: 2px; opacity: 0.7; line-height: 1.5; }
+.settings-links a { color: inherit; }
+.settings-foot .author-stack { align-items: flex-end; margin: 0; text-align: right; }
+/* Řádky jen pro moda (odznaky): body.uc-can-moderate je ukáže. */
+.uc-mod-only { display: none !important; }
+body.uc-can-moderate .uc-mod-only { display: flex !important; }
+/* Výběr odznaku dárce (core/donor-badge.js donorBadgePickerHtml). */
+.uc-dbp { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.uc-dbp-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-tertiary); cursor: pointer; font-size: 11px; color: var(--text-secondary); transition: border-color 0.15s ease, color 0.15s ease; }
+.uc-dbp-item:hover { border-color: rgba(255, 140, 0, 0.45); }
+.uc-dbp-item.on { border-color: var(--accent); color: var(--text-primary); box-shadow: 0 0 0 1px rgba(255, 140, 0, 0.35) inset; }
+.uc-dbp-item input { position: absolute; opacity: 0; pointer-events: none; }
+.uc-dbp-pic { display: inline-flex; width: 28px; height: 28px; }
+.uc-dbp-img { width: 28px; height: 28px; display: block; }
+.uc-dbp-name { white-space: nowrap; }
+.uc-donor-badge { width: 20px; height: 20px; }
+/* Volba účtu „odznak podporovatele místo globálního odznaku Twitche“ + náhled vlastní zprávy (core badgeReplaceHtml). */
+.badge-replace-row { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.uc-dbr { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--text-secondary); line-height: 1.3; }
+.uc-dbr input { margin: 0; accent-color: var(--accent); }
+.uc-dbr-preview { border: 1px dashed var(--border); border-radius: 8px; padding: 4px 6px; background: var(--bg-tertiary); }
+.uc-dbr-preview .msg.uc-badge-preview { margin: 0; pointer-events: none; }
+/* Volby animace odznaku (tempo, intenzita, odstupy). */
+.uc-dbp-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.uc-dbp-opt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.uc-dbp-opt select, .uc-dbp-opt input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 12px; }
+.uc-dbp-opt select:focus, .uc-dbp-opt input:focus { outline: none; border-color: var(--accent); }
+.uc-dbp-check { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; cursor: pointer; line-height: 1.3; }
+.uc-dbp-check input { margin: 0; accent-color: var(--accent); }
 .dev-mode-row label { font-size: 10px; color: var(--text-muted); opacity: 0.4; }
 .dev-mode-row label:hover { opacity: 0.7; }
 .kofi-link { font-size: 11px; color: var(--text-muted); opacity: 0.55; text-decoration: none; transition: opacity 0.15s; }
@@ -611,7 +655,11 @@ body.uc-dev .dev-only { display: block; }
 .dot.connecting { background: #ffc107; animation: pulse 1s infinite; }
 .dot.error { background: #ff5252; }
 .dot.disabled { background: #333; }
-.fbtn:not(.active) .dot { background: #555; box-shadow: none; animation: none; }
+/* Vypnutá platforma: zhasnutá kontrolka (tmavá s tenkým okrajem) a ztlumené celé tlačítko — ať je vypnutí vidět
+   na první pohled (pokyn usera 2026-09-30), ne jen o odstín tmavší text. */
+.fbtn:not(.active) .dot { background: #1c1c20; box-shadow: inset 0 0 0 1px #4a4a52; animation: none; }
+.fbtn:not(.active) { opacity: 0.55; }
+.fbtn:not(.active):hover { opacity: 0.85; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -655,6 +703,9 @@ body.uc-dev .dev-only { display: block; }
   position: relative;
   overflow: hidden;
   min-height: 0;
+  /* Vlastní vrstvení: nic uvnitř chatu (karty GIFů, reakce, Chat historie) nepřeleze panely nad polem
+     pro psaní (emoty, soundboard, QR dono) ani přihlašovací okno. */
+  isolation: isolate;
 }
 
 #chat {
@@ -671,46 +722,19 @@ body.uc-dev .dev-only { display: block; }
   overflow-anchor: none;
 }
 
-/* Tenký scrollbar bez šipek — chat, menu emotů (core/emote-picker.js) i pole pro psaní stejně. */
-#chat::-webkit-scrollbar, .uc-ep-body::-webkit-scrollbar, #msg-input::-webkit-scrollbar { width: 5px; }
-#chat::-webkit-scrollbar-track, .uc-ep-body::-webkit-scrollbar-track, #msg-input::-webkit-scrollbar-track { background: transparent; }
-#chat::-webkit-scrollbar-thumb, .uc-ep-body::-webkit-scrollbar-thumb, #msg-input::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-#chat::-webkit-scrollbar-thumb:hover, .uc-ep-body::-webkit-scrollbar-thumb:hover, #msg-input::-webkit-scrollbar-thumb:hover { background: #555; }
-#chat::-webkit-scrollbar-button, .uc-ep-body::-webkit-scrollbar-button, #msg-input::-webkit-scrollbar-button { display: none; }
+/* Tenký scrollbar bez šipek — JEDINÉ místo pro celý UnityChat (addon i web; audit 2026-09-29). Platí pro každý
+   posuvný prvek, nový panel ho dostane sám. Na jednotlivých prvcích NEPSAT `scrollbar-width` / `scrollbar-color`:
+   Chrome pak ::-webkit-scrollbar ignoruje a vykreslí systémový posuvník se šipkami (Profil, záložky kanálů). */
+*::-webkit-scrollbar { width: 5px; height: 5px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border, #2f2f35); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #555; }
+*::-webkit-scrollbar-button { display: none; }
+*::-webkit-scrollbar-corner { background: transparent; }
 /* Firefox nezná ::-webkit-scrollbar. */
-@supports not selector(::-webkit-scrollbar) { #msg-input { scrollbar-width: thin; scrollbar-color: var(--border) transparent; } }
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: var(--border, #2f2f35) transparent; } }
 
-/* ---- Cleared messages (timeout / ban / single delete) ----
-   Mirrors vanilla Twitch: the message stays visible but greyed + line-
-   through, with a small inline label noting the moderator action. Live
-   clears (CLEARCHAT/CLEARMSG over IRC) and cached _cleared field both
-   feed the same .cleared class so reload preserves history. */
-.msg.cleared {
-  opacity: 0.55;
-}
-.msg.cleared .tx,
-.msg.cleared .reply-ctx {
-  text-decoration: line-through;
-  text-decoration-color: rgba(255, 255, 255, 0.35);
-  text-decoration-thickness: 1px;
-  font-style: italic;
-}
-.cleared-note {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  background: rgba(229, 72, 77, 0.15);
-  border: 1px solid rgba(229, 72, 77, 0.4);
-  color: #ff9a9d;
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  border-radius: 3px;
-  vertical-align: middle;
-  white-space: nowrap;
-}
+/* Timeout / ban / smazání: .uc-deleted* + .uc-mod-tag v moderation.css (core/moderation.js). */
 
 /* ---- Loading overlay ---- */
 .loading-overlay {
@@ -989,6 +1013,16 @@ body.reply-oneline .reply-ctx {
   cursor: default;
 }
 
+/* Menší varianta (datum u času zprávy). */
+.uc-tooltip.small { font-size: 10px; padding: 2px 6px; font-weight: 400; }
+.msg .ts[data-tooltip] { cursor: default; }
+/* GIF zpráva: kopírování pryč (není co kopírovat), místo něj pauza / přehrání animace. */
+.msg-action-btn[data-act="gifpause"] { display: none; }
+.msg.has-gif .msg-action-btn[data-act="copy"] { display: none; }
+.msg.has-gif .msg-action-btn[data-act="gifpause"] { display: flex; }
+.msg-action-btn[data-act="gifpause"].uc-gif-paused { color: var(--accent-light, #ffb347); }
+.uc-gif-still { display: block; position: absolute; left: 0; top: 0; border-radius: inherit; pointer-events: none; }
+.uc-gif--paused .uc-gif-media { visibility: hidden; }
 .uc-tooltip {
   position: fixed;
   display: none;
@@ -1946,6 +1980,50 @@ body.reply-oneline .reply-ctx {
   color: var(--text, #d0d0da);
 }
 
+/* ==== Moderátorské výročí (USERNOTICE modiversary, core/anniversary.js) ====
+   Stejná karta jako sub / milník, zelená Twitche #00AD03 a meč. */
+.msg.modiversary-event {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: linear-gradient(180deg, rgba(0, 173, 3, 0.18), rgba(0, 173, 3, 0.05));
+  border-style: solid;
+  border-color: #00ad03;
+  border-width: 0 5px 0 5px;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 16px rgba(0, 173, 3, 0.24);
+}
+.msg.modiversary-event:hover {
+  background: linear-gradient(180deg, rgba(0, 173, 3, 0.26), rgba(0, 173, 3, 0.08));
+}
+.msg.modiversary-event .modiv-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  color: #3ddc41;
+  filter: drop-shadow(0 0 4px rgba(0, 173, 3, 0.6));
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg.modiversary-event .modiv-body { flex: 1; min-width: 0; }
+.msg.modiversary-event .un { font-weight: 700; cursor: pointer; }
+.msg.modiversary-event .modiv-line {
+  color: var(--text, #d0d0da);
+  line-height: 1.4;
+}
+.msg.modiversary-event .modiv-line strong { color: #fff; font-weight: 700; }
+.msg.modiversary-event .modiv-text {
+  margin-top: 4px;
+  color: var(--text, #d0d0da);
+}
+
 /* ==== Channel Points redeem events ==== */
 .msg.redeem {
   display: flex;
@@ -2068,12 +2146,13 @@ body.reply-oneline .reply-ctx {
 .msg .tx {
   color: var(--text-primary);
 }
-.msg .tx a {
+/* Odkaz ve zprávě — v chatu i v Profilu (core/user-history.js `.uc-uh-tx`, addon i web načítají tohle CSS). */
+.msg .tx a, .uc-uh-tx a {
   color: #e8b84b;
   text-decoration: none;
   word-break: break-all;
 }
-.msg .tx a:hover { text-decoration: underline; }
+.msg .tx a:hover, .uc-uh-tx a:hover { text-decoration: underline; }
 
 .msg .tx img.emote {
   display: inline-block;
@@ -2424,6 +2503,75 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 }
 #tw-credits.hidden { display: none; }
 
+/* ==== Banner výročí nad polem pro psaní (core/anniversary.js AnniversaryBanner) ====
+   Jako výzva Twitche: ikona, text, Sdílet, ×; Sdílet rozbalí zprávu (grid 0fr → 1fr). Předplatné = fialová,
+   moderátorské výročí = zelená #00AD03. prefers-reduced-motion → bez animací. */
+#anniv-banner { flex-shrink: 0; padding: 6px 10px 0; background: var(--bg-secondary); border-top: 1px solid var(--border); }
+#anniv-banner.hidden { display: none; }
+.uc-anniv {
+  --anniv: #9146ff; --anniv-rgb: 145, 70, 255;
+  border: 1px solid rgba(var(--anniv-rgb), 0.55);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(var(--anniv-rgb), 0.22), rgba(var(--anniv-rgb), 0.07));
+  box-shadow: 0 0 14px rgba(var(--anniv-rgb), 0.22);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+.uc-anniv--mod { --anniv: #00ad03; --anniv-rgb: 0, 173, 3; }
+.uc-anniv--enter { animation: uc-anniv-in 220ms cubic-bezier(.2, .9, .3, 1.05); }
+@keyframes uc-anniv-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+.uc-anniv-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; }
+.uc-anniv-icon {
+  display: inline-flex; flex-shrink: 0; width: 26px; height: 26px; align-items: center; justify-content: center;
+  color: var(--anniv); filter: drop-shadow(0 0 5px rgba(var(--anniv-rgb), 0.6));
+}
+.uc-anniv--resub .uc-anniv-icon { color: #b78cff; }
+.uc-anniv--mod .uc-anniv-icon { color: #3ddc41; }
+.uc-anniv--open .uc-anniv-icon, .uc-anniv--done .uc-anniv-icon { animation: uc-anniv-pulse 1.6s ease-in-out infinite; }
+@keyframes uc-anniv-pulse { 50% { transform: scale(1.12); } }
+.uc-anniv-text { flex: 1; min-width: 0; }
+.uc-anniv-title { font-weight: 700; line-height: 1.3; }
+.uc-anniv-linkwarn { color: #ff6b6b; font-size: 0.8em; line-height: 1.3; margin: 0 0 4px; }
+.uc-anniv-sub { font-size: 0.9em; color: var(--text-secondary); line-height: 1.3; }
+.uc-anniv-share, .uc-anniv-send {
+  flex-shrink: 0; border: 0; border-radius: 4px; padding: 5px 12px; font: inherit; font-weight: 700; cursor: pointer;
+  color: #fff; background: var(--anniv); box-shadow: 0 0 8px rgba(var(--anniv-rgb), 0.45);
+}
+.uc-anniv-share:hover, .uc-anniv-send:hover:not(:disabled) { filter: brightness(1.15); }
+.uc-anniv-send:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+.uc-anniv-share[hidden] { display: none; }
+.uc-anniv-close, .uc-anniv-cancel {
+  flex-shrink: 0; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font: inherit;
+}
+.uc-anniv-close { width: 24px; height: 24px; border-radius: 4px; font-size: 18px; line-height: 1; }
+.uc-anniv-close:hover, .uc-anniv-cancel:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.08); }
+.uc-anniv-cancel { padding: 5px 10px; border-radius: 4px; }
+.uc-anniv-form { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 200ms cubic-bezier(.2, .8, .2, 1); }
+.uc-anniv--open .uc-anniv-form { grid-template-rows: 1fr; }
+.uc-anniv-form-inner { min-height: 0; overflow: hidden; }
+.uc-anniv--open .uc-anniv-form-inner { padding: 0 8px 8px 10px; }
+.uc-anniv-input {
+  display: block; width: 100%; box-sizing: border-box; resize: none; font: inherit; color: var(--text-primary);
+  background: var(--bg-primary); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px;
+}
+.uc-anniv-input:focus { outline: none; border-color: var(--anniv); box-shadow: 0 0 0 1px rgba(var(--anniv-rgb), 0.5); }
+.uc-anniv-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 0.88em; color: var(--text-secondary); }
+.uc-anniv-streak { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.uc-anniv-streak input { accent-color: var(--anniv); margin: 0; }
+.uc-anniv-count { margin-left: auto; font-variant-numeric: tabular-nums; }
+.uc-anniv-count--full { color: #ff6b6b; }
+.uc-anniv-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.uc-anniv-msg { color: #ff8a8a; font-size: 0.9em; margin-top: 4px; }
+.uc-anniv-msg:empty { display: none; }
+.uc-anniv--busy .uc-anniv-send { cursor: progress; }
+.uc-anniv--done { border-color: rgba(var(--anniv-rgb), 0.9); }
+.uc-anniv--done .uc-anniv-title { color: #fff; }
+@media (prefers-reduced-motion: reduce) {
+  .uc-anniv--enter, .uc-anniv--open .uc-anniv-icon, .uc-anniv--done .uc-anniv-icon { animation: none; }
+  .uc-anniv-form { transition: none; }
+}
+
 /* Highlights banner background tunes to the accent of its single
    featured card (raid avatar sample, etc.). Fallback = the fixed
    cyan/purple gradient defined earlier. */
@@ -2649,7 +2797,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 
 /* ---- Emote Suggest List ---- */
 
-#emote-suggest {
+#emote-suggest, .emote-suggest {
   position: absolute;
   bottom: 100%;
   left: 0;
@@ -2663,7 +2811,17 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   overflow: hidden;
 }
 
-#emote-suggest.hidden { display: none; }
+#emote-suggest.hidden, .emote-suggest.hidden { display: none; }
+/* Plovoucí seznam u jiných polí (zpráva výročí, core/emote-autocomplete.js): position fixed nad polem (pod ním,
+   když nahoře není místo), aby ho neuřízl kontejner s overflow: hidden. left / width / top|bottom nastaví JS. */
+.emote-suggest--float {
+  position: fixed;
+  right: auto;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+  z-index: 1000;
+}
+.emote-suggest--float.emote-suggest--below { bottom: auto; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
 
 /* Fulltext toggle row at the top of the suggest panel — opt-in switch
    from "starts with" matching to "contains" matching. */
@@ -2916,6 +3074,16 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   text-align: right;
 }
 
+/* `/user` našeptávač (mod): logo platformy vedle tečky, login šedě za přezdívkou, stav hledání */
+.es-item img.es-plat { width: 16px; height: 16px; margin-left: -2px; }
+.es-item.es-user .es-dot { width: 12px; height: 12px; }
+.es-login { color: var(--text-muted); font-weight: 400; font-size: 11px; }
+.es-status {
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .es-counter {
   text-align: center;
   font-size: 10px;
@@ -2966,13 +3134,12 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 }
 /* Jednotný hover ikonových tlačítek (emoty, soundboard, QR dono): tmavé pozadí, UnityChat gradient
    v rámečku, zlatá ikona — stejně jako „Změnit email". */
-.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active,
-#tw-credits .uc-tool-btn:hover, #tw-credits .uc-tool-btn.active {
+.emote-btn:hover, .emote-btn.active, .uc-tool-btn:hover, .uc-tool-btn.active {
   color: var(--accent-light);
   border-color: transparent;
   background: linear-gradient(var(--bg-secondary), var(--bg-secondary)) padding-box, var(--accent-gradient) border-box;
 }
-#msg-input:disabled + .emote-btn { opacity: 0.4; pointer-events: none; }
+#msg-input:disabled ~ .uc-sb-btn { opacity: 0.4; pointer-events: none; }
 
 .uc-ep {
   position: absolute; bottom: 100%; right: 10px; z-index: 30;
@@ -3001,13 +3168,15 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
   font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
 }
 .uc-ep-h span { font-weight: 400; opacity: 0.7; margin-left: 4px; }
-.uc-ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 2px; }
+/* Řádky místo čtvercové mřížky: každý emote má výšku 28 px, šířku podle poměru stran — široký emote se nezmenší
+   (dřív se vtěsnal do čtverce), 1:1 zůstává v buňce 36 × 36 (pokyn usera 2026-09-28). */
+.uc-ep-grid { display: flex; flex-wrap: wrap; gap: 2px; }
 .uc-ep-e {
-  height: 36px; padding: 3px; border: none; border-radius: 5px; background: transparent;
+  flex: 0 0 auto; min-width: 36px; height: 36px; padding: 3px; box-sizing: border-box; border: none; border-radius: 5px; background: transparent;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
 .uc-ep-e:hover { background: var(--bg-hover); }
-.uc-ep-e img { max-width: 100%; max-height: 28px; object-fit: contain; }
+.uc-ep-e img { height: 28px; width: auto; max-width: 220px; object-fit: contain; }
 .uc-ep-e.zw img { opacity: 0.85; }
 .uc-ep-empty { padding: 20px 8px; text-align: center; color: var(--text-secondary, #9a9aa6); font-size: 12px; }
 .uc-ep-foot {
@@ -3027,7 +3196,7 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 
 /* ---- Příjezd nové zprávy zespodu (core/slide-in.js) — OBS chat, web i addon ---- */
 @property --uc-slide { syntax: '<length>'; inherits: true; initial-value: 0px; }
-#chat.uc-sliding { transition: --uc-slide var(--uc-slide-ms, 160ms) cubic-bezier(0.2, 0.7, 0.2, 1); }
+#chat.uc-sliding { transition: --uc-slide var(--uc-slide-ms, 160ms) var(--uc-slide-ease, cubic-bezier(0.2, 0.7, 0.2, 1)); }
 #chat.uc-sliding.uc-slide-jump { transition: none; }
 #chat.uc-sliding > * { transform: translateY(var(--uc-slide)); }
 
@@ -3038,3 +3207,21 @@ body.uc-can-poop:not(.uc-poop-busy) .msg-action-btn[data-act="poop"] { display: 
 .reply-ctx .rctx-pi.uc.tw { background-image: url(icons/platform/twitch-gold.svg); }
 .reply-ctx .rctx-pi.uc.ki { background-image: url(icons/platform/kick-gold.svg); }
 .reply-ctx .rctx-pi.uc.yt { background-image: url(icons/platform/youtube-gold.svg); }
+
+/* ---- Nová verze UnityChatu (core/update-notice.js): tlačítko obnovení v hlavičce svítí, výrazný pulzující glow ---- */
+.uc-update-ready {
+  position: relative;
+  color: #ffb347 !important;
+  border-color: rgba(255, 170, 60, 0.85) !important;
+  background: rgba(255, 140, 0, 0.16) !important;
+  border-radius: 6px;
+  animation: uc-update-glow 1.4s ease-in-out infinite;
+}
+.uc-update-ready svg { filter: drop-shadow(0 0 4px rgba(255, 180, 60, 0.95)); }
+@keyframes uc-update-glow {
+  0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 140, 0, 0.55), 0 0 10px 2px rgba(255, 200, 0, 0.25); text-shadow: 0 0 6px rgba(255, 180, 60, 0.8); }
+  50% { box-shadow: 0 0 10px 3px rgba(255, 140, 0, 0.95), 0 0 22px 7px rgba(255, 200, 0, 0.45); text-shadow: 0 0 12px rgba(255, 200, 80, 1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .uc-update-ready { animation: none; box-shadow: 0 0 8px 2px rgba(255, 140, 0, 0.8); }
+}

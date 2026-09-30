@@ -3,17 +3,51 @@ import { eq, and, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { nicknames } from '../db/schema.js';
-import { addClient, broadcast, replaySince } from '../sse/bus.js';
+import { addClient, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
+import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
+import { reservedNames, reservedNicknameClash } from '../lib/reservedNicknames.js';
 
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+/** Pravidla přezdívky — sdílí PUT /nicknames i přejmenování modem (PUT /moderation/nickname). */
+export const NicknameField = z.string().min(1).max(30).transform((s) => s.trim());
+export const ColorField = z.string().regex(HEX_COLOR).nullable().optional();
 
 const PutBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
   username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
-  nickname: z.string().min(1).max(30).transform((s) => s.trim()),
-  color: z.string().regex(HEX_COLOR).nullable().optional(),
+  nickname: NicknameField,
+  color: ColorField,
 });
+
+type NickPlatform = 'twitch' | 'youtube' | 'kick';
+
+/** Upsert přezdívky; SSE nickname-change rozešle trigger v DB (lib/nicknameNotify.ts). */
+export async function upsertNickname(platform: NickPlatform, username: string, nickname: string, color: string | null): Promise<void> {
+  await db
+    .insert(nicknames)
+    .values({ platform, username, nickname, color })
+    .onConflictDoUpdate({
+      target: [nicknames.platform, nicknames.username],
+      set: { nickname, color, updatedAt: sql`NOW()` },
+    });
+}
+
+/** Smazání přezdívky; SSE nickname-delete rozešle trigger v DB. */
+export async function deleteNickname(platform: NickPlatform, username: string): Promise<void> {
+  await db.delete(nicknames).where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
+}
+
+/** Smí účet měnit přezdívku u (platform, username)? Jen vlastní propojená identita
+ *  (dřív bez ověření → kdokoli přepsal přezdívku komukoli, hlášeno 2026-09-25). */
+export function ownsHandle(identities: Pick<PublicIdentity, 'platform' | 'login'>[], platform: string, username: string): boolean {
+  const u = username.trim().replace(/^@/, '').toLowerCase();
+  return identities.some((i) => i.platform === platform && i.login.trim().replace(/^@/, '').toLowerCase() === u);
+}
+
+async function assertOwner(accountId: number, platform: string, username: string): Promise<boolean> {
+  return ownsHandle(await listIdentities(accountId), platform, username);
+}
 
 export default async function nicknameRoutes(app: FastifyInstance) {
   // Bulk fetch all nicknames
@@ -32,7 +66,7 @@ export default async function nicknameRoutes(app: FastifyInstance) {
   });
 
   // Set/update nickname (rate-limited per user: 1 change per 5 min)
-  app.put('/nicknames', async (req, reply) => {
+  app.put('/nicknames', { preHandler: requireWebSession }, async (req, reply) => {
     const parsed = PutBody.safeParse(req.body);
     if (!parsed.success) {
       reply.code(400);
@@ -40,6 +74,19 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     const { platform, username, nickname, color } = parsed.data;
+    const ids = await listIdentities(req.webAccountId!);
+    if (!ownsHandle(ids, platform, username)) {
+      req.log.warn({ platform, username }, 'nicknames: PUT cizí přezdívky odmítnut');
+      reply.code(403);
+      return { ok: false, error: 'not_owner' };
+    }
+    // Jméno streamera (a UnityChatu / bota) si smí dát jen účet, kterému login patří (lib/reservedNicknames.ts).
+    const clash = reservedNicknameClash(nickname, ids.map((i) => i.login), await reservedNames());
+    if (clash) {
+      req.log.warn({ platform, username, clash }, 'nicknames: rezervované jméno odmítnuto');
+      reply.code(400);
+      return { ok: false, error: 'nickname_reserved', name: clash };
+    }
     const rateLimitSecs = config.NICKNAME_RATE_LIMIT_SECS;
 
     // Check rate limit via updated_at
@@ -58,24 +105,15 @@ export default async function nicknameRoutes(app: FastifyInstance) {
       }
     }
 
-    // Upsert
-    const colorValue = color ?? null;
-    await db
-      .insert(nicknames)
-      .values({ platform, username, nickname, color: colorValue })
-      .onConflictDoUpdate({
-        target: [nicknames.platform, nicknames.username],
-        set: { nickname, color: colorValue, updatedAt: sql`NOW()` },
-      });
+    await upsertNickname(platform, username, nickname, color ?? null);
 
-    // Broadcast to all SSE clients
-    broadcast('nickname-change', { platform, username, nickname, color: colorValue });
+    // SSE nickname-change rozešle trigger v DB (lib/nicknameNotify.ts) — i pro ruční opravy v DB.
 
     return { ok: true };
   });
 
   // Delete nickname
-  app.delete('/nicknames', async (req, reply) => {
+  app.delete('/nicknames', { preHandler: requireWebSession }, async (req, reply) => {
     const parsed = z.object({
       platform: z.enum(['twitch', 'youtube', 'kick']),
       username: z.string().min(1).max(50).transform((s) => s.trim().replace(/^@/, '').toLowerCase()),
@@ -87,11 +125,14 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     const { platform, username } = parsed.data;
-    await db
-      .delete(nicknames)
-      .where(and(eq(nicknames.platform, platform), eq(nicknames.username, username)));
+    if (!(await assertOwner(req.webAccountId!, platform, username))) {
+      req.log.warn({ platform, username }, 'nicknames: DELETE cizí přezdívky odmítnut');
+      reply.code(403);
+      return { ok: false, error: 'not_owner' };
+    }
+    await deleteNickname(platform, username);
 
-    broadcast('nickname-delete', { platform, username });
+    // SSE nickname-delete rozešle trigger v DB (lib/nicknameNotify.ts).
     return { ok: true };
   });
 

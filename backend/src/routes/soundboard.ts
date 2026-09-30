@@ -16,9 +16,10 @@ import { db } from '../db/index.js';
 import { soundboardFavorites, soundboardUsage, webIdentities } from '../db/schema.js';
 import { bearerToken, listIdentities, requireWebSession, validateWebSession } from '../lib/webAuth.js';
 import { chatRole } from '../lib/chatRole.js';
-import { twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { twitchChannelsOf, workspaceForChannel, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
+import { handleSfxRequestWebhook } from './sfxRequests.js';
 
 type Platform = 'twitch' | 'kick' | 'youtube';
 const PLATFORMS: Platform[] = ['twitch', 'kick', 'youtube'];
@@ -26,7 +27,7 @@ const RECENT_MAX = 8;
 const CATALOG_CACHE_MS = 60_000;
 
 export type SoundIcon = { kind: 'emoji'; value: string } | { kind: '7tv'; id: string; name: string; url: string };
-export interface Sound { id: number; name: string; displayName: string | null; tier: number; emoji: string | null; icon: SoundIcon | null; url: string; durationMs: number | null }
+export interface Sound { id: number; name: string; displayName: string | null; tier: number; emoji: string | null; icon: SoundIcon | null; url: string; durationMs: number | null; gainDb: number }
 
 /** Ikona zvuku z katalogu: emoji, nebo 7TV emote (URL jen z cdn.7tv.app — obrázek se vkládá do klienta). */
 export function normalizeIcon(v: unknown, emoji: string | null): SoundIcon | null {
@@ -57,7 +58,9 @@ export function normalizeCatalog(raw: unknown): { tiers: Tier[]; sounds: Sound[]
     const emoji = typeof o.emoji === 'string' && o.emoji.trim() && o.emoji.length <= 16 ? o.emoji.trim() : null;
     const durationMs = Number.isFinite(o.durationMs) && (o.durationMs as number) > 0 ? Math.round(o.durationMs as number) : null;
     const displayName = typeof o.displayName === 'string' && o.displayName.trim() ? o.displayName.trim().slice(0, 40) : null;
-    sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs });
+    // Zesílení v dB proti originálu: výsledná hlasitost zvuku + tieru ze Židolišty (tier NEPŘIČÍTAT znovu), strop ±30 dB.
+    const gainDb = Number.isFinite(o.gainDb) ? Math.round(Math.max(-30, Math.min(30, o.gainDb as number)) * 10) / 10 : 0;
+    sounds.push({ id, name, displayName, tier, emoji, icon: normalizeIcon(o.icon, emoji), url: o.url, durationMs, gainDb });
   }
   const tiers = new Map<number, Tier>();
   for (const t of Array.isArray(j.tiers) ? j.tiers : []) {
@@ -93,12 +96,12 @@ export function normalizeState(raw: unknown): { role: string; tiers: StateTier[]
   return { role: typeof j.role === 'string' ? j.role : 'viewer', tiers, cooldown: { globalReadyAt: iso(cd.globalReadyAt), userReadyAt: iso(cd.userReadyAt) } };
 }
 
-const base = () => config.ZIDOLISTA_API_BASE.replace(/\/$/, '');
+const base = zidolistaBase;
 const catalogs = new Map<string, Catalog>();   // klíč = slug workspace
 
 async function fetchCatalog(slug: string, prev?: Catalog): Promise<Catalog> {
-  const r = await fetch(`${base()}/integrations/${encodeURIComponent(slug)}/sound-effects`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json', ...(prev?.etag ? { 'If-None-Match': prev.etag } : {}) },
+  const r = await zidolistaFetch(`${base()}/integrations/${encodeURIComponent(slug)}/sound-effects`, {
+    headers: prev?.etag ? { 'If-None-Match': prev.etag } : {},
     signal: AbortSignal.timeout(8000),
   });
   if (r.status === 304 && prev) return { ...prev, at: Date.now(), error: undefined };
@@ -128,11 +131,11 @@ async function getCatalog(slug: string, log: FastifyInstance['log']): Promise<Ca
 const STATE_CACHE_MS = 2000;
 const states = new Map<string, { at: number; p: Promise<Record<string, unknown> | null> }>();
 
-function cachedState(slug: string, platform: Platform, userId: string, role: string) {
-  const key = `${slug}|${platform}|${userId}|${role}`;
+function cachedState(slug: string, platform: Platform, userId: string, role: string, login: string) {
+  const key = `${slug}|${platform}|${userId}|${role}|${login}`;
   const hit = states.get(key);
   if (hit && Date.now() - hit.at < STATE_CACHE_MS) return hit.p;
-  const p = fetchState(slug, platform, userId, role);
+  const p = fetchState(slug, platform, userId, role, login);
   states.set(key, { at: Date.now(), p });
   p.catch(() => states.delete(key));
   if (states.size > 5000) for (const [k, v] of states) if (Date.now() - v.at >= STATE_CACHE_MS) states.delete(k);
@@ -143,12 +146,10 @@ function dropStates(slug: string): void {
   for (const k of states.keys()) if (k.startsWith(`${slug}|`)) states.delete(k);
 }
 
-async function fetchState(slug: string, platform: Platform, userId: string, role: string) {
-  const q = new URLSearchParams({ platform, userId, role });
-  const r = await fetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
+async function fetchState(slug: string, platform: Platform, userId: string, role: string, login: string) {
+  // login: Židolišta podle něj páruje dárce (role donor) i s donatem jen s přezdívkou (2026-09-28).
+  const q = new URLSearchParams({ platform, userId, role, ...(login ? { login } : {}) });
+  const r = await zidolistaFetch(`${base()}/integrations/${encodeURIComponent(slug)}/sfx-state?${q}`, { signal: AbortSignal.timeout(8000) });
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`zidolista HTTP ${r.status}`);
   return (await r.json()) as Record<string, unknown>;
@@ -156,11 +157,13 @@ async function fetchState(slug: string, platform: Platform, userId: string, role
 
 /**
  * Webhook ze Židolišty (přes /commands/invalidate, reason sfx / sfx-unlocks / sfx-played /
- * sfx-denied). Vrací kanály workspace; prázdné = neznámý workspace.
+ * sfx-denied / sfx-request). Vrací kanály workspace; prázdné = neznámý workspace.
  */
 export async function handleSfxWebhook(slug: string, reason: string, data: unknown, log: FastifyInstance['log']): Promise<string[]> {
   const channels = await twitchChannelsOf(slug);
   if (!channels.length) return channels;
+  // Změna stavu návrhu zvuku (schváleno / zamítnuto) → SSE sfx-request (routes/sfxRequests.ts).
+  if (reason === 'sfx-request') return handleSfxRequestWebhook(slug, data, log);
   const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
   if (reason === 'sfx-unlocks' || reason === 'sfx-played') dropStates(slug);
   if (reason === 'sfx' || reason === 'sfx-unlocks') {
@@ -236,7 +239,7 @@ export default async function soundboardRoutes(app: FastifyInstance) {
     // ne null: null klient bere jako „nepřipojený účet" a nabízel přihlášení (2026-09-24).
     const noState = { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState({}), role };
     try {
-      const st = await cachedState(slug, platform, ident.platformUserId, role);
+      const st = await cachedState(slug, platform, ident.platformUserId, role, String(ident.login || '').toLowerCase());
       if (!st) return { ...res, me: noState };
       return { ...res, serverNow: iso(st.serverNow) ?? res.serverNow, me: { platform, userId: ident.platformUserId, login: ident.login, ...normalizeState(st), role } };
     } catch (e) {

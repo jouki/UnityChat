@@ -29,6 +29,10 @@
 #platform-menu .pm-name { flex: 1; }
 #platform-menu .pm-state { font-size: 11px; opacity: 0.75; }
 #platform-menu .pm-login { color: #ffb347; font-weight: 600; opacity: 1; }
+/* Broadcast (mod / streamer): tři loga vedle sebe, pod ním oddělovač od jednotlivých platforem. */
+#platform-menu .pm-broadcast { border-bottom: 1px solid var(--border, #333); border-radius: 6px 6px 0 0; margin-bottom: 4px; }
+#platform-menu .pm-bc-logos { display: inline-flex; gap: 3px; flex-shrink: 0; }
+#platform-menu .pm-bc-logos .pm-badge { width: 16px; height: 16px; }
 #platform-menu .pm-logout { border-top: 1px solid var(--border, #333); border-radius: 0; margin-top: 4px; opacity: 0.8; }
 
 /* ---- přihlašovací okno (reflektorový hover podle AoE Inviter) ---- */
@@ -105,6 +109,15 @@
 .uc-login-note { line-height: 1.5; }
 
 
+/* Badge u inputu v režimu Broadcast: zlatá loga všech tří platforem (Twitch, Kick, YouTube). */
+#active-badge.badge.bc {
+  width: 46px; height: 22px; padding: 0; font-size: 0; color: transparent; overflow: hidden;
+  background-image: url(icons/platform/twitch-gold.svg), url(icons/platform/kick-gold.svg), url(icons/platform/youtube-gold.svg);
+  background-repeat: no-repeat; background-size: 14px 14px, 12px 12px, 14px 14px;
+  background-position: left center, center center, right center;
+  filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65));
+}
+
 /* Kick logo u inputu je opticky větší než ostatní: 2 px nahoře i dole (jako .pi.ki v chatu). */
 #active-badge.ki, #platform-menu .pm-badge.ki { padding: 2px 0; box-sizing: border-box; background-origin: content-box; background-clip: content-box; }
 .uc-login-choice[data-platform="kick"] img { padding: 3% 0; box-sizing: border-box; }
@@ -136,3 +149,22 @@
 /* ---- odpojení platformy v menu ---- */
 #platform-menu .pm-unlink { margin-left: 4px; padding: 0 6px; border-radius: 4px; opacity: 0.55; font-size: 14px; line-height: 1; }
 #platform-menu .pm-unlink:hover { opacity: 1; color: #ff5252; background: rgba(255, 82, 82, 0.12); }
+
+/* ---- posuvný indikátor výběru (core/slide-indicator.js) — záložky panelu emotů, taby GIF panelu, ikony v poli ---- */
+.uc-slide-host { position: relative; }
+.uc-slide-ind {
+  position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; box-sizing: border-box;
+  border: 1px solid rgba(255, 140, 0, 0.45); border-radius: 6px; background: var(--bg-tertiary, #1f1f23);
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.15s ease;
+}
+.uc-slide-ind.uc-slide-noanim { transition: opacity 0.15s ease; }
+.uc-slide-ind.uc-slide-off { opacity: 0; }
+/* Ikony v poli pro psaní: stejný vzhled jako hover ikony (tmavé pozadí + UnityChat gradient v rámečku). */
+.uc-slide-ind.uc-slide-ind--tool {
+  border-radius: 5px; border-color: transparent;
+  background: linear-gradient(var(--bg-secondary, #18181b), var(--bg-secondary, #18181b)) padding-box, var(--accent-gradient) border-box;
+}
+/* Aktivní ikona vlastní pozadí nekreslí — kreslí ho indikátor, který k ní přijede. */
+.msg-input-wrap.uc-slide-host > .emote-btn.active, .msg-input-wrap.uc-slide-host > .uc-tool-btn.active { background: transparent; }
+@media (prefers-reduced-motion: reduce) { .uc-slide-ind, .uc-slide-ind.uc-slide-noanim { transition: none; } }

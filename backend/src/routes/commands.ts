@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { RateLimiter } from './chat.js';
 import { broadcast } from '../sse/bus.js';
-import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel } from '../lib/zidolista.js';
+import { getWorkspaces, invalidateWorkspaces, twitchChannelsOf, workspaceForChannel, workspaceBySlug, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
+import { invalidateLinkFilter } from '../lib/linkFilter.js';
+import { gifAccessChanged } from '../lib/gifAccess.js';
 import { invalidateBlacklist } from './blacklist.js';
 import { handleSfxWebhook } from './soundboard.js';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
@@ -118,10 +120,7 @@ interface CacheEntry { at: number; commands: PublicCommand[]; error?: string }
 const cache = new Map<string, CacheEntry>();
 
 async function fetchZidolista(slug: string): Promise<PublicCommand[]> {
-  const r = await fetch(`${config.ZIDOLISTA_API_BASE.replace(/\/$/, '')}/integrations/${encodeURIComponent(slug)}/chat-commands`, {
-    headers: { 'X-Api-Key': config.ZIDOLISTA_API_KEY, Accept: 'application/json' },
-    signal: AbortSignal.timeout(8000),
-  });
+  const r = await zidolistaFetch(`${zidolistaBase()}/integrations/${encodeURIComponent(slug)}/chat-commands`, { signal: AbortSignal.timeout(8000) });
   if (!r.ok) throw new Error(`zidolista HTTP ${r.status}`);
   const j = (await r.json()) as { ok?: boolean; commands?: unknown };
   if (!j.ok) throw new Error('zidolista not ok');
@@ -154,13 +153,31 @@ export default async function commandRoutes(app: FastifyInstance) {
       if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
       return { ok: true, channels };
     }
-    // Změna nastavení donací (minimum, hlasy, účty…) → otevřené QR dono formuláře si config načtou hned.
+    // Změna nastavení donatů (minimum, hlasy, účty…) → otevřené QR dono formuláře si config načtou hned.
     if (reason === 'donate') {
       const channels = await twitchChannelsOf(slug);
       if (!channels.length) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
       for (const channel of channels) broadcast('donate-config-change', { channel });
       app.log.info({ slug, channels }, 'donate: config change broadcast');
       return { ok: true, channels };
+    }
+    // Nastavení filtru odkazů (moderace část 3) → zahodit cache + ETag a načíst znovu (onLive čte jen cache).
+    if (reason === 'link-filter') {
+      const ws = await workspaceBySlug(slug);
+      if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+      const settings = await invalidateLinkFilter(ws.slug, app.log);
+      app.log.info({ slug: ws.slug, enabled: settings.enabled, version: settings.version }, 'link filter: invalidated');
+      return { ok: true, workspace: ws.slug, enabled: settings.enabled, version: settings.version };
+    }
+    // Odemčení GIFů (moderace část 4: label s akcí „Posílání GIFů", časovač, cooldown) → cache stavu pryč
+    // + veřejné SSE gif-access-change { channel } (klienti si GET /gif/state přenačtou rozprostřeně 0–2 s).
+    if (reason === 'gif-access') {
+      const ws = await workspaceBySlug(slug);
+      if (!ws) return reply.code(404).send({ ok: false, error: 'unknown_workspace' });
+      const channels = await twitchChannelsOf(ws.slug);
+      const dropped = gifAccessChanged(ws.slug, channels, broadcast);
+      app.log.info({ slug: ws.slug, dropped, channels }, 'gif access: invalidated → gif-access-change');
+      return { ok: true, workspace: ws.slug };
     }
     if (reason === 'workspaces') { invalidateWorkspaces(); await getWorkspaces({ force: true, log: app.log }); }
     const channels = await twitchChannelsOf(slug);

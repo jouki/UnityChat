@@ -46,6 +46,26 @@ test('KickListener: chatroom id z API, subscribe, ChatMessageEvent → onMessage
   l.stop();
 });
 
+test('KickListener: MessageDeletedEvent → onDelete s message.id (přednost před top-level id)', async () => {
+  FakeWs.instances = [];
+  const deleted: { platform: string; channel: string; messageId: string }[] = [];
+  const l = new KickListener('robdiesalot', () => {}, {
+    WebSocketCtor: FakeWs as unknown as typeof WebSocket,
+    fetchImpl: fakeFetch,
+    log: silent,
+    onDelete: (d) => deleted.push(d),
+  });
+  l.start();
+  await new Promise((r) => setTimeout(r, 10));
+  const ws = FakeWs.instances[0];
+  ws.open();
+  ws.recv({ event: 'pusher:connection_established', data: '{}' });
+  ws.recv({ event: 'pusher_internal:subscription_succeeded', data: '{}' });
+  ws.recv({ event: 'App\\Events\\MessageDeletedEvent', data: '{"id":"x","message":{"id":"msg-1"}}' });
+  assert.deepEqual(deleted, [{ platform: 'kick', channel: 'robdiesalot', messageId: 'msg-1' }]);
+  l.stop();
+});
+
 test('KickListener: chybějící chatroom → reconnecting (retry přes fetch)', async () => {
   FakeWs.instances = [];
   const badFetch = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;

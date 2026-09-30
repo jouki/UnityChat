@@ -75,6 +75,10 @@ interface StatePayload {
   expectLogin?: string;
   // bot: 'broadcaster' = souhlas streamera s botem v kanálu (channel:bot), ne účet bota.
   botKind?: 'bot' | 'broadcaster';
+  // bot: vazba na prohlížeč, který otevřel /bot/link/:token — cookie `ucb_<bindId>` nese tajemství,
+  // state jen jeho SHA-256 (routes/integrations.ts verifyBotBinding).
+  bindId?: string;
+  bindHash?: string;
   createdAt: number;
 }
 

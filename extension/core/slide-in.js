@@ -5,6 +5,37 @@
 
 export const SLIDE_IN_MS = 160;
 
+/** Aktuální posun běžící animace v px (0 mimo animaci). */
+export function slideOffset(chatEl) {
+  if (!chatEl?.classList.contains('uc-sliding')) return 0;
+  const win = chatEl.ownerDocument.defaultView;
+  return parseFloat(win.getComputedStyle(chatEl).getPropertyValue('--uc-slide')) || 0;
+}
+
+/**
+ * O kolik px je scrollHeight během animace větší než bez ní: transformovaný rámeček poslední zprávy přečnívá
+ * o posun dolů, ale nepočítá se mu spodní margin ani spodní padding chatu (ty už v overflow jsou). Měřeno 2026-09-28:
+ * posun 29,5 px, padding 2 px → scrollHeight +27,5 px.
+ */
+export function slideInflation(chatEl) {
+  const off = slideOffset(chatEl);
+  if (!off) return 0;
+  const win = chatEl.ownerDocument.defaultView;
+  const last = chatEl.lastElementChild;
+  const pb = parseFloat(win.getComputedStyle(chatEl).paddingBottom) || 0;
+  const mb = last ? (parseFloat(win.getComputedStyle(last).marginBottom) || 0) : 0;
+  return Math.max(0, off - pb - mb);
+}
+
+/**
+ * Posun na skutečný konec chatu. Během animace odečte její nafouknutí scrollHeight — holé `scrollTop = scrollHeight`
+ * skočilo rovnou na konec animace (dočtení badge / emotu nové zprávy, další zpráva v řadě) a z příjezdu zbylo jen
+ * bliknutí (OBS chat, měřeno 2026-09-28). Používat všude místo `scrollTop = scrollHeight`.
+ */
+export function scrollToBottom(chatEl) {
+  chatEl.scrollTop = chatEl.scrollHeight - chatEl.clientHeight - slideInflation(chatEl);
+}
+
 /**
  * Zavolat hned po nastavení scrollTop na konec (ve stejném snímku), jinak by obsah
  * na jeden snímek poskočil.

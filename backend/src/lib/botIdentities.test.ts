@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rememberBot, isBotAuthor, _resetBotsForTest, SHARED } from './botIdentities.js';
+import { rememberBot, isBotAuthor, isSharedBotId, _resetBotsForTest, SHARED } from './botIdentities.js';
 
 test('isBotAuthor: Kick bot podle id, i když se username liší od slugu', () => {
   _resetBotsForTest();
@@ -17,4 +17,16 @@ test('isBotAuthor: vlastní bot workspace platí jen pro svůj workspace, sdíle
   assert.equal(isBotAuthor('twitch', 'RobBot', 'jiny', '555'), false);
   rememberBot('youtube', 'joukibot', SHARED, 'UCabc');
   assert.equal(isBotAuthor('youtube', 'Jouki BOT', 'jiny', 'UCabc'), true, 'YouTube: jméno se liší, id sedí');
+});
+
+test('isSharedBotId: zlaté logo jen pro sdíleného bota a jen podle id účtu (jméno nestačí)', () => {
+  _resetBotsForTest();
+  rememberBot('twitch', 'joukibot', SHARED, '1543570056');
+  rememberBot('twitch', 'robbot', 'rob', '555');
+  assert.equal(isSharedBotId('twitch', '1543570056'), true);
+  assert.equal(isSharedBotId('kick', '1543570056'), false, 'jiná platforma');
+  assert.equal(isSharedBotId('twitch', '555'), false, 'vlastní bot workspace ne');
+  assert.equal(isSharedBotId('twitch', '999'), false, 'cizí účet se jménem joukibot ne');
+  assert.equal(isSharedBotId('twitch', null), false);
+  assert.equal(isSharedBotId('twitch', ''), false);
 });

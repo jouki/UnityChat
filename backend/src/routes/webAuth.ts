@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { streamers } from '../db/schema.js';
+import { messages, streamers } from '../db/schema.js';
 import { config } from '../config.js';
 import { signState, type StateInput } from '../lib/session.js';
 import { isCryptoReady } from '../lib/crypto.js';
@@ -10,12 +10,20 @@ import * as twitch from '../lib/oauthTwitch.js';
 import * as youtube from '../lib/oauthYoutube.js';
 import * as kick from '../lib/oauthKick.js';
 import {
-  allowedOrigins, isAllowedReturnTo, issueCode, consumeCode, bearerToken, validateWebSession, deleteWebSession,
-  requireWebSession, completeWebLogin, listIdentities, getDecryptedIdentity, storeRefreshedTokens, unlinkIdentity, signOutAccount,
-  needsRefresh, type Platform, type IdentityInfo, type TokenSet,
+  allowedOrigins, isAllowedReturnTo, issuePendingCode, exchangePendingCode, bearerToken, validateWebSession, deleteWebSession,
+  requireWebSession, listIdentities, unlinkIdentity, signOutAccount, WEB_SESSION_TTL_MS,
+  type Platform, type IdentityInfo, type TokenSet,
 } from '../lib/webAuth.js';
-import { outgoingText, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId, SendError } from '../lib/webSend.js';
-import { ucSends, markUc, ucReplies, attachUcReply, parseUcReply } from '../lib/ucSends.js';
+import { outgoingText, SendError } from '../lib/webSend.js';
+import { sendAsAccount, sendUcReply } from '../lib/accountSend.js';
+import { pendingWarnings } from '../lib/accountWarnings.js';
+import { runBroadcast } from '../lib/chatBroadcast.js';
+import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } from '../lib/twitchFirstMessage.js';
+import { accountModIdentities } from '../lib/chatRole.js';
+import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
+import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
+import { getReplaceGlobalPref, setReplaceGlobalPref, refreshAccount as refreshBadgePrefs } from '../lib/badgePrefs.js';
+import { syncEmailLink } from '../lib/emailLink.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
@@ -29,8 +37,16 @@ import type { Ingest } from '../ingest/index.js';
  */
 
 const PlatformParam = z.object({ platform: z.enum(['twitch', 'youtube', 'kick']) });
-const StartBody = z.object({ returnTo: z.string().url().optional() }).optional();
+// `mod: true` = navíc žádat moderátorské scopes (mazání zpráv, bany) — mod se přihlašuje
+// vlastním účtem, aby mohl mazat/banovat z UnityChatu na platformách, kde to podporují.
+const StartBody = z.object({ returnTo: z.string().url().optional(), mod: z.boolean().optional() }).optional();
 const ExchangeBody = z.object({ code: z.string().min(8).max(200) });
+const BroadcastBody = z.object({
+  channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
+  text: z.string().min(1).max(2000),
+  /** Text pro jednotlivé platformy (@přezdívka → login té platformy); kontroluje se stejně jako `text`. */
+  texts: z.object({ twitch: z.string().min(1).max(2000), kick: z.string().min(1).max(2000), youtube: z.string().min(1).max(2000) }).partial().optional().nullable(),
+});
 const SendBody = z.object({
   platform: z.enum(['twitch', 'youtube', 'kick']),
   channel: z.string().regex(/^[a-z0-9_]{1,40}$/i).optional(),
@@ -40,11 +56,17 @@ const SendBody = z.object({
   replyToUser: z.string().max(60).optional().nullable(),
   /** Odpověď napříč platformami (UnityChat): na kterou zprávu se odpovídá — server ji spáruje s echem. */
   ucReplyTo: z.object({ platform: z.string(), id: z.string(), username: z.string().optional(), message: z.string().optional(), authorUc: z.boolean().optional() }).optional().nullable(),
+  /** GIF od moda schvalovat jako od diváka (Dev mód v UnityChatu, lib/ucSends.ts gifReviews). */
+  gifReview: z.boolean().optional(),
 });
 
 const DEFAULT_CHANNEL = 'robdiesalot';
 
-/** Po OAuth callbacku (kind:'web'): účet + session → jednorázový kód → redirect na web (#uc_code). */
+/**
+ * Po OAuth callbacku (kind:'web'): identita + tokeny čekají pod jednorázovým kódem → redirect
+ * na web (#uc_code). Účet ani session tu NEVZNIKAJÍ a identita se nepřipojuje k účtu ze state —
+ * to až POST /auth/exchange s Bearerem téhož účtu (login CSRF, lib/webAuth.ts exchangePendingCode).
+ */
 export async function completeWebCallback(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -54,9 +76,8 @@ export async function completeWebCallback(
   tokens: TokenSet,
 ) {
   const returnTo = payload.returnTo && isAllowedReturnTo(payload.returnTo) ? payload.returnTo : `${allowedOrigins()[0]}/chat/`;
-  const { accountId, sessionToken } = await completeWebLogin(platform, identity, tokens, payload.webAccountId ?? null);
-  const code = issueCode(sessionToken);
-  req.log.info({ platform, accountId, login: identity.login, linked: payload.webAccountId != null }, 'web OAuth completed');
+  const code = issuePendingCode({ platform, identity, tokens, linkAccountId: payload.webAccountId ?? null });
+  req.log.info({ platform, login: identity.login, linkIntent: payload.webAccountId != null }, 'web OAuth callback: pending exchange');
   return reply.redirect(`${returnTo}#uc_code=${encodeURIComponent(code)}&uc_platform=${platform}`, 302);
 }
 
@@ -66,12 +87,28 @@ export function webErrorRedirect(reply: FastifyReply, returnTo: string | undefin
   return reply.redirect(`${target}#uc_error=${encodeURIComponent(message)}`, 302);
 }
 
+/**
+ * Twitch `msg_rejected` u nejspíš první zprávy účtu v kanálu (lib/twitchFirstMessage.ts) → česká rada místo „try again
+ * later“. Jinak (nebo když se to nedá zjistit) null = původní hláška.
+ */
+async function twitchFirstMessageHint(accountId: number, channel: string, err: string, log: { info: (o: object, m: string) => void }): Promise<string | null> {
+  if (!isTwitchRejected(err)) return null;
+  const userId = (await listIdentities(accountId).catch(() => [])).find((i) => i.platform === 'twitch')?.platformUserId || '';
+  const first = await looksLikeFirstMessage({ channel, userId }, {
+    hasMessage: async (ch, uid) => (await db.select({ id: messages.id }).from(messages)
+      .where(and(eq(messages.platform, 'twitch'), eq(messages.channel, ch.toLowerCase()), eq(messages.platformUserId, uid))).limit(1)).length > 0,
+  });
+  log.info({ accountId, channel, first }, 'twitch msg_rejected: první zpráva v kanálu?');
+  return first ? TWITCH_FIRST_MESSAGE_TEXT : null;
+}
+
 export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest?: Ingest }) {
   const sendLimiter = new RateLimiter(5, 1);   // per účet: 5 najednou, doplňuje 1/s
+  const broadcastLimiter = new RateLimiter(2, 0.25); // per účet: Broadcast = zpráva na 2–3 platformy, max 1 za 4 s
   const startLimiter = new RateLimiter(10, 0.2); // per IP: 10 startů, doplňuje 1 za 5 s
 
   // ---- start OAuth (web) ----
-  app.post<{ Params: { platform: string }; Body: { returnTo?: string } }>('/auth/:platform/start', async (req, reply) => {
+  app.post<{ Params: { platform: string }; Body: { returnTo?: string; mod?: boolean } }>('/auth/:platform/start', async (req, reply) => {
     const params = PlatformParam.safeParse(req.params);
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     const body = StartBody.safeParse(req.body ?? {});
@@ -87,32 +124,47 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       reply.code(400); return { ok: false, error: 'returnTo origin not allowed' };
     }
 
-    // Přihlášený uživatel napojuje další platformu na svůj účet.
+    // Přihlášený uživatel napojuje další platformu na svůj účet. Ve state je to jen ZÁMĚR —
+    // splní se při /auth/exchange, když výměnu pošle session téhož účtu (login CSRF, C1).
     let webAccountId: number | undefined;
     const raw = bearerToken(req);
     if (raw) { const id = await validateWebSession(raw); if (id !== null) webAccountId = id; }
 
     const stateInput: StateInput = { platform, kind: 'web', returnTo, webAccountId };
+    const wantMod = body.data?.mod === true;
     if (platform === 'twitch') {
       if (!twitch.twitchConfigured()) { reply.code(503); return { ok: false, error: 'Twitch OAuth not configured' }; }
-      return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), twitch.WEB_SCOPES) };
+      // Twitch: jedno přihlášení žádá rovnou i moderátorské scopes (pokyn usera 2026-09-25 — žádné druhé
+      // přihlášení pro mody). Kick zatím jen s `mod: true`, dokud nejsou scopes povolené v Kick dev app.
+      const scopes = [...twitch.WEB_SCOPES, ...twitch.MOD_SCOPES];
+      return { ok: true, url: twitch.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (platform === 'youtube') {
       if (!youtube.youtubeConfigured()) { reply.code(503); return { ok: false, error: 'YouTube OAuth not configured' }; }
-      return { ok: true, url: youtube.buildAuthorizeUrl(signState(stateInput), youtube.WEB_SCOPES) };
+      const scopes = wantMod ? [...youtube.WEB_SCOPES, ...youtube.MOD_SCOPES] : youtube.WEB_SCOPES;
+      return { ok: true, url: youtube.buildAuthorizeUrl(signState(stateInput), scopes) };
     }
     if (!kick.kickConfigured()) { reply.code(503); return { ok: false, error: 'Kick OAuth not configured' }; }
     const pkce = kick.generatePkcePair();
-    return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kick.WEB_SCOPES) };
+    // Kick: moderátorské scopes jsou v Kick dev app povolené (2026-09-25) → rovnou při každém přihlášení.
+    const kickScopes = [...kick.WEB_SCOPES, ...kick.MOD_SCOPES];
+    return { ok: true, url: kick.buildAuthorizeUrl(signState({ ...stateInput, codeVerifier: pkce.verifier }), pkce.challenge, kickScopes) };
   });
 
   // ---- jednorázový kód → session token ----
+  // Bearer (volitelný) = session, ve které klient přihlášení spustil. Jen s ním se nová platforma
+  // připojí k účtu ze startu; bez něj / s jiným účtem jde o běžné přihlášení podle identity.
   app.post<{ Body: { code: string } }>('/auth/exchange', async (req, reply) => {
     const body = ExchangeBody.safeParse(req.body);
     if (!body.success) { reply.code(400); return { ok: false, error: 'code' }; }
-    const token = consumeCode(body.data.code);
-    if (!token) { reply.code(400); return { ok: false, error: 'code invalid or expired' }; }
-    return { ok: true, token, expiresInMs: 30 * 24 * 60 * 60 * 1000 };
+    const res = await exchangePendingCode(body.data.code, bearerToken(req));
+    if (!res) { reply.code(400); return { ok: false, error: 'code invalid or expired' }; }
+    req.log.info({ accountId: res.accountId, linked: res.linked, linkRefused: res.linkRefused }, 'web OAuth exchange');
+    // Nová platforma na účtu → seznam identit u ověřeného e-mailu v Židolištce (účet bez e-mailu nic neposílá dál).
+    if (res.linked) void syncEmailLink(res.accountId, { log: req.log });
+    // Identity účtu se změnily → cache volby odznaku (lib/badgePrefs.ts).
+    void refreshBadgePrefs(res.accountId).catch((e) => req.log.warn({ err: (e as Error).message }, 'badge-prefs: refresh po přihlášení selhal'));
+    return { ok: true, token: res.sessionToken, linked: res.linked, expiresInMs: WEB_SESSION_TTL_MS };
   });
 
   // ---- kdo jsem ----
@@ -120,7 +172,28 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const ids = await listIdentities(req.webAccountId!);
     const platforms: Record<string, unknown> = { twitch: null, youtube: null, kick: null };
     for (const i of ids) platforms[i.platform] = { login: i.login, displayName: i.displayName, avatarUrl: i.avatarUrl };
-    return { ok: true, accountId: req.webAccountId, platforms };
+    // Nepotvrzená varování od moda (moderace část 2) — klient je ukáže hned po přihlášení.
+    let warnings: Awaited<ReturnType<typeof pendingWarnings>> = [];
+    try { warnings = await pendingWarnings(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: varování nenačtena'); }
+    // Předvolba „stažení GIFu prohlížečem odesílatele" (Task 6) — tabulka chybí / výpadek DB → výchozí 'ask'.
+    let gifClientFetch: ClientFetchPref = 'ask';
+    try { gifClientFetch = await getClientFetchPref(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: gifClientFetch nenačten'); }
+    // Odznak podporovatele: „místo globálního odznaku Twitche“ (lib/badgePrefs.ts) — výpadek / chybějící tabulka → false.
+    let badgeReplaceGlobal = false;
+    try { badgeReplaceGlobal = await getReplaceGlobalPref(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: badgeReplaceGlobal nenačten'); }
+    return { ok: true, accountId: req.webAccountId, platforms, warnings, gifClientFetch, badgeReplaceGlobal };
+  });
+
+  // Odznak podporovatele — individuální volba účtu (pokyn usera 2026-09-30): jen s propojeným Twitchem (jinde globální odznaky nejsou).
+  app.put<{ Body: { replaceGlobal?: unknown } }>('/account/badge-prefs', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const v = req.body?.replaceGlobal;
+    if (typeof v !== 'boolean') return reply.code(400).send({ ok: false, error: 'replaceGlobal' });
+    const ids = await listIdentities(req.webAccountId!);
+    if (!ids.some((i) => i.platform === 'twitch')) return reply.code(409).send({ ok: false, error: 'no_twitch' });
+    await setReplaceGlobalPref(req.webAccountId!, v);
+    req.log.info({ accountId: req.webAccountId, replaceGlobal: v }, 'badge-prefs: změna');
+    return { ok: true, replaceGlobal: v };
   });
 
   // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.
@@ -128,7 +201,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const raw = bearerToken(req);
     if (!raw) return { ok: true };
     const accountId = await validateWebSession(raw);
-    if (accountId !== null) await signOutAccount(accountId);
+    if (accountId !== null) { await signOutAccount(accountId); void refreshBadgePrefs(accountId).catch(() => {}); }
     else await deleteWebSession(raw);
     return { ok: true };
   });
@@ -137,6 +210,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const params = PlatformParam.safeParse(req.params);
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     await unlinkIdentity(req.webAccountId!, params.data.platform);
+    void syncEmailLink(req.webAccountId!, { log: req.log });
+    void refreshBadgePrefs(req.webAccountId!).catch(() => {});
     return { ok: true };
   });
 
@@ -152,75 +227,33 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     let text: string;
     try { text = outgoingText(body.data.text); } catch (e) { reply.code(400); return { ok: false, error: (e as Error).message }; }
 
-    const dir = await db
-      .select({ twitchUserId: streamers.twitchUserId, kickUserId: streamers.kickUserId, youtubeHandle: streamers.youtubeHandle })
-      .from(streamers)
-      .where(eq(streamers.twitchLogin, channel))
-      .limit(1);
-    if (!dir.length) { reply.code(404); return { ok: false, error: 'unknown channel' }; }
-
-    let ident = await getDecryptedIdentity(accountId, platform);
-    if (!ident) { reply.code(403); return { ok: false, error: `not linked: ${platform}` }; }
-
-    const refresh = async () => {
-      if (!ident?.refreshToken) throw new SendError(`${platform}: token expired, login again`, 401);
-      let t: TokenSet;
-      if (platform === 'twitch') { const r = await twitch.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope }; }
-      else if (platform === 'kick') { const r = await kick.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
-      else { const r = await youtube.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
-      await storeRefreshedTokens(accountId, platform, t);
-      ident = { ...ident!, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000) };
-    };
-
-    const doSend = async (): Promise<{ id: string | null; sentText?: string; fallback?: 'mention' }> => {
-      if (platform === 'twitch') {
-        if (!dir[0].twitchUserId) throw new SendError('channel has no twitch id', 404);
-        return sendTwitch({ accessToken: ident!.accessToken, senderId: ident!.platformUserId, broadcasterId: dir[0].twitchUserId, text, replyTo: body.data.replyTo });
-      }
-      if (platform === 'kick') {
-        if (!dir[0].kickUserId) throw new SendError('channel has no kick id', 404);
-        try {
-          return await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text, replyTo: body.data.replyTo });
-        } catch (e) {
-          // Kick public API vrací na odpověď 404 „Not found" (2026-09-23, i se správným
-          // broadcaster_user_id). Zpráva nesmí propadnout → znovu jako obyčejná „@login text"
-          // (jako odpověď napříč platformami). Log rozliší, jestli padá jen odpověď.
-          if (!(e instanceof SendError) || e.status !== 404 || !body.data.replyTo) throw e;
-          const at = body.data.replyToUser ? `@${body.data.replyToUser.replace(/^@/, '')} ` : '';
-          req.log.warn({ accountId, replyTo: body.data.replyTo, err: e.message }, 'kick: odpověď odmítnuta → posílám jako zprávu s @');
-          const sentText = text.startsWith(at) ? text : at + text;
-          const res = await sendKick({ accessToken: ident!.accessToken, broadcasterUserId: dir[0].kickUserId, text: sentText, replyTo: null });
-          req.log.info({ accountId, id: res.id }, 'kick: záložní zpráva bez reply odeslána');
-          // Klient podle toho zahodí optimistickou „odpověď" (echo přijde jako „@login text").
-          return { ...res, sentText, fallback: 'mention' as const };
-        }
-      }
-      const videoId = opts.ingest?.videoIdFor('youtube', dir[0].youtubeHandle || channel) || null;
-      if (!videoId) throw new SendError('youtube: stream not live (no video id)', 409);
-      const liveChatId = await youtubeLiveChatId({ accessToken: ident!.accessToken, videoId });
-      if (!liveChatId) throw new SendError('youtube: live chat not active', 409);
-      return sendYoutube({ accessToken: ident!.accessToken, liveChatId, text });
-    };
+    // Nepotvrzené varování od moda (moderace část 2): psát se nesmí, dokud ho uživatel nepotvrdí.
+    // Chybějící tabulka (SQL ještě neproběhlo) / výpadek DB psaní neblokuje.
+    try {
+      if ((await pendingWarnings(accountId)).length) { reply.code(403); return { ok: false, error: 'warning_pending' }; }
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'chat send: kontrola varování selhala'); }
 
     // Odpověď napříč platformami: nahlásit PŘED odesláním, echo z ingestu ji pak rovnou ponese.
-    const ucReply = body.data.replyTo ? null : parseUcReply(body.data.ucReplyTo);
-    if (ucReply) {
-      const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text, data: ucReply });
-      if (rh) attachUcReply(rh, ucReply, req.log, { late: true });
-    }
+    // Citace z archivu, ne od klienta (podvržené citace, 2026-09-25) — sendUcReply → verifyUcReply.
+    const ucReply = await sendUcReply(body.data);
 
     try {
-      if (needsRefresh(ident.expiresAt)) await refresh();
-      let res: { id: string | null; sentText?: string; fallback?: 'mention' };
-      try {
-        res = await doSend();
-      } catch (e) {
-        if (e instanceof SendError && e.retryable) { await refresh(); res = await doSend(); } else throw e;
-      }
+      const res = await sendAsAccount({
+        accountId, platform, channel, text,
+        replyTo: body.data.replyTo, replyToUser: body.data.replyToUser,
+        ingest: opts.ingest, log: req.log,
+        beforeSend: async (ident) => {
+          // Před odesláním: echo z ingestu už hlášení najde (linkFilter → gifReviews.requested).
+          if (body.data.gifReview) gifReviews.report({ platform, channel: await platformChannel(platform, channel), userId: ident.platformUserId, text });
+          if (!ucReply) return;
+          const rh = ucReplies.report({ platform, channel: await platformChannel(platform, channel), userId: ident.platformUserId, text, data: ucReply });
+          if (rh) attachUcReply(rh, ucReply, req.log, { late: true });
+        },
+      });
       req.log.info({ accountId, platform, channel, id: res.id, len: text.length }, 'web chat send');
       // Command (bez markeru): ingest ho podle hlášení označí jako UnityChat (zlaté logo, lib/ucSends.ts).
       if (text.startsWith('!')) {
-        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: ident!.platformUserId, text });
+        const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: res.platformUserId, text });
         if (hit) markUc(hit, req.log, { late: true });
       }
       return { ok: true, id: res.id, text: res.sentText ?? text, ...(res.fallback ? { fallback: res.fallback } : {}) };
@@ -229,8 +262,44 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       const status = err instanceof SendError ? err.status : 502;
       req.log.warn({ accountId, platform, channel, status, err: err.message }, 'web chat send failed');
       reply.code(status >= 400 && status < 600 ? status : 502);
-      return { ok: false, error: err.message };
+      const hint = platform === 'twitch' ? await twitchFirstMessageHint(accountId, channel, err.message, req.log).catch(() => null) : null;
+      return { ok: false, error: hint || err.message, ...(hint ? { code: 'twitch_first_message' } : {}) };
     }
+  });
+
+  // ---- Broadcast (mod / streamer): zpráva na všechny přihlášené platformy ----
+  // Roli ověřuje jen server (lib/chatBroadcast.ts → accountModIdentities), klient ji podstrčit nemůže.
+  app.post<{ Body: z.infer<typeof BroadcastBody> }>('/chat/broadcast', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = BroadcastBody.safeParse(req.body);
+    if (!body.success) { reply.code(400); return { ok: false, error: 'body' }; }
+    const accountId = req.webAccountId!;
+    if (!broadcastLimiter.allow(String(accountId)) || !sendLimiter.allow(String(accountId))) { reply.code(429); return { ok: false, error: 'slow down' }; }
+    const channel = (body.data.channel || DEFAULT_CHANNEL).toLowerCase();
+    const out = await runBroadcast({ accountId, channel, text: body.data.text, texts: body.data.texts }, {
+      pendingWarnings,
+      modIdentities: (id, ch) => accountModIdentities(id, ch),
+      listIdentities,
+      send: async (platform, text) => {
+        try {
+          const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
+          // Command (bez markeru) i Broadcastem: ingest ho podle hlášení označí jako UnityChat (zlaté logo) —
+          // stejně jako /chat/send (chybělo, hlášení usera 2026-09-30: „!multichat“ přes Broadcast bez loga).
+          if (text.startsWith('!')) {
+            const hit = ucSends.report({ platform, channel: await platformChannel(platform, channel), userId: res.platformUserId, text });
+            if (hit) markUc(hit, req.log, { late: true });
+          }
+          return { id: res.id ?? null, sentText: res.sentText ?? null };
+        } catch (e) {
+          // Twitch odmítl nejspíš první zprávu v kanálu → česká rada (jako /chat/send).
+          const hint = platform === 'twitch' && e instanceof SendError ? await twitchFirstMessageHint(accountId, channel, e.message, req.log).catch(() => null) : null;
+          if (hint) throw new SendError(hint, (e as SendError).status);
+          throw e;
+        }
+      },
+      log: req.log,
+    });
+    reply.code(out.status);
+    return out.body;
   });
 
   // ---- je streamer live? (web: tečky ve filtrech) ----

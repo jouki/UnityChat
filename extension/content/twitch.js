@@ -643,17 +643,7 @@
 
     if (msg.type === 'TW_CLAIM_BONUS') {
       try {
-        let target = null;
-        const iconEl = document.querySelector('.claimable-bonus__icon');
-        if (iconEl) target = iconEl.closest('button, [role="button"]');
-        if (!target) {
-          for (const b of document.querySelectorAll('[aria-label*="bonus" i], [aria-label*="claim" i], [aria-label*="vyzv" i]')) {
-            const al = (b.getAttribute('aria-label') || '').toLowerCase();
-            if (!/claim|bonus|vyzv/i.test(al)) continue;
-            const r = b.getBoundingClientRect();
-            if (r.width > 0 && r.height > 0) { target = b; break; }
-          }
-        }
+        const target = findClaimBonusBtn();
         if (!target) { sendResponse({ ok: false, error: 'no_claim_btn' }); return; }
         const r = target.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
@@ -1796,8 +1786,26 @@
   // tab is the only anonymous-safe path. We extract: bits string, channel-point
   // balance string, and the channel-point icon URL (channels can customize it).
   let lastCreditsHash = '';
+  const CREDITS_SUMMARY_SEL = '[data-test-selector="community-points-summary"], .community-points-summary';
+  // Tlačítko „Vyzvednout bonus“ (body kanálu). Ikona .claimable-bonus__icon je jednoznačná; záložní hledání podle
+  // aria-label jen UVNITŘ widgetu bodů — v celém dokumentu trefilo promo Twitche „Dárek: bonusová předplatná“
+  // (gift-button): pilulka svítila pořád a klik otevřel darování předplatného (hlášení 2026-09-29).
+  // --- findClaimBonusBtn (scripts/test-claim-bonus.mjs si funkci bere odsud)
+  function findClaimBonusBtn() {
+    const visible = (b) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const icon = document.querySelector('.claimable-bonus__icon');
+    const byIcon = icon ? icon.closest('button, [role="button"]') : null;
+    if (byIcon && visible(byIcon)) return byIcon;
+    const summary = document.querySelector(CREDITS_SUMMARY_SEL);
+    if (!summary) return null;
+    for (const b of summary.querySelectorAll('button[aria-label], [role="button"][aria-label]')) {
+      if (/claim|bonus|vyzv/i.test(b.getAttribute('aria-label') || '') && visible(b)) return b;
+    }
+    return null;
+  }
+  // --- /findClaimBonusBtn
   function snapshotCredits() {
-    const summary = document.querySelector('[data-test-selector="community-points-summary"], .community-points-summary');
+    const summary = document.querySelector(CREDITS_SUMMARY_SEL);
     if (!summary) return null;
     // Multiple known selectors — Twitch's class hashes change but the
     // data-test-selector attrs are reasonably stable. We also fall back to
@@ -1815,32 +1823,7 @@
       }
     }
     const iconEl = summary.querySelector('img.image--D5HXC, img[src*="channel-points-icons"]');
-    // Claim-bonus button: appears periodically as a visible button near
-    // the points summary with aria-label like "Claim Bonus" / "Vyzvédněte
-    // si bonus" depending on locale, or a [data-test-selector*="claim"].
-    // We just look for an interactive element whose label matches.
-    const claimBtn = (() => {
-      // Most reliable signal: the .claimable-bonus__icon class lives
-      // inside the actual claim button. Walk up from there to its
-      // nearest button ancestor.
-      const iconEl = document.querySelector('.claimable-bonus__icon');
-      if (iconEl) {
-        const btn = iconEl.closest('button, [role="button"]');
-        if (btn) {
-          const r = btn.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return btn;
-        }
-      }
-      // Fallback: aria-label match in EN/CZ on any visible button.
-      const cands = document.querySelectorAll('[aria-label*="bonus" i], [aria-label*="claim" i], [aria-label*="vyzv" i]');
-      for (const b of cands) {
-        const al = (b.getAttribute('aria-label') || '').toLowerCase();
-        if (!/claim|bonus|vyzv/i.test(al)) continue;
-        const r = b.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return b;
-      }
-      return null;
-    })();
+    const claimBtn = findClaimBonusBtn();
     return {
       bits: bitsEl ? (bitsEl.textContent || '').trim() : null,
       points: pointsEl ? (pointsEl.textContent || '').trim() : null,

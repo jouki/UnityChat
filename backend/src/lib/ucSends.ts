@@ -77,6 +77,42 @@ export class UcSendRegistry<T = undefined> {
 
 export const ucSends = new UcSendRegistry();
 
+/**
+ * GIF „schvalovat jako divák" (moderace část 4, UX 2026-09-25): mod / broadcaster posílá GIF bez schvalování,
+ * KROMĚ zprávy z UnityChatu se zapnutým Dev módem — klient pošle `gifReview: true` (/chat/send před odesláním,
+ * /chat/uc-sent po něm) a ingest (lib/linkFilter.ts) pak GIF zachytí jako od diváka. Párování stejné jako
+ * ucSends / ucReplies (platforma, kanál, odesílatel, text do SEND_TTL_MS; pozdní hlášení přes recent).
+ */
+export class GifReviewRegistry {
+  private reg: UcSendRegistry;
+  /** Hlášení, které přišlo až po zprávě (`platform:messageId` → kdy) — intercept si ho vyzvedne po stažení média. */
+  private late = new Map<string, number>();
+  constructor(private now: () => number = Date.now) { this.reg = new UcSendRegistry(now, { recentMarked: true }); }
+
+  /** Klient: tuhle zprávu schvalovat jako od diváka. */
+  report(s: UcSend): void {
+    const hit = this.reg.report(s);
+    if (!hit) return;
+    const t = this.now();
+    this.late.set(`${hit.platform}:${hit.platformMessageId}`, t);
+    if (this.late.size > 500) for (const [k, at] of this.late) if (t - at > RECENT_TTL_MS) this.late.delete(k);
+  }
+
+  /** Ingest (jen GIF od moda): bylo hlášení dřív než zpráva? (spotřebuje ho; jinak si zprávu pamatuje pro pozdní hlášení) */
+  requested(m: IngestMessage): boolean { return this.reg.take(m) !== null; }
+
+  /** Po stažení média: přišlo hlášení mezitím (po zprávě)? */
+  lateRequested(m: Pick<IngestMessage, 'platform' | 'platformMessageId'>): boolean {
+    const k = `${m.platform}:${m.platformMessageId}`;
+    const at = this.late.get(k);
+    if (at === undefined) return false;
+    this.late.delete(k);
+    return this.now() - at <= RECENT_TTL_MS;
+  }
+}
+
+export const gifReviews = new GifReviewRegistry();
+
 /** Odpověď napříč platformami: na kterou zprávu se odpovídá (extension/core/uc-reply.js). */
 export interface UcReply { platform: string; id: string; username: string; message: string; authorUc?: boolean }
 export const ucReplies = new UcSendRegistry<UcReply>(Date.now, { recentMarked: true });

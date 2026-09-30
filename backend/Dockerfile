@@ -25,7 +25,9 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
 
-RUN apk add --no-cache curl && addgroup -S app && adduser -S app -G app
+# ffmpeg (+ ffprobe): perceptuální hash MP4 GIFů (lib/gifPhash.ts); bez něj hash zůstane null, nic se nerozbije.
+# sharp (GIF/WebP) si nese vlastní libvips pro musl (@img/sharp-linuxmusl-x64 z package-lock).
+RUN apk add --no-cache curl ffmpeg && addgroup -S app && adduser -S app -G app
 
 COPY --from=prod-deps --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist

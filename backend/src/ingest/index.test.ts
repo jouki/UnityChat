@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createIngest } from './index.js';
-import type { IngestListener, IngestMessage } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage } from './types.js';
 
 const silent = { info() {}, warn() {}, error() {} };
 const msg = (id: string): IngestMessage => ({ platform: 'twitch', platformMessageId: id, platformUserId: '', username: 'u', channel: 'c', content: 'x', contentRaw: {}, sentAt: new Date(1700000000000), isUnitychatUser: false, isReply: false, replyToMessageId: null });
@@ -96,4 +96,25 @@ test('createIngest: onLive dostane zprávu synchronně před flushem, chyba v n�
   assert.deepEqual(live, ['a', 'c']);
   await ing.stop();
   assert.deepEqual(batches, [3], 'všechny tři zprávy došly do DB dávky');
+});
+
+test('createIngest: onDelete se protáhne do factory a chyba v něm ingest nezastaví', async () => {
+  const deleted: IngestDelete[] = [];
+  let emitDelete: ((d: IngestDelete) => void) | null = null;
+  const fakeListener: IngestListener = { start() {}, stop() {}, status: () => 'connected', lastMessageAt: () => null };
+  let calls = 0;
+  const ing = createIngest({
+    channels: [{ platform: 'twitch', channel: 'c' }],
+    retentionDays: 0,
+    log: silent,
+    insert: async () => 0,
+    deleteOld: async () => 0,
+    listenerFactory: (_c, _onMessage, onDelete) => { emitDelete = onDelete ?? null; return fakeListener; },
+    onDelete: (d) => { calls++; deleted.push(d); if (calls === 1) throw new Error('boom'); },
+  });
+  ing.start();
+  emitDelete!({ platform: 'twitch', channel: 'c', messageId: 'm1' }); // hodí — nesmí shodit ingest
+  emitDelete!({ platform: 'twitch', channel: 'c', messageId: 'm2' });
+  assert.deepEqual(deleted.map((d) => d.messageId), ['m1', 'm2']);
+  await ing.stop();
 });

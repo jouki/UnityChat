@@ -33,6 +33,11 @@ const DEFAULTS = {
   sound: true, // zvuky reakcí (video Peepo poop); false = přehrát potichu
   reactionScrollBack: true, // po konci animace reakce skočit zpět na konec chatu
   acFulltext: false, // Fulltext prepinac v naseptavaci emotu (persistentni, user 2026-09-20)
+  acUserFulltext: false, // Fulltext v našeptávači `/user` (mod; vlastní stav — hledání lidí ≠ hledání emotů)
+  acColon: false, // Našeptávat emoty po „:jméno" jako na Twitchi (výchozí vypnuto, user 2026-09-25)
+  mentionNotify: false, // oznámení prohlížeče na @zmínku / odpověď, když se na chat nedívám (opt-in, user 2026-09-25)
+  deletedStyle: 'dim', // vzhled smazané zprávy pro moda: label | dim | strike (core/moderation.js DEFAULT_MOD_DELETED_STYLE; divák nemá volbu). Výchozí „Zašedlé“ (kolo 4 bod 5)
+  deletedStyleChosen: false, // true = styl smazaných vybral uživatel v selectu (jen tehdy; migrace core migrateDeletedStyle ho respektuje)
 };
 
 // =============================================================
@@ -50,6 +55,8 @@ const DEFAULTS = {
 
 // DEV: http://178.104.160.182:3001 | PROD: https://api.jouki.cz
 const UC_API = 'https://api.jouki.cz';
+// Média GIFů (moderace část 4) smí jen z našeho backendu (kontrakt: klienti načítají jen z api.jouki.cz).
+const UC_GIF_ORIGINS = [new URL(UC_API).origin];
 // Reakce „Peepo poop" — video sdílené s webem (robdiesalot.com/chat/media/).
 const POOP_VIDEO_URL = 'https://robdiesalot.com/chat/media/peepo-chat-alpha-v2-wet-sound.webm';
 
@@ -75,9 +82,10 @@ class NicknameManager {
 
   async fetchAll() {
     try {
-      const resp = await fetch(`${UC_API}/nicknames`);
+      const resp = await fetch(`${UC_API}/nicknames`, { cache: 'no-store' });
       if (!resp.ok) return;
       const data = await resp.json();
+      const prev = new Map(this._map);
       this._map.clear();
       for (const n of data.nicknames) {
         this._map.set(`${n.platform}:${n.username.toLowerCase()}`, {
@@ -86,6 +94,15 @@ class NicknameManager {
         });
       }
       this._saveCache();
+      // Zprávy už vykreslené z lokální cache (nebo se změnou, která přišla mimo SSE) přepsat
+      // na stav ze serveru — jinak zůstane stará přezdívka až do dalšího reloadu.
+      for (const key of new Set([...prev.keys(), ...this._map.keys()])) {
+        const a = prev.get(key), b = this._map.get(key);
+        if ((a?.nickname || null) === (b?.nickname || null) && (a?.color || null) === (b?.color || null)) continue;
+        const i = key.indexOf(':');
+        const username = key.slice(i + 1);
+        this.onChange?.({ platform: key.slice(0, i), username, nickname: b?.nickname || username, color: b?.color || null });
+      }
       if (this.onLoad) this.onLoad();
     } catch {}
   }
@@ -118,7 +135,11 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcMark) this.onUcMark(d); } catch {}
       });
-      // Změna nastavení donací v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
+      // Živá zpráva podporovatele (lib/donors.ts) — addon ji má z vlastního IRC bez `donor` → odznak dodatečně.
+      this._eventSource.addEventListener('donor-mark', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onDonorMark) this.onDonorMark(d); } catch {}
+      });
+      // Změna nastavení donatů v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
       this._eventSource.addEventListener('donate-config-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonateConfigChange) this.onDonateConfigChange(d); } catch {}
       });
@@ -126,15 +147,46 @@ class NicknameManager {
       this._eventSource.addEventListener('uc-reply', (e) => {
         try { const d = JSON.parse(e.data); if (this.onUcReply) this.onUcReply(d); } catch {}
       });
+      // Moderace: smazaná zpráva (mod v UnityChatu / na platformě / filtr odkazů), skrytá / znovu zobrazená jen
+      // v UnityChatu, obnovená permitem (zpráva smazaná filtrem odkazů, část 3).
+      for (const type of ['message-deleted', 'message-hidden', 'message-unhidden', 'message-restored']) {
+        this._eventSource.addEventListener(type, (e) => {
+          try { const d = JSON.parse(e.data); if (this.onModeration) this.onModeration(type, d); } catch {}
+        });
+      }
+      // Moderace uživatele (timeout / ban / unban z nabídky moda, Židolišty nebo Twitch CLEARCHAT z ingestu).
+      this._eventSource.addEventListener('user-moderated', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUserModerated) this.onUserModerated(d); } catch {}
+      });
       // Soundboard (Židolišta → backend → SSE): změna zvuků/odemčení = refetch, přehrání/odmítnutí = core.
       for (const type of ['soundboard-change', 'soundboard-played', 'soundboard-denied']) {
         this._eventSource.addEventListener(type, (e) => {
           try { const d = JSON.parse(e.data); if (this.onSoundboard) this.onSoundboard(type, d); } catch {}
         });
       }
+      // Změna stavu návrhu zvuku (schváleno / zamítnuto v Židolištce) → „Moje návrhy“.
+      this._eventSource.addEventListener('sfx-request', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onSfxRequest) this.onSfxRequest(d); } catch {}
+      });
+      // Schválený GIF (moderace část 4) → nová zpráva s médiem pro všechny (dedup gif-<id> ve store).
+      this._eventSource.addEventListener('gif-message', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifMessage) this.onGifMessage(d); } catch {}
+      });
+      // Stav média se změnil (zahozeno / obnoveno / soubor smazán / odebráno z knihovny) → překreslit zprávy s GIFem.
+      this._eventSource.addEventListener('gif-media', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifMedia) this.onGifMedia(d); } catch {}
+      });
+      // Odemčení GIFů se v Židolištce změnilo (webhook gif-access) → stav odměny znovu (pásek / tooltip u ikony emotů hned).
+      this._eventSource.addEventListener('gif-access-change', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGifAccessChange) this.onGifAccessChange(d); } catch {}
+      });
       // Změna blacklistu slov v Židolištce → UnityChat._loadBlacklist() hned.
       this._eventSource.addEventListener('blacklist-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBlacklistChange) this.onBlacklistChange(d); } catch {}
+      });
+      // Nastavení kanálu společné pro všechny (odznak dárce, routes/channelPrefs.ts).
+      this._eventSource.addEventListener('channel-prefs', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onChannelPrefs) this.onChannelPrefs(d); } catch {}
       });
       this._eventSource.addEventListener('nickname-change', (e) => {
         try {
@@ -192,12 +244,18 @@ class NicknameManager {
     return null;
   }
 
+  /** Hlavičky zápisu: server přijme změnu jen od přihlášeného majitele účtu (Bearer session). */
+  async _authHeaders() {
+    const token = await this.tokenProvider?.().catch(() => null);
+    return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  }
+
   async save(platform, username, nickname, color) {
     const cleanName = username.replace(/^@/, '');
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await this._authHeaders(),
         body: JSON.stringify({ platform, username: cleanName, nickname, color: color || null }),
       });
       const data = await resp.json();
@@ -216,7 +274,7 @@ class NicknameManager {
     try {
       const resp = await fetch(`${UC_API}/nicknames`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await this._authHeaders(),
         body: JSON.stringify({ platform, username: cleanName }),
       });
       const data = await resp.json();
@@ -824,6 +882,7 @@ class YouTubeProvider {
         badges,
         timestamp: Math.floor(Number(renderer.timestampUsec) / 1000) || Date.now(), // čas z YouTube (µs → ms)
         id,
+        userId: renderer.authorExternalChannelId || null,   // YouTube channel id (UC…) — moderace podle uživatele
         superChat: isSuperChat
       });
     }
@@ -978,26 +1037,52 @@ async function _7tvFetchPaint(paintId) {
   return _7TV_PAINTS.get(paintId) || null;
 }
 
+// 7TV badge (Profil 2026-09-25: „všechny badge včetně 7TV“) — stejně jako painty jen hromadně přes GQL
+// (`cosmetics { badges }`, ověřeno curl 2026-09-25: host.url = //cdn.7tv.app/badge/<id>, soubory 1x–4x.webp).
+const _7TV_BADGES = new Map();
+let _7TV_BADGES_LOADING = null;
+async function _7tvFetchBadge(badgeId) {
+  if (!badgeId) return null;
+  if (!_7TV_BADGES.size) {
+    if (!_7TV_BADGES_LOADING) {
+      _7TV_BADGES_LOADING = fetch('https://7tv.io/v3/gql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: '{ cosmetics { badges { id tooltip host { url } } } }' }),
+        signal: AbortSignal.timeout(8000),
+      }).then((r) => r.json()).then((json) => {
+        for (const b of json?.data?.cosmetics?.badges || []) {
+          const host = String(b?.host?.url || '');
+          if (b?.id && /^\/\/cdn\.7tv\.app\//.test(host)) _7TV_BADGES.set(b.id, { url: `https:${host}/1x.webp`, title: String(b.tooltip || '7TV') });
+        }
+      }).catch(() => {}).finally(() => { _7TV_BADGES_LOADING = null; });
+    }
+    await _7TV_BADGES_LOADING;
+  }
+  return _7TV_BADGES.get(badgeId) || null;
+}
+
 // Resolve the 7TV cosmetics + emote-set assigned to a Twitch user (by their
 // Twitch numeric ID). Returns { paint, emoteSet } where paint is the full
 // definition or null, emoteSet is the raw 7TV emote-set object (with .emotes
 // array) or null. The user's emote set is what they "carry" to other
 // channels — typing their own emote there is still valid.
 async function _7tvFetchUserData(twitchUserId) {
-  if (!twitchUserId) return { paint: null, emoteSet: null };
+  if (!twitchUserId) return { paint: null, emoteSet: null, badge: null };
   try {
     const r = await fetch(`https://7tv.io/v3/users/twitch/${twitchUserId}`);
-    if (!r.ok) return { paint: null, emoteSet: null };
+    if (!r.ok) return { paint: null, emoteSet: null, badge: null };
     const data = await r.json();
     const user = data?.user || data;
     const paintId = user?.style?.paint_id;
     const paint = paintId ? await _7tvFetchPaint(paintId) : null;
+    const badge = user?.style?.badge_id ? await _7tvFetchBadge(user.style.badge_id) : null;
     // Top-level `emote_set` on the platform-binding response is the channel
     // emote set the user has assigned for Twitch (their personal "loadout").
     const emoteSet = data?.emote_set || null;
-    return { paint, emoteSet };
+    return { paint, emoteSet, badge };
   } catch {
-    return { paint: null, emoteSet: null };
+    return { paint: null, emoteSet: null, badge: null };
   }
 }
 
@@ -1013,6 +1098,8 @@ class UnityChat {
       assetUrl: (p) => chrome.runtime.getURL(p),
     });
     this.nicknames = new NicknameManager();
+    // Zápis přezdívky jen přihlášeným majitelem účtu (server ověřuje Bearer session).
+    this.nicknames.tokenProvider = () => this._ucSessionToken();
     this.twitch = new TwitchProvider({ log: (tag, text) => this._ucLog(tag, text) });
     this.kick = new KickProvider({ log: (tag, text) => this._ucLog(tag, text) });
     this._kickSubBadges = []; // Kick per-channel subscriber badge tiers
@@ -1064,7 +1151,10 @@ class UnityChat {
     this.sendBtn = document.getElementById('btn-send');
     this.platformBadge = document.getElementById('active-badge');
     this._initEmotePicker();
-    this._initSoundboard();
+    // Emote, který se nenačetl (výpadek sítě/CDN), zkusit znovu — jinak zůstane rozbitý do reloadu.
+    window.UC_CORE?.installEmoteRetry?.(document, { log: (t) => this._ucLog('EmoteRetry', t) });
+    // Klik na GIF ve zprávě = náhled v plné velikosti přes panel (core/gif-lightbox.js).
+    window.UC_CORE?.installGifLightbox?.(document, this.chatEl, { log: (tag, t) => this._ucLog(tag, t) });
     this._initQrDono();
 
     // Boot instrumentation: every _bootMark() logs ms since this timestamp,
@@ -1078,6 +1168,13 @@ class UnityChat {
     // Type `ucDump()` in the side-panel devtools (right-click → Inspect) to
     // force a log dump without needing the 💾 button to respond.
     try { window.ucDump = () => this._dumpLogs(); } catch {}
+    // Ladění / e2e: pojistka schovaných GIF zpráv (delayMs, size).
+    try { window.ucGifHold = () => this._gifHold(); } catch {}
+    // Ladění / e2e: GIF knihovna (stav odměny, fronta, štítky vlastních zpráv, záložka GIFy).
+    // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
+    // Soundboard (záložka SFX): znovu načíst stav (e2e přepíná odemčení odměny).
+    try { window.ucSfx = { reload: () => this._loadSoundboard(), sb: () => this._sfx }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
 
     this._init();
   }
@@ -1117,11 +1214,121 @@ class UnityChat {
         save: (list) => localStorage.setItem('uc_recent_emotes', JSON.stringify(list)),
       },
       log: (tag, text) => this._ucLog(tag, text),
+      // Boční záložky: GIFy (GIF knihovna, core/gif-library.js) a SFX (soundboard, core/soundboard.js) — nota v poli
+      // je zkratka na SFX a její odměnu smajlík neukazuje (2026-09-27).
+      tabs: [
+        ...(core.createGifPanel ? [{ key: 'gif', label: 'GIFy', icon: core.GIF_TAB_SVG, mount: (pane) => this._mountGifPanel(pane) }] : []),
+        ...(core.createSoundboard && document.getElementById('btn-sfx')
+          ? [{ key: 'sfx', label: 'SFX', icon: core.SFX_TAB_SVG, button: document.getElementById('btn-sfx'), buttonIndicator: false, mount: (pane, tab) => this._initSoundboard(pane, tab) }]
+          : []),
+      ],
     });
+    this._gifPanel?.update();
+  }
+
+  /** Záložka „GIFy“ v panelu emotů: knihovna schválených GIFů, mod navíc zamítnuté a návrhy duplikátů. */
+  _mountGifPanel(pane) {
+    const core = window.UC_CORE;
+    this._gifPanel = core.createGifPanel({
+      pane,
+      api: (path, opts) => this._ucApi(path, opts),
+      channel: () => (this.config.channel || '').toLowerCase(),
+      canModerate: () => !!this._canModerate,
+      reward: () => this._gifRewardView(),
+      // Otevření záložky / zamčený výběr: zeptat se jen když stav není čerstvý (GET /gif/state má rate limit).
+      refreshReward: () => (this._account ? this._gifCd().refreshIfStale() : null),
+      // Vlastní GIF ještě čeká na moda → výběr z knihovny blokovat (server pustí jednu žádost na uživatele).
+      ownPending: () => !!this._gifOutInst?.busy(),
+      // Streamer (vlastní kanál, stejně jako role pro commandy): zamítnuté GIFy rozmazané, oko zaostří (test2 bod 2).
+      isBroadcaster: () => this._myChatRole() === 'broadcaster',
+      onPick: (url) => {
+        this._emotePicker?.close();
+        this._sendMessage({ text: url, gif: true });
+      },
+      onIndicator: (v) => this._emotePicker?.setIndicator('gif', v),
+      tokens: this._gifTokens(),
+      origins: UC_GIF_ORIGINS,
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    return this._gifPanel;
+  }
+
+  /** Stav odměny „Posílání GIFů“ pro GIF záložku a indikátor (core gifRewardView nad GifCooldown.snapshot). */
+  _gifRewardView() {
+    return window.UC_CORE.gifRewardView(this._gifCdInst?.snapshot() || null, Date.now(), { loggedIn: !!this._account });
+  }
+
+  /** Token moda pro náhledy zamítnutých GIFů — jen paměť + chrome.storage.session (nikdy log / localStorage). */
+  _gifTokens() {
+    if (!this._gifTokensInst) {
+      const KEY = 'uc_gif_token';
+      const ses = chrome.storage?.session;
+      this._gifTokensInst = new window.UC_CORE.GifAccessToken({
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        store: ses ? {
+          load: async () => (await ses.get(KEY))?.[KEY] || null,
+          save: (t) => ses.set({ [KEY]: t }),
+          clear: () => ses.remove(KEY),
+        } : null,
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifTokensInst;
+  }
+
+  /** Stav vlastních GIF zpráv (kolečko %, „Schvalování moderátorem“, zamítnuto) — core GifOutbox. */
+  _gifOut() {
+    if (!this._gifOutInst) {
+      const core = window.UC_CORE;
+      this._gifOutInst = new core.GifOutbox({
+        channel: () => (this.config.channel || '').toLowerCase(),
+        log: (tag, text) => this._ucLog(tag, text),
+        hasMessage: (platform, id) => this._msgEls(id, platform).length > 0,
+        // Pojistka po ztrátě SSE: stav štítku z GET /gif/held (průběh bez události 60 s, čekání po expiresAt).
+        api: (path) => this._ucApi(path),
+        serverOffset: () => this._gifCdInst?.serverOffset() || 0,
+        onChange: (keys) => this._paintGifOwn(keys),
+        onNotice: (kind, _e, d) => {
+          if (kind === 'approved_only') this._sys(core.GIF_APPROVED_ONLY_TEXT);
+          // GIF odkaz během cooldownu zůstal běžnou zprávou (test2 bod 4.1); čas ze serveru (until − serverNow).
+          else if (kind === 'cooldown') this._sys(core.gifCooldownNoticeText(Math.max(1000, Number(d?.until) - Number(d?.serverNow)) || 1000, { removed: d?.removed === true }));
+        },
+      });
+    }
+    return this._gifOutInst;
+  }
+
+  /** Závislosti štítků vlastních GIF zpráv pro core (gif-host.js applyGifOwn / paintGifOwnKeys). */
+  _gifOwnDeps() {
+    return {
+      msgEls: (id, platform) => this._msgEls(id, platform),
+      getMsg: (id) => this.store.get(id),
+      isModerated: (m) => this._isModerated(m),
+      paintDeleted: (el, m) => this._paintDeleted(el, m),
+      // Zaparkovaný uzel (mimo DOM) nechat — _dropOptimistic maže jen z okna chatu.
+      dropOptimistic: (optId, platform, el) => { if (!el.isConnected) return false; this._dropOptimistic(optId); return true; },
+      log: (tag, text) => this._ucLog(tag, text),
+    };
+  }
+
+  /** Překreslit štítky vlastních GIF zpráv s danými klíči (`platform:id`) — core paintGifOwnKeys. */
+  _paintGifOwn(keys) {
+    window.UC_CORE.paintGifOwnKeys(document, keys, this._gifOutInst, this._gifOwnDeps());
+  }
+
+  /** Štítek vlastní GIF zprávy v nově vykresleném uzlu (core applyGifOwn). */
+  _applyGifOwn(el, msg) {
+    if (!el) return;
+    const out = this._gifOutInst;
+    const platform = el.dataset.platform || msg?.platform;
+    window.UC_CORE.applyGifOwn(document, el, msg, { ...this._gifOwnDeps(), outbox: out, view: out?.view(platform, el.dataset.msgId) || null });
   }
 
   /** Dev mode (pamatuje se v configu): nástroje, editace jména; QR dono ukáže i u kanálu bez darů. */
+  /** Dev mode platí jen modovi / streamerovi (pokyn usera 2026-09-30); divák ho zapnout nemůže (řádek je schovaný). */
   _applyDevMode(on) {
+    on = on === true && !!this._canModerate;
     document.getElementById('dev-tools')?.classList.toggle('hidden', !on);
     const un = document.getElementById('input-username');
     if (un) un.readOnly = !on;
@@ -1153,13 +1360,17 @@ class UnityChat {
   }
 
   /** Volání backendu s Bearer session; chyba = throw objekt z JSON odpovědi ({error, …}). */
-  async _ucApi(path, { method = 'GET', body } = {}) {
+  async _ucApi(path, { method = 'GET', body, timeoutMs = 15000, signal } = {}) {
     const token = await this._ucSessionToken();
     const headers = { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
-    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    // `signal` = zrušení volajícím (našeptávač /user ruší starý dotaz), timeout platí vždy.
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const sig = signal && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout;
+    const r = await fetch(`${UC_API}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', signal: sig });
     let j = {};
     try { j = await r.json(); } catch {}
-    if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status };
+    // `status` = HTTP status; tělo zvlášť (`body.status` u 409 already_decided nese stav žádosti).
+    if (!r.ok || j.ok === false) throw { ...j, error: j.error || `HTTP ${r.status}`, status: r.status, body: j };
     return j;
   }
 
@@ -1169,6 +1380,7 @@ class UnityChat {
     return {
       config: () => this._ucApi(`/donate/config?channel=${encodeURIComponent(channel())}`),
       testToken: (token) => this._ucApi('/donate/test-token', { method: 'POST', body: { channel: channel(), token } }),
+      modTest: () => this._ucApi(`/donate/mod-test?channel=${encodeURIComponent(channel())}`),
       createIntent: (b) => this._ucApi('/donate/intents', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform } }),
       intentStatus: (id) => this._ucApi(`/donate/intents/${encodeURIComponent(id)}`),
       profile: () => this._ucApi('/account/profile'),
@@ -1204,37 +1416,75 @@ class UnityChat {
     if (slot && core.createEmailSettings) {
       this._emailSettings = core.createEmailSettings({ container: slot, api, onChange: () => this._qd?.refreshIdentity?.(), log: (tag, text) => this._ucLog(tag, text) });
     }
-    // Tlačítka podle šířky pole pro psaní: pod 330 px QR, pod 310 px i nota, pod 290 px i smajlík
-    // do řádku nad polem (pokyn usera 2026-09-25).
-    const row = document.getElementById('tw-credits');
-    if (row && core.createToolDock) {
+    // Ikony v poli pro psaní (spec 2026-09-27 §3): QR, nota i smajlík vždy v poli (řádek s ikonami navíc zmizel,
+    // řádek bodů/bitů Twitche zůstává). QR ustoupí psaní — pod 330 px šířky pole, když je v něm text (dotyk: při fokusu).
+    const wrap = document.querySelector('#input-area .msg-input-wrap');
+    if (wrap && core.createToolDock) {
       this._qdDock = core.createToolDock({
-        row,
-        inlineParent: document.querySelector('#input-area .msg-input-wrap'),
+        inlineParent: wrap,
+        input: document.getElementById('msg-input'),
         items: [
           { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
-          { button: document.getElementById('btn-sfx'), minWidth: 310 },
-          { button: document.getElementById('btn-emotes'), minWidth: 290 },
+          // Nota jen s odemčenou odměnou soundboardu (core NOTE_MODES → třída uc-sb-na): sbalí se / objeví jako QR.
+          { button: document.getElementById('btn-sfx'), collapse: () => document.getElementById('btn-sfx').classList.contains('uc-sb-na') },
+          { button: document.getElementById('btn-emotes') },
         ],
-        rowHasOther: () => !document.body.classList.contains('uc-no-twitch-login')
-          && [...row.querySelectorAll('.tc-pill')].some((p) => !p.classList.contains('hidden')),
       });
-      // Pill bodů/bitů se objeví nebo zmizí → řádek otevřít/zavřít.
-      new MutationObserver(() => this._qdDock.update()).observe(row, { subtree: true, attributes: true, attributeFilter: ['class'] });
       this._updateQrAvailability();
     }
     this._ucLog('QrDono', 'zapnuto');
     this._refreshDonoAvailability();
   }
 
-  /** Soundboard sound efektů (sdílený core/soundboard.js): tlačítko s notou v poli pro psaní. */
-  _initSoundboard() {
+  /**
+   * API návrhů zvuků (backend /soundboard/requests*, proxy na Židolištu). Identitu a roli
+   * ověří server z přihlášení; klient posílá jen kanál a platformu, za kterou navrhuje.
+   */
+  _sfxRequestApi() {
+    const channel = () => (this.config.channel || '').toLowerCase();
+    const log = (text) => this._ucLog('SfxReq', text);
+    // Bez vybrané platformy (nepřihlášený / bez identity) server nemá za koho návrh poslat.
+    const needPlatform = () => { if (!this.activePlatform) { log('bez aktivní platformy'); throw { error: 'no_platform' }; } };
+    return {
+      // Stažení a převod zvuku na serveru Židolišty může trvat desítky sekund (YouTube).
+      prepare: async (url) => {
+        needPlatform();
+        const r = await this._ucApi('/soundboard/requests/prepare', { method: 'POST', body: { channel: channel(), platform: this.activePlatform, url }, timeoutMs: 130000 })
+          .catch((e) => { log(`prepare → ${e.status || ''} ${e.error}`); throw e; });
+        log(`prepare → ${r.mode} ${r.source} ${r.durationMs ?? '?'} ms`);
+        return r;
+      },
+      submit: async (b) => {
+        needPlatform();
+        const r = await this._ucApi('/soundboard/requests', { method: 'POST', body: { ...b, channel: channel(), platform: this.activePlatform }, timeoutMs: 70000 })
+          .catch((e) => { log(`submit → ${e.status || ''} ${e.error}`); throw e; });
+        log(`submit → id=${r.requestId}`);
+        return r;
+      },
+      list: () => this._ucApi(`/soundboard/requests?channel=${encodeURIComponent(channel())}`),
+    };
+  }
+
+  /**
+   * Soundboard sound efektů (sdílený core/soundboard.js) = záložka SFX v panelu emotů; nota v poli ji otevírá a je vidět
+   * jen s odemčenou odměnou. Volá ho panel emotů při připojení záložky (mount) → vrací { show, hide }.
+   */
+  _initSoundboard(pane, tab) {
     const core = window.UC_CORE;
     const btn = document.getElementById('btn-sfx');
-    if (!btn || !core?.createSoundboard) return;
+    if (!btn || !core?.createSoundboard) return {};
     this._sfx = core.createSoundboard({
       host: document.getElementById('input-area'),
+      pane,
       button: btn,
+      embed: {
+        open: () => this._emotePicker?.open('sfx'),
+        close: () => this._emotePicker?.close(),
+        isShown: () => !!this._emotePicker?.isOpen() && this._emotePicker.activeTab() === 'sfx',
+        frame: () => this._emotePicker?.panel,
+      },
+      onIndicator: (v) => tab.setIndicator(v),
+      onTabHidden: (hidden) => tab.setHidden(hidden),
       // Klik na zvuk = `!se <jméno>` vlastním účtem diváka, stejnou cestou jako psaní (command → bez markeru).
       onSend: (s) => this._sendMessage({ text: `!se ${s.name}` }),
       onFavorite: async (soundId, on) => {
@@ -1253,11 +1503,14 @@ class UnityChat {
         else this._openLoginModal();
       },
       volume: {
-        load: () => { try { return Number(localStorage.getItem('uc_sfx_volume') ?? 0.6); } catch { return 0.6; } },
+        load: () => { try { return localStorage.getItem('uc_sfx_volume'); } catch { return null; } },   // null → výchozí (core SFX_DEFAULT_VOLUME)
         save: (v) => { try { localStorage.setItem('uc_sfx_volume', String(v)); } catch {} },
       },
       log: (tag, text) => this._ucLog(tag, text),
+      // Tlačítko „Navrhnout zvuk“ vedle hledání (core/sfx-request.js).
+      requestApi: this._sfxRequestApi(),
     });
+    return this._sfx;
   }
 
   /** Stav soundboardu pro aktivní platformu + kanál (GET /soundboard, Bearer volitelně). */
@@ -1356,8 +1609,20 @@ class UnityChat {
       if (type === 'soundboard-change') { clearTimeout(this._sfxRefetchTimer); this._sfxRefetchTimer = setTimeout(() => this._loadSoundboard(), Math.random() * 3000); }
       else this._sfx?.onSse(type, d);
     };
+    this.nicknames.onSfxRequest = (d) => {
+      if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
+      this._ucLog('SfxReq', `SSE ${d?.requestId} → ${d?.status}`);
+      this._sfx?.onSfxRequest(d);
+    };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
+    this.nicknames.onDonorMark = (d) => this._applyDonorMark(d);
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
+    this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
+    this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
+    this.nicknames.onGifMessage = (d) => this._onGifMessage(d);
+    this.nicknames.onGifMedia = (d) => this._onGifMedia(d);
+    // Bez účtu stav odměny nemá smysl (GifCooldown.enabled) — instanci nezakládat zbytečně.
+    this.nicknames.onGifAccessChange = (d) => { if (this._account) this._gifCd().onAccessChange(d); };
     // Všichni diváci naráz → rozprostřít 0–2 s (backend se ptá Židolišty z jedné IP).
     this.nicknames.onDonateConfigChange = (d) => {
       if (d?.channel && d.channel !== (this.config.channel || '').toLowerCase()) return;
@@ -1367,6 +1632,10 @@ class UnityChat {
       this._ucLog('QrDono', 'donate-config-change → reload');
     };   // id zprávy je jednoznačné, kanál netřeba
     this.nicknames.onBlacklistChange = (d) => { if (!d?.channel || d.channel === (this.config.channel || '').toLowerCase()) this._loadBlacklist().catch(() => {}); };
+    this.nicknames.onChannelPrefs = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._applyChannelPrefs(d.prefs, 'sse'); };
+    this._initSettingsTabs();
+    this._initDonorBadgePicker();
+    this._loadChannelPrefs();
     this.nicknames.onLoad = () => {
       if (this.config.username) {
         for (const p of ['twitch', 'youtube', 'kick']) {
@@ -1460,8 +1729,17 @@ class UnityChat {
     // pin cards entirely. FETCH_PINS pulls pinned messages straight from
     // the server — works regardless of chat UI visibility.
     this._startPinPoll();
+    this._annivStart();
     try { const r = await chrome.storage.local.get('uc_send_platform'); if (['twitch', 'kick', 'youtube'].includes(r.uc_send_platform)) this._sendPlatform = r.uc_send_platform; } catch {}
+    // Uložené filtry platforem (klik na TW / YT / KI) — jinak vše zapnuté.
+    try {
+      const r = await chrome.storage.local.get('uc_filters');
+      const f = r.uc_filters;
+      if (f && typeof f === 'object') { for (const p of ['twitch', 'youtube', 'kick']) if (typeof f[p] === 'boolean') this.filters[p] = f[p]; this._applyFilters(); }
+    } catch { /* ignore */ }
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
+    // Broadcast (mod / streamer) si pamatuje zvlášť — platí, jen dokud je role a aspoň dvě přihlášené platformy.
+    try { this._broadcast = (await chrome.storage.local.get('uc_send_broadcast')).uc_send_broadcast === true; } catch {}
     if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
     this._refreshAccount();
     this._bootMark('_init done');
@@ -1470,10 +1748,31 @@ class UnityChat {
   }
 
 
+  /**
+   * Nová verze addonu (pokyn usera 2026-09-27): background zachytí stažení z obchodu (runtime.onUpdateAvailable,
+   * stav v storage.session) → tlačítko obnovení svítí s textem „Aktualizuj addon!“. Kontrola v obchodě při otevření
+   * panelu a pak každou hodinu (requestUpdateCheck v backgroundu; Chrome ji sám omezuje).
+   */
+  _initUpdateNotice() {
+    chrome.storage.session?.get('uc_update_ready').then((r) => { if (r?.uc_update_ready) this._markUpdateReady(r.uc_update_ready); }).catch(() => {});
+    const check = () => { try { chrome.runtime.sendMessage({ type: 'CHECK_UPDATE' }).then((r) => { if (r?.status === 'update_available') this._markUpdateReady(r.version); }).catch(() => {}); } catch {} };
+    setTimeout(check, 5000);
+    setInterval(check, 60 * 60 * 1000);
+  }
+
+  _markUpdateReady(version) {
+    this._updateReady = true;
+    if (window.UC_CORE.markUpdateReady(document.getElementById('btn-reconnect'), 'addon')) {
+      this._ucLog('Update', `nová verze ${typeof version === 'string' ? version : ''} připravená — tlačítko obnovení svítí`);
+    }
+  }
+
   // Background broadcasts for panel-wide state.
   _wireBackgroundUpdateListener() {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
+      if (msg?.type === 'UC_UPDATE_READY') {
+        this._markUpdateReady(msg.version);
+      } else if (msg?.type === 'TW_REDEEM_DOM' && msg.data) {
         this._handleDomRedeem(msg.data);
       } else if (msg?.type === 'TW_HIGHLIGHTS') {
         this._handleHighlights(msg);
@@ -1495,6 +1794,9 @@ class UnityChat {
       const s = await chrome.storage.sync.get('uc_config');
       if (s.uc_config) this.config = { ...DEFAULTS, ...s.uc_config };
     } catch {}
+    // Uložené 'label' bez ruční volby = starý výchozí → „Zašedlé“ (review kola 4 I1).
+    const mig = window.UC_CORE?.migrateDeletedStyle?.(this.config);
+    if (mig && mig !== this.config) { this._ucLog?.('Mod', `styl smazaných ${this.config.deletedStyle ?? '—'} → ${mig.deletedStyle} (migrace, bez ruční volby)`); this.config = mig; }
   }
 
   async _saveConfig() {
@@ -1552,6 +1854,20 @@ class UnityChat {
         this._applyReplyOneLine();
       });
     }
+    // Vzhled smazaných zpráv (core/moderation.js) — změna se hned promítne do vykreslených zpráv
+    const delSel = $('input-deleted-style');
+    if (delSel) {
+      // Jen 3 volby pro moda (MOD_DELETED_STYLES); uložené 'hide' se ukáže jako „Zpráva smazána“.
+      const styles = (window.UC_CORE?.MOD_DELETED_STYLES || []).map((o) => o.id);
+      delSel.value = styles.includes(this.config.deletedStyle) ? this.config.deletedStyle : 'label';
+      delSel.addEventListener('change', () => {
+        this.config.deletedStyle = delSel.value;
+        this.config.deletedStyleChosen = true;   // jen ruční změna selectu (migrace ji pak respektuje)
+        this._saveConfig();
+        this._reapplyDeleted();
+        this._ucLog('Mod', `styl smazaných → ${delSel.value}`);
+      });
+    }
     // Po animaci reakce zpět na konec chatu
     const rsbBox = $('chk-reaction-scrollback');
     if (rsbBox) {
@@ -1559,6 +1875,43 @@ class UnityChat {
       rsbBox.addEventListener('change', () => {
         this.config.reactionScrollBack = rsbBox.checked;
         this._saveConfig();
+      });
+    }
+    // Našeptávání emotů po „:jméno" (jako Twitch), bez nutnosti mačkat Tab
+    const colonBox = $('chk-ac-colon');
+    if (colonBox) {
+      colonBox.checked = this.config.acColon === true;
+      colonBox.addEventListener('change', () => {
+        this.config.acColon = colonBox.checked;
+        this._saveConfig();
+      });
+    }
+    // Oznámení prohlížeče na @zmínky a odpovědi (opt-in). Oprávnění „notifications" je
+    // v manifestu, ale uživatel je může v prohlížeči/systému zakázat → pak nejde zapnout.
+    const notifyBox = $('chk-mention-notify');
+    const notifyNote = $('mention-notify-note');
+    if (notifyBox) {
+      const showNote = (text) => {
+        if (!notifyNote) return;
+        notifyNote.textContent = text || '';
+        notifyNote.classList.toggle('hidden', !text);
+      };
+      notifyBox.checked = this.config.mentionNotify === true;
+      notifyBox.addEventListener('change', async () => {
+        showNote('');
+        if (notifyBox.checked) {
+          const api = chrome.notifications;
+          let level = 'granted';
+          try { level = api?.getPermissionLevel ? await api.getPermissionLevel() : (api?.create ? 'granted' : 'denied'); } catch { level = api?.create ? 'granted' : 'denied'; }
+          if (level !== 'granted') {
+            notifyBox.checked = false;
+            showNote('Oznámení jsou pro UnityChat v prohlížeči zakázaná. Povol je v nastavení prohlížeče a zkus to znovu.');
+            this._ucLog('Notify', `permission ${level}`);
+          }
+        }
+        this.config.mentionNotify = notifyBox.checked;
+        this._saveConfig();
+        if (!notifyBox.checked) this._mentionNotifier?.reset();
       });
     }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
@@ -1572,8 +1925,11 @@ class UnityChat {
       });
     }
     // Auto-resize textarea + auto @username suggest
+    // GIF odkaz v poli + běžící cooldown odměny → bublina nad polem (core/gif-cooldown.js).
+    this.msgInput.addEventListener('paste', () => setTimeout(() => this._gifCd().onInput(this.msgInput.value), 0));
     this.msgInput.addEventListener('input', () => {
       this._autoResizeInput();
+      this._gifCd().onInput(this.msgInput.value);
 
       // Auto-trigger @username autocomplete while typing
       const text = this.msgInput.value;
@@ -1582,7 +1938,16 @@ class UnityChat {
       let ws = pos;
       while (ws > 0 && text[ws - 1] !== ' ') ws--;
       const partial = text.substring(ws, pos);
-      if (partial.startsWith('@') && partial.length >= 2) {
+      // `/user <jméno>` (jen mod): našeptávač všech uživatelů kanálu (archiv serveru), výběr = Profil.
+      const userCmd = this._canModerate ? window.UC_CORE.parseUserCommand(text) : null;
+      if (userCmd) {
+        if (userCmd.query) this._userSearch().query(userCmd.query, this.config.acUserFulltext === true);
+        else { this._userSearchInst?.cancel(); this._acHide(); }
+      } else if (this._canModerate && text.length >= 2 && !text.includes(' ') && '/user'.startsWith(text.toLowerCase())) {
+        // Napovědět příkaz `/user` (jen modům): Tab doplní „/user “.
+        this._ac = { start: 0, end: pos, index: 0, matches: ['/user'], _type: 'usercmd' };
+        this._acRender();
+      } else if (partial.startsWith('@') && partial.length >= 2) {
         const matches = this._acUserMatches(partial.substring(1).toLowerCase());
         if (matches.length) {
           this._ac = { start: ws, end: pos, index: 0, matches };
@@ -1605,6 +1970,17 @@ class UnityChat {
         } else {
           this._acHide();
         }
+      } else if (this.config.acColon === true && partial.startsWith(':')) {
+        // Twitch-style „:jméno" spouštěč — bez Tabu (core/colon-emotes.js
+        // hlídá, že dvojtečka je na začátku slova, ne uprostřed URL/času).
+        const cq = window.UC_CORE.colonQuery(text, pos);
+        const matches = cq ? this.emotes.findCompletions(cq.query, { fulltext: this.config.acFulltext === true }) : [];
+        if (cq && matches.length) {
+          this._ac = { start: cq.start, end: pos, index: 0, matches, kind: 'emote', prefix: cq.query, trigger: 'colon' };
+          this._acRender();
+        } else {
+          this._acHide();
+        }
       } else if (text === '/uc' || (text.startsWith('/uc ') && ws <= 4)) {
         // /uc subcommand autocomplete — shows the full list as soon as
         // the user finishes typing "/uc" (before the space) and filters
@@ -1615,7 +1991,7 @@ class UnityChat {
           'sub', 'resub', 'prime', 'sub2', 'sub3',
           'subgift', 'giftbundle',
           'command', 'redeem', 'highlight', 'annc',
-          'milestone', 'streak',
+          'milestone', 'streak', 'modiversary', 'modiv', 'anniv',
           'timeout', 'ban', 'delete',
           'claim', 'points10', 'points50',
           'raidbanner',
@@ -1631,7 +2007,7 @@ class UnityChat {
         }
       } else if (!partial.startsWith('@') && !partial.startsWith('!')) {
         // Not typing @ or !, clear any open suggest (emote suggest is Tab-only)
-        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc')) this._acHide();
+        if (this._ac && (this._ac.matches[0]?.startsWith('@') || this._ac.matches[0]?.startsWith('!') || this._ac._type === 'uc' || this._ac._type === 'usercmd' || this._ac.kind === 'userSearch')) this._acHide();
       }
     });
 
@@ -1683,8 +2059,17 @@ class UnityChat {
       this._applyBarCollapsed(this.config.barCollapsed);
     });
     $('btn-settings').addEventListener('click', () => {
-      const opening = $('settings').classList.toggle('hidden') === false;
-      if (opening) this._refreshAccount();
+      // Otevření / zavření panelu v toku plynule (core morphResize: vyroste z výšky 0 / sjede do ní), jako panely u pole.
+      const el = $('settings');
+      const core = window.UC_CORE;
+      const opening = el.classList.contains('hidden') || core.isMorphGhost(el);
+      if (opening) {
+        core.morphResize(el, () => el.classList.remove('hidden'), { log: (t) => this._ucLog('Settings', t) });
+        this._settingsTabsUpdate?.();   // indikátor záložek se v zavřeném panelu nezměří
+        this._refreshAccount();
+      } else {
+        core.morphResize(el, () => el.classList.add('hidden'), { collapse: true, log: (t) => this._ucLog('Settings', t) });
+      }
     });
     // Pole pro psaní (jako web): badge + šipka → menu „Psát jako", bez přihlášení výzva.
     $('platform-btn').addEventListener('click', (e) => { e.stopPropagation(); this._togglePlatformMenu(); });
@@ -1746,6 +2131,10 @@ class UnityChat {
         }
         if (result.ok) saved++;
         else if (result.retryAfter) lastError = `Počkej ${Math.ceil(result.retryAfter)}s`;
+        // Server bere změnu jen od přihlášeného majitele (platforma bez přihlášení → přeskočit tiše).
+        else if (result.error === 'not_owner') continue;
+        else if (/session/i.test(String(result.error))) lastError = 'Pro změnu přezdívky se přihlas';
+        else if (result.error === 'nickname_reserved') lastError = 'Tohle jméno patří streamerovi nebo UnityChatu, nejde si ho dát jako přezdívku.';
         else lastError = result.error;
       }
 
@@ -1793,7 +2182,11 @@ class UnityChat {
 
     // Reload ikona v hlavičce = dřívější „Připojit": uloží kanály z inputů
     // a znovu připojí vše. „Odpojit" a „Vyčistit chat" zrušeny (v3.38.72).
+    // Stažená nová verze (tlačítko svítí, core/update-notice.js) → klik ji nainstaluje (restart rozšíření).
+    this._initUpdateNotice();
     $('btn-reconnect').addEventListener('click', () => {
+      if (this._updateReady) { this._ucLog('Update', 'instaluji novou verzi (runtime.reload)'); chrome.runtime.reload(); return; }
+      this._closeUserHistory('reconnect');
       this.config.channel = $('input-channel').value.trim();
       this.config.kickChannel = $('input-kick-channel').value.trim();
       this.config.ytChannel = $('input-yt-channel').value.trim();
@@ -1887,12 +2280,28 @@ class UnityChat {
         const p = btn.dataset.platform;
         this.filters[p] = !this.filters[p];
         this._applyFilters();
+        // Filtry přežijí obnovení panelu (pokyn usera 2026-09-30).
+        try { chrome.storage.local.set({ uc_filters: { ...this.filters } }); } catch { /* ignore */ }
       });
     });
 
     // Odesílání zpráv + Tab autocomplete
     this._ac = null;
     this.msgInput.addEventListener('keydown', (e) => {
+      // `/user` našeptávač (mod): ↑/↓ a Shift+Tab posouvají výběr, Tab / Enter / → otevře Profil vybraného.
+      if (this._ac?.kind === 'userSearch') {
+        const n = this._ac.users.length;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
+          e.preventDefault();
+          if (n) { this._ac.index = (this._ac.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n; this._acRender(); }
+          return;
+        }
+        if ((e.key === 'Tab' || e.key === 'Enter' || e.key === 'ArrowRight') && !e.shiftKey) {
+          e.preventDefault();
+          if (n) this._acPickUser(this._ac.index);
+          return;
+        }
+      }
       // Tab / Shift+Tab - cykluje seznamem
       if (e.key === 'Tab') {
         e.preventDefault();
@@ -1900,38 +2309,28 @@ class UnityChat {
         return;
       }
       // Šipky během aktivního autocomplete
-      if (this._ac && this._ac.matches.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          this._acTab(1);
-          return;
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          this._acTab(-1);
-          return;
-        }
-        if (e.key === 'ArrowRight') {
-          // Potvrdit výběr — kurzor je už za doplněným textem, jen zavřít
-          // suggest list.
-          e.preventDefault();
-          this._acHide();
-          return;
-        }
-        if (e.key === 'Enter') {
-          // Enter potvrdí JEN pro @username autocomplete (chat-app pattern).
-          // Pro emote / !cmd / /uc autocomplete propadne dolů na _sendMessage
-          // (původní funkcionalita — Tab/ArrowRight už emote vložilo,
-          // Enter logicky odešle zprávu).
-          const isUserAc = this._ac.kind === 'user'
-            || this._ac.matches[0]?.startsWith?.('@');
-          if (isUserAc) {
-            e.preventDefault();
-            this._acHide();
-            return;
-          }
-          // Fall through — emote/cmd autocomplete: Enter sends message
-        }
+      // ↓/↑ cyklují, → potvrdí (kurzor je už za doplněným textem, jen zavřít).
+      // Enter potvrdí JEN pro @username autocomplete (chat-app pattern) a pro
+      // „:jméno" emote seznam / `/user` nápovědu (jako na Twitchi — Enter vloží
+      // zvýrazněnou položku místo odeslání zprávy). Pro Tab-triggered emote /
+      // !cmd / /uc propadne dolů na _sendMessage (Tab už emote vložil).
+      // Rozhodnutí sdílí pole výročí (core/emote-autocomplete.js acKeyAction).
+      const acAct = window.UC_CORE.acKeyAction(this._ac, e.key);
+      if (acAct === 'next' || acAct === 'prev') {
+        e.preventDefault();
+        this._acTab(acAct === 'next' ? 1 : -1);
+        return;
+      }
+      if (acAct === 'close') {
+        e.preventDefault();
+        this._acHide();
+        return;
+      }
+      if (acAct === 'apply-close') {
+        e.preventDefault();
+        this._acApply();
+        this._acHide();
+        return;
       }
       // Message history (ArrowUp/Down). Multi-line draft / history zpráva:
       // šipka prvně posouvá kurzor v textu, teprve při dosažení okraje
@@ -1974,7 +2373,7 @@ class UnityChat {
         return;
       }
       if (e.key === 'Escape') {
-        if (this._ac) { this._acHide(); return; }
+        if (this._ac) { if (this._ac.kind === 'userSearch') this._userSearchInst?.cancel(); this._acHide(); return; }
         if (this._reply) { this._clearReply(); return; }
         return;
       }
@@ -1989,6 +2388,7 @@ class UnityChat {
       }
     });
     this.sendBtn.addEventListener('click', () => this._sendMessage());
+    this.msgInput.closest('.msg-input-wrap')?.addEventListener('mousedown', () => { if (this._warnings?.blocked) this._warnings.open(); });
 
     this._updateDisabled();
   }
@@ -2032,41 +2432,18 @@ class UnityChat {
 
   // ---- Emote Tab autocomplete (suggest list) ----
 
+  // Stav, cyklování a vložení sdílí core/emote-autocomplete.js (i pole výročí); tady jen zdroje hlavního pole.
   _acTab(dir) {
     const input = this.msgInput;
-    const text = input.value;
-    const pos = input.selectionStart;
-
-    // Cycling - opakovaný Tab / Shift+Tab
-    if (this._ac && this._ac.end === pos) {
-      if (!this._ac.applied) {
-        // First TAB after input-triggered suggest → confirm current selection
-        this._acApply();
-        return;
-      }
-      const len = this._ac.matches.length;
-      this._ac.index = (this._ac.index + dir + len) % len;
-      this._acApply();
-      return;
-    }
-
-    // Nový autocomplete
-    let ws = pos;
-    while (ws > 0 && text[ws - 1] !== ' ') ws--;
-    const partial = text.substring(ws, pos);
-    if (!partial) return;
-
-    let matches;
-    if (partial.startsWith('@')) {
+    // Opakovaný Tab / Shift+Tab cykluje (první Tab po seznamu otevřeném psaním jen potvrdí výběr), jinak nový dotaz.
+    const next = window.UC_CORE.acTabStep(this._ac, input.value, input.selectionStart, dir, (partial) => (partial.startsWith('@')
       // @username autocomplete (@ samotné = všichni uživatelé)
-      matches = this._acUserMatches(partial.substring(1).toLowerCase());
-    } else {
+      ? { matches: this._acUserMatches(partial.substring(1).toLowerCase()), kind: 'user' }
       // Emote autocomplete — honors the per-session "Fulltext" toggle
-      matches = this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true });
-    }
-    if (!matches.length) { this._acHide(); return; }
-
-    this._ac = { start: ws, end: pos, index: 0, matches, prefix: partial, kind: partial.startsWith('@') ? 'user' : 'emote' };
+      : { matches: this.emotes.findCompletions(partial, { fulltext: this.config.acFulltext === true }), kind: 'emote' }));
+    if (next === undefined) return;
+    if (!next) { this._acHide(); return; }
+    this._ac = next;
     this._acApply();
   }
 
@@ -2087,15 +2464,7 @@ class UnityChat {
   _acApply() {
     const ac = this._ac;
     if (!ac) return;
-    const match = ac.matches[ac.index];
-    const input = this.msgInput;
-    const text = input.value;
-    const before = text.substring(0, ac.start);
-    const after = text.substring(ac.end);
-    input.value = before + match + ' ' + after;
-    ac.end = ac.start + match.length + 1;
-    ac.applied = true;
-    input.setSelectionRange(ac.end, ac.end);
+    window.UC_CORE.acApplyMatch(this.msgInput, ac);
     this._acRender();
   }
 
@@ -2136,19 +2505,13 @@ class UnityChat {
   /** Zjistí zdroj emotu pro zobrazení tagu. */
   _acSource(name) {
     if (name.startsWith('/uc ')) return 'UC';
+    if (name === '/user') return 'Profil';
     if (name.startsWith('!')) return this._bangSources(name).join(' · ') || 'SE';
     if (name.startsWith('@')) {
       const u = this._acUserEntry(name);
       return u ? u.platform.charAt(0).toUpperCase() + u.platform.slice(1) : '';
     }
-    if (this.emotes.channel7tv.has(name)) return '7TV';
-    if (this.emotes.global7tv.has(name)) return '7TV';
-    if (this.emotes.bttvEmotes.has(name)) return 'BTTV';
-    if (this.emotes.ffzEmotes.has(name)) return 'FFZ';
-    if (this.emotes.twitchNative.has(name)) return 'Twitch';
-    if (this.emotes.kickNative.has(name)) return 'Kick';
-    if (this.emotes.ucEmotes.has(name)) return 'UChat';
-    return '';
+    return window.UC_CORE.emoteSourceLabel(this.emotes, name);
   }
 
   _acRender() {
@@ -2162,63 +2525,67 @@ class UnityChat {
       document.getElementById('input-area').appendChild(el);
     }
 
-    const VISIBLE = 4;
+    const core = window.UC_CORE;
     const total = ac.matches.length;
     const idx = ac.index;
 
-    // Okno kolem vybraného (posun aby vybraný byl vidět)
-    let winStart = ac._winStart || 0;
-    if (idx < winStart) winStart = idx;
-    if (idx >= winStart + VISIBLE) winStart = idx - VISIBLE + 1;
-    winStart = Math.max(0, Math.min(winStart, total - VISIBLE));
-    ac._winStart = winStart;
-
-    const winEnd = Math.min(winStart + VISIBLE, total);
+    // Okno kolem vybraného (posun aby vybraný byl vidět) — sdílené s polem výročí (core/emote-autocomplete.js)
+    const [winStart, winEnd] = core.acWindowRange(ac);
 
     let html = '';
     // Fulltext-search toggle row (only for emote completion, not @user) —
     // when checked, future findCompletions() calls match by `includes`
     // rather than `startsWith`, so middle-of-name matches show up too.
-    if (ac.kind === 'emote') {
-      const checked = this.config.acFulltext === true ? ' checked' : '';
-      html += `<label class="es-toggle"><input type="checkbox" id="es-fulltext"${checked}>Fulltext</label>`;
+    const isUserSearch = ac.kind === 'userSearch';
+    if (ac.kind === 'emote' || isUserSearch) {
+      html += core.fulltextToggleHtml((isUserSearch ? this.config.acUserFulltext : this.config.acFulltext) === true);
     }
     for (let i = winStart; i < winEnd; i++) {
       const name = ac.matches[i];
       const sel = i === idx ? ' selected' : '';
-      html += `<div class="es-item${sel}" data-idx="${i}">`;
+      let icon = '';
 
-      if (name.startsWith('!')) {
+      if (isUserSearch) {
+        // `/user`: tečka v barvě jména, logo platformy, přezdívka + šedě login (core userSearchItemHtml)
+        html += `<div class="es-item es-user${sel}" data-idx="${i}">`;
+        html += core.userSearchItemHtml(ac.users[i], {
+          esc: (t) => this.emotes._eh(t),
+          escAttr: (t) => this.emotes._ea(t),
+          platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
+          color: (h) => this.emotes._sc(this.nicknames?.getColor(h.platform, h.login) || h.color),
+        });
+        html += '</div>';
+        continue;
+      } else if (name === '/user') {
+        icon = `<span class="es-dot" style="background:#ff8c00"></span>`;
+      } else if (name.startsWith('!')) {
         // Chat command: loga všech zdrojů, kde spouštěč je (Židolišta první, pak StreamElements)
-        html += '<span class="es-logos">' + this._bangSources(name).map((src) => {
+        icon = '<span class="es-logos">' + this._bangSources(name).map((src) => {
           const logo = src === 'Židolišta' ? 'icons/commands/zidolista.png' : 'icons/commands/streamelements.svg';
           return `<img class="es-logo${src === 'Židolišta' ? ' es-logo-zidolista' : ''}" src="${logo}" alt="${this.emotes._ea(src)}">`;
         }).join('') + '</span>';
       } else if (name.startsWith('/uc ')) {
         // UC command: oranžová tečka
-        html += `<span class="es-dot" style="background:#ff8c00"></span>`;
+        icon = `<span class="es-dot" style="background:#ff8c00"></span>`;
       } else if (name.startsWith('@')) {
         // Username: barevná tečka
         const u = this._acUserEntry(name);
         const col = this.emotes._sc(
           this.nicknames?.getColor(u?.platform, u?.name) || u?.color
         ) || '#ccc';
-        html += `<span class="es-dot" style="background:${col}"></span>`;
+        icon = `<span class="es-dot" style="background:${col}"></span>`;
       } else {
         // Emote: obrázek
-        const url = this.emotes.getAnyUrl(name);
-        if (url) html += `<img src="${this.emotes._ea(url)}" alt="${this.emotes._ea(name)}">`;
+        icon = core.emoteIconHtml(this.emotes, name);
       }
 
-      const src = this._acSource(name);
-      html += `<span class="es-name"><span class="es-name-inner">${this.emotes._eh(name)}</span></span>`;
-      if (src) html += `<span class="es-src">${src}</span>`;
-      html += '</div>';
+      html += core.suggestRowHtml({ i, selected: i === idx, iconHtml: icon, name, src: this._acSource(name), esc: (t) => this.emotes._eh(t) });
     }
 
-    if (total > VISIBLE) {
-      html += `<div class="es-counter">${idx + 1} / ${total}</div>`;
+    if (isUserSearch && !total) {
+      html += `<div class="es-status">${ac.loading ? 'Hledám…' : ac.error ? 'Hledání se nepovedlo.' : 'Nikdo takový v tomhle kanálu nepsal.'}</div>`;
     }
+    html += core.suggestCounterHtml(idx, total);
 
     const logosBefore = this._acAnimateLogos ? this._acSnapshotLogos(el) : null;
     el.innerHTML = html;
@@ -2227,37 +2594,22 @@ class UnityChat {
 
     // Wire fulltext checkbox — toggles persistent flag and re-runs the
     // current search, so the panel refilters live without retyping.
-    const ftBox = el.querySelector('#es-fulltext');
-    if (ftBox) {
-      ftBox.addEventListener('change', (e) => {
-        e.stopPropagation();
-        this.config.acFulltext = ftBox.checked;
-        this._saveConfig();
-        this._acRefilter();
-        this.msgInput.focus();
-      });
-      // Don't let mousedown on the label steal focus from the textarea.
-      const lbl = el.querySelector('.es-toggle');
-      if (lbl) lbl.addEventListener('mousedown', (e) => e.preventDefault());
-    }
+    // (Mousedown na labelu nebere fokus textarea.)
+    core.wireFulltextToggle(el, (checked) => {
+      if (isUserSearch) this.config.acUserFulltext = checked;
+      else this.config.acFulltext = checked;
+      this._saveConfig();
+      if (isUserSearch) this._userSearchRequery();
+      else this._acRefilter();
+      this.msgInput.focus();
+    });
 
-    // Detekce overflow + nastavení CSS variable pro scroll animaci
-    el.querySelectorAll('.es-item').forEach((item) => {
-      const outer = item.querySelector('.es-name');
-      const inner = item.querySelector('.es-name-inner');
-      if (outer && inner) {
-        const overflow = inner.scrollWidth - outer.clientWidth;
-        if (overflow > 0) {
-          item.classList.add('overflowing');
-          item.style.setProperty('--scroll-dist', `-${overflow + 8}px`);
-        }
-      }
-      item.addEventListener('click', () => {
-        const i = parseInt(item.dataset.idx, 10);
-        this._ac.index = i;
-        this._acApply();
-        this.msgInput.focus();
-      });
+    // Detekce overflow (CSS --scroll-dist pro animaci vybrané položky) + klik = výběr
+    core.wireSuggestRows(el, (i) => {
+      if (this._ac?.kind === 'userSearch') { this._acPickUser(i); return; }
+      this._ac.index = i;
+      this._acApply();
+      this.msgInput.focus();
     });
   }
 
@@ -2294,6 +2646,78 @@ class UnityChat {
     this._ac = null;
     const el = document.getElementById('emote-suggest');
     if (el) el.classList.add('hidden');
+  }
+
+  // ---- `/user <jméno>` (mod): našeptávač uživatelů kanálu → Profil (core/user-search.js) ----
+
+  _userSearch() {
+    if (!this._userSearchInst) {
+      this._userSearchInst = new window.UC_CORE.UserSearch({
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        local: (q, fulltext) => window.UC_CORE.localUserHits(this._sessionUsers(), q, {
+          fulltext,
+          nickname: (p, login) => this.nicknames?.getNickname(p, login) || null,
+        }),
+        onResults: (st) => this._onUserSearchResults(st),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._userSearchInst;
+  }
+
+  /** Uživatelé, kteří v této session psali (_chatUsers drží každého i pod `platform:login`). */
+  _sessionUsers() {
+    const out = [];
+    for (const [key, u] of this._chatUsers) {
+      const i = key.indexOf(':');
+      if (i <= 0 || !u?.platform) continue;
+      out.push({ platform: u.platform, login: key.slice(i + 1), displayName: (u.name || '').replace(/^@/, ''), userId: u.userId || null, color: u.color || null });
+    }
+    return out;
+  }
+
+  /** Výsledky hledání (lokální hned, server po debounce) → seznam; výběr zůstává na stejném uživateli. */
+  _onUserSearchResults(st) {
+    const core = window.UC_CORE;
+    const cmd = this._canModerate ? core.parseUserCommand(this.msgInput.value) : null;
+    // Pole se mezitím změnilo (jiný text, odesláno, Esc) → pozdní odpověď nic neotevře.
+    if (!cmd || core.foldName(cmd.query) !== core.foldName(st.query)) return;
+    const prev = this._ac?.kind === 'userSearch' ? this._ac : null;
+    const sel = prev?.users[prev.index];
+    const keys = st.users.map((u) => `${u.platform}:${u.login}`);
+    const keep = sel ? keys.indexOf(`${sel.platform}:${sel.login}`) : -1;
+    this._ac = {
+      start: 0, end: this.msgInput.value.length, index: keep >= 0 ? keep : 0,
+      matches: keys, users: st.users, kind: 'userSearch', loading: !!st.loading, error: !!st.error, _winStart: prev?._winStart || 0,
+    };
+    this._acRender();
+  }
+
+  _userSearchRequery() {
+    const cmd = this._canModerate ? window.UC_CORE.parseUserCommand(this.msgInput.value) : null;
+    if (cmd?.query) this._userSearch().query(cmd.query, this.config.acUserFulltext === true);
+    this.msgInput.focus();
+  }
+
+  /** Výběr v `/user` našeptávači: pole se vyprázdní, nic se neodesílá, otevře se Profil. */
+  _acPickUser(i) {
+    const u = this._ac?.users?.[i];
+    if (!u) return;
+    this._userSearchInst?.cancel();
+    this._acHide();
+    this.msgInput.value = '';
+    this._autoResizeInput();
+    this._ucLog('Profile', `/user → ${u.platform}:${u.userId || '?'} ${u.login}`);
+    if (u.platform === 'twitch' && u.userId) this._enqueue7tvPaintLookup(u.userId, u.login);
+    this._userHistory().open({
+      channel: (this.config.channel || '').toLowerCase(),
+      platform: u.platform,
+      userId: u.userId || null,
+      login: u.login,
+      displayName: u.displayName || u.login,
+      nameColor: this.nicknames?.getColor(u.platform, u.login) || u.color || null,
+    });
   }
 
   // ---- Cursor line detection ----
@@ -2355,6 +2779,8 @@ class UnityChat {
     const h = Math.min(this.msgInput.scrollHeight, max);
     this.msgInput.style.height = h + 'px';
     this.msgInput.style.overflowY = this.msgInput.scrollHeight > max ? 'auto' : 'hidden';
+    // Text se změnil z kódu → QR ikona ustoupí / vrátí se (core/tool-dock.js).
+    this._qdDock?.update();
   }
 
   _isCursorOnLastLine() {
@@ -2770,6 +3196,7 @@ class UnityChat {
     this._loadSoundboard();
     this._loadBlacklist().catch(() => {});
     this._refreshDonoAvailability();
+    this._loadModState();   // mod na novém kanálu? (tlačítko smazat)
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
     // message of the new channel hides it.
@@ -3450,7 +3877,15 @@ class UnityChat {
     // Uživatel mimo UnityChat vidí jen svou platformu → dočasně přepnout na ni (když na ní mám účet).
     // Vrátí se po odeslání nebo zrušení odpovědi; ruční přepnutí během odpovídání návrat ruší.
     // Původní platforma = ta před první automatickou změnou (další odpověď ji nepřepíše).
-    if (!this._legacySend()) {
+    // Broadcast: odpověď patří jednomu člověku → vždy na platformu autora (i uživatele UnityChatu),
+    // po odeslání / zrušení zase Broadcast.
+    if (!this._legacySend() && (this._isBroadcast() || this._replyPrevBroadcast)) {
+      if (!this._replyPrevBroadcast) { this._replyPrevBroadcast = true; this._replyPrevPlatform = this.activePlatform; }
+      this._broadcast = false;
+      if (platform !== this.activePlatform && this._identity(platform)) this._selectSendPlatform(platform, { quiet: true, auto: true });
+      else this._renderComposer();
+      this._ucLog('Reply', `broadcast → ${platform}:${username} (${this._identity(platform) ? 'platforma autora' : 'autor na nepřihlášené platformě, píšu na ' + this.activePlatform})`);
+    } else if (!this._legacySend()) {
       const needSwitch = !authorUc && platform !== this.activePlatform && this._identity(platform);
       if (needSwitch) {
         if (!this._replyPrevPlatform) this._replyPrevPlatform = this.activePlatform;
@@ -3491,10 +3926,13 @@ class UnityChat {
 
   _restoreReplyPlatform() {
     const prev = this._replyPrevPlatform;
-    if (!prev) return;
+    const bc = this._replyPrevBroadcast;
+    if (!prev && !bc) return;
     this._replyPrevPlatform = null;
-    if (prev !== this.activePlatform && this._identity(prev)) this._selectSendPlatform(prev, { quiet: true, auto: true });
-    this._ucLog('Reply', `platforma zpět na ${prev}`);
+    this._replyPrevBroadcast = false;
+    if (prev && prev !== this.activePlatform && this._identity(prev)) this._selectSendPlatform(prev, { quiet: true, auto: true });
+    if (bc) { this._broadcast = true; this._renderComposer(); }
+    this._ucLog('Reply', `platforma zpět na ${bc ? 'Broadcast' : prev}`);
   }
 
   // @přezdívka → @login pro odchozí text. Záměrně širší než mention regex v
@@ -3507,7 +3945,9 @@ class UnityChat {
     // Přezdívková mapa je lowercase — pro hezčí zprávu vzít původní psaní
     // loginu tak, jak dorazil z chatu, když ho známe.
     const core = window.UC_CORE;
-    return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform), (login) => this._chatUsers?.get(login)?.name || login);
+    // Stejná přezdívka u víc loginů platformy (starý handle) → přednost má login, který v chatu píše.
+    const known = (login) => !!this._chatUsers?.has(`${platform}:${login}`);
+    return core.resolveNicknameMentions(text, core.nicknameEntries(this.nicknames._map, platform, known), (login) => this._chatUsers?.get(login)?.name || login);
   }
 
   async _sendMessage(opts = {}) {
@@ -3515,6 +3955,14 @@ class UnityChat {
     const external = typeof opts.text === 'string';
     const text = (external ? opts.text : this.msgInput.value).trim();
     if (!text || !this.activePlatform) return;
+
+    // `/user <jméno>` (mod): nikdy do chatu — Enter bez otevřeného seznamu jen poradí.
+    const userCmd = !external && this._canModerate ? window.UC_CORE.parseUserCommand(text) : null;
+    if (userCmd) {
+      if (this._ac?.kind === 'userSearch' && this._ac.users.length) this._acPickUser(this._ac.index);
+      else this._sys(userCmd.query ? `/user: „${userCmd.query}“ — vyber jméno ze seznamu.` : '/user <jméno> — najde uživatele kanálu a otevře jeho Profil.');
+      return;
+    }
 
     // /uc commands — local mock messages for testing (mod/broadcaster only)
     if (!external && text.startsWith('/uc ')) {
@@ -3526,6 +3974,18 @@ class UnityChat {
 
     const legacy = this._legacySend();
     if (!legacy && !this._identity(this.activePlatform)) { this._openLoginModal(); return; }
+    if (this._warnings?.blocked) { this._ucLog('ModMenu', 'send blokováno — nepotvrzené varování'); this._warnings.open(); return; }
+    // Broadcast (mod / streamer, roli ověřuje server): text z pole na všechny přihlášené platformy.
+    // !command jde taky na všechny platformy (pokyn usera 2026-09-29); lomítkové commandy jsou věc platformy
+    // → jen na vybranou. GIF odkaz Broadcastem vůbec.
+    if (!external && this._isBroadcast() && !text.startsWith('/')) {
+      if (window.UC_CORE.hasGifLink(text)) { this._sys('GIF pošli na jednu platformu — vyber ji v menu u pole.'); return; }
+      await this._sendBroadcast(text);
+      return;
+    }
+    // GIF odkaz během cooldownu odměny: neodeslat, pole zčervená, bublina „Můžeš až za:" (text zůstává v poli).
+    // Výběr z knihovny (opts.gif) taky — cooldown ze serveru (i tiché schválení modem) ho musí zastavit (test2 bod 4.1).
+    if ((!external || opts.gif) && !this._gifCd().checkSend(text)) return;
 
     // Send protection (jen stará cesta přes kartu): if the active tab's channel differs from the configured
     // channel for this platform, refuse to send. Auto-switch should normally
@@ -3544,6 +4004,9 @@ class UnityChat {
 
     const isCmd = text.startsWith('!') || text.startsWith('/');
     const platform = this.activePlatform;
+    // Mod v Dev módu: GIF odkaz serveru nahlásit „schvalovat jako divák" (/chat/send gifReview, /chat/uc-sent).
+    const gifReview = !external && this._gifReviewMode() && window.UC_CORE.hasGifLink(text);
+    if (!external && window.UC_CORE.hasGifLink(text)) this._ucLog('Gif', `odesílám GIF odkaz${gifReview ? ' (Dev mód → schvalování jako divák)' : ''}`);
     // Autocomplete vkládá UC přezdívku (skutečný login uživatel nevidí), do
     // chatu ale musí odejít login — jinak zmíněný nedostane upozornění a lidé
     // mimo UnityChat nepoznají, o koho jde. V panelu se @přezdívka zobrazí
@@ -3551,6 +4014,9 @@ class UnityChat {
     const wireText = this._resolveNicknameMentions(text, platform);
     const markedText = isCmd ? wireText : wireText + ' ' + UC_MARKER;
     const reply = !external && this._reply ? { ...this._reply } : null;
+    // GIF odkaz: stav odměny PŘED lokálním cooldownem (onSent níž), ať kolečko průběhu ví, že GIF odejde přes odměnu.
+    const hasGif = !isCmd && window.UC_CORE.hasGifLink(text);
+    const gifRv = hasGif ? window.UC_CORE.gifRewardView(this._gifCd().snapshot(), Date.now(), { loggedIn: !!this._account }) : null;
 
     if (!external) {
       // Save to message history (max 50)
@@ -3563,15 +4029,23 @@ class UnityChat {
       this.msgInput.value = '';
       this.msgInput.style.height = 'auto';
       this._clearReply();
+      // Cooldown GIFu lokálně od odeslání (cooldownSec ze /gif/state); prázdné pole bublinu schová.
+      this._gifCd().onSent(text);
+      this._gifCd().onInput('');
+    } else if (opts.gif) {
+      // GIF z knihovny (panel emotů): cooldown odměny lokálně stejně jako u odkazu z pole.
+      this._gifCd().onSent(text);
     }
 
     // Optimistic UI: show message instantly
     // Native reply support: Twitch (GQL) + Kick (API reply metadata).
     // For cross-platform or YouTube → fallback to @mention prefix.
-    const identity = legacy ? null : this._identity(platform);
-    const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
-    const ucProfile = this.nicknames.get(platform, username);
-    const hasNativeReply = reply && reply.platform === platform
+    const base = this._optimisticBase(platform);
+    const username = base.username;
+    // Schválený GIF (id gif-<n>) je syntetická zpráva UnityChatu — na platformě neexistuje, nativní
+    // odpověď by selhala → odpověď napříč platformami (ucReplyTo / @jméno).
+    const replyIsGif = window.UC_CORE.isGifMessageId(reply?.messageId);
+    const hasNativeReply = reply && reply.platform === platform && !replyIsGif
       && (platform === 'twitch' || platform === 'kick');
     let displayText = text;
     if (reply && !hasNativeReply) {
@@ -3580,17 +4054,22 @@ class UnityChat {
     }
     // Echo z IRC nese odeslanou (přeloženou) podobu, ne to, co je v inputu.
     this._lastSentText = wireText;
-    const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
     // Id si držíme stranou: když odeslání selže, musí se tahle optimistická
     // zpráva označit jako neodeslaná a vypadnout z cache (viz _markSendFailed).
-    const optId = `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const optId = base.optId;
+    // GIF odkaz: kolečko s % u optimistické zprávy hned (jen když odměnu mám / jsem mod), průběh pak ze SSE gif-progress.
+    if (hasGif) {
+      // Náš odkaz (výběr z knihovny) server nestahuje → „Odesílám…“ bez procent (test2 bod 4).
+      const ownLink = !!opts.gif || window.UC_CORE.gifCandidate?.(text)?.mode === 'own';
+      this._gifOut().noteOptimistic(optId, platform, { show: gifRv.canSend || gifRv.mode === 'unknown', own: ownLink });
+    }
     this._addMessage({
       id: optId,
       platform,
       username,
       message: displayText,
-      color: ucProfile?.color || userEntry?.color || this._platformColors?.[platform] || null,
-      badgesRaw: userEntry?.badgesRaw || '',
+      color: base.color,
+      badgesRaw: base.badgesRaw,
       timestamp: Date.now(),
       _uc: true,
       _optimistic: true,
@@ -3603,7 +4082,7 @@ class UnityChat {
     }
 
     if (!legacy) {
-      await this._sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw: text });
+      await this._sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw: text, gifReview });
       return;
     }
 
@@ -3620,7 +4099,7 @@ class UnityChat {
       let resp;
       // Native reply: Twitch (GQL threading) + Kick (API reply metadata).
       // YouTube → @mention prefix fallback.
-      if (reply?.messageId && reply.platform === platform && platform === 'twitch') {
+      if (hasNativeReply && reply?.messageId && platform === 'twitch') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'REPLY_CHAT',
           text: markedText,
@@ -3628,7 +4107,7 @@ class UnityChat {
           username: reply.username,
           broadcasterId: this.config._roomId || null
         });
-      } else if (reply?.messageId && reply.platform === platform && platform === 'kick') {
+      } else if (hasNativeReply && reply?.messageId && platform === 'kick') {
         resp = await chrome.tabs.sendMessage(tab.id, {
           type: 'SEND_CHAT',
           text: markedText,
@@ -3661,13 +4140,13 @@ class UnityChat {
         const reason = resp?.error || 'nepodařilo se odeslat';
         this._markSendFailed(optId, reason);
         this._sys(`Chyba: ${reason}`);
-      } else if (text.startsWith('!') || (reply && !hasNativeReply)) {
+      } else if (text.startsWith('!') || (reply && !hasNativeReply) || gifReview) {
         // Command jde bez markeru (rozbil by boty) → serveru nahlásit, že je z UnityChatu;
         // ingest zprávu označí a všem pošle SSE `uc-mark` (zlaté logo), backend lib/ucSends.ts.
         // Odpověď napříč platformami: server ji spáruje s echem (SSE `uc-reply`, ↩ u všech).
         const crossReply = reply && !hasNativeReply ? window.UC_CORE.ucReplyPayload(reply) : null;
         const sent = crossReply && !markedText.startsWith(`@${reply.username.replace(/^@/, '')}`) ? `@${reply.username.replace(/^@/, '')} ${markedText}` : markedText;
-        this._reportUcSent(platform, username, sent, crossReply);
+        this._reportUcSent(platform, username, sent, crossReply, gifReview);
       }
     } catch (err) {
       this._markSendFailed(optId, err.message);
@@ -3675,12 +4154,117 @@ class UnityChat {
     }
   }
 
+  /** Optimistická zpráva: id, jméno, pod kterým mě platforma ukáže, a barva / badge z posledních známých. */
+  _optimisticBase(platform) {
+    const identity = this._legacySend() ? null : this._identity(platform);
+    const username = identity ? this._accountName(platform) : (this._platformUsernames[platform] || this.config.username || 'me');
+    const ucProfile = this.nicknames.get(platform, username);
+    const userEntry = this._chatUsers.get(`${platform}:${username.toLowerCase()}`);
+    return {
+      optId: `sent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      username,
+      color: ucProfile?.color || userEntry?.color || this._platformColors?.[platform] || null,
+      badgesRaw: userEntry?.badgesRaw || '',
+    };
+  }
+
+  /**
+   * Broadcast: stejný text na všechny přihlášené platformy jedním POST /chat/broadcast. Roli moda / streamera
+   * ověřuje server (lib/chatBroadcast.ts) — bez ní nic neodejde (403 not_mod). Každá platforma má svou
+   * optimistickou zprávu (páruje se s echem jako u běžné zprávy) a neodeslaná část se označí sama.
+   */
+  async _sendBroadcast(text) {
+    const targets = this._broadcastTargets();
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
+    this._msgHistoryIdx = -1;
+    this._msgHistoryDraft = '';
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    const texts = {};
+    const opt = {};
+    for (const p of targets) {
+      texts[p] = this._resolveNicknameMentions(text, p);
+      const base = this._optimisticBase(p);
+      opt[p] = base.optId;
+      this._addMessage({ id: base.optId, platform: p, username: base.username, message: text, color: base.color, badgesRaw: base.badgesRaw, timestamp: Date.now(), _uc: true, _optimistic: true });
+    }
+    this._lastSentText = texts[targets[0]];
+    this._ucLog('Send', `broadcast → ${targets.join(',')} "${text.slice(0, 60)}"`);
+    const failAll = (reason) => {
+      for (const p of targets) this._markSendFailed(opt[p], reason);
+      if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+    };
+    try {
+      const token = await this._ucSessionToken();
+      const r = await fetch(`${UC_API}/chat/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channel: (this.config.channel || '').toLowerCase(), text, texts }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const j = await r.json().catch(() => ({}));
+      this._ucLog('Send', `broadcast → ${r.status} ${j.results ? Object.entries(j.results).map(([p, x]) => `${p}=${x.ok ? 'ok' : x.status + ' ' + x.error}`).join(' ') : (j.error || '')}`);
+      if (r.status === 401) { failAll('přihlášení vypršelo'); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
+      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora'); this._loadWarnings(); return; }
+      if (r.status === 403 && j.error === 'not_mod') {
+        // Server roli nepotvrdil (menu mělo starý stav) → Broadcast pryč, znovu načíst roli.
+        failAll('Broadcast smí jen mod nebo streamer');
+        this._sys('Broadcast smí posílat jen mod nebo streamer kanálu.');
+        this._loadModState();
+        return;
+      }
+      if (!j.results) {
+        const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : j.error === 'gif' ? 'GIF pošli na jednu platformu' : (j.error || `HTTP ${r.status}`);
+        failAll(reason);
+        this._sys(`Chyba: ${reason}`);
+        return;
+      }
+      let failed = 0;
+      for (const p of targets) {
+        const res = j.results[p];
+        if (!res?.ok) { failed++; this._markSendFailed(opt[p], res?.error || 'neodesláno'); continue; }
+        if (p === 'youtube') {
+          window.UC_CORE.watchYoutubeSend({
+            optId: opt[p], platform: p, isGif: false, outbox: this._gifOutInst,
+            pending: () => !!this.store.get(opt[p]) && !this.store.get(opt[p]).sendFailed,
+            markFailed: (reason) => this._markSendFailed(opt[p], reason),
+            log: (tag, t) => this._ucLog(tag, t),
+          });
+        }
+      }
+      if (failed && failed === targets.length && !this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+    } catch (e) {
+      failAll(e.message || 'neodesláno');
+      this._sys(`Nelze odeslat: ${e.message || e}`);
+    }
+  }
+
+  /** Platformy pro Broadcast (core broadcastTargets): mod / streamer s aspoň dvěma přihlášenými, jinak []. */
+  _broadcastTargets() {
+    return this._legacySend() ? [] : window.UC_CORE.broadcastTargets(this._account, !!this._canModerate);
+  }
+
+  /** Píšu teď Broadcastem? (volba + role + přihlášení; bez nich se píše na vybranou platformu) */
+  _isBroadcast() {
+    return !!this._broadcast && this._broadcastTargets().length >= 2;
+  }
+
+  _selectBroadcast() {
+    this._replyPrevPlatform = null;
+    this._replyPrevBroadcast = false;
+    this._broadcast = true;
+    try { chrome.storage.local.set({ uc_send_broadcast: true }); } catch {}
+    this._renderComposer();
+    this.msgInput.focus();
+  }
+
   /**
    * Odeslání účtem uživatele přes backend (POST /chat/send, stejně jako web): Twitch Helix,
    * Kick API, YouTube liveChatMessages.insert. Marker UnityChatu přidává server (ne na !/ commandy)
    * a commandy sám hlásí pro zlaté logo. Echo z chatu spáruje optimistickou zprávu jako dřív.
    */
-  async _sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw }) {
+  async _sendViaAccount({ optId, platform, wireText, reply, hasNativeReply, external, raw, gifReview = false }) {
     let text = wireText;
     if (reply && !hasNativeReply) {
       const at = `@${reply.username.replace(/^@/, '')}`;
@@ -3702,6 +4286,8 @@ class UnityChat {
           platform, text, replyTo, replyToUser: replyTo ? reply.username.replace(/^@/, '') : null, channel: (this.config.channel || '').toLowerCase(),
           // Odpověď napříč platformami (nebo na YouTube): server ji spáruje s echem a ukáže všem v UnityChatu.
           ...(reply && !replyTo ? { ucReplyTo: window.UC_CORE.ucReplyPayload(reply) } : {}),
+          // Mod v Dev módu: GIF schvalovat jako od diváka (backend lib/ucSends.ts gifReviews).
+          ...(gifReview ? { gifReview: true } : {}),
         }),
         signal: AbortSignal.timeout(15000),
       });
@@ -3715,23 +4301,33 @@ class UnityChat {
         this._afterAccountChange();
         return;
       }
+      if (r.status === 403 && j.error === 'warning_pending') {
+        fail('nepotvrzené varování od moderátora');
+        this._loadWarnings();
+        return;
+      }
       if (!r.ok || j.ok === false) {
         const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : (j.error || `HTTP ${r.status}`);
         fail(reason);
         this._sys(`Chyba: ${reason}`);
         return;
       }
+      // GIF odkaz: id zprávy na platformě = klíč průběhu (gif-progress requestKey) → spárovat s optimistickou.
+      if (j.id && raw && !raw.startsWith('!') && window.UC_CORE.hasGifLink(raw)) this._gifOut().alias(optId, platform, j.id);
       // Kick odpověď odmítl (odpověď na starou zprávu) a server poslal „@login text" → optimistická
       // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
       if (j.fallback === 'mention') this._dropOptimistic(optId);
-      // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora).
+      // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora) → bez echa neodesláno;
+      // GIF zprávu řídí štítek (core watchYoutubeSend). Pořád optimistická = stále ve store pod optId (i zaparkovaná).
       if (platform === 'youtube') {
-        setTimeout(() => {
-          if (this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`)) {
-            this._markSendFailed(optId, 'YouTube zprávu přijal, ale v chatu ji nezobrazil — nejspíš blokuje odkazy nebo ji zadržel filtr');
-            this._ucLog('Send', 'youtube: bez echa 20 s → označeno');
-          }
-        }, 20_000);
+        window.UC_CORE.watchYoutubeSend({
+          optId, platform,
+          isGif: !!raw && !raw.startsWith('!') && window.UC_CORE.hasGifLink(raw),
+          outbox: this._gifOutInst,
+          pending: () => !!this.store.get(optId) && !this.store.get(optId).sendFailed,
+          markFailed: (reason) => this._markSendFailed(optId, reason),
+          log: (tag, text) => this._ucLog(tag, text),
+        });
       }
     } catch (e) {
       fail(e.message || 'neodesláno');
@@ -3769,44 +4365,44 @@ class UnityChat {
   }
 
   /** POST /chat/uc-sent — command odeslaný z UnityChatu (bez markeru) dostane u všech zlaté logo. */
-  _reportUcSent(platform, username, text, replyTo = null) {
+  _reportUcSent(platform, username, text, replyTo = null, gifReview = false) {
     const channel = (this.config.channel || '').toLowerCase();
     if (!channel || !username || username === 'me') return;
-    fetch(`${UC_API}/chat/uc-sent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, channel, username, text, ...(replyTo ? { replyTo } : {}) }),
+    // Server bere hlášení jen od přihlášeného majitele účtu (Bearer session).
+    this._ucSessionToken().catch(() => null).then((token) => fetch(`${UC_API}/chat/uc-sent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ platform, channel, username, text, ...(replyTo ? { replyTo } : {}), ...(gifReview ? { gifReview: true } : {}) }),
       signal: AbortSignal.timeout(8000),
-    }).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
+    })).then((r) => r.json()).then((j) => this._ucLog('UcSent', `${platform} ${text.slice(0, 30)} matched=${!!j?.matched}`)).catch((e) => this._ucLog('UcSent', `selhalo: ${e.message || e}`));
   }
 
-  /** ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami). */
-  _buildReplyCtx(msg) {
+  /**
+   * ↩ @jméno citace nad zprávou; platforma citované zprávy může být jiná (odpověď napříč platformami).
+   * `interactive: false` = bez klik handleru (Profil má vlastní: zalomení / profil autora).
+   */
+  _buildReplyCtx(msg, { interactive = true } = {}) {
     const rt = msg.replyTo;
     const rp = rt.platform || msg.platform;
     const ctx = document.createElement('div');
     ctx.className = 'reply-ctx';
-    if (rt.id) ctx.classList.add('clickable');
+    if (rt.id && interactive) ctx.classList.add('clickable');
     // Show nickname if available, otherwise platform username
     const replyRawName = (rt.username || '').replace(/^@/, '');
     const replyProfile = this.nicknames.get(rp, replyRawName);
     const replyDisplayName = replyProfile?.nickname || replyRawName;
-    let replyBodyHtml = '';
-    if (rt.message) {
-      // Render emotes in reply context using platform-specific parser.
-      // No emotes tag for Twitch (positions unknown) → rely on 7TV/BTTV/FFZ/learned Twitch native.
-      let body;
-      if (rp === 'kick') body = this.emotes.renderKick(rt.message);
-      else if (rp === 'twitch') body = this.emotes.renderTwitch(rt.message, null);
-      else body = this.emotes.renderPlain(rt.message);
-      replyBodyHtml = ` <span class="rctx-body">${body}</span>`;
-    }
+    // Citace s emoty (platformní render, Twitch bez pozic emotů), nikdy s živým odkazem; smazaný rodič (moderace,
+    // GIF — i odpověď bota na nepovolený GIF) jen „↩ @jméno“ (core uc-reply.js, review 2026-09-27 I2).
+    const parent = rt.id != null ? this.store.get(String(rt.id)) : null;
+    const parentGone = window.UC_CORE.isReplyParentGone(parent && (!parent.platform || parent.platform === rp) ? parent : null);
+    const replyBodyHtml = window.UC_CORE.replyBodyHtml(rt, rp, this.emotes, { parentGone });
+    if (rt.id != null) ctx.dataset.rctxId = String(rt.id);
     // Odpověď na zprávu z jiné platformy: malé logo té platformy.
     // Zlaté logo, když autor citované zprávy je uživatel UnityChatu (jako .pi.uc u jeho zprávy).
     const authorUc = !!rt.authorUc || !!(rt.id && this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(String(rt.id))}"] .pi.uc`));
     const pBadge = rt.platform && rt.platform !== msg.platform
       ? `<span class="badge ${({ twitch: 'tw', kick: 'ki', youtube: 'yt' })[rt.platform] || ''} rctx-pi${authorUc ? ' uc' : ''}">${this.emotes._eh(rt.platform)}</span> ` : '';
     ctx.innerHTML = `&#8617; ${pBadge}<span class="rctx-user">@${this.emotes._eh(replyDisplayName)}</span>` + replyBodyHtml;
-    if (rt.id) {
+    if (rt.id && interactive) {
       ctx.addEventListener('click', (e) => {
         e.stopPropagation();
         this._scrollToMessage(rt.id);
@@ -3852,6 +4448,30 @@ class UnityChat {
   }
 
   /** SSE `uc-mark`: server poznal zprávu z UnityChatu bez markeru → zlaté logo (i u vykreslené). */
+  /** SSE donor-mark: zpráva z vlastního IRC je od podporovatele → `donor` do dat + odznak (zpráva může dorazit i po marku). */
+  _applyDonorMark({ platform, id, czk, replace }) {
+    if (!id) return;
+    if (!this._donorMarks) this._donorMarks = new Map();
+    this._donorMarks.set(String(id), { czk: Number(czk) || 0, replace: replace === true });
+    if (this._donorMarks.size > 500) this._donorMarks.delete(this._donorMarks.keys().next().value);
+    const cached = this.store.get(id);
+    if (!cached || (platform && cached.platform !== platform)) return;
+    this._markDonor(cached);
+    let n = 0;
+    for (const el of this._msgEls(id, platform)) { if (window.UC_CORE.setMessageBadges(el, this._badgesEl(cached))) n++; }
+    this._ucLog('Donor', `donor-mark ${platform}:${id} → ${n} el`);
+  }
+
+  /** Příznak podporovatele ze zapamatovaného donor-marku do dat zprávy (před vykreslením). */
+  _markDonor(msg) {
+    const mark = msg?.id != null ? this._donorMarks?.get(String(msg.id)) : undefined;
+    if (!mark) return false;
+    msg.donor = true;
+    if (mark.czk) msg.donorCzk = mark.czk;
+    if (mark.replace) msg.donorReplace = true;
+    return true;
+  }
+
   _applyUcMark({ platform, id }) {
     if (!id) return;
     // Zapamatovat (zpráva z IRC může dorazit až po uc-mark); strop, ať množina neroste.
@@ -3860,8 +4480,7 @@ class UnityChat {
     if (this._ucMarkedIds.size > 500) this._ucMarkedIds.delete(this._ucMarkedIds.values().next().value);
     const cached = this.store.get(id);
     if (cached) cached._uc = true;
-    const sel = `.msg[data-msg-id="${CSS.escape(String(id))}"]`;
-    const els = [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+    const els = this._msgNodes(`.msg[data-msg-id="${CSS.escape(String(id))}"]`);
     for (const el of els) {
       const pi = el.querySelector('.pi');
       if (pi && (!platform || el.dataset.platform === platform || !el.dataset.platform)) { pi.classList.add('uc'); pi.setAttribute('data-tooltip', 'UnityChat User'); }
@@ -3935,6 +4554,26 @@ class UnityChat {
         this._addMessage({ ...base, message: body, isAnnouncement: true, announcementColor: annColor, color: '#9146ff' });
         break;
       }
+      case 'anniv': {
+        // /uc anniv [resub|gift|mod] [měsíce] [integrity|already] — lokální náhled banneru výročí, nic se neodesílá.
+        const argv = text === 'test message' ? [] : text.trim().split(/\s+/);
+        const kind = ['resub', 'gift', 'mod'].includes(argv[0]) ? argv[0] : 'resub';
+        const months = parseInt(argv[1], 10) || (kind === 'mod' ? 12 : 7);
+        const mock = ['integrity', 'already'].includes(argv[2]) ? argv[2] : true;
+        const item = kind === 'mod'
+          ? { kind: 'mod', key: `mock:mod:${Date.now()}`, months, mock }
+          : { kind: 'resub', key: `mock:resub:${Date.now()}`, id: 'mock', months, streak: kind === 'gift' ? 0 : Math.min(months, 3), isGift: kind === 'gift', gifter: kind === 'gift' ? 'Dárce' : null, mock };
+        this._annivBanner()?.show(item);
+        break;
+      }
+      case 'modiversary':
+      case 'modiv': {
+        // /uc modiversary [měsíce] [text] — moderátorské výročí (USERNOTICE modiversary)
+        const argv = text === 'test message' ? [] : text.trim().split(/\s+/);
+        const months = parseInt(argv[0], 10) || 12;
+        this._addMessage({ ...base, message: argv.slice(/^\d+$/.test(argv[0] || '') ? 1 : 0).join(' '), isModiversary: true, modMonths: months, color: '#00AD03' });
+        break;
+      }
       case 'sub':
         this._addMessage({ ...base, message: text === 'test message' ? '' : text, isSubEvent: true, subPlan: '1000', subMonths: 1 });
         break;
@@ -3994,14 +4633,14 @@ class UnityChat {
       case 'mod':
       case 'timeout': {
         const secs = parseInt(text, 10) || 600;
-        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _cleared: `Timeout (${secs >= 60 ? Math.round(secs / 60) + 'm' : secs + 's'})` });
+        this._addMessage({ ...base, message: 'Tato zpráva byla timeoutnuta.', _deleted: true, _modTag: window.UC_CORE.modTagText({ action: 'timeout', durationSec: secs }) });
         break;
       }
       case 'ban':
-        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _cleared: 'Permanently banned' });
+        this._addMessage({ ...base, message: 'Tato zpráva byla banem skryta.', _deleted: true, _modTag: window.UC_CORE.modTagText({ action: 'ban' }) });
         break;
       case 'delete':
-        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _cleared: 'Deleted by mod' });
+        this._addMessage({ ...base, message: 'Tato zpráva byla smazána.', _deleted: true });
         break;
       case 'raidbanner': {
         const raider = (text && text !== 'test message') ? text : (this.config.channel || 'Karpo_cz');
@@ -4134,14 +4773,14 @@ class UnityChat {
         break;
       }
       default:
-        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
+        this._sys(`/uc: neznámý příkaz "${cmd}". Použij: command <!spouštěč>, raid, raider, first, sus, announcement [color], modiversary [měsíce] [text], anniv [resub|gift|mod] [měsíce], sub, resub, prime, sub2, sub3, subgift, giftbundle [N], redeem [name] [cost], highlight, timeout [s], ban, delete, claim, points10, points50, raidbanner [name], pin [text]`);
     }
   }
 
   _setupProviders() {
     this.twitch.onMessage = (m) => this._addMessage(m);
     this.twitch.onStatus = (s, d) => this._status('twitch', s, d);
-    this.twitch.onClear = (e) => this._applyTwitchClear(e.user, e.banDuration);
+    this.twitch.onClear = (e) => this._applyTwitchClear(e);
     this.twitch.onClearMsg = (e) => this._applyTwitchClearMsg(e.id);
     this.twitch.onRoomId = (id) => {
       this.config._roomId = id;
@@ -4151,6 +4790,8 @@ class UnityChat {
       this.emotes.loadFFZ(id);
       this.emotes.loadTwitchChannel(this.config.channel);
       this._loadTwitchBadges(id);
+      // Výročí (sdílení) — po připojení ke kanálu; reconnecty hlídá 5min pojistka.
+      this._checkAnniversary('room');
     };
 
     this.kick.onMessage = (m) => this._addMessage(m);
@@ -4216,81 +4857,741 @@ class UnityChat {
 
   // ---- Mod actions: timeout / ban / single-message delete ---------------
 
-  _fmtBanDuration(seconds) {
-    if (!seconds) return '';
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-    return `${Math.floor(seconds / 86400)}d`;
+  // Twitch CLEARCHAT z vlastního IRC (timeout/ban odkudkoli) — stejná cesta jako SSE user-moderated
+  // (server tentýž CLEARCHAT z ingestu pošle znovu; aplikace je idempotentní, štítek se nezdvojí).
+  _applyTwitchClear(e) {
+    if (!e?.user) return;
+    const now = Date.now();
+    const n = window.UC_CORE.normalizeUserModerated({
+      platform: 'twitch', userId: e.userId || null, login: e.user,
+      action: e.banDuration ? 'timeout' : 'ban', until: e.banDuration ? now + e.banDuration * 1000 : null, at: now, by: null,
+    });
+    if (n) this._applyUserModerated(n, 'irc');
   }
 
-  // Mark every Twitch message from `username` as cleared (greyed) with a
-  // small label noting the action. Vanilla Twitch keeps the messages
-  // visible; we mirror that. Also persists into _msgCache so the cleared
-  // state survives reload / scroll-back.
-  _applyTwitchClear(username, banDuration) {
-    if (!username) return;
-    const u = String(username).toLowerCase();
-    const note = banDuration
-      ? `Timeout (${this._fmtBanDuration(banDuration)})`
-      : 'Permanently banned';
-    // DOM
-    const sel = `.msg[data-platform="twitch"] .un[data-username="${CSS.escape(u)}"]`;
-    for (const un of this.chatEl.querySelectorAll(sel)) {
-      const msgEl = un.closest('.msg');
-      if (!msgEl) continue;
-      this._markMessageCleared(msgEl, note);
-    }
-    // Data ve store (uzly mimo okno se vykreslí až po návratu — stav musí sedět)
-    for (const m of this.store.slice()) {
-      if (m.platform === 'twitch' && m.username && m.username.toLowerCase() === u) m._cleared = note;
-    }
-  }
-
-  // Single message delete (CLEARMSG). Just one DOM node + cache entry.
+  // Single message delete (CLEARMSG) — stejná cesta jako smazání přes UnityChat (SSE message-deleted).
   _applyTwitchClearMsg(msgId) {
     if (!msgId) return;
-    const note = 'Deleted by mod';
-    const msgEl = this.chatEl.querySelector(`.msg[data-msg-id="${CSS.escape(msgId)}"]`);
-    if (msgEl) this._markMessageCleared(msgEl, note);
-    const cached = this.store.get(msgId);
-    if (cached) cached._cleared = note;
+    this._applyDeleted('twitch', msgId);
   }
 
-  // Apply the .cleared class + append (or update) the inline mod-action
-  // note. Idempotent — repeated calls just refresh the label text.
-  _markMessageCleared(msgEl, label) {
-    if (!msgEl) return;
-    msgEl.classList.add('cleared');
-    let note = msgEl.querySelector('.cleared-note');
-    if (!note) {
-      note = document.createElement('span');
-      note.className = 'cleared-note';
-      msgEl.appendChild(note);
-    }
-    note.textContent = label;
+  // ---- Moderace: smazané / skryté zprávy (core/moderation.js, backend /moderation/*) ----
 
-    // Retroactively upgrade tag-line from "First message" to "Suspicious" —
-    // a moderated user shouldn't keep the cheerful first-message label.
-    // Preserves higher-priority tags (reply/mention/raid) if already present.
-    const tagLine = msgEl.querySelector('.msg-tag-line');
-    if (tagLine) {
-      const tag = tagLine.querySelector('.msg-tag');
-      if (tag && tag.classList.contains('tag-first')) {
-        tag.classList.remove('tag-first');
-        tag.classList.add('tag-sus');
-        tag.textContent = 'Suspicious';
-      }
-    } else {
-      const newTagLine = document.createElement('div');
-      newTagLine.className = 'msg-tag-line';
-      newTagLine.innerHTML = `<span class="msg-tag tag-sus">Suspicious</span>`;
-      // Insert before message text (.tx) so tag-line appears above content,
-      // matching the initial render order.
-      const tx = msgEl.querySelector('.tx');
-      if (tx) msgEl.insertBefore(newTagLine, tx);
-      else msgEl.appendChild(newTagLine);
+  /** Uzly odpovídající selektoru v DOM i zaparkované mimo okno (_parkedTop/_parkedBottom). */
+  _msgNodes(sel = '.msg[data-msg-id]') {
+    return [...this.chatEl.querySelectorAll(sel), ...[...(this._parkedTop || []), ...(this._parkedBottom || [])].filter((el) => el.matches?.(sel))];
+  }
+
+  /** Uzly jedné zprávy (DOM + zaparkované), volitelně jen dané platformy. */
+  _msgEls(id, platform = null) {
+    const els = this._msgNodes(`.msg[data-msg-id="${CSS.escape(String(id))}"]`);
+    return platform ? els.filter((el) => !el.dataset.platform || el.dataset.platform === platform) : els;
+  }
+
+  /** Má zpráva v datech text? (historie posílá smazané/skryté bez obsahu) */
+  _msgHasContent(msg) {
+    // Obsah dotažený jako mod (/moderation/deleted-content) po ztrátě role nevykreslovat.
+    if (msg?._modContent && !this._canModerate) return false;
+    const probe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
+    return !!probe || msg?.ytRuns?.length > 0 || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0) || !!msg?.gif;
+  }
+
+  /** Zobrazuje se divákovi místo textu „Zpráva smazána" / nic? Pak kopírovat ani citovat nejde. */
+  _textSuppressed(msg) {
+    if (!this._isModerated(msg)) return false;
+    const deleted = !!(msg._deleted || msg.deleted);
+    const mode = window.UC_CORE.deletedMode({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden: !deleted && !!(msg._hidden || msg.hidden) });
+    return mode === 'label' || mode === 'hide' || !this._msgHasContent(msg);
+  }
+
+  _isModerated(msg) {
+    return !!(msg && (msg._deleted || msg.deleted || msg._hidden || msg.hidden));
+  }
+
+  /** Vzhled smazané/skryté zprávy podle role a nastavení. Smazání má přednost před skrytím. */
+  _paintDeleted(el, msg) {
+    const core = window.UC_CORE;
+    if (!el || !core?.applyDeleted) return;
+    const deleted = !!(msg._deleted || msg.deleted);
+    const hidden = !deleted && !!(msg._hidden || msg.hidden);
+    // GIF větve (core gif-host.js paintGifDeleted, sdílené s webem): vlastní GIF se štítkem (i po reloadu — identita
+    // účtu), čekající gif_request ostatním schovaná + pojistka GET /gif/held, smazanému GIFu pryč médium.
+    const platform = msg?.platform || el.dataset?.platform;
+    const identity = this._account ? this._identity(platform) : null;
+    const own = core.gifOwnView(identity ? this._gifOut() : this._gifOutInst, el, msg, identity);
+    const gifDone = core.paintGifDeleted(document, el, msg, {
+      own,
+      hasContent: (m) => this._msgHasContent(m),
+      rerender: (_el, tx, m) => { tx.innerHTML = this._renderMsgBody(m); this._processMentions(tx, m.platform); },
+      hold: (pl, id) => this._gifHold().hold(pl, id),
+      release: (pl, id) => this._gifHoldInst?.release(pl, id),
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    if (gifDone) return;
+    const hasContent = this._msgHasContent(msg);
+    // Divák: vždy zašedlé „Zpráva smazána"; mod volí label / zašedlé / přeškrtnuté (core deletedView).
+    const view = core.deletedView({ style: this.config.deletedStyle, isMod: !!this._canModerate, hidden });
+    // Přechod z „Zpráva smazána" na styl s textem → text zpátky z dat.
+    const tx = el.querySelector('.tx');
+    if (tx && hasContent && view.mode !== 'label' && tx.querySelector('.uc-deleted-label')) {
+      tx.innerHTML = this._renderMsgBody(msg);
+      this._processMentions(tx, msg.platform);
     }
+    // Smazal / skryl ji server (historie, SSE message-deleted / -hidden) → mod může odkrýt (oko).
+    // Ztlumení jen po timeoutu / banu (user-moderated) ne — server ji smazanou nemá.
+    // GIF (gif_rejected) mod v UnityChatu neodkryje (server → 409 not_restorable).
+    const restorable = !!(msg.deleted || msg.hidden || msg._srvDeleted || msg._srvHidden) && !String(msg.deletedReason || '').startsWith('gif_');
+    core.applyDeleted(el, { ...view, hidden, hasContent, restorable });
+    // Historie/stream posílají smazanou zprávu bez obsahu — mod si text dotáhne (dávkově, jednou).
+    const id = msg?.id != null ? String(msg.id) : '';
+    // GIF odebraný z knihovny (gif_removed) text nemá — neptat se.
+    if (this._canModerate && !hasContent && id && !id.startsWith('sent-') && msg.platform && msg.deletedReason !== 'gif_removed' && this.store.get(msg.id) === msg) {
+      if (this._deletedLoader().request(msg.platform, id)) this._ucLog('Mod', `deleted-content ← ${msg.platform}:${id}`);
+    }
+  }
+
+  /** Pojistka pro zprávy schované jako gif_request bez rozhodnutí serveru (core GifHoldWatch → GET /gif/held). */
+  _gifHold() {
+    if (!this._gifHoldInst) {
+      this._gifHoldInst = new window.UC_CORE.GifHoldWatch({
+        api: (path) => this._ucApi(path),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        onResult: (r) => this._onGifHoldResult(r),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifHoldInst;
+  }
+
+  /** Odpověď GET /gif/held: visible → odkrýt s daty ze serveru, deleted → běžně smazaná, jinak nechat schovanou. */
+  _onGifHoldResult(r) {
+    return window.UC_CORE.applyGifHeldResult(r, {
+      store: this.store,
+      unhide: (d) => this._unhideMessage(d, { restore: true }),
+      applyDeleted: (p, id, o) => this._applyDeleted(p, id, o),
+      forgetHeld: (id) => this._heldReasons?.delete(id),
+    });
+  }
+
+  /** Dotažení textu smazaných/skrytých zpráv pro moda (core DeletedContentLoader → GET /moderation/deleted-content). */
+  _deletedLoader() {
+    if (!this._deletedLoaderInst) {
+      this._deletedLoaderInst = new window.UC_CORE.DeletedContentLoader({
+        api: (path) => this._ucApi(path),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        onContent: (m) => this._onDeletedContent(m),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._deletedLoaderInst;
+  }
+
+  /** Obsah smazané/skryté zprávy (jen mod) → do dat ve store a znovu vykreslit její uzly. */
+  _onDeletedContent(fresh) {
+    const msg = fresh?.id != null ? (this.store.get(String(fresh.id)) || this.store.get(Number(fresh.id))) : null;
+    if (!msg || msg.platform !== fresh.platform || !this._isModerated(msg)) return;
+    const SKIP = ['id', 'platform', 'historical', 'timestamp', 'deleted', 'deletedReason', 'hidden', 'gif', 'segments'];
+    // Původní hodnoty přepsaných polí — po ztrátě role moda se obsah zase zahodí (_dropModContent).
+    const orig = msg._modOrig || {};
+    for (const [k, v] of Object.entries(fresh)) {
+      if (v === undefined || SKIP.includes(k)) continue;
+      if (!(k in orig)) orig[k] = msg[k];
+      msg[k] = v;
+    }
+    msg._modOrig = orig;
+    msg._modContent = true;
+    const els = this._msgEls(msg.id, msg.platform);
+    for (const el of els) {
+      const tx = el.querySelector('.tx');
+      if (tx) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+      // Odpověď přišla bez obsahu → citace ↩ až teď (existující nahradit, ať sedí s daty).
+      if (msg.replyTo && !msg.isRaid && !msg.isAnnouncement) {
+        const ctx = this._buildReplyCtx(msg);
+        const old = el.querySelector(':scope > .reply-ctx');
+        if (old) old.replaceWith(ctx);
+        else el.insertBefore(ctx, el.querySelector(':scope > .msg-tag-line, :scope > .pi') || el.firstChild);
+      }
+      this._paintDeleted(el, msg);
+    }
+    this._ucLog('Mod', `deleted-content → ${msg.platform}:${msg.id} (${els.length} el)`);
+  }
+
+  /**
+   * Ztráta role moda: obsah smazaných zpráv dotažený jako mod zahodit i z dat ve store (jinak by skončil
+   * v DIAG dumpu) a vrátit původní pole; citace dotažená s obsahem pryč i z DOM. Vrací počet zpráv.
+   */
+  _dropModContent() {
+    let n = 0;
+    for (const m of this.store.slice()) {
+      if (!m?._modContent) continue;
+      for (const [k, v] of Object.entries(m._modOrig || {})) { if (v === undefined) delete m[k]; else m[k] = v; }
+      delete m._modOrig;
+      m._modContent = false;
+      if (!m.replyTo) for (const el of this._msgEls(m.id, m.platform)) el.querySelector(':scope > .reply-ctx')?.remove();
+      n++;
+    }
+    if (n) this._ucLog('Mod', `ztráta role → obsah ${n} smazaných zpráv zahozen`);
+    return n;
+  }
+
+  /** Zrušit vzhled smazání/skrytí a vykreslit text znovu z dat. */
+  _restoreMessage(el, msg) {
+    window.UC_CORE?.clearDeleted?.(el);
+    // Odkrytá zpráva dostane odznaky zpátky (smazaná je bez nich, core applyDeleted).
+    if (msg) window.UC_CORE.setMessageBadges(el, this._badgesEl(msg));
+    this._gifHoldInst?.release(msg?.platform || el.dataset?.platform, msg?.id != null ? String(msg.id) : el.dataset?.msgId);
+    const tx = el.querySelector('.tx');
+    if (tx && msg) { tx.innerHTML = this._renderMsgBody(msg); this._processMentions(tx, msg.platform); }
+    // Obnovená zpráva se schváleným GIFem (obnova zahozeného / znovu v knihovně): médium zpátky pod text.
+    // Jen když médium v uzlu chybí (smazání ho odebralo) — jinak by se GIF zbytečně načítal znovu. Server u odkryté
+    // zprávy hlásí odebraný / nedostupný GIF (removed / unavailable) → štítek stejnou cestou jako čerstvý stav.
+    const cur = el.querySelector(':scope > .uc-gif');
+    if (msg?.gif && (!cur || ((msg.gif.removed || msg.gif.unavailable) && !cur.classList.contains('uc-gif--failed')))) {
+      const g = window.UC_CORE.normalizeGifMedia?.(msg.gif, { origins: UC_GIF_ORIGINS });
+      if (g) { msg.gif = g; this._appendGifMedia(el, msg); this._ucLog('Gif', `obnovená zpráva ${msg.platform}:${msg.id} → GIF zpátky`); }
+      else delete msg.gif;
+    }
+  }
+
+  /** Označit zprávu jako smazanou (hidden = jen skrytá v UnityChatu) ve store i ve všech jejích uzlech. */
+  _applyDeleted(platform, id, { hidden = false, reason = null } = {}) {
+    if (!id) return 0;
+    const cached = this.store.get(String(id)) || this.store.get(id);
+    const msg = cached && (!platform || cached.platform === platform) ? cached : null;
+    // Důvod smazání (SSE message-deleted): gif_request schová zprávu úplně, gif_rejected z ní udělá běžně smazanou;
+    // ozvěna smazání z platformy schovanou zprávu neodkryje (core gifHeldAfter).
+    const nextReason = hidden ? null : window.UC_CORE.gifHeldAfter(msg?.deletedReason ?? (msg ? null : this._heldReasons?.get(String(id))), reason);
+    if (!hidden) {
+      if (!this._heldReasons) this._heldReasons = new Map();
+      // Schovaná (gif_request) i nepovolený nový GIF (gif_not_allowed): zpráva, která dorazí až po události, se
+      // vykreslí rovnou schovaně (core gifEarlyReason).
+      const early = window.UC_CORE.gifEarlyReason(this._heldReasons.get(String(id)), nextReason);
+      if (early) this._heldReasons.set(String(id), early); else this._heldReasons.delete(String(id));
+      if (this._heldReasons.size > 300) this._heldReasons.delete(this._heldReasons.keys().next().value);
+    }
+    if (msg) {
+      if (hidden) { msg._hidden = true; msg._srvHidden = true; } else { msg._deleted = true; msg._srvDeleted = true; if (nextReason) msg.deletedReason = nextReason; }
+    }
+    const els = this._msgEls(id, platform);
+    const key = hidden ? '_hidden' : '_deleted';
+    const srv = hidden ? '_srvHidden' : '_srvDeleted';
+    // Živé smazání / schování: změna výšky zprávy plynule (core/height-anim.js), ne skokem.
+    for (const el of els) this._changeHeight(el, () => this._paintDeleted(el, msg || { platform, [key]: true, [srv]: true, deletedReason: nextReason, message: el.querySelector('.tx')?.textContent || '' }));
+    // Citace smazané zprávy v odpovědích jen „↩ @jméno“ (odkaz smazaného GIFu se nesmí vrátit, review I2).
+    if (!hidden) window.UC_CORE.dropReplyBodies([this.chatEl, ...(this._parkedTop || []), ...(this._parkedBottom || [])], id);
+    return els.length;
+  }
+
+  /** Změna výšky zprávy (smazání / obnovení) plynule; chat, který držel konec, ho drží i během ní. */
+  _changeHeight(el, mutate) {
+    window.UC_CORE.changeHeightPinned(this.chatEl, el, mutate, { pinned: this.autoScroll, isPinned: () => this.autoScroll });
+  }
+
+  /** Vrátit lokální smazání (odmítnuté optimistické smazání). */
+  _undoDeleted(platform, id) {
+    if (this._serverDeleted?.has(String(id))) { this._ucLog('Mod', `undo ${platform}:${id} přeskočeno — smazání potvrdil server`); return; }
+    const msg = this.store.get(String(id));
+    if (msg) { msg._deleted = false; msg._srvDeleted = false; }
+    for (const el of this._msgEls(id, platform)) this._changeHeight(el, () => {
+      if (msg && this._isModerated({ ...msg, deleted: false })) this._paintDeleted(el, msg);
+      else this._restoreMessage(el, msg);
+    });
+  }
+
+  /** Nastavení stylu nebo role se změnily → přebarvit všechny smazané/skryté zprávy. */
+  _reapplyDeleted() {
+    let n = 0;
+    for (const el of this._msgNodes()) {
+      const msg = el.dataset?.msgId ? this.store.get(el.dataset.msgId) : null;
+      if (msg && this._isModerated(msg)) { this._paintDeleted(el, msg); n++; }
+    }
+    return n;
+  }
+
+  /** SSE message-deleted / message-hidden / message-unhidden z /nicknames/stream. */
+  _onModerationEvent(type, d) {
+    if (!d?.messageId) return;
+    // Události jsou vázané na kanál — bez kanálu nebo z jiného kanálu zahodit.
+    if (!d.channel || String(d.channel).toLowerCase() !== (this.config.channel || '').toLowerCase()) return;
+    let n = 0;
+    if (type === 'message-deleted') {
+      // Potvrzené serverem → případné odmítnutí vlastního POST už smazání nevrátí (_undoDeleted).
+      if (!this._serverDeleted) this._serverDeleted = new Set();
+      this._serverDeleted.add(String(d.messageId));
+      if (this._serverDeleted.size > 500) this._serverDeleted.delete(this._serverDeleted.values().next().value);
+      n = this._applyDeleted(d.platform, d.messageId, { reason: d.reason || null });
+    }
+    else if (type === 'message-hidden') n = this._applyDeleted(d.platform, d.messageId, { hidden: true });
+    else if (type === 'message-unhidden') n = this._unhideMessage(d);
+    else if (type === 'message-restored') n = this._unhideMessage(d, { restore: true });
+    this._ucLog('Mod', `${type} ${d.platform}:${d.messageId} by=${d.by || '?'}${d.reason ? ` reason=${d.reason}` : ''} → ${n} el`);
+  }
+
+  /**
+   * Zrušené skrytí (message-unhidden) nebo obnovení permitem (message-restored — zpráva smazaná filtrem
+   * odkazů): data ze SSE (celá zpráva) → vykreslit na místě, nebo přidat běžnou cestou.
+   * Obnovení ruší smazání; historie ho poslala bez obsahu, takže se z dat převezme celá zpráva.
+   */
+  _unhideMessage(d, { restore = false } = {}) {
+    const fresh = d.message && typeof d.message === 'object' ? d.message : null;
+    const msg = this.store.get(String(d.messageId));
+    if (restore) {
+      this._serverDeleted?.delete(String(d.messageId));
+      // Obnovená (i dosud schovaná gif_request) zpráva: pozdější příchod z IRC ji už nesmí schovat.
+      this._heldReasons?.delete(String(d.messageId));
+      this._gifHoldInst?.release(d.platform, String(d.messageId));
+    }
+    if (msg && fresh) {
+      // Obsah je teď veřejný (přišel se zprávou) — ne jen dotažený jako mod, po ztrátě role ho nezahazovat.
+      delete msg._modOrig;
+      msg._modContent = false;
+    }
+    if (msg) {
+      if (restore) {
+        msg._deleted = false; msg.deleted = false; msg._srvDeleted = false; delete msg.deletedReason;
+        if (fresh) for (const [k, v] of Object.entries(fresh)) if (v !== undefined && !['id', 'platform', 'historical', 'deleted', 'deletedReason', 'hidden'].includes(k)) msg[k] = v;
+      } else {
+        msg._hidden = false; msg.hidden = false; msg._srvHidden = false;
+        if (fresh) for (const k of ['message', 'ytRuns', 'kickContent', 'twitchEmotes', 'twitchEmotesOffset']) if (fresh[k] !== undefined) msg[k] = fresh[k];
+      }
+    }
+    const els = this._msgEls(d.messageId, d.platform);
+    for (const el of els) this._changeHeight(el, () => {
+      if (msg && this._isModerated(msg)) this._paintDeleted(el, msg);
+      else this._restoreMessage(el, msg || fresh);
+    });
+    if (!els.length && !msg && fresh) this._addMessage({ ...fresh, hidden: false, deleted: false });
+    return els.length;
+  }
+
+  /** Mod smaže zprávu: hned lokálně, pak POST /moderation/delete (backend pošle SSE všem). */
+  async _deleteMessage(el) {
+    const id = el?.dataset.msgId;
+    const platform = el?.dataset.platform;
+    if (!id || String(id).startsWith('sent-')) { this._sys('Počkej, až se zpráva potvrdí z chatu.'); return; }
+    const NAMES = { twitch: 'Twitchi', kick: 'Kicku', youtube: 'YouTube' };
+    const channel = (this.config.channel || '').toLowerCase();
+    this._applyDeleted(platform, id);
+    let res;
+    try {
+      res = await this._ucApi('/moderation/delete', { method: 'POST', body: { channel, platform, messageId: id } });
+    } catch (e) {
+      this._ucLog('Mod', `delete ${platform}:${id} FAIL ${e.status || 0} ${e.error || e.message || e}`);
+      this._undoDeleted(platform, id);
+      if (e.status === 403) { this._sys('Mazat můžou jen modi.'); this._loadModState(); }
+      else if (e.status === 401) { this._sys('Přihlášení vypršelo, přihlas se znovu.'); this._refreshAccount(); }
+      else if (e.status === 429) this._sys('Mažeš moc rychle, chvíli počkej.');
+      else this._sys(`Zprávu se nepodařilo smazat (${e.error || e.message || e}).`);
+      return;
+    }
+    const result = String(res?.result || '');
+    this._ucLog('Mod', `delete ${platform}:${id} → ${result}`);
+    const core = window.UC_CORE;
+    const needScopes = core.modScopePlatforms({ [platform]: result }, this._modMissingScopes || {});
+    if (needScopes.length) this._offerModLogin(platform, core.modScopePrompt(platform, result), 'delete');
+    else if (result.startsWith('error')) {
+      this._sys(`V UnityChatu smazáno, na ${NAMES[platform] || platform} se smazat nepodařilo`);
+    }
+  }
+
+  /** Jsem na kanálu mod (podle účtu UnityChatu)? → body.uc-can-moderate + přebarvit smazané. */
+  // ---- Nastavení kanálu společné pro všechny (odznak dárce, core/donor-badge.js) ----
+
+  /** Záložky nastavení (Účet | Rozhraní): přepnutí panelu, posuvné zvýraznění, uložená volba. */
+  _initSettingsTabs() {
+    const bar = document.querySelector('#settings .settings-tabs');
+    if (!bar || bar._ucInit) return;
+    bar._ucInit = true;
+    const panes = [...document.querySelectorAll('#settings .settings-pane')];
+    const ind = window.UC_CORE.createSlideIndicator?.({ container: bar, getActive: () => bar.querySelector('.settings-tab.on') });
+    const select = (tab, animate = true) => {
+      for (const b of bar.querySelectorAll('.settings-tab')) { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
+      // Přepnutí záložky: obsah odjede / přijede (core switchPanes) a výška panelu přejede plynule (morphResize).
+      const panelEl = document.getElementById('settings');
+      const from = panes.find((p) => !p.hidden), to = panes.find((p) => p.dataset.pane === tab);
+      const dir = panes.indexOf(to) >= panes.indexOf(from) ? 1 : -1;
+      const swap = () => { if (animate && from && to && from !== to) window.UC_CORE.switchPanes(panelEl, from, to, { dir }); else for (const p of panes) p.hidden = p.dataset.pane !== tab; };
+      if (animate) window.UC_CORE.morphResize(panelEl, swap, { log: (t) => this._ucLog('Settings', t) }); else swap();
+      ind?.update({ animate });
+      try { localStorage.setItem('uc_settings_tab', tab); } catch { /* ignore */ }
+    };
+    let saved = 'account';
+    try { saved = localStorage.getItem('uc_settings_tab') || 'account'; } catch { /* ignore */ }
+    select(panes.some((p) => p.dataset.pane === saved) ? saved : 'account', false);
+    bar.addEventListener('click', (e) => { const b = e.target.closest('.settings-tab'); if (b) select(b.dataset.tab); });
+    this._settingsTabsUpdate = () => ind?.update({ animate: false });
+  }
+
+  /** Výběr odznaku dárce v nastavení (mod): varianta + tempo, intenzita, odstupy, nahrazení globálního odznaku → PUT celých prefs. */
+  _initDonorBadgePicker() {
+    const host = document.getElementById('donor-badge-picker');
+    if (!host || host._ucInit) return;
+    host._ucInit = true;
+    const core = window.UC_CORE;
+    host.innerHTML = core.donorBadgePickerHtml(this._channelPrefs);
+    this._donorMotion = core.installDonorMotion({ root: document.body, prefs: () => this._channelPrefs });
+    host.addEventListener('change', async (e) => {
+      if (!e.target.closest?.('[name^="uc-donor-"]')) return;
+      const status = document.getElementById('donor-badge-status');
+      const prev = this._channelPrefs;
+      const prefs = core.readDonorPickerPrefs(host);
+      core.markDonorBadgePicker(host, prefs);
+      if (status) { status.textContent = 'Ukládám…'; status.className = 'nick-status'; }
+      try {
+        const j = await this._ucApi('/moderation/channel-prefs', { method: 'PUT', body: { channel: (this.config.channel || '').toLowerCase(), prefs } });
+        this._applyChannelPrefs(j.prefs, 'save');
+        if (status) { status.textContent = 'Uloženo pro celý kanál'; status.className = 'nick-status success'; setTimeout(() => { if (status.textContent === 'Uloženo pro celý kanál') status.textContent = ''; }, 2500); }
+      } catch (err) {
+        core.markDonorBadgePicker(host, prev);
+        if (status) { status.textContent = err?.error === 'not_mod' ? 'Odznak může měnit jen mod.' : 'Uložení se nepovedlo.'; status.className = 'nick-status error'; }
+        this._ucLog('Prefs', `donorBadge FAIL ${err?.status || 0} ${err?.error || err?.message || err}`);
+      }
+    });
+  }
+
+  async _loadChannelPrefs() {
+    const channel = (this.config.channel || '').toLowerCase();
+    if (!channel) return;
+    try {
+      const r = await fetch(`${UC_API}/channel/prefs?channel=${encodeURIComponent(channel)}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j?.ok) this._applyChannelPrefs(j.prefs, 'load');
+    } catch (e) { this._ucLog('Prefs', `load FAIL ${e?.message || e}`); }
+  }
+
+  /** Nové hodnoty (load / SSE / uložení): výběr v nastavení + odznaky v chatu (varianta hned, animace od dalšího cyklu). */
+  _applyChannelPrefs(prefs, why) {
+    const core = window.UC_CORE;
+    const next = core.normalizeDonorPrefs(prefs);
+    const changed = JSON.stringify(next) !== JSON.stringify(this._channelPrefs || null);
+    this._channelPrefs = next;
+    core.markDonorBadgePicker(document.getElementById('donor-badge-picker'), next);
+    if (changed) {
+      this._ucLog('Prefs', `${JSON.stringify(next)} (${why})`);
+      core.repaintDonorBadges(document, next);
+      this._donorMotion?.refresh();
+      this._renderBadgePreview();
+    }
+  }
+
+  async _loadModState() {
+    const channel = (this.config.channel || '').toLowerCase();
+    const seq = (this._modSeq = (this._modSeq || 0) + 1);
+    let can = false;
+    let platforms = [];
+    let missingScopes = {};
+    if (this._signedIn && channel) {
+      try {
+        const j = await this._ucApi(`/moderation/me?channel=${encodeURIComponent(channel)}`);
+        can = !!j.mod;
+        platforms = j.platforms || [];
+        missingScopes = j.missingScopes || {};
+        const missing = Object.entries(j.missingScopes || {}).filter(([, s]) => s?.length).map(([p]) => p);
+        if (missing.length) this._ucLog('Mod', `chybí mod scopes: ${missing.join(',')}`);
+      } catch (e) { this._ucLog('Mod', `me FAIL ${e.status || 0} ${e.error || e.message || e}`); }
+    }
+    if (seq !== this._modSeq) return;   // mezitím novější dotaz (přepnutí kanálu, přihlášení)
+    const changed = can !== !!this._canModerate;
+    this._canModerate = can;
+    document.body.classList.toggle('uc-can-moderate', can);
+    // Volba vzhledu smazaných zpráv jen pro moda (divák má vždy zašedlé „Zpráva smazána“).
+    const delRow = document.getElementById('row-deleted-style');
+    if (delRow) delRow.hidden = !can;
+    // Odznak podporovatele (společný pro kanál) nastavuje jen mod v Dev mode; Dev mode sám platí jen modovi.
+    const dbRow = document.getElementById('row-donor-badge');
+    if (dbRow) dbRow.hidden = !can;
+    if (changed) this._applyDevMode(this.config.devMode === true);
+    // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu) a dotažený se zahodí.
+    if (!can) { this._deletedLoaderInst?.reset(); this._dropModContent(); }
+    // Chybějící mod scopes účtu (core ModMenu: po 'bot' / 'error:no_actor' nabídne přihlášení s moderací).
+    this._modMissingScopes = can ? missingScopes : {};
+    // Změna role → přebarvit smazané (mod: ztlumení + štítek + dotažení textu, divák: podle nastavení).
+    if (changed) this._reapplyDeleted();
+    // GIFy ke schválení (část 4): mod si dotáhne čekající žádosti kanálu, karty přebarví tlačítka podle role.
+    if (this._gifInst || can) { this._gifs().repaint(); if (can) this._gifs().loadPending(); }
+    // GIF záložka: taby Zamítnuté + duplikáty jen modovi.
+    this._gifPanel?.update();
+    // Broadcast v menu „Psát jako“ jen pro moda / streamera (server roli ověřuje znovu při odeslání).
+    if (changed) this._renderComposer();
+    this._ucLog('Mod', `${channel}: ${can ? `mod (${platforms.join(',')})` : 'není mod'}${this._signedIn ? '' : ' (nepřihlášen)'}`);
+  }
+
+  // ---- Moderace část 2: nabídka na jméno, timeout/ban uživatele, varování účtu ----
+
+  /** ID autora zprávy na platformě (Twitch user-id, Kick sender id, YouTube channel id). */
+  _msgUserId(msg) {
+    const id = msg?.userId ?? msg?.senderId ?? null;
+    return id != null && id !== '' ? String(id) : null;
+  }
+
+  _modMenu() {
+    if (!this._modMenuInst) {
+      this._modMenuInst = new window.UC_CORE.ModMenu({
+        doc: document,
+        api: (path, opts) => this._ucApi(path, opts),
+        onDelete: (t) => {
+          const el = t.messageId ? this._msgEls(t.messageId, t.platform)[0] : null;
+          if (el) this._deleteMessage(el);
+        },
+        onHistory: (t) => this._userHistory().open(t),
+        notify: (text, info) => {
+          if (info?.ok && info.kind === 'restore') this._applyRestored(info.target, info.res);
+          if (info?.error?.status === 401) { this._sys(text); this._refreshAccount(); return; }
+          if (info?.error?.status === 403 && info.error.error === 'not_mod') this._loadModState();
+          this._sys(text);
+        },
+        missingScopes: () => this._modMissingScopes || {},
+        onModScopes: (platform, prompt, info) => this._offerModLogin(platform, prompt, info.kind),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._modMenuInst;
+  }
+
+  /**
+   * Akci provedl bot / neprovedl nikdo, protože účtu chybí mod scopes (core modScopePrompt): hláška
+   * s tlačítkem na přihlášení s moderací (Twitch = jednorázové obnovení starého tokenu).
+   */
+  _offerModLogin(platform, prompt, kind) {
+    this._ucLog('Mod', `${kind}: ${platform} bez mod scopes účtu → „${prompt.action}“`);
+    this._sysAction(prompt.text, prompt.action, () => this._loginPlatform(platform, { mod: true }));
+  }
+
+  /**
+   * Panel „Profil" (core/user-history.js) přes chat — levý klik na jméno (všichni) a položka v nabídce moda.
+   * Render těla, badge, citace i barvy jména jsou tytéž funkce jako v chatu.
+   */
+  _userHistory() {
+    if (!this._userHistoryInst) {
+      this._userHistoryInst = new window.UC_CORE.UserHistoryPanel({
+        doc: document,
+        api: (path, opts) => this._ucApi(path, opts),
+        container: document.getElementById('chat-wrapper'),
+        // Stejný render těla jako chat (emoty, odkazy, cenzura z blacklistu).
+        renderMessage: (m) => this._renderMsgBody(m),
+        renderBadges: (m) => this._badgesEl(m),
+        paintName: (el, info) => this._styleName(el, info.platform, info.login, info.color || info.msg?.color || null),
+        renderReply: (m) => this._buildReplyCtx(m, { interactive: false }),
+        modMenu: this._modMenu(),
+        deletedStyle: () => this.config.deletedStyle,
+        onPlatformCard: (t) => this._openUserCard(t.platform, t.login),
+        platformIcon: (p, uc) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}${uc ? '-gold' : ''}.svg` : null),
+        log: (tag, text) => this._ucLog(tag, text),
+        // GIFy ve zprávách Profilu: zamítnuté / zahozené rozmazaně, náhled s tokenem moda (stejný jako záložka GIFy).
+        gifOrigins: UC_GIF_ORIGINS,
+        gifToken: this._gifTokens(),
+      });
+    }
+    return this._userHistoryInst;
+  }
+
+  /** Levý klik na jméno (všichni, rozhodnutí usera 2026-09-25): Profil autora zprávy; pravý klik u moda dál nabídka. */
+  _openProfile(msg, un) {
+    const platform = msg?.platform;
+    const login = msg?.username || un?.dataset?.username || '';
+    if (!platform || !login) return;
+    const userId = this._msgUserId(msg);
+    // 7TV badge / paint do hlavičky Profilu (dotáhne se jednou za session, Profil se pak překreslí).
+    if (platform === 'twitch' && userId) this._enqueue7tvPaintLookup(userId, login);
+    this._ucLog('Profile', `klik na jméno ${platform}:${userId || '?'} ${login}`);
+    this._userHistory().open({
+      channel: (this.config.channel || '').toLowerCase(),
+      platform,
+      userId,
+      login,
+      displayName: un?.textContent || login,
+      nameColor: un?.style?.color || null,
+    });
+  }
+
+  /** GIFy ke schválení (core/gif.js): karty modům + stav odesílateli u spodku chatu. */
+  _gifs() {
+    if (!this._gifInst) {
+      this._gifInst = new window.UC_CORE.GifRequests({
+        doc: document,
+        container: document.getElementById('chat-wrapper'),
+        api: (path, opts) => this._ucApi(path, opts),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        canModerate: () => !!this._canModerate,
+        // Streamer (vlastní kanál): karta zabalená do záložky ⌃⌃ a GIF rozmazaný (pokyn usera 2026-09-28).
+        streamer: () => this._myChatRole() === 'broadcaster',
+        origins: UC_GIF_ORIGINS,
+        // Posun hodin klienta vůči serveru (GET /gif/state) pro expiresAt karet (audit F1).
+        serverOffset: () => this._gifCdInst?.serverOffset() || 0,
+        // Dříve zamítnuté médium (media.tokenRequired) server vydá jen s tokenem moda.
+        tokens: this._gifTokens(),
+        platformIcon: (p) => (['twitch', 'kick', 'youtube'].includes(p) ? `icons/platform/${p}.svg` : null),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._gifInst;
+  }
+
+  /**
+   * Bublina cooldownu GIFů nad polem pro psaní (core/gif-cooldown.js): GIF odkaz v poli + běžící cooldown
+   * odměny → kolečko se sekundami; odeslání během cooldownu zablokuje (checkSend v _sendMessage).
+   */
+  _gifCd() {
+    if (!this._gifCdInst) {
+      this._gifCdInst = new window.UC_CORE.GifCooldown({
+        doc: document,
+        host: document.getElementById('input-area'),
+        input: this.msgInput,
+        api: (path) => this._ucApi(path),
+        channel: () => (this.config.channel || '').toLowerCase(),
+        platform: () => this.activePlatform || '',
+        review: () => this._gifReviewMode(),
+        enabled: () => !!this.activePlatform && !!this._identity(this.activePlatform),
+        log: (tag, text) => this._ucLog(tag, text),
+        // Stav odměny → GIF záložka (hlavička, zamčení výběru) a pásek pod tlačítkem emotů.
+        onState: () => this._gifPanel?.update(),
+      });
+    }
+    return this._gifCdInst;
+  }
+
+  /** Mod v Dev módu posílá GIFy přes schvalování jako divák (testování); jinak se modovi GIF schválí rovnou. */
+  _gifReviewMode() {
+    return this.config.devMode === true && !!this._canModerate;
+  }
+
+  /** SSE gif-message z /nicknames/stream: schválený GIF = nová zpráva (dedup gif-<id> ve store). */
+  _onGifMessage(d) {
+    const m = window.UC_CORE.gifMessageForChat(d, {
+      channel: this.config.channel || '',
+      origins: UC_GIF_ORIGINS,
+      has: (id) => !!this.store.get(id),
+      outbox: this._gifOutInst,
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    if (m) this._addMessage(m);
+  }
+
+  /**
+   * Médium GIFu do zprávy `el` hned za text (core appendGifMedia). `msg.gif` musí být ověřené (normalizeGifMedia
+   * s originy) — `unavailable` = štítek „[GIF nedostupný]“.
+   */
+  _appendGifMedia(el, msg) {
+    return window.UC_CORE.appendGifMedia(document, el, msg.gif, {
+      log: (tag, t) => this._ucLog(tag, t),
+      // Bez známých rozměrů se výška ustálí až po načtení → dorovnat konec chatu.
+      onSized: () => { if (this.autoScroll) this._scroll(); },
+    });
+  }
+
+  /**
+   * SSE gif-media z /nicknames/stream (spec 2026-09-27-gif-nahled-zahozeni-design.md, core gif-host.js):
+   * zahozené i se zprávami / odebrané → zprávy „smazané“ (gif_removed); soubor smazán → „[GIF nedostupný]“;
+   * znovu vidět → zprávy, které chat má, z GET /chat/messages (rozprostřeně 0–2 s) na místě jako obnovené.
+   */
+  async _onGifMedia(d) {
+    const core = window.UC_CORE;
+    const channel = this.config.channel || '';
+    const log = (tag, text) => this._ucLog(tag, text);
+    const { n, list } = await core.loadGifMediaMessages(d, { channel, api: (p) => this._ucApi(p), has: (k) => core.storeHasKey(this.store, k), log });
+    if (!n) return;
+    const hit = core.applyGifMediaEvent(n, list, {
+      doc: document,
+      store: this.store,
+      msgEls: (id, p) => this._msgEls(id, p),
+      applyDeleted: (p, id, o) => this._applyDeleted(p, id, o),
+      unhide: (x) => this._unhideMessage(x, { restore: true }),
+      origins: UC_GIF_ORIGINS,
+    });
+    this._ucLog('Gif', `gif-media ${n.mediaId} → ${n.state} (${hit} zpráv v chatu${n.state === 'visible' ? `, ${n.messageIds.length} id v události` : ''})`);
+    this._gifPanel?.mediaChanged?.();
+  }
+
+  /** Zavře Profil (přepnutí streamera / kanálu — panel patří kanálu, kde se otevřel). */
+  _closeUserHistory(why) {
+    if (!this._userHistoryInst?.isOpen) return;
+    this._userHistoryInst.close();
+    this._ucLog('Profile', `zavřeno: ${why}`);
+  }
+
+  /** Cíl akce moda (core ModMenu) ze zprávy `el`; `un` = jméno (.un). null = zprávu nejde určit. */
+  _modTarget(el, un = el?.querySelector('.un')) {
+    const id = el?.dataset.msgId || null;
+    const msg = id ? this.store.get(id) : null;
+    const platform = el?.dataset.platform || msg?.platform;
+    const login = msg?.username || un?.dataset.username || '';
+    if (!platform || !login) return null;
+    const nick = this.nicknames.get(platform, login);
+    const confirmed = id && !String(id).startsWith('sent-') && !msg?._optimistic;
+    return {
+      channel: (this.config.channel || '').toLowerCase(),
+      platform,
+      userId: this._msgUserId(msg),
+      login,
+      displayName: un?.textContent || login,
+      nameColor: un?.style.color || null,
+      messageId: confirmed ? id : null,
+      nickname: nick?.nickname || null,
+      color: nick?.color || null,
+      // Zprávu smazal / skryl server → v nabídce „Odkrýt zprávu“ místo „Smazat zprávu“ (ne po timeoutu / banu).
+      deleted: !!el?.classList.contains('uc-deleted--restorable'),
+    };
+  }
+
+  /** Otevře nabídku moda pro autora zprávy `el` (klik na jméno `un`). */
+  _openModMenu(el, un, x, y) {
+    const t = this._modTarget(el, un);
+    if (t) this._modMenu().open(t, { x, y });
+  }
+
+  /** Oko v hover akcích: odkrýt smazanou / skrytou zprávu jen v UnityChatu (POST /moderation/restore přes ModMenu). */
+  _restoreDeleted(el) {
+    const t = this._modTarget(el);
+    if (!t?.messageId) { this._sys('Zprávu nejde určit.'); return; }
+    this._ucLog('Mod', `restore ← ${t.platform}:${t.messageId}`);
+    this._modMenu().run('restore', t);
+  }
+
+  /** Odpověď /moderation/restore (result ok + message) → zprávu hned vykreslit zpátky; SSE message-restored dorazí taky. */
+  _applyRestored(t, res) {
+    if (res?.result !== 'ok' || !t?.messageId || !res.message) return;
+    const msg = this.store.get(String(t.messageId));
+    if (msg) { msg._hidden = false; msg.hidden = false; msg._srvHidden = false; }
+    const n = this._unhideMessage({ platform: t.platform, messageId: t.messageId, message: res.message }, { restore: true });
+    this._ucLog('Mod', `restore → ${t.platform}:${t.messageId} (${n} el)`);
+  }
+
+  /** SSE user-moderated z /nicknames/stream. */
+  _onUserModerated(d) {
+    const n = window.UC_CORE.normalizeUserModerated(d, this.config.channel || '');
+    if (!n) { this._ucLog('ModMenu', `user-moderated ignorováno (${d?.channel || '?'} ${d?.platform || '?'}:${d?.userId || '?'})`); return; }
+    this._applyUserModerated(n, 'sse');
+  }
+
+  /**
+   * Timeout / ban: předchozí zprávy uživatele dostanou styl smazaných zpráv (stejné nastavení deletedStyle)
+   * + štítek „Timeout (5 min)" / „Zabanován". Unban štítek sundá, obsah nechá, jak je.
+   * Idempotentní (SSE i vlastní IRC CLEARCHAT → jeden štítek).
+   */
+  _applyUserModerated(n, src) {
+    const core = window.UC_CORE;
+    const unban = n.action === 'unban';
+    const matches = (m) => m && m.platform === n.platform
+      && ((n.userId && this._msgUserId(m) === n.userId) || (n.login && String(m.username || '').toLowerCase().replace(/^@/, '') === n.login));
+    const ids = new Set();
+    for (const m of this.store.slice()) {
+      if (!matches(m)) continue;
+      if (unban) m._modTag = null;
+      else { m._deleted = true; m._modTag = n.tag; }
+      if (m.id != null) ids.add(String(m.id));
+    }
+    let count = 0;
+    for (const el of this._msgNodes()) {
+      const id = el.dataset.msgId;
+      const m = id ? this.store.get(id) : null;
+      const hit = m ? ids.has(String(id))
+        : (el.dataset.platform === n.platform && !!n.login && el.querySelector('.un')?.dataset.username === n.login);
+      if (!hit) continue;
+      if (!unban) this._paintDeleted(el, m || { platform: n.platform, _deleted: true, message: el.querySelector('.tx')?.textContent || '' });
+      core.applyModTag(el, unban ? null : n.tag);
+      count++;
+    }
+    this._ucLog('ModMenu', `user-moderated[${src}] ${n.action} ${n.platform}:${n.userId || '?'} ${n.login || '?'} tag=${n.tag || '-'} by=${n.by || '-'} → ${ids.size} zpráv, ${count} el`);
   }
 
   // ---- Loading overlay ---------------------------------------------------
@@ -4359,7 +5660,12 @@ class UnityChat {
   // ---- Messages ----
 
   // ---- UnityChat Announcement (command v Židolištce s videem, SSE `announcement`) ----
-  _addAnnouncement(payload) {
+  /**
+   * UnityChat Announcement: živě ze SSE, nebo z historie (`historical`, položka /chat/history s ucAnnouncement —
+   * po obnovení nezmizí, pokyn usera 2026-09-30). Z historie se nic neskrývá (potlačené odpovědi označil server
+   * `anncHidden`) a vkládá se podle času jako zpráva.
+   */
+  _addAnnouncement(payload, { historical = false } = {}) {
     const core = window.UC_CORE;
     const a = core.normalizeAnnouncement(payload);
     if (!a) { this._ucLog('Annc', 'neplatný payload'); return false; }
@@ -4367,13 +5673,13 @@ class UnityChat {
     if (this._anncSeen.has(a.id)) return false;
     this._anncSeen.add(a.id);
     if (!this._pendingReplies) this._pendingReplies = [];
-    if (a.chatReply?.hideInUnityChat) {
+    if (!historical && a.chatReply?.hideInUnityChat) {
       const now = Date.now();
       this._pendingReplies = this._pendingReplies.filter((p) => p.until > now);
       this._pendingReplies.push({ text: a.chatReply.text, until: now + core.ANNC_REPLY_HIDE_MS });
     }
     // Odpověď cizího bota (StreamElements…): už vykreslenou skrýt, jinak počkat na ni.
-    if (a.hideBotReplies.length) {
+    if (!historical && a.hideBotReplies.length) {
       const now = Date.now();
       this._pendingBotReplies = (this._pendingBotReplies || []).filter((p) => p.until > now);
       for (const login of core.hideRecentBotReplies(this.chatEl, a.hideBotReplies, now)) this._pendingBotReplies.push({ login, until: now + core.ANNC_BOT_AHEAD_MS });
@@ -4389,6 +5695,14 @@ class UnityChat {
     if (tx) this._processMentions(tx, 'twitch');
     let replay = null;
     el.querySelector('.ua-media')?.addEventListener('click', (e) => { e.stopPropagation(); replay?.(); });
+    if (historical) {
+      // Starší stránka → před první dosavadní uzel; boot → na konec; jinak podle času mezi zprávy.
+      if (this._prependCursor) this.chatEl.insertBefore(el, this._prependCursor);
+      else if (this._bootLoading) this.chatEl.appendChild(el);
+      else { const anchor = this._firstNewerMsgEl(a.at); if (anchor) this.chatEl.insertBefore(el, anchor); else this.chatEl.appendChild(el); }
+      replay = core.wireAnnouncementVideo(el, { autoplay: false });
+      return true;
+    }
     if (this._parkedBottom.length) { this._parkedBottom.push(el); return true; }
     if (!this.autoScroll) {
       if (this._unreadCount === 0) { const sep = document.createElement('div'); sep.id = 'unread-separator'; sep.className = 'unread-sep'; sep.textContent = 'Nové zprávy'; this.chatEl.appendChild(sep); }
@@ -4451,12 +5765,13 @@ class UnityChat {
 
   /** Přihlášení (nebo napojení další platformy na účet, když už session je) —
    *  stejný flow jako web: /auth/:platform/start → OAuth v okně prohlížeče → /auth/exchange. */
-  async _ucLogin(platform = 'twitch') {
+  async _ucLogin(platform = 'twitch', { mod = false } = {}) {
     const returnTo = chrome.identity.getRedirectURL();
     const current = await this._ucSessionToken();
     const headers = { 'Content-Type': 'application/json' };
     if (current) headers.Authorization = `Bearer ${current}`;   // napojit na existující účet
-    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify({ returnTo }) });
+    // mod: true = navíc moderátorské scopes (mazání zpráv) — backend /auth/:platform/start.
+    const start = await fetch(`${UC_API}/auth/${platform}/start`, { method: 'POST', headers, body: JSON.stringify(mod ? { returnTo, mod: true } : { returnTo }) });
     const sj = await start.json().catch(() => ({}));
     if (!start.ok || !sj.url) throw new Error(sj.error || `start ${start.status}`);
     const final = await chrome.identity.launchWebAuthFlow({ url: sj.url, interactive: true });
@@ -4464,10 +5779,15 @@ class UnityChat {
     if (p.get('uc_error')) throw new Error(p.get('uc_error'));
     const code = p.get('uc_code');
     if (!code) throw new Error('bez kódu');
-    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    // Bearer i při výměně: backend připojí platformu k účtu jen tehdy, když výměnu pošle session
+    // téhož účtu, který přihlášení spustil (ochrana proti login CSRF). Bez něj = samostatné přihlášení.
+    const exHeaders = { 'Content-Type': 'application/json' };
+    if (current) exHeaders.Authorization = `Bearer ${current}`;
+    const ex = await fetch(`${UC_API}/auth/exchange`, { method: 'POST', headers: exHeaders, body: JSON.stringify({ code }) });
     const ej = await ex.json().catch(() => ({}));
     if (!ex.ok || !ej.token) throw new Error(ej.error || `exchange ${ex.status}`);
     await chrome.storage.local.set({ uc_session: ej.token });
+    this._stopAccountStream();   // stream varování patří k předchozí session
     this._ucLog('Account', `login ok (${platform})`);
     this._refreshAccount();
     return ej.token;
@@ -4485,7 +5805,9 @@ class UnityChat {
         this._ucLog('Account', 'session vypršela → odhlášen');
       } else if (r.ok) {
         const j = await r.json();
-        this._account = { accountId: j.accountId, platforms: j.platforms || {} };
+        this._account = { accountId: j.accountId, platforms: j.platforms || {}, gifClientFetch: j.gifClientFetch || 'ask', badgeReplaceGlobal: j.badgeReplaceGlobal === true };
+        // Nepotvrzená varování od moderátora (moderace část 2) — okno + blokace psaní.
+        this._warn().set(j.warnings || []);
       }
       // Jiná chyba (síť, 5xx): nechat poslední známý stav.
     } catch (e) { this._ucLog('Account', `me FAIL ${e.message || e}`); if (this._account === undefined) this._account = null; }
@@ -4509,6 +5831,180 @@ class UnityChat {
     this._signedIn = linked.length > 0;
     this._updateQrAvailability();
     this._emailSettings?.refresh?.();
+    this._loadModState();
+    this._refreshMentionHighlights();
+    // Varování účtu: SSE jen pro tento účet (ticket); bez přihlášení pryč.
+    if (this._signedIn) this._startAccountStream();
+    else { this._stopAccountStream(); this._warnings?.clear(); this._gifInst?.clear(); this._gifOutInst?.clear(); this._gifTokensInst?.clear(); }
+    this._gifCdInst?.reset();
+    // Stav odměny GIFů hned (indikátor pod tlačítkem emotů, GIF záložka).
+    if (this._signedIn) this._gifCd().fetchState();
+    this._gifPanel?.update();
+    // Výročí na Twitchi po přihlášení / změně účtu (stav bere cookie Twitche, ne účet UnityChatu).
+    // Odhlášení z UnityChatu / jiný Twitch účet → banner pryč hned; znovu se ptát jen při změně účtu
+    // (otevření nastavení účet také obnovuje).
+    const annivAcct = this._signedIn ? (acc?.platforms?.twitch?.login || '') : null;
+    const annivChanged = annivAcct !== this._annivAcct;
+    if (annivChanged && this._annivAcct !== undefined) this._annivReset('account');
+    this._annivAcct = annivAcct;
+    if (this._signedIn) this._checkAnniversary('account', { force: annivChanged });
+    // Vlastní GIF zprávy z historie (zamítnuté / čekající) podle identity účtu → štítek, po odhlášení zase pryč.
+    this._reapplyDeleted();
+    // Stažení GIFu prohlížečem odesílatele (core/gif-client-fetch.js): instalovat jen jednou, až outbox existuje.
+    if (!this._gifCfUninstall && this._account) {
+      this._gifCfUninstall = window.UC_CORE?.installGifClientFetch?.(document, this.chatEl, {
+        outbox: this._gifOut(),
+        upload: async (buf, token, remember) => {
+          const tok = await this._ucSessionToken();
+          const r = await fetch(`${UC_API}/gif/client-upload`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Gif-Token': token, ...(remember ? { 'X-Gif-Remember': '1' } : {}), ...(tok ? { Authorization: `Bearer ${tok}` } : {}) }, body: buf, cache: 'no-store', signal: AbortSignal.timeout(30000) });
+          let j = {}; try { j = await r.json(); } catch {}
+          if (remember && r.ok && this._account) { this._account.gifClientFetch = 'always'; this._syncGifClientFetchRow(); }
+          return { ok: r.ok && j.ok !== false, error: j.error, status: r.status };
+        },
+        decline: async (token, remember) => { await this._ucApi('/gif/client-fetch/decline', { method: 'POST', body: { token, remember } }); if (remember && this._account) { this._account.gifClientFetch = 'never'; this._syncGifClientFetchRow(); } },
+        pref: () => this._account?.gifClientFetch || 'ask',
+        log: (tag, t) => this._ucLog(tag, t),
+      });
+    }
+    this._syncGifClientFetchRow();
+    this._syncBadgeReplaceRow();
+  }
+
+  /** Řádek předvolby stažení GIFu prohlížečem: jen s účtem; hodnota z /auth/me, změna → PUT /account/gif-prefs. */
+  /**
+   * Volba účtu „odznak podporovatele místo globálního odznaku Twitche“ (core badgeReplaceHtml, PUT /account/badge-prefs):
+   * jen s propojeným Twitchem; pod ní náhled vlastní zprávy (badgePreviewHtml) — přezdívka, barva, odznaky.
+   */
+  _syncBadgeReplaceRow() {
+    const row = document.getElementById('badge-replace-row');
+    if (!row) return;
+    const core = window.UC_CORE;
+    const has = !!this._account?.platforms?.twitch;
+    row.hidden = !has;
+    if (!has) { row.innerHTML = ''; return; }
+    if (!row._ucWired) {
+      row._ucWired = true;
+      row.innerHTML = core.badgeReplaceHtml({ checked: this._account.badgeReplaceGlobal === true });
+      row.addEventListener('change', async (e) => {
+        const cb = e.target.closest?.('[name="uc-badge-replace"]');
+        if (!cb) return;
+        const v = !!cb.checked;
+        // Náhled může změnit výšku řádku (zalomení) → panel přejede (core morphResize), jako u záložek.
+        core.morphResize(document.getElementById('settings'), () => this._renderBadgePreview());
+        try {
+          await this._ucApi('/account/badge-prefs', { method: 'PUT', body: { replaceGlobal: v } });
+          if (this._account) this._account.badgeReplaceGlobal = v;
+          this._ucLog('Donor', `volba místo globálního odznaku → ${v}`);
+          // Vlastní zprávy v chatu hned podle nové volby (server ji dává jen nově vykresleným).
+          const me = String(this._identity('twitch')?.login || '').toLowerCase();
+          for (const el of this._msgNodes()) {
+            const m = this.store.get(el.dataset.msgId);
+            if (m?.platform === 'twitch' && m.donor && String(m.username || '').toLowerCase() === me) { m.donorReplace = v; core.setMessageBadges(el, this._badgesEl(m)); }
+          }
+        } catch (err) {
+          cb.checked = this._account?.badgeReplaceGlobal === true;
+          this._renderBadgePreview();
+          this._ucLog('Donor', `volba se neuložila: ${err?.error || err?.message || err}`);
+        }
+      });
+      // Náhled sleduje přezdívku a barvu hned při psaní.
+      for (const id of ['input-nickname', 'input-color-hex', 'input-color-picker']) document.getElementById(id)?.addEventListener('input', () => this._renderBadgePreview());
+    } else {
+      const cb = row.querySelector('[name="uc-badge-replace"]');
+      if (cb) cb.checked = this._account.badgeReplaceGlobal === true;
+    }
+    this._renderBadgePreview();
+  }
+
+  /** Náhled vlastní zprávy pod volbou odznaku: jméno (přezdívka / displayName), barva, vlastní odznaky Twitche + odznak UC. */
+  _renderBadgePreview() {
+    const row = document.getElementById('badge-replace-row');
+    const box = row?.querySelector('.uc-dbr-preview');
+    if (!box || row.hidden) return;
+    const core = window.UC_CORE;
+    const $ = (id) => document.getElementById(id);
+    const id = this._identity('twitch');
+    const login = String(id?.login || '').toLowerCase();
+    const known = this._chatUsers.get(`twitch:${login}`);
+    const hex = ($('input-color-hex')?.value || '').trim();
+    const color = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : (this.nicknames.getColor('twitch', login) || known?.color || this._platformColors?.twitch || '');
+    const badges = String(known?.badgesRaw || '').split(',').filter(Boolean).map((b) => {
+      const entry = this._badgeEntry('twitch', b);
+      const url = entry && typeof entry === 'object' ? entry.url : entry;
+      return url ? { url, title: (entry && typeof entry === 'object' && entry.title) || b.split('/')[0], global: core.isGlobalTwitchBadge(b) } : null;
+    }).filter(Boolean);
+    const mine = this.store.slice?.().find?.((m) => m?.platform === 'twitch' && m.donorCzk && String(m.username || '').toLowerCase() === login);
+    core.renderBadgePreviewInto(box, {
+      displayName: ($('input-nickname')?.value || '').trim() || this._accountName('twitch') || login,
+      color: color ? core.readableColor?.(color) || color : '',
+      badges,
+      replace: !!row.querySelector('[name="uc-badge-replace"]')?.checked,
+      donorBadge: this._channelPrefs?.donorBadge,
+      amountCzk: mine?.donorCzk || null,
+    });
+  }
+
+  _syncGifClientFetchRow() {
+    const $ = (id) => document.getElementById(id);
+    const row = $('row-gif-client-fetch'), sel = $('input-gif-client-fetch');
+    if (!row || !sel) return;
+    row.hidden = !this._account;
+    if (this._account) sel.value = this._account.gifClientFetch || 'ask';
+    if (!sel._ucWired) {
+      sel._ucWired = true;
+      sel.addEventListener('change', async () => {
+        const v = sel.value;
+        try { await this._ucApi('/account/gif-prefs', { method: 'PUT', body: { clientFetch: v } }); if (this._account) this._account.gifClientFetch = v; this._ucLog('Gif', `předvolba stažení prohlížečem → ${v}`); }
+        catch (e) { this._ucLog('Gif', `předvolba se neuložila: ${e?.error || e}`); sel.value = this._account?.gifClientFetch || 'ask'; }
+      });
+    }
+  }
+
+  /** Okno varování od moderátora (core/account-warnings.js), lazy. */
+  _warn() {
+    if (!this._warnings) {
+      this._warnings = new window.UC_CORE.WarningModal({
+        doc: document,
+        onAck: (id) => this._ucApi(`/account/warnings/${encodeURIComponent(id)}/ack`, { method: 'POST' }),
+        onChange: () => this._renderComposer(),
+        log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
+      });
+    }
+    return this._warnings;
+  }
+
+  _startAccountStream() {
+    if (this._accStream) return;
+    // GIFy (moderace část 4, knihovna): fronta modům, průběh / štítky odesílateli, resync po znovupřipojení (core gif-host.js).
+    const gif = window.UC_CORE.gifAccountHandlers({
+      requests: () => this._gifs(),
+      outbox: () => this._gifOut(),
+      cooldown: () => this._gifCdInst,
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+    this._accStream = window.UC_CORE.connectAccountStream({
+      baseUrl: UC_API,
+      getTicket: async () => (await this._ucApi('/account/stream-ticket', { method: 'POST' })).ticket,
+      onWarning: (w) => this._warn().add(w),
+      onAck: (id) => this._warn().remove(id),
+      handlers: gif.handlers,
+      onOpen: gif.onOpen,
+      log: (tag, text) => this._ucLog('ModMenu', `${tag} ${text}`),
+    });
+  }
+
+  _stopAccountStream() {
+    this._accStream?.close();
+    this._accStream = null;
+  }
+
+  /** Nepotvrzená varování znovu ze serveru (po 403 warning_pending z /chat/send). */
+  async _loadWarnings() {
+    try {
+      const j = await this._ucApi('/account/warnings');
+      this._warn().set(j.warnings || []);
+    } catch (e) { this._ucLog('ModMenu', `warnings FAIL ${e.status || 0} ${e.error || e.message || e}`); }
+    this._warn().open();
   }
 
   /** Jméno, pod kterým mě vidí chat platformy: Twitch/Kick display name, YouTube handle (login),
@@ -4534,8 +6030,12 @@ class UnityChat {
   }
 
   _selectSendPlatform(platform, { quiet = false, auto = false } = {}) {
-    // Ruční volba během odpovídání = platforma zůstane, návrat po odpovědi se nekoná.
-    if (!auto) this._replyPrevPlatform = null;
+    // Ruční volba během odpovídání = platforma zůstane, návrat po odpovědi se nekoná; ruší i Broadcast.
+    if (!auto) {
+      this._replyPrevPlatform = null;
+      this._replyPrevBroadcast = false;
+      if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+    }
     this._sendPlatform = platform;
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
     if (!this._legacySend()) this._setActivePlatform(platform);
@@ -4557,10 +6057,19 @@ class UnityChat {
     this.sendBtn.classList.toggle('hidden', known && !canWrite);
     cta?.classList.toggle('hidden', !known || canWrite);
     btn?.classList.toggle('hidden', known && !canWrite);
-    this.msgInput.disabled = !canWrite;
-    this.sendBtn.disabled = !canWrite;
-    this.msgInput.placeholder = platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
-    if (btn) btn.title = id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
+    // Nepotvrzené varování od moderátora → psát nejde, dokud ho uživatel nepotvrdí (server blokuje taky).
+    const warned = canWrite && !!this._warnings?.blocked;
+    document.body.classList.toggle('uc-warning-pending', warned);
+    this.msgInput.disabled = !canWrite || warned;
+    this.sendBtn.disabled = !canWrite || warned;
+    const bc = canWrite && this._isBroadcast();
+    this.msgInput.placeholder = warned ? 'Máš nepotvrzené varování od moderátora — potvrď ho, pak můžeš psát.'
+      : bc ? 'Zpráva na všechny platformy...'
+      : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
+    if (btn) btn.title = bc ? `Broadcast: píšeš na ${this._broadcastTargets().map((p) => NAMES[p]).join(', ')}`
+      : id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
+    // Badge u pole: v Broadcastu všechna tři loga (composer.css #active-badge.bc), jinak logo platformy.
+    this.platformBadge?.classList.toggle('bc', bc);
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
     this._qdDock?.update();
@@ -4573,6 +6082,7 @@ class UnityChat {
     window.UC_CORE.renderPlatformMenu(menu, {
       me: this._account,
       current: this.activePlatform,
+      broadcast: { targets: this._broadcastTargets(), selected: this._isBroadcast(), onSelect: () => this._selectBroadcast() },
       onSelect: (p) => this._selectSendPlatform(p),
       onLogin: (p) => this._loginPlatform(p),
       onUnlink: (p) => this._unlinkPlatform(p),
@@ -4621,9 +6131,9 @@ class UnityChat {
   }
 
   /** Přihlásit / připojit platformu a rovnou na ni psát. Vrací true při úspěchu. */
-  async _loginPlatform(platform) {
+  async _loginPlatform(platform, { mod = false } = {}) {
     try {
-      await this._ucLogin(platform);
+      await this._ucLogin(platform, { mod });
       await this._refreshAccount();
       if (this._identity(platform)) this._selectSendPlatform(platform);
       return true;
@@ -4686,6 +6196,19 @@ class UnityChat {
     el.textContent = text;
     this.chatEl.appendChild(el);
     this._scroll();
+    return el;
+  }
+
+  /** Systémový řádek s tlačítkem akce (jednorázové — po kliknutí zmizí). */
+  _sysAction(text, label, onClick) {
+    const el = this._sys(text);
+    const btn = document.createElement('button');
+    btn.className = 'sys-action';
+    btn.textContent = label;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); btn.remove(); onClick(); });
+    el.appendChild(document.createTextNode(' '));
+    el.appendChild(btn);
+    return el;
   }
 
   // Twitch's hash fallback may not match the color Twitch actually stores for
@@ -4747,6 +6270,7 @@ class UnityChat {
         badgesRaw: prev?.badgesRaw || '',
         userId: prev?.userId || null,
         _paint: prev?._paint,
+        _badge7tv: prev?._badge7tv,
         _paintChecked: prev?._paintChecked || false,
         _fromGQL: true,
       };
@@ -4812,6 +6336,7 @@ class UnityChat {
         badgesRaw: prev?.badgesRaw || '',
         userId: userId || prev?.userId || null,
         _paint: prev?._paint,
+        _badge7tv: prev?._badge7tv,
         _paintChecked: prev?._paintChecked || false,
         _fromGQL: !!color,
       };
@@ -4881,7 +6406,7 @@ class UnityChat {
     await Promise.allSettled(batch.map(async ({ userId, username }) => {
       const key = `twitch:${username}`;
       const prev = this._chatUsers.get(key) || { name: username, platform: 'twitch' };
-      const { paint, emoteSet } = await _7tvFetchUserData(userId);
+      const { paint, emoteSet, badge } = await _7tvFetchUserData(userId);
       const entry = { ...prev, _paintChecked: true };
       if (paint) {
         entry._paint = paint;
@@ -4890,6 +6415,8 @@ class UnityChat {
         // Negative result still stored so we skip re-query next time.
         entry._paint = null;
       }
+      // 7TV badge: do dat uživatele (render badge v chatu i v Profilu, _badgesEl) + dopsat k vykresleným zprávám.
+      entry._badge7tv = badge || null;
       // Personal emote loadout: register so the user's emotes resolve in any
       // channel, not just their own. e.g. KombatWombatt typing kombatwDefeated
       // outside his channel still renders the emote. Re-render any of their
@@ -4900,6 +6427,8 @@ class UnityChat {
       }
       this._chatUsers.set(key, entry);
       this._chatUsers.set(username, entry);
+      if (badge) this._apply7tvBadgeToRenderedMessages(username);
+      if (paint || badge) this._userHistoryInst?.isOpen && this._userHistoryInst.refreshBadges();
     }));
 
     if (!this._userColorTimer) {
@@ -5073,10 +6602,11 @@ class UnityChat {
       isGiftBundle: !!m.isGiftBundle,
       isSubGift: !!m.isSubGift,
       isMilestone: !!m.isMilestone,
+      isModiversary: !!m.isModiversary,
       isAction: !!m.isAction,
       scraped: !!m.scraped,
       optimistic: !!m._optimistic,
-      cleared: m._cleared || null,
+      modTag: m._modTag || null,
       msgLen: (m.message || '').length,
       msgPreview: (m.message || '').slice(0, 80),
     }));
@@ -5430,6 +6960,140 @@ class UnityChat {
   // channel. Runs every 8s (pin state rarely changes faster). Caches
   // the last result in this._gqlPinCards so _handleHighlights merges
   // them into whatever DOM-sourced highlight cards are active.
+  // ---- Výročí na Twitchi: sdílení vlastního výročí předplatného / moderátorského výročí ----
+  // Podklad docs/superpowers/specs/2026-09-27-twitch-vyroci-research.md. Stav i sdílení přes background (GQL s cookie
+  // Twitche: ANNIV_STATUS / ANNIV_SHARE / ANNIV_DISMISS), banner nad polem pro psaní (core/anniversary.js).
+  // Ptá se po připojení ke kanálu (onRoomId) a po přihlášení, pak jednou za 30 min — Twitch výzvu také nepolluje.
+  // Zavření výročí předplatného se pamatuje lokálně podle id notifikace (uc_anniv_dismissed), jako Twitch.
+  _annivBanner() {
+    if (!this._anniv) {
+      const host = document.getElementById('anniv-banner');
+      if (!host) return null;
+      this._anniv = new window.UC_CORE.AnniversaryBanner({
+        doc: document,
+        host,
+        onShare: (item, opts) => this._annivShare(item, opts),
+        onDismiss: (item) => this._annivDismiss(item),
+        onHide: () => this._annivShowNext(),
+        // Našeptávač emotů v poli zprávy: stejné zdroje, řazení, vzhled i nastavení („:jméno", Fulltext) jako hlavní
+        // pole. Enter při otevřeném seznamu jen potvrdí výběr — sdílení výročí je jednorázové, nesmí odejít omylem.
+        attachInput: (input, { onApply }) => window.UC_CORE.attachEmoteAutocomplete(input, {
+          emotes: this.emotes,
+          options: () => ({ colon: this.config.acColon === true, fulltext: this.config.acFulltext === true }),
+          setFulltext: (on) => { this.config.acFulltext = on; this._saveConfig(); },
+          onApply,
+          enterConfirms: true,
+        }),
+        log: (tag, text) => this._ucLog(tag, text),
+      });
+    }
+    return this._anniv;
+  }
+
+  _annivStart() {
+    if (this._annivTimer) return;
+    this._annivTimer = setInterval(() => this._checkAnniversary('interval', { force: true }), 30 * 60 * 1000);
+  }
+
+  async _annivDismissed() {
+    let map = {};
+    try {
+      const r = await chrome.storage.local.get('uc_anniv_dismissed');
+      map = window.UC_CORE.annivPruneDismissed(r.uc_anniv_dismissed || {});
+    } catch { /* ignore */ }
+    // Právě zavřené / sdílené (zápis do storage ještě nemusí být hotový, onHide přijde hned).
+    return { ...map, ...(this._annivGone || {}) };
+  }
+
+  async _annivRemember(key, type) {
+    (this._annivGone ||= {})[key] = { at: Date.now(), type };
+    const map = await this._annivDismissed();
+    map[key] = { at: Date.now(), type };
+    try { await chrome.storage.local.set({ uc_anniv_dismissed: map }); } catch { /* ignore */ }
+  }
+
+  /** Zapomenout stav a skrýt banner (odhlášení, jiný účet, chyba stavu). */
+  _annivReset(reason, { keepThrottle = false } = {}) {
+    this._annivStatus = null;
+    if (!keepThrottle) this._annivLast = null;
+    if (this._anniv?.current) { this._ucLog('Anniversary', `banner pryč (${reason})`); this._anniv.hide({ instant: true }); }
+  }
+
+  /** Stav výročí pro aktuální kanál. `force` obejde 5min pojistku (onRoomId chodí i při každém reconnectu). */
+  async _checkAnniversary(reason, { force = false } = {}) {
+    const channel = (this.config.channel || '').toLowerCase();
+    const banner = this._annivBanner();
+    if (!banner) return;
+    // Jen s přihlášením do UnityChatu (po odhlášení banner nevisí).
+    if (this._signedIn === false) { this._annivReset('odhlášen'); return; }
+    if (!channel || !this.config.twitch) { this._annivStatus = null; if (!banner.expanded) banner.hide({ instant: true }); return; }
+    if (this._annivStatus && this._annivStatus.channel !== channel) { this._annivStatus = null; banner.hide({ instant: true }); }
+    const now = Date.now();
+    if (!force && this._annivLast?.channel === channel && now - this._annivLast.at < 5 * 60 * 1000) return;
+    if (this._annivInflight?.channel === channel) return this._annivInflight.p;
+    this._annivLast = { channel, at: now };
+    const p = (async () => {
+      let st = null;
+      try { st = await chrome.runtime.sendMessage({ type: 'ANNIV_STATUS', channel }); } catch (e) { st = { ok: false, error: e.message }; }
+      if ((this.config.channel || '').toLowerCase() !== channel) return; // mezitím přepnuto
+      this._ucLog('Anniversary', `check ${reason} ${channel}: ok=${!!st?.ok} loggedIn=${!!st?.loggedIn} resub=${st?.resub ? st.resub.months + 'm' : '-'} mod=${st?.modiversary ? st.modiversary.months + 'm' : '-'}${st?.error ? ' error=' + st.error : ''}`);
+      // Chyba stavu (GQL, síť): starý banner nenechat viset.
+      if (!st?.ok) { this._annivReset(`chyba ${st?.error || ''}`, { keepThrottle: true }); return; }
+      // Jiný účet v cookie Twitche než minule → starou výzvu pryč (klíče výzev nesou id účtu).
+      if (this._annivStatus && st.userId && this._annivStatus.userId !== st.userId) this._annivReset('jiný Twitch účet');
+      this._annivStatus = { ...st, channel };
+      await this._annivShowNext();
+    })().finally(() => { if (this._annivInflight?.p === p) this._annivInflight = null; });
+    this._annivInflight = { channel, p };
+    return p;
+  }
+
+  /** Vybrat výzvu ze známého stavu (resub má přednost) a ukázat ji; nic → banner pryč (rozepsaný nechat). */
+  async _annivShowNext() {
+    const banner = this._annivBanner();
+    if (!banner) return;
+    const st = this._annivStatus;
+    const item = st ? window.UC_CORE.pickAnniversary(st, await this._annivDismissed()) : null;
+    if (item) banner.show({ ...item, channelLogin: st.channel, channelId: st.channelId });
+    else if (banner.current && !banner.expanded && !banner.current.mock) banner.hide();
+  }
+
+  async _annivShare(item, { text, includeStreak }) {
+    const core = window.UC_CORE;
+    if (item.mock) {
+      // /uc anniv — lokální náhled, nic se na Twitch neposílá.
+      await new Promise((r) => setTimeout(r, 500));
+      if (item.mock === 'integrity') return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
+      if (item.mock === 'already') return { ok: false, error: core.annivErrorText('ALREADY_SENT') };
+      return { ok: true };
+    }
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: 'ANNIV_SHARE', kind: item.kind, channelLogin: item.channelLogin, channelId: item.channelId, tokenId: item.id, text, includeStreak });
+    } catch (e) { res = { ok: false, code: 'UNKNOWN', error: e.message }; }
+    this._ucLog('Anniversary', `share ${item.kind}: ok=${!!res?.ok} code=${res?.code || '-'} integrity=${!!res?.integrity} len=${text.length} streak=${!!includeStreak}`);
+    // Client-Integrity challenge (nebo jiná chyba): jen hláška, banner zůstává. Zálohu přes stránku Twitche
+    // controller zamítl (klikala by na libovolnou výzvu / jiný kanál); co Twitch chce, ukáže log Anniversary
+    // z background (errors + extensions).
+    if (res?.integrity) return { ok: false, error: core.ANNIV_INTEGRITY_TEXT };
+    if (!res?.ok) return { ok: false, error: core.annivErrorText(res?.code) };
+    await this._annivRemember(item.key, 'shared');
+    // Za chvíli se Twitch zeptat znovu (výzva by měla zmizet); banner zatím ukazuje potvrzení.
+    setTimeout(() => this._checkAnniversary('shared', { force: true }), 8000);
+    return { ok: true };
+  }
+
+  async _annivDismiss(item) {
+    if (item.mock) return;
+    await this._annivRemember(item.key, 'dismissed');
+    if (item.kind === 'mod') {
+      // Twitch křížkem volá DismissUserModiversaryCallout (chybu ignoruje) — lokální záznam drží zavření i při chybě.
+      chrome.runtime.sendMessage({ type: 'ANNIV_DISMISS', kind: 'mod', channelId: item.channelId })
+        .then((r) => this._ucLog('Anniversary', `dismiss mod ok=${!!r?.ok}${r?.integrity ? ' integrity' : ''}`))
+        .catch(() => {});
+    }
+  }
+
   _startPinPoll() {
     if (this._pinPollT) return;
     this._gqlPinCards = [];
@@ -6033,7 +7697,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6094,37 +7758,21 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
     body.appendChild(un);
 
-    const tier = { '1000': '1', '2000': '2', '3000': '3' }[msg.subPlan] || '1';
-    const tierLabel = isPrime ? 'Prime' : `Tier ${tier}`;
+    // Česky se třemi tvary („Předplatné Tier 1. Celkem 7 měsíců, 3 měsíce v řadě.“) — sdílené s webem (core/anniversary.js).
     const line = document.createElement('div');
     line.className = 'sub-line';
-    const prefix = document.createElement('strong');
-    prefix.textContent = 'Subscribed';
-    line.appendChild(prefix);
-    line.appendChild(document.createTextNode(` with `));
-    const tierSpan = document.createElement('strong');
-    tierSpan.className = isPrime ? 'sub-tier-prime' : 'sub-tier';
-    tierSpan.textContent = tierLabel;
-    line.appendChild(tierSpan);
-    line.appendChild(document.createTextNode('.'));
-    if (msg.subMonths && msg.subMonths > 1) {
-      line.appendChild(document.createTextNode(` They've subscribed for `));
-      const m = document.createElement('strong');
-      m.textContent = `${msg.subMonths} month${msg.subMonths === 1 ? '' : 's'}`;
-      line.appendChild(m);
-      if (msg.subStreak && msg.subStreak > 1) {
-        line.appendChild(document.createTextNode(`, `));
-        const s = document.createElement('strong');
-        s.textContent = `${msg.subStreak} month${msg.subStreak === 1 ? '' : 's'} in a row`;
-        line.appendChild(s);
-      }
-      line.appendChild(document.createTextNode('.'));
+    for (const p of window.UC_CORE.subLineParts(msg)) {
+      if (!p.strong) { line.appendChild(document.createTextNode(p.text)); continue; }
+      const st = document.createElement('strong');
+      if (p.cls) st.className = p.cls;
+      st.textContent = p.text;
+      line.appendChild(st);
     }
     body.appendChild(line);
 
@@ -6132,6 +7780,43 @@ class UnityChat {
     if (msg.message) {
       const tx = document.createElement('div');
       tx.className = 'sub-text tx';
+      tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
+      this._processMentions(tx, 'twitch');
+      body.appendChild(tx);
+    }
+    el.appendChild(body);
+  }
+
+  /** Moderátorské výročí (USERNOTICE modiversary): meč + „{jméno} je už N … moderátorem!“ + text uživatele (core/anniversary.js). */
+  _renderModiversaryEvent(el, msg) {
+    const core = window.UC_CORE;
+    el.classList.add('modiversary-event');
+    const icon = document.createElement('span');
+    icon.className = 'modiv-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = core.ANNIV_SWORD_SVG;
+    el.appendChild(icon);
+    const body = document.createElement('div');
+    body.className = 'modiv-body';
+    const line = document.createElement('div');
+    line.className = 'modiv-line';
+    const un = document.createElement('span');
+    un.className = 'un';
+    un.textContent = this._censorName(msg.username);
+    un.dataset.platform = msg.platform;
+    un.dataset.username = msg.username.toLowerCase();
+    un.addEventListener('click', () => this._openProfile(msg, un));
+    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
+    const ucProfile = this.nicknames.get(msg.platform, msg.username);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
+    const parts = core.modiversaryParts(msg.modMonths);
+    line.append(un, document.createTextNode(' ' + parts.lead));
+    if (parts.strong) { const st = document.createElement('strong'); st.textContent = parts.strong; line.appendChild(st); }
+    if (parts.tail) line.appendChild(document.createTextNode(parts.tail));
+    body.appendChild(line);
+    if (msg.message) {
+      const tx = document.createElement('div');
+      tx.className = 'modiv-text tx';
       tx.innerHTML = this.emotes.renderTwitch(msg.message, msg.twitchEmotes, { platform: 'twitch', author: msg.username });
       this._processMentions(tx, 'twitch');
       body.appendChild(tx);
@@ -6164,7 +7849,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6234,7 +7919,7 @@ class UnityChat {
     un.textContent = this._censorName(msg.username);
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
     un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
@@ -6300,7 +7985,9 @@ class UnityChat {
         span.dataset.mentionUser = login;
         const entry = this._chatUsers.get(`${platform}:${login}`)
           || this._chatUsers.get(login);
-        const color = entry?.color;
+        // Vlastní barva z profilu UnityChatu má přednost před barvou z platformy — stejně jako u jména
+        // (hlášení usera 2026-09-29: zmínka měla barvu z YouTube, jméno barvu z profilu).
+        const color = this.nicknames?.getColor(platform, login) || entry?.color;
         if (color) {
           const sanitized = this.emotes._sc(color);
           if (sanitized) span.style.color = readableColor(sanitized);
@@ -6332,37 +8019,38 @@ class UnityChat {
     // words. Plain key check is enough because _chatUsers only contains
     // entries for users we've actually seen (chat history + scrape +
     // queued mentions), so common Czech/English words don't collide.
-    const bareRe = /[A-Za-z0-9_]{3,25}/g;
+    // Jen celá slova (i s diakritikou: „kamo“ v „kamošem“ ne) a ne uvnitř adresy ani odkazu
+    // („robdiesalot“ v www.robdiesalot.com) — core/mentions.js bareWords.
     const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     const nodes2 = [];
     let n2;
     while ((n2 = walker2.nextNode())) {
       // Skip text nodes already inside a .mention (don't re-wrap @mentions)
       if (n2.parentNode?.classList?.contains('mention')) continue;
+      if (n2.parentElement?.closest('a')) continue;
       nodes2.push(n2);
     }
     for (const textNode of nodes2) {
       const text = textNode.nodeValue;
       if (!text) continue;
-      bareRe.lastIndex = 0;
-      let match;
       let last = 0;
       let frag = null;
-      while ((match = bareRe.exec(text)) !== null) {
-        const word = match[0];
+      for (const match of window.UC_CORE.bareWords(text)) {
+        const word = match.word;
         const lname = word.toLowerCase();
-        const entry = this._chatUsers.get(`${platform}:${lname}`)
-          || this._chatUsers.get(lname);
-        // Require a chatter entry — and skip the message author itself
-        // (their own username appears literally inside the message body
-        // on /me lines, no need to "mention" themselves).
-        if (!entry || !entry.color) continue;
+        // Slovo = login známého uživatele, nebo UC přezdívka („Jouki“ → jouki728; víc loginů → ten z chatu) → barva jména.
+        const known = this._chatUsers.has(`${platform}:${lname}`) || this._chatUsers.has(lname);
+        const login = known ? lname : (this.nicknames?.resolveNickname(lname, platform) || this.nicknames?.resolveNickname(lname) || null);
+        if (!login) continue;
+        const entry = this._chatUsers.get(`${platform}:${login}`) || this._chatUsers.get(login);
+        const color = this.nicknames?.getColor(platform, login) || entry?.color || null;
+        if (!color) continue;
         if (!frag) frag = document.createDocumentFragment();
         if (match.index > last) frag.appendChild(document.createTextNode(text.substring(last, match.index)));
         const span = document.createElement('span');
         span.className = 'mention bare';
-        span.dataset.mentionUser = lname;
-        const sanitized = this.emotes._sc(entry.color);
+        span.dataset.mentionUser = login;
+        const sanitized = this.emotes._sc(color);
         if (sanitized) span.style.color = readableColor(sanitized);
         span.textContent = word;
         frag.appendChild(span);
@@ -6381,6 +8069,15 @@ class UnityChat {
     this._emotePreviewWired = true;
 
     // Delegated hover-intent over emote <img> inside chat message bodies.
+    // Pravé tlačítko na jméno → nabídka moda (core/mod-menu.js). Divák (ne mod) má nativní menu.
+    this.chatEl.addEventListener('contextmenu', (e) => {
+      const un = e.target?.closest?.('.un');
+      if (!un || !this._canModerate) return;
+      const el = un.closest('.msg');
+      if (!el) return;
+      e.preventDefault();
+      this._openModMenu(el, un, e.clientX, e.clientY);
+    });
     this.chatEl.addEventListener('mouseover', (e) => {
       const img = e.target?.closest?.('.tx .emote');
       if (!img) return;
@@ -6484,6 +8181,13 @@ class UnityChat {
   // messages.
   /** Tělo zprávy → HTML (emoty, odkazy, cenzura z blacklistu). Sdílí render i přerenderování. */
   _renderMsgBody(msg) {
+    // Vlastní GIF v konečném stavu (zamítnuto / vypršelo / nepovolený, core syncGifOwnFinal → _gifOwnFinal): odkaz
+    // v textu nesmí ožít při žádném překreslení (review 2026-09-27 M6).
+    const html = this._renderMsgBodyRaw(msg);
+    return msg?._gifOwnFinal ? window.UC_CORE.stripLinksHtml(html) : html;
+  }
+
+  _renderMsgBodyRaw(msg) {
     const renderCtx = { platform: msg.platform, author: msg.username };
     if (msg.platform === 'twitch') {
       // Reply messages strip the "@username " prefix from the body, but the
@@ -6500,13 +8204,15 @@ class UnityChat {
   /** Po změně blacklistu: přerenderovat text i jméno všech zpráv (i zaparkovaných mimo DOM). */
   _reRenderAllMessages() {
     let n = 0;
-    for (const msgEl of [...this.chatEl.querySelectorAll('.msg[data-msg-id]'), ...(this._parkedTop || []), ...(this._parkedBottom || [])]) {
+    for (const msgEl of this._msgNodes()) {
       const cached = msgEl.dataset?.msgId ? this.store.get(msgEl.dataset.msgId) : null;
       if (!cached) continue;
       const tx = msgEl.querySelector('.tx');
       if (tx) { tx.innerHTML = this._renderMsgBody(cached); this._processMentions(tx, cached.platform); }
       const un = msgEl.querySelector('.un');
       if (un) un.textContent = this._censorName(this.nicknames.get(cached.platform, cached.username)?.nickname || cached.username);
+      // Smazaná/skrytá zpráva: znovu „Zpráva smazána" / přeškrtnutí (jinak by se text u diváka vrátil).
+      if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);
       n++;
     }
     this._ucLog('Blacklist', `přerenderováno ${n} zpráv`);
@@ -6532,8 +8238,89 @@ class UnityChat {
       } else {
         continue;
       }
+      // Vlastní GIF v konečném stavu: odkaz nesmí ožít ani tady (review M6).
+      if (cached._gifOwnFinal) tx.innerHTML = window.UC_CORE.stripLinksHtml(tx.innerHTML);
       // @mention spans need re-applying since innerHTML wiped them.
       this._processMentions(tx, platform);
+      if (this._isModerated(cached)) this._paintDeleted(msgEl, cached);
+    }
+  }
+
+  /**
+   * Badge zprávy (Twitch/Kick podle badgesRaw + 7TV badge uživatele) → <span class="bdg"> nebo null.
+   * Jediný render badge: chat (_renderMessage) i Profil (core/user-history.js renderBadges).
+   */
+  _badgesEl(msg) {
+    const bdg = document.createElement('span');
+    bdg.className = 'bdg';
+    const badgeCount = Object.keys(this._twitchBadges).length;
+    // Volba autora „odznak podporovatele místo globálního odznaku Twitche“ (server `donorReplace`, lib/badgePrefs.ts):
+    // zůstanou jen odznaky role / sub, globální nahradí odznak UC.
+    const raw = msg?.donor && msg.donorReplace && msg.platform === 'twitch' ? window.UC_CORE.stripGlobalTwitchBadges(msg.badgesRaw) : String(msg?.badgesRaw || '');
+    for (const badge of raw.split(',')) {
+      if (!badge) continue;
+      const entry = this._badgeEntry(msg.platform, badge);
+      const url = entry && typeof entry === 'object' ? entry.url : entry;
+      if (!url && msg.platform !== 'kick' && badgeCount > 0) {
+        console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
+      }
+      if (url) {
+        const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
+        const img = document.createElement('img');
+        img.className = 'bdg-img';
+        img.src = url;
+        img.alt = title;
+        img.setAttribute('data-tooltip', title);
+        bdg.appendChild(img);
+      }
+    }
+    const b7 = msg?.platform === 'twitch' && msg.username ? this._chatUsers.get(`twitch:${String(msg.username).toLowerCase()}`)?._badge7tv : null;
+    if (b7?.url) bdg.appendChild(this._badge7tvImg(b7));
+    // Podporovatel (server `donor`, lib/donors.ts) → odznak UC jako poslední (pokyn usera 2026-09-30); s volbou „místo
+    // globálního“ jsou globální odznaky vynechané výš, takže stojí na jejich místě za rolí / subem.
+    if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, null, { amountCzk: msg.donorCzk }));
+    return bdg.children.length ? bdg : null;
+  }
+
+  _badge7tvImg(b7) {
+    const img = document.createElement('img');
+    img.className = 'bdg-img bdg-7tv';
+    img.src = b7.url;
+    img.alt = b7.title;
+    img.setAttribute('data-tooltip', b7.title);
+    return img;
+  }
+
+  /** 7TV badge dorazil po vykreslení → dopsat k zprávám uživatele (jako paint). */
+  _apply7tvBadgeToRenderedMessages(username) {
+    const b7 = this._chatUsers.get(`twitch:${username}`)?._badge7tv;
+    if (!b7?.url) return;
+    let n = 0;
+    for (const un of this.chatEl.querySelectorAll(`.un[data-platform="twitch"][data-username="${CSS.escape(username)}"]`)) {
+      const msgEl = un.closest('.msg');
+      if (!msgEl || msgEl.querySelector('.bdg-7tv') || msgEl.classList.contains('uc-deleted')) continue;
+      let bdg = msgEl.querySelector(':scope > .bdg');
+      if (!bdg) { bdg = document.createElement('span'); bdg.className = 'bdg'; msgEl.insertBefore(bdg, un); }
+      bdg.appendChild(this._badge7tvImg(b7));
+      n++;
+    }
+    if (n) this._ucLog('7TV', `badge ${username} → ${n} zpráv`);
+  }
+
+  /**
+   * Barva jména jako v chatu: přezdívka UC → barva z chatu (platform:login) → barva zprávy, + 7TV paint
+   * (jen bez vlastní barvy UC). Sdílí render chatu i Profil (paintName).
+   */
+  _styleName(un, platform, username, color) {
+    const ucProfile = this.nicknames.get(platform, username);
+    const chatUserEntry = this._chatUsers.get(`${platform}:${String(username || '').toLowerCase()}`);
+    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || color);
+    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
+    // user intent), and we have a paint for this Twitch user. Paint replaces
+    // the solid color with a gradient/image + background-clip on the glyphs.
+    if (platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
+      const css = _7tvPaintToCss(chatUserEntry._paint);
+      if (css) _7tvApplyPaintStyles(un, css);
     }
   }
 
@@ -6557,6 +8344,9 @@ class UnityChat {
   // Returns {ids, content} — callers mutate them directly. Returns null if
   // the platform/channel can't be resolved (let the caller skip dedup).
   _addMessage(msg) {
+    // Odpověď na command potlačená serverem kvůli announcementu (lib/anncHides.ts) — nevykreslit ani z historie.
+    if (msg?.anncHidden) { this._ucLog('Annc', `skryta odpověď (server) ${msg.platform}:${msg.id}`); return; }
+    msg = window.UC_CORE.withTwitchDefaultColor(msg);
     // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
     // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.
     if (msg && !msg.replyTo && msg.id && this._ucReplies?.has(String(msg.id))) msg = { ...msg, replyTo: this._ucReplies.get(String(msg.id)) };
@@ -6574,11 +8364,17 @@ class UnityChat {
     // `message` string is empty — those must NOT be dropped.
     const msgProbe = String(msg?.message || '').replace(new RegExp(UC_MARKER, 'g'), '').trim();
     const hasPlatformContent = (msg?.ytRuns?.length > 0) || (typeof msg?.kickContent === 'string' && msg.kickContent.trim().length > 0);
-    const textEmpty = !msgProbe && !hasPlatformContent;
+    // Schválený GIF (část 4) může mít prázdný text — médium je obsah.
+    if (msg?.gif) {
+      const g = window.UC_CORE?.normalizeGifMedia?.(msg.gif, { origins: UC_GIF_ORIGINS });
+      if (!g) this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} s neplatným médiem → bez GIFu`);
+      msg = g ? { ...msg, gif: g } : { ...msg, gif: undefined };
+    }
+    const textEmpty = !msgProbe && !hasPlatformContent && !msg?.gif;
     const isSystem = msg?.isRaid || msg?.isAnnouncement || msg?.isSubEvent
       || msg?.isGiftBundle || msg?.isSubGift || msg?.isRedeem
-      || msg?.isMilestone
-      || msg?.isHighlight || msg?._cleared || msg?.isAction;
+      || msg?.isMilestone || msg?.isModiversary
+      || msg?.isHighlight || msg?.isAction;
     // Běžná odpověď commandu, místo které uživatel UnityChatu vidí announcement — nevykreslit.
     if (!msg._optimistic && !this._bootLoading && this._pendingReplies?.length && window.UC_CORE.matchesChatReply(this._pendingReplies, msg.message)) {
       this._ucLog('Annc', `skryta odpověď „${String(msg.message || '').slice(0, 40)}"`);
@@ -6588,7 +8384,8 @@ class UnityChat {
       this._ucLog('Annc', `skryta odpověď bota ${msg.username}: „${String(msg.message || '').slice(0, 40)}"`);
       return;
     }
-    if (textEmpty && !isSystem) {
+    // Smazaná / skrytá zpráva z historie přichází bez obsahu — vykreslí se jako „Zpráva smazána".
+    if (textEmpty && !isSystem && !this._isModerated(msg)) {
       // Log root-cause clues — which source produced an empty message.
       try {
         chrome.runtime.sendMessage({
@@ -6682,8 +8479,23 @@ class UnityChat {
       }
     }
 
+    // Vlastní GIF: echo spárovat přes id (POST /chat/send → id, gif-progress requestKey), ne podle textu — server
+    // zprávu schoval (gif_request) a /chat/stream ji pošle BEZ obsahu, textový klíč by nesouhlasil a zpráva by
+    // se ukázala dvakrát. Optimistická si nechá svůj text (gifEchoPatch), echo dodá id, čas a smazání.
+    const gifPair = window.UC_CORE.pairGifEcho(msg, this._gifOutInst, (id) => !!this.store.get(id));
+    if (gifPair) {
+      const { optId: gifOpt, patch } = gifPair;
+      for (const [k, id] of this._optimisticKeys) if (id === gifOpt) { this._optimisticKeys.delete(k); break; }
+      this.store.upgrade(gifOpt, patch);
+      this._upgradeOptimistic(gifOpt, patch);
+      this._ucLog('Gif', `echo ${msg.platform}:${msg.id} spárováno přes id s ${gifOpt}${patch === msg ? '' : ' (bez obsahu)'}`);
+      const heldR = msg.deleted ? msg.deletedReason : this._heldReasons?.get(String(msg.id));
+      if (heldR || msg.deleted) this._applyDeleted(msg.platform, msg.id, { reason: heldR || null });
+      return;
+    }
+
     // Párování optimistická ↔ echo z platformy (echo má jiné id, stejný text).
-    const contentKey = this._contentKey(msg.username, msg.message);
+    const contentKey = this._contentKey(msg.platform, msg.username, msg.message);
     if (msg._optimistic) {
       if (contentKey) this._optimisticKeys.set(contentKey, msg.id);
     } else if (contentKey && this._optimisticKeys.has(contentKey)) {
@@ -6692,10 +8504,17 @@ class UnityChat {
       if (this.store.get(optId)) {
         this.store.upgrade(optId, msg);
         this._upgradeOptimistic(optId, msg);
+        // SSE message-deleted (gif_request) předběhlo echo vlastní zprávy → schovat až teď.
+        const heldR = this._heldReasons?.get(String(msg.id));
+        if (heldR) this._applyDeleted(msg.platform, msg.id, { reason: heldR });
         return; // upgraded in-place, don't render again
       }
     }
 
+    // SSE message-deleted (gif_request) předběhlo zprávu z vlastního spojení (IRC) → vykreslit rovnou schovanou.
+    if (!msg._optimistic && !msg.deleted && msg.id != null && this._heldReasons?.has(String(msg.id))) {
+      msg = { ...msg, _deleted: true, _srvDeleted: true, deletedReason: this._heldReasons.get(String(msg.id)) };
+    }
     // Dedup jen podle platform:id (historie ze serveru ↔ živé zprávy ↔ reconnect).
     if (this.store.add(msg) === 'dup') return;
 
@@ -6789,21 +8608,17 @@ class UnityChat {
       }
     }
 
-    // @mention zvýraznění - kontroluje text zprávy i reply-parent
-    // Matchuje jak @username tak @nickname (pokud je nastavený)
-    const myName = this.config.username?.toLowerCase();
-    // Check nickname on the message's platform (not activePlatform —
-    // that may be null when rendering cached messages at startup)
-    const myNick = myName ? this.nicknames.getNickname(msg.platform, this.config.username)?.toLowerCase() : null;
+    // @mention zvýraznění — text zprávy i reply-parent. Moje jména napříč VŠEMI platformami
+    // (login z každé platformy + UC přezdívky), ne jen z platformy zprávy: divák z YouTube
+    // píše „@Jouki“ (přezdívka z Twitche / login z Kicku) — stejně jako web (renderCtx.myNames).
+    const myNames = this._myMentionNames();
     const msgLower = msg.message?.toLowerCase() || '';
-    const replyTarget = msg.replyTo?.username?.toLowerCase();
-    const isMentioned = myName && (
-      msgLower.includes(`@${myName}`) ||
-      (myNick && msgLower.includes(`@${myNick}`)) ||
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      // Also match platform-specific username
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
+    const replyTarget = msg.replyTo?.username?.toLowerCase().replace(/^@/, '');
+    // I jméno bez zavináče („to byl Jouki“) jako celé slovo mimo adresu — ne ve vlastní zprávě.
+    const isMentioned = myNames.size > 0 && (
+      (replyTarget && myNames.has(replyTarget)) ||
+      [...myNames].some((n) => this._hasMention(msgLower, n)) ||
+      (!this._isOwnMsg(msg) && [...myNames].some((n) => window.UC_CORE.hasBareMention(msgLower, n)))
     );
 
     const el = document.createElement('div');
@@ -6842,32 +8657,16 @@ class UnityChat {
     const isSubEvent = !!msg.isSubEvent;
     const isRedeem = !!msg.isRedeem;
     const isMilestone = !!msg.isMilestone;
-    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone;
+    const isModiversary = !!msg.isModiversary;
+    const isCustomEvent = isGift || isSubEvent || isRedeem || isMilestone || isModiversary;
     if (msg.isGiftBundle) el.classList.add('gift-bundle');
     if (msg.isSubGift) el.classList.add('sub-gift');
     if (isSubEvent) el.classList.add('sub-event');
     if (isRedeem) el.classList.add('redeem');
     if (msg.isHighlight) el.classList.add('highlight');
     if (!this.filters[msg.platform]) el.classList.add('hide-platform');
-    // Cached message that was cleared (timeout/ban/delete) in a previous
-    // session — re-apply the visual on render. Live clears go through
-    // _markMessageCleared after the message is already in the DOM.
-    if (msg._cleared) {
-      el.classList.add('cleared');
-      const cn = document.createElement('span');
-      cn.className = 'cleared-note';
-      cn.textContent = msg._cleared;
-      // Append at end after the rest of the message renders below.
-      // Defer with microtask so it lands as the last child.
-      Promise.resolve().then(() => el.appendChild(cn));
-    }
-
     // Determine if reply is TO the current user (not just any reply)
-    const isReplyToMe = msg.replyTo && (
-      replyTarget === myName ||
-      (myNick && replyTarget === myNick) ||
-      (this._platformUsernames[msg.platform] && replyTarget === this._platformUsernames[msg.platform]?.toLowerCase())
-    );
+    const isReplyToMe = !!(msg.replyTo && replyTarget && myNames.has(replyTarget));
 
     if (isGift) {
       this._renderGiftEvent(el, msg);
@@ -6877,6 +8676,8 @@ class UnityChat {
       this._renderRedeemEvent(el, msg);
     } else if (isMilestone) {
       this._renderMilestoneEvent(el, msg);
+    } else if (isModiversary) {
+      this._renderModiversaryEvent(el, msg);
     } else {
 
     // Reply context (Twitch reply-parent tagy, Kick reply, odpověď napříč platformami)
@@ -6886,7 +8687,7 @@ class UnityChat {
     // reply/mention/raid > suspicious (sus user OR message was cleared by mod)
     // > first message. Moderation-related flags win over first-message because
     // they're the signal that matters when scanning chat for trouble.
-    const susLike = msg.isSus || !!msg._cleared;
+    const susLike = msg.isSus || !!msg._modTag;
     const tagText =
       isReplyToMe ? 'Replying to you' :
       isMentioned ? 'Mentions you' :
@@ -6923,52 +8724,25 @@ class UnityChat {
     ts.className = 'ts';
     const d = new Date(msg.timestamp);
     ts.textContent = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    // Malý tooltip s celým datem (core/time.js, pokyn usera 2026-09-30) — stejný mechanismus jako u log platforem.
+    ts.setAttribute('data-tooltip', window.UC_CORE.formatDateTooltip(msg.timestamp));
     el.appendChild(ts);
 
-    // Badges
-    if (msg.badgesRaw) {
-      const bdg = document.createElement('span');
-      bdg.className = 'bdg';
-      const badgeCount = Object.keys(this._twitchBadges).length;
-      for (const badge of msg.badgesRaw.split(',')) {
-        if (!badge) continue;
-        const entry = this._badgeEntry(msg.platform, badge);
-        const url = entry && typeof entry === 'object' ? entry.url : entry;
-        if (!url && msg.platform !== 'kick' && badgeCount > 0) {
-          console.warn(`[Badge] Not found: "${badge}" (have ${badgeCount} badges)`);
-        }
-        if (url) {
-          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
-          const img = document.createElement('img');
-          img.className = 'bdg-img';
-          img.src = url;
-          img.alt = title;
-          img.setAttribute('data-tooltip', title);
-          bdg.appendChild(img);
-        }
-      }
-      if (bdg.children.length) el.appendChild(bdg);
-    }
+    // Badges (platforma + 7TV) — stejná funkce kreslí badge v Profilu. donor-mark mohl přijít dřív než zpráva z IRC.
+    this._markDonor(msg);
+    const bdg = this._badgesEl(msg);
+    if (bdg) el.appendChild(bdg);
 
-    // Username (klik → otevře user card na platformě)
+    // Username (klik → Profil uživatele, v něm tlačítko na původní kartu platformy)
     const un = document.createElement('span');
     un.className = 'un';
     const ucProfile = this.nicknames.get(msg.platform, msg.username);
-    const chatUserEntry = this._chatUsers.get(`${msg.platform}:${msg.username?.toLowerCase()}`);
-    // Color priority: nickname custom → chatUsers map (platform:username) → msg.color fallback
-    un.style.color = readableColor(ucProfile?.color || chatUserEntry?.color || msg.color);
-    // 7TV paint overlay — only if no UnityChat custom color (that's a stronger
-    // user intent), and we have a paint for this Twitch user. Paint replaces
-    // the solid color with a gradient/image + background-clip on the glyphs.
-    if (msg.platform === 'twitch' && !ucProfile?.color && chatUserEntry?._paint) {
-      const css = _7tvPaintToCss(chatUserEntry._paint);
-      if (css) _7tvApplyPaintStyles(un, css);
-    }
+    this._styleName(un, msg.platform, msg.username, msg.color);
     un.textContent = this._censorName(ucProfile?.nickname || msg.username);
     if (ucProfile?.nickname) un.title = msg.username; // tooltip shows real username
     un.dataset.platform = msg.platform;
     un.dataset.username = msg.username.toLowerCase();
-    un.addEventListener('click', () => this._openUserCard(msg.platform, msg.username));
+    un.addEventListener('click', () => this._openProfile(msg, un));
     el.appendChild(un);
     el.appendChild(document.createTextNode(' '));
 
@@ -6989,6 +8763,12 @@ class UnityChat {
     this._processMentions(tx, msg.platform);
 
     el.appendChild(tx);
+
+    // Schválený GIF pod textem (core/gif.js): max 400 × 250 px, lazy, při chybě „GIF odebrán“.
+    if (msg.gif) {
+      this._appendGifMedia(el, msg);
+      this._ucLog('Gif', `zpráva ${msg.platform}:${msg.id} ${msg.gif.kind} ${msg.gif.width || '?'}×${msg.gif.height || '?'}${msg.gif.unavailable ? ' (nedostupný)' : ''}${msg.historical ? ' (historie)' : ''}`);
+    }
 
     // Easter egg: StreamElements !bulgarians response — click to play audio
     if (msg.username?.toLowerCase() === 'streamelements' && msg.message?.includes('Bulgarians a pojedeš')) {
@@ -7019,7 +8799,7 @@ class UnityChat {
     // is meaningless and Twitch IRC won't accept a reply to them.
     const isSystemEvent = msg.isRaid || msg.isAnnouncement
       || msg.isSubEvent || msg.isGiftBundle || msg.isSubGift || msg.isRedeem
-      || msg.isMilestone;
+      || msg.isMilestone || msg.isModiversary;
     if (isSystemEvent) {
       // Skip the entire actions cluster but keep the closing brace structure
       // (we still need to fall through to the unread/append/scroll/cache).
@@ -7030,21 +8810,37 @@ class UnityChat {
     // Copy button
     const copyBtn = document.createElement('button');
     copyBtn.className = 'msg-action-btn';
+    copyBtn.dataset.act = 'copy';
     copyBtn.title = 'Kopírovat zprávu';
     const copySvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
     copyBtn.innerHTML = copySvg;
     copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      // Smazaná/skrytá zpráva v režimu „Zpráva smazána" / „Skryté" — text nevydat (CSS tlačítko schová, tohle je pojistka).
+      if (this._textSuppressed(this.store.get(copyBtn.closest('.msg')?.dataset.msgId) || msg)) return;
       navigator.clipboard.writeText((msg.message || '') + ' ').catch(() => {});
       copyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>';
       setTimeout(() => { copyBtn.innerHTML = copySvg; }, 1500);
     });
     actions.appendChild(copyBtn);
+    // GIF: místo kopírování (není co kopírovat, CSS koš/copy skryje u .has-gif) pauza / přehrání animace (core/gif.js).
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'msg-action-btn';
+    pauseBtn.dataset.act = 'gifpause';
+    window.UC_CORE.setGifPauseButton(pauseBtn, false);
+    pauseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const host = pauseBtn.closest('.msg');
+      const paused = window.UC_CORE.toggleGifPause(host);
+      if (paused !== null) window.UC_CORE.setGifPauseButton(pauseBtn, paused);
+    });
+    actions.appendChild(pauseBtn);
 
     // Pin button (jen Twitch zprávy; jen pokud viewer je mod/broadcaster).
     // Mod status se detekuje z IRC badge na vlastní zprávě — takže button se
     // objeví až poté co viewer pošle alespoň jednu zprávu (nebo dorazí echo).
-    if (msg.platform === 'twitch' && this._isModOnChannel) {
+    // GIF (gif-<n>) na Twitchi neexistuje → připnout nejde.
+    if (msg.platform === 'twitch' && this._isModOnChannel && !window.UC_CORE.isGifMessageId(msg.id)) {
       const pinBtn = document.createElement('button');
       pinBtn.className = 'msg-action-btn';
       pinBtn.title = 'Připnout zprávu';
@@ -7062,10 +8858,12 @@ class UnityChat {
     // Reply button
     const replyBtn = document.createElement('button');
     replyBtn.className = 'msg-action-btn';
+    replyBtn.dataset.act = 'reply';
     replyBtn.title = 'Odpovědět';
     replyBtn.innerHTML = '&#8617;'; // ↩
     replyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (this._textSuppressed(this.store.get(replyBtn.closest('.msg')?.dataset.msgId) || msg)) return;
       this._setReply(msg.platform, msg.username, msg.id, msg.message, msg.senderId);
     });
     actions.appendChild(replyBtn);
@@ -7077,7 +8875,7 @@ class UnityChat {
     const poopBtn = document.createElement('button');
     poopBtn.className = 'msg-action-btn';
     poopBtn.dataset.act = 'poop';
-    poopBtn.title = 'Peepo poop (mod)';
+    poopBtn.title = 'Peepo poop';
     poopBtn.textContent = '\u{1F4A9}';
     poopBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -7085,12 +8883,50 @@ class UnityChat {
       this._triggerPoop(msg.platform, host?.dataset.msgId || msg.id);
     });
     actions.insertBefore(poopBtn, actions.firstChild);
+    // Smazat zprávu (mod) — hned vlevo od 💩; vykreslené vždy, vidět jen s body.uc-can-moderate
+    // (role se může změnit až po vykreslení). Id i platforma se čtou až při kliknutí z datasetu.
+    const delBtn = document.createElement('button');
+    delBtn.className = 'msg-action-btn';
+    delBtn.dataset.act = 'delete';
+    delBtn.title = 'Smazat zprávu';
+    delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // První klik koš natáhne (zčervená), až druhý do 3 s smaže (core confirmDeleteClick, pokyn usera 2026-09-30).
+      if (!window.UC_CORE.confirmDeleteClick(delBtn)) return;
+      this._deleteMessage(delBtn.closest('.msg'));
+    });
+    // Pořadí (pokyn usera 2026-09-30): 💩 první, koš hned za ním.
+    poopBtn.after(delBtn);
+    // Odkrýt zprávu (mod, jen v UnityChatu) — vykreslené vždy vlevo od koše; CSS ukáže oko místo koše
+    // (tj. hned vlevo od 💩), jen když má zpráva třídu .uc-deleted (smazaná / skrytá).
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'msg-action-btn';
+    restoreBtn.dataset.act = 'restore';
+    restoreBtn.title = window.UC_CORE.RESTORE_TITLE;
+    restoreBtn.innerHTML = window.UC_CORE.EYE_ICON_SVG;
+    restoreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._restoreDeleted(restoreBtn.closest('.msg'));
+    });
+    delBtn.before(restoreBtn);
     el.appendChild(actions);
     }
     } // end isSystemEvent guard
 
+    // Smazaná / skrytá zpráva (historie, nebo uzel vykreslený znovu z dat ve store).
+    if (this._isModerated(msg)) this._paintDeleted(el, msg);
+    // Vlastní GIF zpráva (odesílatel): kolečko % / „Schvalování moderátorem“ / zamítnuto (core GifOutbox).
+    else if (this._gifOutInst?.size && this._gifOutInst.has(msg.platform, msg.id)) this._applyGifOwn(el, msg);
+    // Štítek timeoutu / banu uživatele (SSE user-moderated / CLEARCHAT) u uzlu vykresleného znovu z dat.
+    if (msg._modTag) window.UC_CORE.applyModTag(el, msg._modTag);
+
     // Historie (boot / starší stránka) není „nová zpráva" — bez unread logiky.
     const isHistory = this._bootLoading || !!this._prependCursor;
+
+    // Oznámení prohlížeče na zmínku / odpověď (opt-in, jen když se na chat nedíváš).
+    this._maybeNotifyMention(msg, isReplyToMe ? 'reply' : isMentioned ? 'mention' : null, isHistory);
     // Pokud nejsme dole, přidat unread separator (jen jednou pro první novou zprávu).
     if (!this.autoScroll && !isHistory) {
       if (this._unreadCount === 0) {
@@ -7115,7 +8951,13 @@ class UnityChat {
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
     let appendedAtEnd = false;
 
-    if (this._prependCursor) {
+    // Schválený GIF nahrazuje původní zprávu (replaces, stejný čas i autor) přímo na jejím místě.
+    const replaced = msg.gif ? this._takeGifReplacedSlot(msg, el) : false;
+    if (replaced === 'parked') return;
+
+    if (replaced) {
+      // vloženo místo původní zprávy (_takeGifReplacedSlot)
+    } else if (this._prependCursor) {
       // Starší stránka ze serveru (vzestupně) → před první dosavadní uzel.
       this.chatEl.insertBefore(el, this._prependCursor);
     } else if (!this._bootLoading && !msg._optimistic && this._olderThanDomTail(msg.timestamp)) {
@@ -7147,6 +8989,21 @@ class UnityChat {
     this._scroll(appendedAtEnd && !this._bootLoading ? el : null);
   }
 
+  /**
+   * GIF zpráva s `replaces` (core gifReplacedTarget): uzel původní zprávy (schovaný gif_request) nahradit novým
+   * uzlem na stejném místě — v DOM i v parku mimo okno. Vrací true (v DOM), 'parked' (v parku), false (původní
+   * uzel tu není → běžné vložení podle času, GIF nese čas původní zprávy).
+   */
+  _takeGifReplacedSlot(msg, el) {
+    return window.UC_CORE.takeGifReplacedSlot(msg, el, {
+      chatEl: this.chatEl,
+      parks: [this._parkedTop, this._parkedBottom],
+      msgEls: (id, p) => this._msgEls(id, p),
+      store: this.store,
+      log: (tag, text) => this._ucLog(tag, text),
+    });
+  }
+
   // ---- Historie ze serveru + DOM okno ---------------------------------
 
   // GET /chat/history — server je jediný zdroj historie (spec 2026-09-19).
@@ -7176,6 +9033,8 @@ class UnityChat {
       // reconcile: nic z toho — historické zprávy se zařadí podle času mezi živé.
       try {
         for (const m of list) {
+          // Announcement uložený na serveru (routes/announcements.ts) → vykreslit na svém místě v historii.
+          if (m.ucAnnouncement) { if (this._addAnnouncement(m.ucAnnouncement, { historical: true })) added++; continue; }
           const beforeLen = this.store.length;
           this._addMessage(m);
           if (this.store.length > beforeLen) added++;
@@ -7187,7 +9046,7 @@ class UnityChat {
       if (!reconcile) this.store.oldestCursor = data.nextBefore || null;
       this._historyFetches++;
       this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
-      if (!before && !reconcile) { this.autoScroll = true; this.chatEl.scrollTop = this.chatEl.scrollHeight; this._clearUnread(); }
+      if (!before && !reconcile) { this.autoScroll = true; this._scrollEnd(); this._clearUnread(); }
     } catch (err) {
       this._sys(`Historie nedostupná (${err.name === 'AbortError' ? 'timeout' : err.message})`);
       this._historyCooldownUntil = performance.now() + 3000;
@@ -7228,6 +9087,17 @@ class UnityChat {
 
   // Vyčistit vše — nový store, prázdný DOM, žádné parky (přepnutí streamera, dev tlačítko).
   _resetChat() {
+    // Přepnutí streamera: Chat historie patří kanálu, ve kterém se otevřela.
+    this._closeUserHistory('reset chatu');
+    // Karty GIFů patří kanálu (mod si po _loadModState dotáhne čekající nového kanálu).
+    this._gifInst?.clear();
+    this._gifCdInst?.reset();
+    this._gifOutInst?.clear();
+    this._gifPanel?.reset();
+    // Obsah smazaných zpráv pro moda patří kanálu — rozpracované dotazy zahodit.
+    this._deletedLoaderInst?.reset();
+    this._gifHoldInst?.clear();
+    this._heldReasons?.clear();
     this.store = new ChatStore();
     this.chatEl.innerHTML = '';
     this._parkedTop = [];
@@ -7324,10 +9194,12 @@ class UnityChat {
     this._unloadTop();
     this._clearUnread();
     this._programmaticScrollUntil = performance.now() + 200;
-    this.chatEl.scrollTop = this.chatEl.scrollHeight;
+    this._scrollEnd();
   }
 
-  _contentKey(username, message) {
+  // Klíč nese platformu: stejný login na víc platformách (broadcast) jinak dal třem optimistickým zprávám
+  // jeden klíč a echa se spárovala křížem / vůbec (hlášení 2026-09-29).
+  _contentKey(platform, username, message) {
     if (!username || !message) return null;
     const norm = (s) => (s || '')
       .toLowerCase()
@@ -7336,7 +9208,7 @@ class UnityChat {
       .trim()
       .substring(0, 80);
     // Úvodní @zmínka se nepočítá: optimistická odpověď napříč platformami ji v UnityChatu nemá, echo ano.
-    return norm(username) + '|' + norm(String(message).replace(/^\s*@\S+\s+/, ''));
+    return `${platform || ''}|${norm(username)}|${norm(String(message).replace(/^\s*@\S+\s+/, ''))}`;
   }
 
   // Odeslání selhalo → optimistická zpráva nesmí dál vypadat jako odeslaná.
@@ -7366,6 +9238,12 @@ class UnityChat {
     }
 
     this.store.markFailed(optId);
+    // Neodeslaný GIF odkaz: kolečko průběhu pryč.
+    if (this._gifOutInst) {
+      const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
+      this._gifOutInst.drop(el?.dataset.platform || '', optId);
+      if (el) window.UC_CORE.paintGifStatus(document, el, null);
+    }
 
     // Uvolnit párovací klíč — pozdější reálná zpráva se stejným textem
     // (třeba po ručním poslání ve vanilla chatu) by jinak tuhle mrtvou
@@ -7387,6 +9265,9 @@ class UnityChat {
       realMsg = window.UC_CORE.stripReplyMention({ ...realMsg, replyTo: { username: el.dataset.ucReplyUser } });
     }
     if (el && realMsg.id) { el.dataset.msgId = realMsg.id; if (realMsg.timestamp) el.dataset.ts = String(realMsg.timestamp); }
+    // Vlastní GIF odkaz: echo = skutečné id zprávy (klíč gif-progress) → spárovat se štítkem optimistické zprávy.
+    if (realMsg.id && this._gifOutInst?.has(realMsg.platform, optId)) this._gifOutInst.alias(optId, realMsg.platform, realMsg.id);
+    else if (realMsg.id && this._gifOutInst && window.UC_CORE.hasGifLink(realMsg.message || '')) this._gifOutInst.alias(optId, realMsg.platform, realMsg.id);
     // uc-mark mohl přijít dřív než echo (server byl rychlejší) → teď, když má element skutečné id.
     if (el && this._ucMarkedIds?.has(realMsg.id)) this._applyUcMark({ platform: realMsg.platform, id: realMsg.id });
 
@@ -7404,28 +9285,8 @@ class UnityChat {
     // message seeded its badges from a last-known cache entry which can be
     // stale (previous channel, session before sub bump, etc.) — we always
     // overwrite when the real echo lands so visual matches vanilla chat.
-    if (el && realMsg.badgesRaw) {
-      el.querySelectorAll(':scope > .bdg').forEach((n) => n.remove());
-      const un = el.querySelector('.un');
-      const bdg = document.createElement('span');
-      bdg.className = 'bdg';
-      for (const badge of realMsg.badgesRaw.split(',')) {
-        if (!badge) continue;
-        // Kick má vlastní badge (moderátor apod.) — dřív se hledal jen v Twitch mapě a po echu zmizel.
-        const entry = this._badgeEntry(realMsg.platform, badge);
-        const url = entry && typeof entry === 'object' ? entry.url : entry;
-        if (url) {
-          const title = (entry && typeof entry === 'object' && entry.title) || badge.split('/')[0];
-          const img = document.createElement('img');
-          img.className = 'bdg-img';
-          img.src = url;
-          img.alt = title;
-          img.setAttribute('data-tooltip', title);
-          bdg.appendChild(img);
-        }
-      }
-      if (bdg.children.length && un) el.insertBefore(bdg, un);
-    }
+    // Jediný render odznaků (_badgesEl: Twitch / Kick podle badgesRaw, 7TV, podporovatel z donor-marku).
+    if (el && realMsg.badgesRaw) { this._markDonor(realMsg); window.UC_CORE.setMessageBadges(el, this._badgesEl(realMsg)); }
 
     // Re-render message text with emotes from IRC echo
     if (el && realMsg.platform === 'twitch' && realMsg.twitchEmotes) {
@@ -7440,6 +9301,8 @@ class UnityChat {
         });
         // Re-apply @mention highlighting — innerHTML overwrite wiped spans
         this._processMentions(tx, realMsg.platform);
+        // Vlastní GIF v konečném stavu je smazaný (kolo 4 bod 4a) — echo mu text s odkazem nevrátí.
+        if (el.classList.contains('uc-gif-own-final')) this._applyGifOwn(el, this.store.get(String(realMsg.id)) || realMsg);
       }
     }
 
@@ -7480,6 +9343,123 @@ class UnityChat {
     return `${n} nových zpráv`;
   }
 
+  /** Moje jména pro @zmínky: config.username, loginy ze všech platforem a UC přezdívky k nim. */
+  _myMentionNames() {
+    const names = new Set();
+    const add = (n) => { const v = String(n || '').trim().replace(/^@/, '').toLowerCase(); if (v) names.add(v); };
+    add(this.config.username);
+    for (const p of ['twitch', 'youtube', 'kick']) {
+      const login = this._platformUsernames[p] || (p === 'twitch' ? this.config.username : null);
+      if (!login) continue;
+      add(login);
+      add(this.nicknames.getNickname(p, login));
+    }
+    return names;
+  }
+
+  /**
+   * Doplnit „Replying to you“ / „Mentions you“ na už vykreslené zprávy: historie se po obnovení vykreslí dřív,
+   * než se načte účet (moje jména), a zvýraznění by chybělo až do další zprávy (hlášení usera 2026-09-30).
+   */
+  _refreshMentionHighlights() {
+    const core = window.UC_CORE;
+    const myNames = this._myMentionNames();
+    if (!myNames.size || !this.store) return 0;
+    let n = 0;
+    for (const m of this.store.slice()) {
+      if (!m?.id || m.deleted || m._deleted) continue;
+      const kind = core.highlightKind({ text: m.message || '', replyTarget: m.replyTo?.username, myNames, own: this._isOwnMsg(m), hasBare: core.hasBareMention });
+      if (!kind) continue;
+      for (const el of this._msgEls(m.id, m.platform)) if (core.applyMentionTag(el, kind)) n++;
+    }
+    if (n) this._ucLog('Mention', `zvýraznění doplněno po načtení účtu: ${n} zpráv`);
+    return n;
+  }
+
+  /** „@jméno“ jako celé slovo (ne @joukibot pro jouki), text i jméno malými písmeny. */
+  _hasMention(text, name) {
+    return window.UC_CORE.hasMention(text, name);
+  }
+
+  /** Moje vlastní zpráva (optimistická nebo echo pod mým loginem na dané platformě)? */
+  _isOwnMsg(msg) {
+    if (msg?._optimistic) return true;
+    const mine = (this._platformUsernames[msg?.platform] || (msg?.platform === 'twitch' ? this.config.username : '') || '').toLowerCase().replace(/^@/, '');
+    return !!mine && String(msg?.username || '').toLowerCase().replace(/^@/, '') === mine;
+  }
+
+  /** Díváš se právě na chat? Panel viditelný a s fokusem. */
+  _isWatchingChat() {
+    return !document.hidden && document.hasFocus();
+  }
+
+  /**
+   * Oznámení prohlížeče na @zmínku / odpověď (core/mention-notify.js). Jen živé zprávy,
+   * ne vlastní, ne smazané, jen když se na chat nedíváš; dedup podle id + throttle 1 / 5 s.
+   */
+  _maybeNotifyMention(msg, kind, isHistory) {
+    if (!kind) return;
+    const core = window.UC_CORE;
+    const verdict = core.shouldNotify({
+      enabled: this.config.mentionNotify === true && !!chrome.notifications?.create,
+      kind,
+      historical: isHistory || !!msg.historical || !!msg.scraped,
+      own: this._isOwnMsg(msg),
+      moderated: this._isModerated(msg) || !!msg._cleared,
+      watching: this._isWatchingChat(),
+    });
+    if (!verdict.ok) {
+      if (verdict.reason !== 'off' && verdict.reason !== 'history') this._ucLog('Notify', `skip ${verdict.reason} ${msg.platform}:${msg.id}`);
+      return;
+    }
+    if (!this._mentionNotifier) {
+      this._mentionNotifier = core.createMentionNotifier({ emit: (note, more) => this._showMentionNotification(core.withMore(note, more)) });
+      // Vrátil ses do chatu → sloučená čekající oznámení už nejsou potřeba.
+      const drop = () => { if (this._isWatchingChat()) this._mentionNotifier?.reset(); };
+      window.addEventListener('focus', drop);
+      document.addEventListener('visibilitychange', drop);
+    }
+    const note = core.formatNotification(msg, kind, {
+      displayName: this.nicknames.getNickname(msg.platform, msg.username) || msg.username,
+      channel: this._getConfiguredHandle(msg.platform),
+    });
+    const res = this._mentionNotifier.offer(msg.id ? `${msg.platform}:${msg.id}` : null, note);
+    this._ucLog('Notify', `${kind} ${res} ${msg.platform}:${msg.id}`);
+  }
+
+  async _showMentionNotification(note) {
+    try {
+      // Id nese okno (a tab v tab režimu) panelu → background po kliknutí fokusne správné okno.
+      if (this._notifyWin === undefined) {
+        const [win, tab] = await Promise.all([
+          chrome.windows?.getCurrent?.().catch(() => null),
+          chrome.tabs?.getCurrent?.().catch(() => null),
+        ]);
+        this._notifyWin = { windowId: win?.id ?? tab?.windowId ?? '', tabId: tab?.id ?? '' };
+      }
+      this._notifySeq = (this._notifySeq || 0) + 1;
+      const id = `ucm|${this._notifyWin.windowId}|${this._notifyWin.tabId}|${Date.now()}-${this._notifySeq}`;
+      const opts = {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+        title: note.title,
+        message: note.message || ' ',
+        contextMessage: note.contextMessage,
+      };
+      try {
+        await chrome.notifications.create(id, opts);
+      } catch (e) {
+        // Firefox contextMessage nezná → zkusit bez něj (kontext připojit ke zprávě).
+        const { contextMessage, ...rest } = opts;
+        await chrome.notifications.create(id, { ...rest, message: contextMessage ? `${rest.message}
+${contextMessage}` : rest.message });
+      }
+      this._ucLog('Notify', `shown ${id} „${note.title}"`);
+    } catch (e) {
+      this._ucLog('Notify', `create failed: ${e?.message || e}`);
+    }
+  }
+
   _scroll(slideEl = null) {
     if (this.autoScroll) {
       requestAnimationFrame(() => {
@@ -7487,10 +9467,16 @@ class UnityChat {
         // (which can fire after more messages have appended in a busy
         // chat) doesn't get re-interpreted as the user scrolling away.
         this._programmaticScrollUntil = performance.now() + 200;
-        this.chatEl.scrollTop = this.chatEl.scrollHeight;
+        this._scrollEnd();
         if (slideEl) window.UC_CORE?.slideInMessage?.(this.chatEl, slideEl);
       });
     }
+  }
+
+  /** Na konec chatu i během příjezdu zprávy (core scrollToBottom odečte běžící posun, jinak by animace skočila na konec). */
+  _scrollEnd() {
+    if (window.UC_CORE?.scrollToBottom) window.UC_CORE.scrollToBottom(this.chatEl);
+    else this.chatEl.scrollTop = this.chatEl.scrollHeight;
   }
 }
 
@@ -7537,8 +9523,9 @@ function _initPlatformBadgeTooltip() {
   }
 
   document.body.addEventListener('mouseover', (e) => {
-    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip]');
+    const badge = e.target.closest('.pi[data-tooltip], .bdg-img[data-tooltip], .ts[data-tooltip]');
     if (!badge || badge === currentBadge) return;
+    tooltip.classList.toggle('small', badge.classList.contains('ts'));
     show(badge);
   });
 

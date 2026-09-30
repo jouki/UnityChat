@@ -13,6 +13,7 @@ import { and, eq, gt, lt, or, sql } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { accountDonatePrefs, accountEmails, emailSendLog, emailVerifications, nicknames } from '../db/schema.js';
+import { syncEmailLink } from '../lib/emailLink.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { CODE_TTL_MS, EMAIL_RE, emailChangeAllowedAt, LIMITS, MAX_ATTEMPTS, cleanCode, codeHash, ipHash, newCode, nextAllowedAt, normEmail } from '../lib/emailVerify.js';
 import { providersConfigured, sendMail, verificationMail } from '../lib/mailer.js';
@@ -150,6 +151,8 @@ export default async function accountRoutes(app: FastifyInstance) {
       .onConflictDoUpdate({ target: accountEmails.accountId, set: { email: v.email, verifiedAt: now, updatedAt: now } });
     await db.delete(emailVerifications).where(eq(emailVerifications.accountId, accountId));
     req.log.info({ accountId }, 'account: email verified');
+    // Platby z ověřené adresy (i pod jinými přezdívkami dárce) se v Židolištce spojí s účtem (lib/emailLink.ts).
+    void syncEmailLink(accountId, { log: req.log });
     return { ok: true, email: v.email };
   });
 }

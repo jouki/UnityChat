@@ -1,6 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rolesFromBadges, toChatEvent } from './integrationStream.js';
+import { rolesFromBadges, toChatEvent, chatEventFromRow, modIntegrationEvent, publishIntegrationEvent, publishModIntegration, publishUserModIntegration, subscribeIntegration } from './integrationStream.js';
+
+test('publishUserModIntegration: tvar chat.user_moderated, duration jen u timeoutu, nenamapovaný kanál nic', async () => {
+  const ws = { slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robkick', youtube: null }, bot: { mode: 'shared' as const, displayName: 'JoukiBOT' } };
+  const published: object[] = [];
+  const deps = { workspaceFor: async (p: string, ch: string) => (ws.channels[p as 'twitch'] === ch ? ws : null), publish: (e: object) => { published.push(e); return 1; } };
+  await publishUserModIntegration('robdiesalot', { platform: 'kick', userId: '77', login: 'k', action: 'timeout', duration: 60, by: 'twitch:modik' }, deps);
+  await publishUserModIntegration('robdiesalot', { platform: 'twitch', userId: '1', login: 't', action: 'ban', duration: null, by: null }, deps);
+  assert.equal(await publishUserModIntegration('jouki', { platform: 'twitch', userId: '1', login: 't', action: 'unban', by: null }, deps), null);
+  assert.deepEqual(published, [
+    { type: 'chat.user_moderated', workspace: 'rob', platform: 'kick', userId: '77', login: 'k', action: 'timeout', by: 'twitch:modik', duration: 60 },
+    { type: 'chat.user_moderated', workspace: 'rob', platform: 'twitch', userId: '1', login: 't', action: 'ban', by: null },
+  ]);
+});
+import type { FastifyReply } from 'fastify';
+import type { WorkspaceInfo } from '../lib/zidolista.js';
 import type { IngestMessage } from '../ingest/types.js';
 
 test('rolesFromBadges: Twitch tag string', () => {
@@ -24,7 +39,90 @@ test('toChatEvent: tvar chat.message podle kontraktu', () => {
     isUnitychatUser: false, isReply: true, replyToMessageId: 'p1',
   };
   assert.deepEqual(toChatEvent(m, 'jouki'), {
-    type: 'chat.message', workspace: 'jouki', messageId: 'abc', platform: 'twitch', user: 'Jouki728', userId: '30645675', text: '!brohemians',
-    isSub: true, isMod: false, isVip: false, isBroadcaster: false, isBot: false, replyTo: { messageId: 'p1', user: 'Rob' }, timestamp: '2026-09-22T14:00:00.000Z',
+    type: 'chat.message', workspace: 'jouki', messageId: 'abc', platform: 'twitch', user: 'Jouki728', login: 'jouki728', userId: '30645675', text: '!brohemians',
+    isSub: true, isMod: false, isVip: false, isBroadcaster: false, isBot: false, viaUnityChat: false, replyTo: { messageId: 'p1', user: 'Rob' }, timestamp: '2026-09-22T14:00:00.000Z',
   });
+});
+
+test('toChatEvent: zpráva smazaná filtrem odkazů jde bez textu, s deleted: true', () => {
+  const m: IngestMessage = {
+    platform: 'kick', platformMessageId: 'k1', platformUserId: '7', username: 'spam', channel: 'uctest',
+    content: 'koukni neco.cz/x', contentRaw: {}, sentAt: new Date('2026-09-25T14:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null, deleted: { by: 'filter', reason: 'link_filter' },
+  };
+  const ev = toChatEvent(m, 'jouki');
+  assert.equal(ev.text, '');
+  assert.equal(ev.deleted, true);
+});
+
+test('A12 oprava: zpráva schovaná kvůli GIFu (gif_request, i při neznámém přístupu) jde Židolištce S textem + held', () => {
+  const m: IngestMessage = {
+    platform: 'twitch', platformMessageId: 't1', platformUserId: '7', username: 'Divak', channel: 'robdiesalot',
+    content: '!command https://tenor.com/view/cat-gif-1', contentRaw: { badges: 'subscriber/1' }, sentAt: new Date('2026-09-27T10:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null, deleted: { by: 'filter', reason: 'gif_request' },
+  };
+  const ev = toChatEvent(m, 'rob');
+  assert.equal(ev.text, '!command https://tenor.com/view/cat-gif-1');
+  assert.equal(ev.held, true);
+  assert.equal(ev.hiddenReason, 'gif_request');
+  assert.equal(ev.deleted, undefined, 'není smazaná — jen schovaná, čeká na rozhodnutí');
+  assert.equal(ev.isSub, true);
+});
+
+test('chat.restored nese text a celou zprávu (Židolišta ji mohla dostat bez textu — link_filter)', () => {
+  const row = {
+    platform: 'kick', platformMessageId: 'k9', platformUserId: '5', platformUsername: 'Nekdo', channel: 'robkick',
+    content: 'ahoj neco.cz', contentRaw: { badges: [{ type: 'moderator' }] }, sentAt: new Date('2026-09-27T10:00:00Z'),
+    isUnitychatUser: false, isReply: false, replyToMessageId: null,
+  };
+  const chat = chatEventFromRow(row as never, 'rob');
+  assert.equal(chat.text, 'ahoj neco.cz');
+  assert.equal(chat.isMod, true);
+  assert.equal(chat.deleted, undefined);
+  const ev = modIntegrationEvent('chat.restored', 'rob', { platform: 'kick', messageId: 'k9', by: 'filter', chat: (ws) => chatEventFromRow(row as never, ws) });
+  assert.equal(ev.text, 'ahoj neco.cz');
+  assert.equal(ev.message?.type, 'chat.message');
+  assert.equal(ev.message?.workspace, 'rob');
+  assert.equal(modIntegrationEvent('chat.deleted', 'rob', { platform: 'kick', messageId: 'k9', by: 'filter', reason: 'mod', chat: () => chat }).text, undefined, 'text jen u chat.restored');
+});
+
+test('modIntegrationEvent: tvary chat.deleted / chat.hidden / chat.unhidden', () => {
+  assert.deepEqual(modIntegrationEvent('chat.deleted', 'rob', { platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod' }),
+    { type: 'chat.deleted', workspace: 'rob', platform: 'twitch', messageId: 'm1', by: 'zidolista:7', reason: 'mod' });
+  assert.deepEqual(modIntegrationEvent('chat.hidden', 'rob', { platform: 'kick', messageId: 'k1', by: 'zidolista:7' }),
+    { type: 'chat.hidden', workspace: 'rob', platform: 'kick', messageId: 'k1', by: 'zidolista:7' });
+  assert.deepEqual(modIntegrationEvent('chat.unhidden', 'rob', { platform: 'youtube', messageId: 'y1', by: 'zidolista:7', reason: 'mod' }),
+    { type: 'chat.unhidden', workspace: 'rob', platform: 'youtube', messageId: 'y1', by: 'zidolista:7' }, 'reason jen u chat.deleted');
+});
+
+function fakeReply(out: string[]): FastifyReply {
+  return { raw: { write: (s: string) => { out.push(s); return true; }, on: () => {} } } as unknown as FastifyReply;
+}
+
+test('publishIntegrationEvent: stejný kurzor + replay přes Last-Event-ID, název události z type', () => {
+  const live: string[] = [];
+  const unsub = subscribeIntegration(fakeReply(live), null);
+  const ev = modIntegrationEvent('chat.hidden', 'rob', { platform: 'twitch', messageId: 'h-replay', by: 'zidolista:1' });
+  const id = publishIntegrationEvent(ev);
+  unsub();
+  const frame = live.find((f) => f.includes('h-replay'))!;
+  assert.equal(frame, `id: ${id}\nevent: chat.hidden\ndata: ${JSON.stringify(ev)}\n\n`);
+  const replay: string[] = [];
+  const unsub2 = subscribeIntegration(fakeReply(replay), id - 1);
+  unsub2();
+  assert.ok(replay.includes(frame), 'replay po reconnectu vrátí moderační událost');
+});
+
+test('publishModIntegration: workspace podle UC kanálu (Twitch), fallback platformní kanál, nenamapovaný kanál nic', async () => {
+  const ws: WorkspaceInfo = { slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robkick', youtube: null }, bot: { mode: 'shared', displayName: 'JoukiBOT' } };
+  const find = async (platform: string, ch: string) => (ws.channels[platform as 'twitch'] === ch ? ws : null);
+  const published: object[] = [];
+  const deps = { workspaceFor: find, publish: (e: object) => { published.push(e); return 1; } };
+  const a = await publishModIntegration('robdiesalot', 'chat.deleted', { platform: 'kick', messageId: 'k1', by: null, reason: 'platform' }, deps);
+  assert.equal(a?.workspace, 'rob');
+  const b = await publishModIntegration('robkick', 'chat.deleted', { platform: 'kick', messageId: 'k2', by: null, reason: 'platform' }, deps);
+  assert.equal(b?.workspace, 'rob', 'ucChannelFor spadl na Kick slug → najít podle platformy');
+  const c = await publishModIntegration('cizi', 'chat.hidden', { platform: 'twitch', messageId: 't1', by: 'x' }, deps);
+  assert.equal(c, null);
+  assert.equal(published.length, 2);
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseIrcLine, normalizeTwitchPrivmsg, normalizeKickMessage, normalizeYoutubeAction, toRow } from './normalize.js';
+import { parseIrcLine, normalizeTwitchPrivmsg, normalizeKickMessage, normalizeYoutubeAction, normalizeYoutubeDelete, toRow } from './normalize.js';
 
 const IRC = '@badge-info=subscriber/12;badges=moderator/1,subscriber/12;color=#B22222;display-name=Trokner;emotes=425618:10-12;first-msg=0;id=2efb6cb3-47ec-4288-8c41-885b4147d478;mod=1;reply-parent-display-name=hlavis697;reply-parent-msg-body=Ehmm\\sco\\sje;reply-parent-msg-id=10050d7c-f53a-455f-9a3d-4a9586687739;room-id=39661750;tmi-sent-ts=1789820014396;user-id=12345 :trokner!trokner@trokner.tmi.twitch.tv PRIVMSG #robdiesalot :@hlavis697 specifick LUL build';
 
@@ -99,6 +99,13 @@ test('normalizeYoutubeAction: paid message → superChat + purchaseAmount; jiná
   assert.equal(m.contentRaw.superChat, true);
   assert.equal(m.contentRaw.purchaseAmount, '100 Kč');
   assert.equal(normalizeYoutubeAction({ markChatItemAsDeletedAction: {} }, 'c'), null);
+});
+
+test('normalizeYoutubeDelete: markChatItemAsDeletedAction i removeChatItemAction → targetItemId, jinak null', () => {
+  assert.equal(normalizeYoutubeDelete({ markChatItemAsDeletedAction: { targetItemId: 'yt-1' } }), 'yt-1');
+  assert.equal(normalizeYoutubeDelete({ removeChatItemAction: { targetItemId: 'yt-1' } }), 'yt-1');
+  assert.equal(normalizeYoutubeDelete({ addChatItemAction: {} }), null);
+  assert.equal(normalizeYoutubeDelete({}), null);
 });
 
 test('toRow mapuje na NewMessage', () => {

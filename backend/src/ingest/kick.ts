@@ -1,8 +1,8 @@
 import { normalizeKickMessage } from './normalize.js';
 import { noopLog, type Logger } from './twitch.js';
-import type { IngestListener, IngestMessage, PlatformStatus } from './types.js';
+import type { IngestDelete, IngestListener, IngestMessage, PlatformStatus } from './types.js';
 
-interface Opts { WebSocketCtor?: typeof WebSocket; fetchImpl?: typeof fetch; log?: Logger; reconnectBaseMs?: number }
+interface Opts { WebSocketCtor?: typeof WebSocket; fetchImpl?: typeof fetch; log?: Logger; reconnectBaseMs?: number; onDelete?: (d: IngestDelete) => void }
 
 const PUSHER_KEY = '32cbd69e4b950bf97679';
 
@@ -20,6 +20,7 @@ export class KickListener implements IngestListener {
   private readonly fetchImpl: typeof fetch;
   private readonly log: Logger;
   private readonly baseMs: number;
+  private readonly onDelete?: (d: IngestDelete) => void;
 
   constructor(
     private readonly slug: string,
@@ -30,6 +31,7 @@ export class KickListener implements IngestListener {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.log = opts.log ?? noopLog;
     this.baseMs = opts.reconnectBaseMs ?? 1000;
+    this.onDelete = opts.onDelete;
   }
 
   status() { return this.st; }
@@ -92,6 +94,16 @@ export class KickListener implements IngestListener {
           if (!m) return;
           this.last = m.sentAt;
           try { this.onMessage(m); } catch (err) { this.log.error({ err }, 'kick ingest: onMessage threw'); }
+          break;
+        }
+        case 'App\\Events\\MessageDeletedEvent': {
+          if (!this.onDelete) break;
+          let data: { id?: string; message?: { id?: string } } | null = null;
+          try { data = typeof msg.data === 'string' ? JSON.parse(msg.data) : (msg.data as typeof data); } catch { break; }
+          const id = data?.message?.id || data?.id;
+          if (id) {
+            try { this.onDelete({ platform: 'kick', channel: this.slug, messageId: String(id) }); } catch (err) { this.log.error({ err }, 'kick ingest: onDelete threw'); }
+          }
           break;
         }
       }

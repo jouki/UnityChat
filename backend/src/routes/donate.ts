@@ -1,10 +1,14 @@
 // QR dono v UnityChatu (spec docs/superpowers/specs/2026-09-25-qr-dono-v-unitychatu-design.md):
-// proxy na veřejné API donací Židolišty (RobJewsALot docs/fio-donations/04-public-api.md, 13-czk).
+// proxy na veřejné API donatů Židolišty (RobJewsALot docs/fio-donations/04-public-api.md, 13-czk).
 // Addon ani web nevolají Židolištu přímo (CORS z chrome-extension:// neprojde, nové oprávnění
 // addonu user nechce). Přezdívku posílá klient (předvyplněná), e-mail ověřený k účtu doplní server.
 //
 //   GET  /donate/config?channel=               konfigurace formuláře (+ absolutní URL ukázek hlasů)
 //   POST /donate/test-token {channel, token}   → {valid} (token ověřuje Židolišta, nikdy klient)
+//   GET  /donate/mod-test?channel=             (Bearer) → {allowed, role} — testovací režim bez tokenu pro moda
+//        Token se klientovi NIKDY neposílá (UnityChat ho ani nezná): klient pošle v intents `modTest: true`,
+//        server ověří roli ze session (chatRole — badge v archivu / login = kanál) a Židolištce pošle podepsané
+//        `ucModTest: true` + `ucModRole`. Klient pole ucModTest poslat nemůže (schéma je strict).
 //   POST /donate/intents {channel, platform, currency, amount, message, ttsVoice, ttsLanguage,
 //                         testToken?, markTest?, markPaid?}   (Bearer) → QR + VS + IBAN
 //   GET  /donate/intents/:publicId             stav platby (klient polluje)
@@ -14,14 +18,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { config } from '../config.js';
 import { listIdentities, requireWebSession } from '../lib/webAuth.js';
 import { EMAIL_RE, normEmail } from '../lib/emailVerify.js';
 import { rememberDonateNickname, verifiedEmail } from './account.js';
-import { workspaceForChannel } from '../lib/zidolista.js';
+import { workspaceForChannel, zidolistaBase, zidolistaFetch } from '../lib/zidolista.js';
 import { RateLimiter } from './chat.js';
+import { accountModIdentities, type AccountModIdentity } from '../lib/chatRole.js';
 
-const base = () => config.ZIDOLISTA_API_BASE.replace(/\/$/, '');
+const base = zidolistaBase;
 const Channel = z.string().transform((s) => s.toLowerCase().replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9_]{1,40}$/));
 const Platform = z.enum(['twitch', 'kick', 'youtube']);
 
@@ -34,12 +38,24 @@ const IntentBody = z.object({
   ttsVoice: z.string().trim().max(64).default(''),
   ttsLanguage: z.string().trim().max(8).default('cs'),
   testToken: z.string().trim().max(200).optional(),
+  /** Testovací režim bez tokenu: jen mod / streamer kanálu (ověřuje server). Ruční token má přednost. */
+  modTest: z.boolean().optional(),
   markTest: z.boolean().optional(),
   markPaid: z.boolean().optional(),
   // Přezdívka je vidět vždy (předvyplněná), e-mail jen když účet ještě nemá ověřený.
   nickname: z.string().trim().min(1).max(40),
   email: z.string().trim().max(120).optional(),
 }).strict();
+/**
+ * Pole pro Židolištu u testu bez tokenu (čistá funkce). `mods` = identity účtu s rolí mod / streamer v kanálu.
+ * null = účet v kanálu mod není. Role identity, kterou dárce právě píše, má přednost; jinak nejvyšší z účtu.
+ */
+export function modTestFields(mods: AccountModIdentity[], platform: string): { ucModTest: true; ucModRole: 'moderator' | 'broadcaster' } | null {
+  if (!mods.length) return null;
+  const pick = mods.find((m) => m.platform === platform) ?? mods.find((m) => m.role === 'broadcaster') ?? mods[0];
+  return { ucModTest: true, ucModRole: pick.role === 'broadcaster' ? 'broadcaster' : 'moderator' };
+}
+
 const TokenBody = z.object({ channel: Channel, token: z.string().trim().min(1).max(200) }).strict();
 
 /**
@@ -57,11 +73,9 @@ async function slugFor(channel: string): Promise<string | null> {
 
 /** Požadavek na Židolištu: klíč UnityChatu + IP diváka; odpověď (status + JSON) se přepošle beze změny. */
 async function upstream(req: FastifyRequest, path: string, init: { method?: string; body?: unknown } = {}) {
-  const r = await fetch(`${base()}${path}`, {
+  const r = await zidolistaFetch(`${base()}${path}`, {
     method: init.method ?? 'GET',
     headers: {
-      Accept: 'application/json',
-      'X-Api-Key': config.ZIDOLISTA_API_KEY,
       'X-UC-Client-Ip': req.ip,
       ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
@@ -117,6 +131,14 @@ export default async function donateRoutes(app: FastifyInstance) {
     } catch (e) { return fail(reply, e, app.log, 'test-token'); }
   });
 
+  app.get<{ Querystring: { channel?: string } }>('/donate/mod-test', { preHandler: requireWebSession, onRequest: async (_q, r) => { r.header('Cache-Control', 'no-store'); } }, async (req, reply) => {
+    if (!limiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const ch = Channel.safeParse(req.query.channel);
+    if (!ch.success) return reply.code(400).send({ ok: false, error: 'invalid_channel' });
+    const f = modTestFields(await accountModIdentities(req.webAccountId!, ch.data), '');
+    return { ok: true, allowed: !!f, role: f?.ucModRole ?? null };
+  });
+
   app.post('/donate/intents', { preHandler: requireWebSession }, async (req, reply) => {
     if (!writeLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
     const b = IntentBody.safeParse(req.body);
@@ -125,15 +147,26 @@ export default async function donateRoutes(app: FastifyInstance) {
     if (!slug) return reply.code(404).send({ ok: false, error: 'workspace_not_found' });
     const ident = (await listIdentities(req.webAccountId!)).find((i) => i.platform === b.data.platform);
     if (!ident) return reply.code(403).send({ ok: false, error: 'platform_not_linked' });
-    const { channel: _c, platform: _p, email: givenEmail, ...rest } = b.data;
+    const { channel: _c, platform: _p, email: givenEmail, modTest, ...rest } = b.data;
+    // Test bez tokenu: role se ověřuje TADY ze session, klientovi se nevěří. Ruční token má přednost.
+    let modFields: ReturnType<typeof modTestFields> = null;
+    if (modTest && !rest.testToken) {
+      modFields = modTestFields(await accountModIdentities(req.webAccountId!, b.data.channel), b.data.platform);
+      if (!modFields) {
+        req.log.warn({ accountId: req.webAccountId, channel: b.data.channel }, 'donate: modTest odmítnut (účet není mod)');
+        return reply.code(403).send({ ok: false, error: 'not_mod' });
+      }
+    }
     // E-mail: ověřený e-mail účtu má přednost, jinak ten, který divák zadal (povinný).
     // Z loginů platforem se e-mail nečte (Twitch Developer Agreement VI.C, spec „Identita“).
     const email = (await verifiedEmail(req.webAccountId!)) ?? (givenEmail ? normEmail(givenEmail) : '');
     if (!EMAIL_RE.test(email)) return reply.code(400).send({ ok: false, error: 'email_required' });
-    const body = { ...rest, email };
+    // Ověřený dárce (platforma + login z účtu UnityChatu) — Židolišta ho ukáže u daru (pokyn usera 2026-09-25).
+    // ucUserId = ID na platformě — Židolišta páruje dona divákovi přednostně podle něj (login se může změnit).
+    const body = { ...rest, email, ucPlatform: ident.platform, ucLogin: ident.login, ucUserId: ident.platformUserId, ...(modFields ?? {}) };
     try {
       const u = await upstream(req, `/donate/public/${encodeURIComponent(slug)}/intents`, { method: 'POST', body });
-      req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken }, 'donate: intent');
+      req.log.info({ slug, platform: b.data.platform, currency: b.data.currency, status: u.status, test: !!b.data.testToken, modTest: !!modFields }, 'donate: intent');
       if (u.status === 200) await rememberDonateNickname(req.webAccountId!, b.data.nickname).catch((e) => req.log.warn({ err: (e as Error).message }, 'donate: nickname save failed'));
       if (u.status === 200 && typeof u.json.qrString === 'string') {
         try { u.json.qrSvg = await qrSvg(u.json.qrString); } catch (e) { req.log.warn({ err: (e as Error).message }, 'donate: qr svg failed'); }

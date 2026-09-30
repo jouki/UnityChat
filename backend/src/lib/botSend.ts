@@ -6,9 +6,8 @@ import { db } from '../db/index.js';
 import { streamers } from '../db/schema.js';
 import { config } from '../config.js';
 import * as twitch from './oauthTwitch.js';
-import * as youtube from './oauthYoutube.js';
-import * as kick from './oauthKick.js';
-import { needsRefresh, type TokenSet } from './webAuth.js';
+import { needsRefresh } from './webAuth.js';
+import { refreshTokens } from './platformTokens.js';
 import { SendError, sendTwitch, sendKick, sendYoutube, youtubeLiveChatId } from './webSend.js';
 import { getBotIdentity, storeBotTokens, markBotExpired, type BotIdentity } from './botIdentities.js';
 import { workspaceBySlug, type Platform } from './zidolista.js';
@@ -30,7 +29,7 @@ export function botText(raw: string, platform: Platform): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-async function twitchUserId(login: string, accessToken: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+export async function twitchUserId(login: string, accessToken: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   const k = `twitch:${login}`;
   const hit = idCache.get(k);
   if (hit && Date.now() - hit.at < ID_TTL) return hit.id;
@@ -46,7 +45,7 @@ async function twitchUserId(login: string, accessToken: string, fetchImpl: typeo
   return id;
 }
 
-async function kickUserId(slug: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+export async function kickUserId(slug: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   const k = `kick:${slug}`;
   const hit = idCache.get(k);
   if (hit && Date.now() - hit.at < ID_TTL) return hit.id;
@@ -63,10 +62,7 @@ async function kickUserId(slug: string, fetchImpl: typeof fetch = fetch): Promis
 
 async function refreshBot(ident: BotIdentity): Promise<BotIdentity> {
   if (!ident.refreshToken) throw new SendError(`${ident.platform}: token expired`, 401);
-  let t: TokenSet;
-  if (ident.platform === 'twitch') { const r = await twitch.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope }; }
-  else if (ident.platform === 'kick') { const r = await kick.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: r.refresh_token || ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
-  else { const r = await youtube.refreshAccessToken(ident.refreshToken); t = { accessToken: r.access_token, refreshToken: ident.refreshToken, expiresIn: r.expires_in, scopes: r.scope.split(' ').filter(Boolean) }; }
+  const t = await refreshTokens(ident.platform, ident.refreshToken);
   await storeBotTokens(ident.workspace, ident.platform, t);
   return { ...ident, accessToken: t.accessToken, refreshToken: t.refreshToken || null, expiresAt: new Date(Date.now() + t.expiresIn * 1000), state: 'online' };
 }
