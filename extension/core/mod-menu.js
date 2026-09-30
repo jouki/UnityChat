@@ -65,6 +65,7 @@ const MOD_ERRORS = {
   no_actor: 'Není čím akci provést — tvůj účet ani bot tu nemá práva moda.',
   bad_login: 'Jméno uživatele nejde poslat do chatu (neplatný login).',
   nickname_blacklisted: 'Přezdívka obsahuje zakázané slovo.',
+  nickname_reserved: 'Tohle jméno patří streamerovi nebo UnityChatu, jinému účtu ho dát nejde.',
   rate_limited: 'Moc akcí za sebou, chvíli počkej.',
   not_found: 'Uživatel v archivu chatu není (zpráva je moc stará nebo ještě nedorazila).',
   self: 'Na sebe to nejde.',

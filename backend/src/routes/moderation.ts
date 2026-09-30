@@ -50,7 +50,8 @@ import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
 import { userSearchRoutes } from './userSearch.js';
 import { dbUserSearchDeps } from '../lib/userSearch.js';
-import { accountIdentities } from '../lib/moderationTargets.js';
+import { accountIdentities, accountOf } from '../lib/moderationTargets.js';
+import { reservedNames, reservedNicknameClash } from '../lib/reservedNicknames.js';
 import { config } from '../config.js';
 
 const CHANNEL_RE = /^[a-z0-9_]{2,25}$/;
@@ -600,6 +601,12 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
       },
       targetRole,
       blacklisted: async (channel, nickname) => containsBlacklisted(nickname, (await blacklistFor(channel, req.log)).terms),
+      // Jméno streamera smí mít jen jeho účet: cíl (login) + ostatní identity jeho účtu UnityChatu, když ho má.
+      reserved: async (nickname, t) => {
+        const acc = await accountOf(t.platform, t.userId);
+        const own = [t.login, ...(acc !== null ? (await accountIdentities(acc)).map((i) => i.login) : [])];
+        return reservedNicknameClash(nickname, own, await reservedNames());
+      },
       upsert: upsertNickname,
       remove: deleteNickname,
       recordAction,

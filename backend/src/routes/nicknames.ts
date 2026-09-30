@@ -6,6 +6,7 @@ import { nicknames } from '../db/schema.js';
 import { addClient, replaySince } from '../sse/bus.js';
 import { config } from '../config.js';
 import { listIdentities, requireWebSession, type PublicIdentity } from '../lib/webAuth.js';
+import { reservedNames, reservedNicknameClash } from '../lib/reservedNicknames.js';
 
 export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 /** Pravidla přezdívky — sdílí PUT /nicknames i přejmenování modem (PUT /moderation/nickname). */
@@ -73,10 +74,18 @@ export default async function nicknameRoutes(app: FastifyInstance) {
     }
 
     const { platform, username, nickname, color } = parsed.data;
-    if (!(await assertOwner(req.webAccountId!, platform, username))) {
+    const ids = await listIdentities(req.webAccountId!);
+    if (!ownsHandle(ids, platform, username)) {
       req.log.warn({ platform, username }, 'nicknames: PUT cizí přezdívky odmítnut');
       reply.code(403);
       return { ok: false, error: 'not_owner' };
+    }
+    // Jméno streamera (a UnityChatu / bota) si smí dát jen účet, kterému login patří (lib/reservedNicknames.ts).
+    const clash = reservedNicknameClash(nickname, ids.map((i) => i.login), await reservedNames());
+    if (clash) {
+      req.log.warn({ platform, username, clash }, 'nicknames: rezervované jméno odmítnuto');
+      reply.code(400);
+      return { ok: false, error: 'nickname_reserved', name: clash };
     }
     const rateLimitSecs = config.NICKNAME_RATE_LIMIT_SECS;
 

@@ -306,6 +306,8 @@ export interface RenameDeps {
   targetRole: TargetRole;
   /** Obsahuje přezdívka slovo z blacklistu kanálu (Židolišta)? */
   blacklisted: (channel: string, nickname: string) => Promise<boolean>;
+  /** Rezervované jméno (streamer, UnityChat, bot) pro někoho jiného než cíl? Vrací kolidující jméno. */
+  reserved?: (nickname: string, target: UserTarget) => Promise<string | null>;
   upsert: (platform: Platform, username: string, nickname: string, color: string | null) => Promise<void>;
   remove: (platform: Platform, username: string) => Promise<void>;
   recordAction: UserActionDeps['recordAction'];
@@ -323,6 +325,8 @@ export async function runRename(input: RenameInput, deps: RenameDeps): Promise<O
   if (input.nickname !== null && await deps.blacklisted(input.channel, input.nickname)) {
     return { status: 400, body: { ok: false, error: 'nickname_blacklisted' } };
   }
+  const clash = input.nickname !== null && deps.reserved ? await deps.reserved(input.nickname, u) : null;
+  if (clash) return { status: 400, body: { ok: false, error: 'nickname_reserved', name: clash } };
   if (input.nickname === null) await deps.remove(input.platform, u.login);
   else await deps.upsert(input.platform, u.login, input.nickname, input.color);
   try {

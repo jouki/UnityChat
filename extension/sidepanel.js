@@ -2104,6 +2104,7 @@ class UnityChat {
         // Server bere změnu jen od přihlášeného majitele (platforma bez přihlášení → přeskočit tiše).
         else if (result.error === 'not_owner') continue;
         else if (/session/i.test(String(result.error))) lastError = 'Pro změnu přezdívky se přihlas';
+        else if (result.error === 'nickname_reserved') lastError = 'Tohle jméno patří streamerovi nebo UnityChatu, nejde si ho dát jako přezdívku.';
         else lastError = result.error;
       }
 
