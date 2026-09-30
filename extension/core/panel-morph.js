@@ -167,11 +167,15 @@ export function switchPanes(panel, from, to, { dir = 1, duration = MORPH_MS, eas
   if (win.getComputedStyle(panel).position === 'static') panel.style.position = 'relative';
   from.hidden = true;
   to.hidden = false;
+  // Příchozí záložka přejede z výšky odcházející na svou (jinak by obsah pod ní — patička — skočil hned, živě 2026-09-30).
+  const th = to.getBoundingClientRect().height;
+  const savedTo = to.style.cssText;
+  Object.assign(to.style, { boxSizing: 'border-box', overflow: 'hidden' });
   panel.appendChild(ghost);
   const shift = Math.round(Math.max(12, Math.min(28, pr.width * 0.04)));
   const anims = [
     ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-dir * shift}px)` }], { duration: Math.round(duration * 0.7), easing, fill: 'forwards' }),
-    to.animate([{ opacity: 0, transform: `translateX(${dir * shift}px)` }, { opacity: 1, transform: 'none' }], { duration, easing }),
+    to.animate([{ opacity: 0, transform: `translateX(${dir * shift}px)`, height: `${fr.height}px` }, { opacity: 1, transform: 'none', height: `${th}px` }], { duration, easing, fill: 'forwards' }),
   ];
   let finished = false;
   const finish = () => {
@@ -181,6 +185,7 @@ export function switchPanes(panel, from, to, { dir = 1, duration = MORPH_MS, eas
     win.clearTimeout(t);
     for (const a of anims) { try { a.cancel(); } catch { /* ignore */ } }
     ghost.remove();
+    to.style.cssText = savedTo;
     panel.style.position = savedPanelPos;
   };
   const t = win.setTimeout(finish, duration + 150);
