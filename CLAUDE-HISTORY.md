@@ -140,6 +140,9 @@
 ---
 
 ## Changelog dokumentace
+### 2026-09-30 (session 2026-09-29/30, unitychat-8f)
+- CLAUDE.md: milestone v3.41.98–112 (zmínky bez zavináče + přezdívky, posuvníky, rezervovaná jména, announcement v historii, trvalé filtry, cooldown jako pruh, QR testmode pro moda, donaty podle ověřeného e-mailu, JoukiBOT zlatý, SE na Kicku v link filtru, broadcast commandů), UC_LOG tagy `Viewport` a `Mention`.
+- Memory: checkpoint aktualizován (stav 2026-09-30), `project_qr_dono.md` (testmode pro moda, e-mail ↔ Židolišta), `project_zidolista_bot.md` (JoukiBOT zlatý podle ID), `feedback_patterns.md` (Chrome: `scrollbar-width` vypíná `::-webkit-scrollbar`; deploy backendu = 502 na pár sekund).
 ### 2026-09-29 (stažení GIFu prohlížečem odesílatele)
 - CLAUDE.md: milestone v3.41.89–91 (host blokující IP serveru → výzva ke stažení prohlížečem, `POST /gif/client-upload`, předvolba účtu `account_gif_prefs`, karta moda se štítkem „· z prohlížeče odesílatele“ u čekající žádosti).
 ### 2026-09-28 (rich text v Židolištce)
