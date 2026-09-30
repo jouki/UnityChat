@@ -1,7 +1,11 @@
 // Odznak dárce / podporovatele (pokyn usera 2026-09-30, podklady artifacts/donor-badges-v2/unitychat-donor-motion-v4).
 // Čtyři varianty (QR Patron, Mince, Váček, Karta); jedna společná pro celý kanál — vybírá mod / streamer v nastavení
-// (Účet → Odznak dárce), uloženo na serveru (routes/channelPrefs.ts), změna jde všem SSE `channel-prefs`. Tam se
-// nastavuje i tempo animace, intenzita a odstup mezi animacemi a jestli odznak nahradí globální odznak Twitche.
+// (Účet → Odznak podporovatele, jen v dev módu), uloženo na serveru (routes/channelPrefs.ts), změna jde všem SSE
+// `channel-prefs`. Tam se nastavuje i tempo animace, intenzita a odstup mezi animacemi.
+// Individuální volba každého účtu s propojeným Twitchem (lib/badgePrefs.ts, `PUT /account/badge-prefs`): odznak UC
+// u vlastních zpráv má vlastní slot, nebo nahradí globální odznak Twitche (role / sub zůstávají). Server ji dává
+// zprávě jako `donorReplace`; klient podle toho vynechá globální odznaky (stripGlobalTwitchBadges). Pod volbou je
+// náhled vlastní zprávy (badgePreviewHtml) — bez vlastního globálního odznaku ukáže ukázkový (GlitchCon 2020).
 // Vykreslení: <img data-donor-badge> se statickým SVG (data URL); animaci řídí DonorMotion (installDonorMotion):
 // jen viditelné odznaky, každý zvlášť — přehraje jeden cyklus (core/donor-motion.js), pak náhodná pauza
 // v rozmezí gapMin–gapMax s. `prefers-reduced-motion` = jen statický. Sdílené addonem i webem.
@@ -21,7 +25,9 @@ export const DONOR_SPEEDS = [{ id: 1.5, label: 'Rychlé' }, { id: 2.2, label: 'S
 /** Intenzita = rozsah pohybu (násobek). */
 export const DONOR_STRENGTHS = [{ id: 0.6, label: 'Menší gesta' }, { id: 1, label: 'Plný pohyb' }, { id: 1.3, label: 'Výrazný' }];
 export const DONOR_GAP_MAX_S = 120;
-export const DONOR_PREFS_DEFAULT = Object.freeze({ donorBadge: DONOR_BADGE_DEFAULT, donorSpeed: 3, donorStrength: 1, donorGapMin: 2, donorGapMax: 6, donorReplaceGlobal: false });
+export const DONOR_PREFS_DEFAULT = Object.freeze({ donorBadge: DONOR_BADGE_DEFAULT, donorSpeed: 3, donorStrength: 1, donorGapMin: 2, donorGapMax: 6 });
+/** Ukázkový globální odznak Twitche pro náhled, když uživatel žádný nemá (IVR: set glitchcon2020). */
+export const SAMPLE_GLOBAL_BADGE = Object.freeze({ url: 'https://static-cdn.jtvnw.net/badges/v1/1d4b03b9-51ea-42c9-8f29-698e3c85be3d/1', title: 'GlitchCon 2020 (ukázka)' });
 
 /** Platná varianta, jinak výchozí. */
 export function donorBadgeVariant(id) {
@@ -39,7 +45,6 @@ export function normalizeDonorPrefs(p) {
     donorStrength: DONOR_STRENGTHS.some((s) => s.id === Number(r.donorStrength)) ? Number(r.donorStrength) : DONOR_PREFS_DEFAULT.donorStrength,
     donorGapMin: gapMin,
     donorGapMax: Math.max(gapMin, num(r.donorGapMax, 0, DONOR_GAP_MAX_S, DONOR_PREFS_DEFAULT.donorGapMax)),
-    donorReplaceGlobal: r.donorReplaceGlobal === true || r.donorReplaceGlobal === 'true',
   };
 }
 
@@ -73,11 +78,46 @@ export function donorBadgeHtml(id, _assetUrl = null, { size = 20, className = 'b
   return `<img class="${escapeAttr(className)}" src="${escapeAttr(donorBadgeStaticUrl(v))}" width="${size}" height="${size}" alt="${escapeAttr(t)}" data-tooltip="${escapeAttr(t)}" data-donor-badge="${escapeAttr(v)}">`;
 }
 
-/** Odznaky Twitche, které při „skrýt globální odznaky“ zůstávají (role, sub); ostatní sety = globální → pryč. */
+/** Odznaky Twitche, které při „místo globálního odznaku“ zůstávají (role, sub); ostatní sety = globální → pryč. */
 export const TWITCH_KEEP_BADGE_SETS = new Set(['subscriber', 'founder', 'moderator', 'vip', 'broadcaster', 'staff', 'admin', 'global_mod', 'partner', 'verified', 'bot', 'sub-gifter', 'sub-gift-leader', 'bits-leader', 'hype-train', 'predictions']);
+/** Je set odznaku Twitche globální (ne role / sub)? */
+export const isGlobalTwitchBadge = (badge) => !TWITCH_KEEP_BADGE_SETS.has(String(badge || '').split('/')[0]);
 /** `badgesRaw` Twitche bez globálních odznaků (jen sety z TWITCH_KEEP_BADGE_SETS). */
 export function stripGlobalTwitchBadges(badgesRaw) {
-  return String(badgesRaw || '').split(',').filter((b) => b && TWITCH_KEEP_BADGE_SETS.has(b.split('/')[0])).join(',');
+  return String(badgesRaw || '').split(',').filter((b) => b && !isGlobalTwitchBadge(b)).join(',');
+}
+
+/**
+ * Individuální volba účtu (jen s propojeným Twitchem): zaškrtávátko + místo pro náhled vlastní zprávy.
+ * Hostitel poslouchá `change` na `[name="uc-badge-replace"]`, PUT /account/badge-prefs, náhled překreslí přes badgePreviewHtml.
+ */
+export function badgeReplaceHtml({ checked = false, disabled = false } = {}) {
+  return `<label class="uc-dbr"><input type="checkbox" name="uc-badge-replace"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}> Odznak podporovatele místo globálního odznaku Twitche</label>
+  <div class="uc-dbr-preview" aria-label="Náhled vlastní zprávy"></div>`;
+}
+
+/**
+ * Náhled vlastní zprávy jako v chatu (stejné třídy .msg / .pi / .ts / .bdg / .un / .tx → sidepanel.css):
+ * `badges` = [{ url, title, global }] z vlastních odznaků Twitche (hostitel podle badgesRaw a své mapy odznaků);
+ * bez globálního odznaku se přidá ukázkový (SAMPLE_GLOBAL_BADGE). `replace` = volba účtu; odznak UC se kreslí vždy
+ * (ať je vidět chování), ve vlastním slotu první, jinak na místě globálního odznaku.
+ */
+export function badgePreviewHtml({ displayName = '', color = '', badges = [], replace = false, donorBadge = DONOR_BADGE_DEFAULT, amountCzk = null, text = 'Takhle bude vypadat moje zpráva.' } = {}) {
+  const list = badges.filter((b) => b?.url);
+  if (!list.some((b) => b.global)) list.push({ ...SAMPLE_GLOBAL_BADGE, global: true });
+  const uc = donorBadgeHtml(donorBadge, null, { amountCzk });
+  const img = (b) => `<img class="bdg-img" src="${escapeAttr(b.url)}" alt="${escapeAttr(b.title || '')}" data-tooltip="${escapeAttr(b.title || '')}">`;
+  let bdg = '';
+  if (replace) {
+    // Globální odznaky pryč, odznak UC na místě prvního z nich.
+    let placed = false;
+    for (const b of list) { if (b.global) { if (!placed) { bdg += uc; placed = true; } } else bdg += img(b); }
+    if (!placed) bdg = uc + bdg;
+  } else {
+    bdg = uc + list.map(img).join('');
+  }
+  const name = displayName || 'Já';
+  return `<div class="msg uc-badge-preview"><span class="pi tw" data-tooltip="Twitch">TW</span><span class="ts">12:34</span><span class="bdg">${bdg}</span><span class="un"${color ? ` style="color:${escapeAttr(color)}"` : ''}>${escapeHtml(name)}</span> <span class="tx">${escapeHtml(text)}</span></div>`;
 }
 
 /**
@@ -99,7 +139,6 @@ export function donorBadgePickerHtml(prefs, _assetUrl = null, { disabled = false
     <label class="uc-dbp-opt"><span>Intenzita</span><select name="uc-donor-strength"${dis}>${opts(DONOR_STRENGTHS, p.donorStrength)}</select></label>
     <label class="uc-dbp-opt"><span>Odstup od (s)</span><input type="number" name="uc-donor-gapmin" min="0" max="${DONOR_GAP_MAX_S}" step="0.5" value="${p.donorGapMin}"${dis}></label>
     <label class="uc-dbp-opt"><span>Odstup do (s)</span><input type="number" name="uc-donor-gapmax" min="0" max="${DONOR_GAP_MAX_S}" step="0.5" value="${p.donorGapMax}"${dis}></label>
-    <label class="uc-dbp-check"><input type="checkbox" name="uc-donor-replace"${p.donorReplaceGlobal ? ' checked' : ''}${dis}> Skrýt globální odznaky Twitche (u všech; podporovatel má místo nich odznak UnityChat)</label>
   </div>`;
 }
 
@@ -112,7 +151,6 @@ export function readDonorPickerPrefs(root) {
     donorStrength: q('uc-donor-strength')?.value,
     donorGapMin: q('uc-donor-gapmin')?.value,
     donorGapMax: q('uc-donor-gapmax')?.value,
-    donorReplaceGlobal: !!q('uc-donor-replace')?.checked,
   });
 }
 
@@ -127,7 +165,7 @@ export function markDonorBadgePicker(root, prefs) {
     if (input) input.checked = on;
   }
   const set = (n, v) => { const el = root.querySelector(`[name="${n}"]`); if (el && el.type === 'checkbox') el.checked = !!v; else if (el) el.value = String(v); };
-  set('uc-donor-speed', p.donorSpeed); set('uc-donor-strength', p.donorStrength); set('uc-donor-gapmin', p.donorGapMin); set('uc-donor-gapmax', p.donorGapMax); set('uc-donor-replace', p.donorReplaceGlobal);
+  set('uc-donor-speed', p.donorSpeed); set('uc-donor-strength', p.donorStrength); set('uc-donor-gapmin', p.donorGapMin); set('uc-donor-gapmax', p.donorGapMax);
 }
 
 /** Už vykreslené odznaky (chat, profil) → nová varianta; náhledy ve výběru (`.uc-dbp`) se nemění. */

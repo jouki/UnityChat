@@ -11,12 +11,16 @@ import { ownsHandle } from './nicknames.js';
 import { gifFromRaw, gifReplaces, gifOrigin, gifMediaIdFromRaw, gifMessageState, GIF_REMOVED_REASON, type GifMediaView } from '../lib/gifIds.js';
 import { announcementsBetween, type AnnouncementPayload } from './announcements.js';
 import { isDonor, donorAmount } from '../lib/donors.js';
+import { authorReplacesGlobal } from '../lib/badgePrefs.js';
 
-/** `donor: true` (+ `donorCzk` = součet za 30 dní, když ho Židolišta posílá) pro autora zprávy (identita nebo jméno = přezdívka donatu), jinak nic. */
-function donorFields(platform: string, channel: string, userId: string | null | undefined, username: string | null | undefined): { donor?: true; donorCzk?: number } {
+/**
+ * `donor: true` (+ `donorCzk` = součet za 30 dní, když ho Židolišta posílá) pro autora zprávy (identita nebo jméno =
+ * přezdívka donatu), `donorReplace: true` když má autor volbu „místo globálního odznaku Twitche“ (lib/badgePrefs.ts); jinak nic.
+ */
+export function donorFields(platform: string, channel: string, userId: string | null | undefined, username: string | null | undefined): { donor?: true; donorCzk?: number; donorReplace?: true } {
   if (!isDonor(platform, channel, userId, username)) return {};
   const czk = donorAmount(platform, channel, userId, username);
-  return czk ? { donor: true, donorCzk: czk } : { donor: true };
+  return { donor: true, ...(czk ? { donorCzk: czk } : {}), ...(authorReplacesGlobal(platform, userId) ? { donorReplace: true } : {}) };
 }
 
 /**
@@ -60,9 +64,11 @@ export interface ClientMessage {
   anncHidden?: boolean;
   /** Announcement jako položka historie (announcementMessage). */
   ucAnnouncement?: unknown;
-  /** Autor donatoval v posledních 30 dnech (lib/donors.ts) → odznak dárce; `donorCzk` = součet za okno v Kč (tooltip). */
+  /** Autor donatoval v posledních 30 dnech (lib/donors.ts) → odznak dárce; `donorCzk` = součet za okno v Kč (tooltip);
+   *  `donorReplace` = odznak UC místo globálních odznaků Twitche (volba účtu, lib/badgePrefs.ts). */
   donor?: boolean;
   donorCzk?: number;
+  donorReplace?: boolean;
   /**
    * Jen GIFy schválené před 2026-09-26: nahrazuje původní zprávu (`<platform>:<messageId>`) na jejím místě.
    * Nové schválené GIFy jdou na konec chatu (čas schválení) a nesou jen `gifOrigin`.

@@ -53,14 +53,16 @@
         <input type="color" id="input-color-picker" value="#ff8c00">
         <input type="text" id="input-color-hex" placeholder="#ff8c00" maxlength="7" spellcheck="false" autocomplete="off">
       </div>
+      <!-- Odznak podporovatele — volba účtu (jen s propojeným Twitchem, core badgeReplaceHtml) + náhled vlastní zprávy. -->
+      <div id="badge-replace-row" class="badge-replace-row" hidden></div>
       <div class="save-row">
         <button id="btn-nickname" class="btn-nick">Uložit</button>
       </div>
       <span id="nickname-status" class="nick-status"></span>
     </div>
-    <!-- Odznak dárce (core/donor-badge.js): jen mod / streamer, společný pro celý kanál (routes/channelPrefs.ts). -->
-    <div class="setting-row uc-mod-only" id="row-donor-badge" hidden>
-      <label>Odznak dárce <span class="setting-sub">(společný pro celý kanál)</span></label>
+    <!-- Odznak podporovatele (core/donor-badge.js): jen mod / streamer v Dev mode, společný pro celý kanál (routes/channelPrefs.ts). -->
+    <div class="setting-row uc-mod-only dev-only" id="row-donor-badge" hidden>
+      <label>Odznak podporovatele <span class="setting-sub">(společný pro celý kanál)</span></label>
       <div id="donor-badge-picker"></div>
       <span id="donor-badge-status" class="nick-status"></span>
     </div>
@@ -145,7 +147,8 @@
         Našeptávat emoty po dvojtečce (:)
       </label>
     </div>
-    <div class="setting-row dev-mode-row">
+    <!-- Dev mode zapne jen mod / streamer (pokyn usera 2026-09-30). -->
+    <div class="setting-row dev-mode-row uc-mod-only">
       <label class="platform-check">
         <input type="checkbox" id="chk-devmode">
         Dev mode

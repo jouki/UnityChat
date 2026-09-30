@@ -893,8 +893,9 @@ await ev(`window.ucGif.cd().reset()`);
 await typeIn('šestý https://tenor.com/view/six-gif-6');
 await until(`!!window.ucGif.cd().snapshot() && window.ucGif.cd().remainingMs() === 0`, 4000);
 await clickSend();
+// Optimistická zpráva se vykreslí synchronně, zachycení POST /chat/send (Fetch.requestPaused) chvilku trvá → počkat na obojí.
 check('B odeslání GIF odkazu → optimistická zpráva s kolečkem 0 %', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.uc-gif-st-pct')?.textContent === '0 %')`, 4000)
-  && posts.send.length > sendB, JSON.stringify(await ev(`({ rem: window.ucGif.cd().remainingMs(), snap: window.ucGif.cd().snapshot(), val: document.getElementById('msg-input').value, sent: [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].map(m => m.dataset.msgId + ':' + (m.querySelector('.uc-gif-st')?.className || '-') + ':' + m.querySelector('.tx')?.textContent) })`)) + ' send=' + (posts.send.length - sendB) + ' ' + JSON.stringify(posts.send.at(-1)));
+  && await waitFor(() => posts.send.length > sendB, 4000), JSON.stringify(await ev(`({ rem: window.ucGif.cd().remainingMs(), snap: window.ucGif.cd().snapshot(), val: document.getElementById('msg-input').value, sent: [...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].map(m => m.dataset.msgId + ':' + (m.querySelector('.uc-gif-st')?.className || '-') + ':' + m.querySelector('.tx')?.textContent) })`)) + ' send=' + (posts.send.length - sendB) + ' ' + JSON.stringify(posts.send.at(-1)));
 pushAcc(PR('e2e-own6', 'download', 45));
 check('B gif-progress (id z /chat/send) → kolečko optimistické zprávy „45 %“', await until(`[...document.querySelectorAll('.msg[data-msg-id^="sent-"]')].some(m => m.querySelector('.uc-gif-st-pct')?.textContent === '45 %')`, 12000));
 mock.sendId = null;

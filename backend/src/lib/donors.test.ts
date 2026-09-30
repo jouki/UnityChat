@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseDonors, parseDonorAmounts, refreshDonors, isDonor, donorAmount, _resetDonorsForTest } from './donors.js';
 import { _setWorkspacesForTest } from './zidolista.js';
+import { _setReplaceForTest, authorReplacesGlobal } from './badgePrefs.js';
+import { donorFields } from '../routes/chat.js';
 
 test('parseDonors: jen známé platformy s id', () => {
   const s = parseDonors({ ok: true, donors: [{ platform: 'twitch', userId: '1' }, { platform: 'Kick', userId: ' 2 ' }, { platform: 'x', userId: '3' }, { platform: 'youtube', userId: '' }] });
@@ -27,6 +29,14 @@ test('refreshDonors + isDonor: cache per workspace, 404 = prázdno bez chyby, v�
   assert.equal(isDonor('kick', 'robdiesalot', 'k9', 'Spaja_X'), true);
   assert.equal(donorAmount('twitch', 'robdiesalot', '550788633', 'SpajaX'), 199);
   assert.equal(isDonor('twitch', 'robdiesalot', '777', 'nekdojiny'), false);
+  // Volba účtu „místo globálního odznaku Twitche“ (lib/badgePrefs.ts) → donorReplace jen u Twitche a jen dárci.
+  _setReplaceForTest([['twitch', '30645675', 42], ['twitch', '777', 43]]);
+  assert.equal(authorReplacesGlobal('twitch', '30645675'), true);
+  assert.equal(authorReplacesGlobal('kick', '30645675'), false);
+  assert.deepEqual(donorFields('twitch', 'robdiesalot', '30645675', 'jouki728'), { donor: true, donorCzk: 1130, donorReplace: true });
+  assert.deepEqual(donorFields('twitch', 'robdiesalot', '550788633', 'spajax'), { donor: true, donorCzk: 199 });
+  assert.deepEqual(donorFields('twitch', 'robdiesalot', '777', 'nekdojiny'), {}, 'volba bez donatu odznak nedá');
+  _setReplaceForTest([]);
   assert.equal(isDonor('kick', 'robdiesalot', '30645675'), false, 'jiná platforma = jiné id');
   assert.equal(isDonor('twitch', 'jinykanal', '30645675'), false, 'kanál mimo registr');
   status = 500;

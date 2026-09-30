@@ -47,6 +47,7 @@ import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePerm
 import { isBotAccount, isSharedBotId } from './lib/botIdentities.js';
 import { anncHides } from './lib/anncHides.js';
 import { startDonorsRefresh } from './lib/donors.js';
+import { loadBadgePrefs } from './lib/badgePrefs.js';
 import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
 import { deletePlatformMessage, deleteOwnMessageAsSender } from './lib/modActions.js';
 import { archivedUserByLogin, resolveUserTargets, dbTargetDeps } from './lib/moderationTargets.js';
@@ -250,7 +251,7 @@ const ingest = createIngest({
     const live = toClientMessage(toRow(m), false);
     publishChat(m.channel, m.platform, live);
     // Odznak podporovatele u živé zprávy: addon ji má z vlastního IRC (bez `donor`) → SSE donor-mark (jako uc-mark).
-    if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}) });
+    if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}), ...(live.donorReplace ? { replace: true } : {}) });
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
     publishIntegration(m);
   },
@@ -290,6 +291,7 @@ app.addHook('onReady', async () => {
   startWorkspaceRefresh(app.log);
   // Dárci za 30 dní (odznak v chatu) — ze Židolišty každých 5 min (lib/donors.ts).
   startDonorsRefresh(app.log);
+  void loadBadgePrefs(app.log);
   gifFlow.loadPending().then((n) => app.log.info({ n }, 'gif: čekající žádosti načteny')).catch((err) => app.log.warn({ err: (err as Error).message }, 'gif: načtení žádostí selhalo (tabulka chybí?)'));
   // Propadnutí (10 s), dorovnání schválených bez zprávy (30 s po startu, pak 1×/min, audit A1) a retence
   // (2 min po startu, pak 1×/h — audit B2: dev se nasazuje častěji než jednou za hodinu).

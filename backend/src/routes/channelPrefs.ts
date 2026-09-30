@@ -16,9 +16,9 @@ export const DONOR_BADGE_DEFAULT = 'donor-coin';
 const DONOR_SPEEDS = [1.5, 2.2, 3] as const;
 const DONOR_STRENGTHS = [0.6, 1, 1.3] as const;
 const DONOR_GAP_MAX = 120;
-/** Odznak dárce: varianta, tempo (s), intenzita, odstup mezi animacemi (s), nahrazení globálního odznaku Twitche. */
-export type ChannelPrefs = { donorBadge: (typeof DONOR_BADGE_VARIANTS)[number]; donorSpeed: number; donorStrength: number; donorGapMin: number; donorGapMax: number; donorReplaceGlobal: boolean };
-const DEFAULT_PREFS: ChannelPrefs = { donorBadge: DONOR_BADGE_DEFAULT, donorSpeed: 3, donorStrength: 1, donorGapMin: 2, donorGapMax: 6, donorReplaceGlobal: false };
+/** Odznak podporovatele: varianta, tempo (s), intenzita, odstup mezi animacemi (s). „Místo globálního odznaku“ je volba účtu (lib/badgePrefs.ts). */
+export type ChannelPrefs = { donorBadge: (typeof DONOR_BADGE_VARIANTS)[number]; donorSpeed: number; donorStrength: number; donorGapMin: number; donorGapMax: number };
+const DEFAULT_PREFS: ChannelPrefs = { donorBadge: DONOR_BADGE_DEFAULT, donorSpeed: 3, donorStrength: 1, donorGapMin: 2, donorGapMax: 6 };
 
 const Channel = z.string().transform((s) => s.toLowerCase().replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9_]{1,40}$/));
 const PrefsBody = z.object({
@@ -27,7 +27,6 @@ const PrefsBody = z.object({
     donorBadge: z.enum(DONOR_BADGE_VARIANTS).optional(),
     donorSpeed: z.number().optional(), donorStrength: z.number().optional(),
     donorGapMin: z.number().min(0).max(DONOR_GAP_MAX).optional(), donorGapMax: z.number().min(0).max(DONOR_GAP_MAX).optional(),
-    donorReplaceGlobal: z.boolean().optional(),
   }).strict(),
 }).strict();
 
@@ -44,7 +43,6 @@ export function normalizePrefs(raw: unknown): ChannelPrefs {
     donorStrength: pick(r.donorStrength, DONOR_STRENGTHS, DEFAULT_PREFS.donorStrength),
     donorGapMin: gapMin,
     donorGapMax: Math.max(gapMin, num(r.donorGapMax, 0, DONOR_GAP_MAX, DEFAULT_PREFS.donorGapMax)),
-    donorReplaceGlobal: r.donorReplaceGlobal === true,
   };
 }
 

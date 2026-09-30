@@ -1326,7 +1326,9 @@ class UnityChat {
   }
 
   /** Dev mode (pamatuje se v configu): nástroje, editace jména; QR dono ukáže i u kanálu bez darů. */
+  /** Dev mode platí jen modovi / streamerovi (pokyn usera 2026-09-30); divák ho zapnout nemůže (řádek je schovaný). */
   _applyDevMode(on) {
+    on = on === true && !!this._canModerate;
     document.getElementById('dev-tools')?.classList.toggle('hidden', !on);
     const un = document.getElementById('input-username');
     if (un) un.readOnly = !on;
@@ -4447,10 +4449,10 @@ class UnityChat {
 
   /** SSE `uc-mark`: server poznal zprávu z UnityChatu bez markeru → zlaté logo (i u vykreslené). */
   /** SSE donor-mark: zpráva z vlastního IRC je od podporovatele → `donor` do dat + odznak (zpráva může dorazit i po marku). */
-  _applyDonorMark({ platform, id, czk }) {
+  _applyDonorMark({ platform, id, czk, replace }) {
     if (!id) return;
     if (!this._donorMarks) this._donorMarks = new Map();
-    this._donorMarks.set(String(id), Number(czk) || 0);
+    this._donorMarks.set(String(id), { czk: Number(czk) || 0, replace: replace === true });
     if (this._donorMarks.size > 500) this._donorMarks.delete(this._donorMarks.keys().next().value);
     const cached = this.store.get(id);
     if (!cached || (platform && cached.platform !== platform)) return;
@@ -4462,10 +4464,11 @@ class UnityChat {
 
   /** Příznak podporovatele ze zapamatovaného donor-marku do dat zprávy (před vykreslením). */
   _markDonor(msg) {
-    const czk = msg?.id != null ? this._donorMarks?.get(String(msg.id)) : undefined;
-    if (czk === undefined) return false;
+    const mark = msg?.id != null ? this._donorMarks?.get(String(msg.id)) : undefined;
+    if (!mark) return false;
     msg.donor = true;
-    if (czk) msg.donorCzk = czk;
+    if (mark.czk) msg.donorCzk = mark.czk;
+    if (mark.replace) msg.donorReplace = true;
     return true;
   }
 
@@ -5258,20 +5261,13 @@ class UnityChat {
     const core = window.UC_CORE;
     const next = core.normalizeDonorPrefs(prefs);
     const changed = JSON.stringify(next) !== JSON.stringify(this._channelPrefs || null);
-    const prevReplace = this._channelPrefs?.donorReplaceGlobal ?? false;
     this._channelPrefs = next;
     core.markDonorBadgePicker(document.getElementById('donor-badge-picker'), next);
     if (changed) {
       this._ucLog('Prefs', `${JSON.stringify(next)} (${why})`);
       core.repaintDonorBadges(document, next);
       this._donorMotion?.refresh();
-      // „Skrýt globální odznaky Twitche“ mění sadu odznaků všech Twitch zpráv → překreslit (.bdg); smazané zůstanou bez nich.
-      if (prevReplace !== next.donorReplaceGlobal) {
-        for (const el of this._msgNodes()) {
-          const m = this.store.get(el.dataset.msgId);
-          if (m?.platform === 'twitch') core.setMessageBadges(el, this._badgesEl(m));
-        }
-      }
+      this._renderBadgePreview();
     }
   }
 
@@ -5298,9 +5294,10 @@ class UnityChat {
     // Volba vzhledu smazaných zpráv jen pro moda (divák má vždy zašedlé „Zpráva smazána“).
     const delRow = document.getElementById('row-deleted-style');
     if (delRow) delRow.hidden = !can;
-    // Odznak dárce (společný pro kanál) nastavuje jen mod.
+    // Odznak podporovatele (společný pro kanál) nastavuje jen mod v Dev mode; Dev mode sám platí jen modovi.
     const dbRow = document.getElementById('row-donor-badge');
     if (dbRow) dbRow.hidden = !can;
+    if (changed) this._applyDevMode(this.config.devMode === true);
     // Bez role se obsah smazaných zpráv už nedotahuje (a po návratu role se zeptá znovu) a dotažený se zahodí.
     if (!can) { this._deletedLoaderInst?.reset(); this._dropModContent(); }
     // Chybějící mod scopes účtu (core ModMenu: po 'bot' / 'error:no_actor' nabídne přihlášení s moderací).
@@ -5805,7 +5802,7 @@ class UnityChat {
         this._ucLog('Account', 'session vypršela → odhlášen');
       } else if (r.ok) {
         const j = await r.json();
-        this._account = { accountId: j.accountId, platforms: j.platforms || {}, gifClientFetch: j.gifClientFetch || 'ask' };
+        this._account = { accountId: j.accountId, platforms: j.platforms || {}, gifClientFetch: j.gifClientFetch || 'ask', badgeReplaceGlobal: j.badgeReplaceGlobal === true };
         // Nepotvrzená varování od moderátora (moderace část 2) — okno + blokace psaní.
         this._warn().set(j.warnings || []);
       }
@@ -5867,9 +5864,82 @@ class UnityChat {
       });
     }
     this._syncGifClientFetchRow();
+    this._syncBadgeReplaceRow();
   }
 
   /** Řádek předvolby stažení GIFu prohlížečem: jen s účtem; hodnota z /auth/me, změna → PUT /account/gif-prefs. */
+  /**
+   * Volba účtu „odznak podporovatele místo globálního odznaku Twitche“ (core badgeReplaceHtml, PUT /account/badge-prefs):
+   * jen s propojeným Twitchem; pod ní náhled vlastní zprávy (badgePreviewHtml) — přezdívka, barva, odznaky.
+   */
+  _syncBadgeReplaceRow() {
+    const row = document.getElementById('badge-replace-row');
+    if (!row) return;
+    const core = window.UC_CORE;
+    const has = !!this._account?.platforms?.twitch;
+    row.hidden = !has;
+    if (!has) { row.innerHTML = ''; return; }
+    if (!row._ucWired) {
+      row._ucWired = true;
+      row.innerHTML = core.badgeReplaceHtml({ checked: this._account.badgeReplaceGlobal === true });
+      row.addEventListener('change', async (e) => {
+        const cb = e.target.closest?.('[name="uc-badge-replace"]');
+        if (!cb) return;
+        const v = !!cb.checked;
+        this._renderBadgePreview();
+        try {
+          await this._ucApi('/account/badge-prefs', { method: 'PUT', body: { replaceGlobal: v } });
+          if (this._account) this._account.badgeReplaceGlobal = v;
+          this._ucLog('Donor', `volba místo globálního odznaku → ${v}`);
+          // Vlastní zprávy v chatu hned podle nové volby (server ji dává jen nově vykresleným).
+          const me = String(this._identity('twitch')?.login || '').toLowerCase();
+          for (const el of this._msgNodes()) {
+            const m = this.store.get(el.dataset.msgId);
+            if (m?.platform === 'twitch' && m.donor && String(m.username || '').toLowerCase() === me) { m.donorReplace = v; core.setMessageBadges(el, this._badgesEl(m)); }
+          }
+        } catch (err) {
+          cb.checked = this._account?.badgeReplaceGlobal === true;
+          this._renderBadgePreview();
+          this._ucLog('Donor', `volba se neuložila: ${err?.error || err?.message || err}`);
+        }
+      });
+      // Náhled sleduje přezdívku a barvu hned při psaní.
+      for (const id of ['input-nickname', 'input-color-hex', 'input-color-picker']) document.getElementById(id)?.addEventListener('input', () => this._renderBadgePreview());
+    } else {
+      const cb = row.querySelector('[name="uc-badge-replace"]');
+      if (cb) cb.checked = this._account.badgeReplaceGlobal === true;
+    }
+    this._renderBadgePreview();
+  }
+
+  /** Náhled vlastní zprávy pod volbou odznaku: jméno (přezdívka / displayName), barva, vlastní odznaky Twitche + odznak UC. */
+  _renderBadgePreview() {
+    const row = document.getElementById('badge-replace-row');
+    const box = row?.querySelector('.uc-dbr-preview');
+    if (!box || row.hidden) return;
+    const core = window.UC_CORE;
+    const $ = (id) => document.getElementById(id);
+    const id = this._identity('twitch');
+    const login = String(id?.login || '').toLowerCase();
+    const known = this._chatUsers.get(`twitch:${login}`);
+    const hex = ($('input-color-hex')?.value || '').trim();
+    const color = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : (this.nicknames.getColor('twitch', login) || known?.color || this._platformColors?.twitch || '');
+    const badges = String(known?.badgesRaw || '').split(',').filter(Boolean).map((b) => {
+      const entry = this._badgeEntry('twitch', b);
+      const url = entry && typeof entry === 'object' ? entry.url : entry;
+      return url ? { url, title: (entry && typeof entry === 'object' && entry.title) || b.split('/')[0], global: core.isGlobalTwitchBadge(b) } : null;
+    }).filter(Boolean);
+    const mine = this.store.slice?.().find?.((m) => m?.platform === 'twitch' && m.donorCzk && String(m.username || '').toLowerCase() === login);
+    box.innerHTML = core.badgePreviewHtml({
+      displayName: ($('input-nickname')?.value || '').trim() || this._accountName('twitch') || login,
+      color: color ? core.readableColor?.(color) || color : '',
+      badges,
+      replace: !!row.querySelector('[name="uc-badge-replace"]')?.checked,
+      donorBadge: this._channelPrefs?.donorBadge,
+      amountCzk: mine?.donorCzk || null,
+    });
+  }
+
   _syncGifClientFetchRow() {
     const $ = (id) => document.getElementById(id);
     const row = $('row-gif-client-fetch'), sel = $('input-gif-client-fetch');
@@ -8182,9 +8252,9 @@ class UnityChat {
     // Dárce za posledních 30 dní (server `donor`, lib/donors.ts) → odznak dárce (varianta kanálu, core/donor-badge.js).
     if (msg?.donor) bdg.insertAdjacentHTML('beforeend', window.UC_CORE.donorBadgeHtml(this._channelPrefs?.donorBadge, null, { amountCzk: msg.donorCzk }));
     const badgeCount = Object.keys(this._twitchBadges).length;
-    // Volba kanálu „skrýt globální odznaky Twitche“ (pro teď u všech, user 2026-09-30): zůstanou jen odznaky role / sub,
-    // u dárců je místo globálního odznak UC.
-    const raw = msg?.platform === 'twitch' && this._channelPrefs?.donorReplaceGlobal ? window.UC_CORE.stripGlobalTwitchBadges(msg.badgesRaw) : String(msg?.badgesRaw || '');
+    // Volba autora „odznak podporovatele místo globálního odznaku Twitche“ (server `donorReplace`, lib/badgePrefs.ts):
+    // zůstanou jen odznaky role / sub, globální nahradí odznak UC.
+    const raw = msg?.donor && msg.donorReplace && msg.platform === 'twitch' ? window.UC_CORE.stripGlobalTwitchBadges(msg.badgesRaw) : String(msg?.badgesRaw || '');
     for (const badge of raw.split(',')) {
       if (!badge) continue;
       const entry = this._badgeEntry(msg.platform, badge);

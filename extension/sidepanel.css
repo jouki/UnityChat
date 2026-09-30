@@ -491,6 +491,8 @@ body.uc-no-twitch-login #tw-credits { display: none !important; }
 .dev-only { display: none; }
 body.uc-signed-out #email-settings { display: none; }
 body.uc-dev .dev-only { display: block; }
+/* Řádek jen pro moda v Dev mode (odznak podporovatele): bez Dev mode schovaný i modovi. */
+body:not(.uc-dev) .uc-mod-only.dev-only { display: none !important; }
 /* Bez přihlášení: celé pole pro psaní pryč, zůstane výzva #login-cta. */
 #input-area .msg-input-wrap.hidden { display: none !important; }
 
@@ -562,7 +564,13 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .uc-dbp-img { width: 28px; height: 28px; display: block; }
 .uc-dbp-name { white-space: nowrap; }
 .uc-donor-badge { width: 20px; height: 20px; }
-/* Volby animace odznaku (tempo, intenzita, odstupy) + nahrazení globálního odznaku Twitche. */
+/* Volba účtu „odznak podporovatele místo globálního odznaku Twitche“ + náhled vlastní zprávy (core badgeReplaceHtml). */
+.badge-replace-row { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.uc-dbr { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--text-secondary); line-height: 1.3; }
+.uc-dbr input { margin: 0; accent-color: var(--accent); }
+.uc-dbr-preview { border: 1px dashed var(--border); border-radius: 8px; padding: 4px 6px; background: var(--bg-tertiary); }
+.uc-dbr-preview .msg.uc-badge-preview { margin: 0; pointer-events: none; }
+/* Volby animace odznaku (tempo, intenzita, odstupy). */
 .uc-dbp-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
 .uc-dbp-opt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .uc-dbp-opt select, .uc-dbp-opt input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 12px; }

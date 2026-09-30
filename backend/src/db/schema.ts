@@ -597,6 +597,13 @@ export const accountGifPrefs = pgTable('account_gif_prefs', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Odznak podporovatele — volba účtu „místo globálního odznaku Twitche“ (lib/badgePrefs.ts, SQL 2026-09-30-account-badge-prefs.sql).
+export const accountBadgePrefs = pgTable('account_badge_prefs', {
+  accountId: bigint('account_id', { mode: 'number' }).primaryKey().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  replaceGlobal: boolean('replace_global').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Soundboard (spec 2026-09-24-soundboard-se-tiers-design.md): oblíbené zvuky a počty
 // přehrání per účet. Zvuky samotné žijí v Židolišti, sound_id = její stabilní id.
 // Ručně SQL (backend/sql/2026-09-24-soundboard.sql).

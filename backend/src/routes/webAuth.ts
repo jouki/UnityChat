@@ -22,6 +22,7 @@ import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } fr
 import { accountModIdentities } from '../lib/chatRole.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
 import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
+import { getReplaceGlobalPref, setReplaceGlobalPref, refreshAccount as refreshBadgePrefs } from '../lib/badgePrefs.js';
 import { syncEmailLink } from '../lib/emailLink.js';
 import { platformChannel } from './chat.js';
 import { RateLimiter } from './chat.js';
@@ -161,6 +162,8 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     req.log.info({ accountId: res.accountId, linked: res.linked, linkRefused: res.linkRefused }, 'web OAuth exchange');
     // Nová platforma na účtu → seznam identit u ověřeného e-mailu v Židolištce (účet bez e-mailu nic neposílá dál).
     if (res.linked) void syncEmailLink(res.accountId, { log: req.log });
+    // Identity účtu se změnily → cache volby odznaku (lib/badgePrefs.ts).
+    void refreshBadgePrefs(res.accountId).catch((e) => req.log.warn({ err: (e as Error).message }, 'badge-prefs: refresh po přihlášení selhal'));
     return { ok: true, token: res.sessionToken, linked: res.linked, expiresInMs: WEB_SESSION_TTL_MS };
   });
 
@@ -175,7 +178,22 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     // Předvolba „stažení GIFu prohlížečem odesílatele" (Task 6) — tabulka chybí / výpadek DB → výchozí 'ask'.
     let gifClientFetch: ClientFetchPref = 'ask';
     try { gifClientFetch = await getClientFetchPref(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: gifClientFetch nenačten'); }
-    return { ok: true, accountId: req.webAccountId, platforms, warnings, gifClientFetch };
+    // Odznak podporovatele: „místo globálního odznaku Twitche“ (lib/badgePrefs.ts) — výpadek / chybějící tabulka → false.
+    let badgeReplaceGlobal = false;
+    try { badgeReplaceGlobal = await getReplaceGlobalPref(req.webAccountId!); } catch (e) { req.log.warn({ err: (e as Error).message }, 'auth/me: badgeReplaceGlobal nenačten'); }
+    return { ok: true, accountId: req.webAccountId, platforms, warnings, gifClientFetch, badgeReplaceGlobal };
+  });
+
+  // Odznak podporovatele — individuální volba účtu (pokyn usera 2026-09-30): jen s propojeným Twitchem (jinde globální odznaky nejsou).
+  app.put<{ Body: { replaceGlobal?: unknown } }>('/account/badge-prefs', { preHandler: requireWebSession }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const v = req.body?.replaceGlobal;
+    if (typeof v !== 'boolean') return reply.code(400).send({ ok: false, error: 'replaceGlobal' });
+    const ids = await listIdentities(req.webAccountId!);
+    if (!ids.some((i) => i.platform === 'twitch')) return reply.code(409).send({ ok: false, error: 'no_twitch' });
+    await setReplaceGlobalPref(req.webAccountId!, v);
+    req.log.info({ accountId: req.webAccountId, replaceGlobal: v }, 'badge-prefs: změna');
+    return { ok: true, replaceGlobal: v };
   });
 
   // Odhlásit se = všechny platformy účtu (signOutAccount), ne jen tahle session.
@@ -183,7 +201,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const raw = bearerToken(req);
     if (!raw) return { ok: true };
     const accountId = await validateWebSession(raw);
-    if (accountId !== null) await signOutAccount(accountId);
+    if (accountId !== null) { await signOutAccount(accountId); void refreshBadgePrefs(accountId).catch(() => {}); }
     else await deleteWebSession(raw);
     return { ok: true };
   });
@@ -193,6 +211,7 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     if (!params.success) { reply.code(400); return { ok: false, error: 'platform' }; }
     await unlinkIdentity(req.webAccountId!, params.data.platform);
     void syncEmailLink(req.webAccountId!, { log: req.log });
+    void refreshBadgePrefs(req.webAccountId!).catch(() => {});
     return { ok: true };
   });
 

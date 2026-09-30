@@ -59,6 +59,7 @@ const mock = {
 };
 const posts = [];
 const prefPuts = [];
+const badgePuts = [];
 const contentCalls = [];
 s.onevent = async (d) => {
   if (d.method !== 'Fetch.requestPaused') return;
@@ -71,7 +72,8 @@ s.onevent = async (d) => {
     const body = 'retry: 300\n\n' + events.map(([type, data]) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`).join('');
     return call('Fetch.fulfillRequest', { requestId: rid, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/event-stream' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, d.sessionId);
   }
-  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null } });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, kick: null, youtube: null }, badgeReplaceGlobal: mock.badgeReplace === true });
+  if (u.includes('/account/badge-prefs')) { const b = q.postData ? JSON.parse(q.postData) : {}; badgePuts.push(b); mock.badgeReplace = b.replaceGlobal === true; return json({ ok: true, replaceGlobal: mock.badgeReplace }); }
   // Účtu moda chybí Twitch mod scopes (starý token jen s user:write:chat) → po smazání botem nabídka přihlášení.
   if (u.includes('/moderation/me')) return json(mock.mod ? { ok: true, mod: true, platforms: ['twitch'], missingScopes: { twitch: ['moderator:manage:chat_messages'] } } : { ok: true, mod: false, platforms: [], missingScopes: {} });
   // GIFy ke schválení (část 4) — tady žádné; nesmí odejít na produkci.
@@ -93,7 +95,7 @@ s.onevent = async (d) => {
   if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : mock.history(), nextBefore: null });
   return call('Fetch.continueRequest', { requestId: rid }, d.sessionId);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/nicknames/stream', '/channel/prefs'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/history', '/nicknames/stream', '/channel/prefs', '/account/badge-prefs'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -130,13 +132,32 @@ check('nastavení: záložky Účet | Rozhraní přepínají panely (posuvné zv
 await ev(`(() => { const o = UnityChat.prototype._ucLog; UnityChat.prototype._ucLog = function (...a) { window.__uc = this; return o.apply(this, a); }; return true; })()`);
 await ev(`document.getElementById('input-deleted-style')?.dispatchEvent(new Event('change'))`);
 check('instance zachycena', await until(`!!window.__uc`, 8000));
+// Volby odznaku kanálu jen modovi v Dev mode (pokyn usera 2026-09-30): bez Dev mode schované i modovi; Dev mode řádek jen modovi.
+const devRow = await ev(`(() => { const r = document.getElementById('row-donor-badge'); const dm = document.querySelector('.dev-mode-row'); return { hiddenNoDev: getComputedStyle(r).display === 'none', devRowShown: getComputedStyle(dm).display !== 'none' }; })()`);
+check('mod bez Dev mode: volby odznaku kanálu schované, přepínač Dev mode vidí jen mod', devRow?.hiddenNoDev === true && devRow.devRowShown === true, JSON.stringify(devRow));
+await ev(`(() => { const c = document.getElementById('chk-devmode'); c.checked = true; c.dispatchEvent(new Event('change')); return true; })()`);
+check('mod + Dev mode: volby odznaku kanálu vidět', await until(`getComputedStyle(document.getElementById('row-donor-badge')).display !== 'none'`, 3000));
+// Volba účtu „místo globálního odznaku“ + náhled vlastní zprávy (core badgeReplaceHtml / badgePreviewHtml), jen s Twitchem.
+const br = await ev(`(async () => { const row = document.getElementById('badge-replace-row'); const q = (s) => row.querySelector(s);
+  const pv = () => [...row.querySelectorAll('.uc-dbr-preview .bdg img')].map((i) => i.dataset.donorBadge ? 'UC' : (i.alt || '').replace(' (ukázka)', '')).join(',');
+  const before = { hidden: row.hidden, inSettings: row.closest('.settings-pane')?.dataset.pane, afterColor: row.previousElementSibling?.classList.contains('color-row'), beforeSave: row.nextElementSibling?.classList.contains('save-row'), pv: pv(), name: q('.uc-dbr-preview .un')?.textContent, color: q('.uc-dbr-preview .un')?.style.color };
+  document.getElementById('input-nickname').value = 'Modík'; document.getElementById('input-nickname').dispatchEvent(new Event('input'));
+  document.getElementById('input-color-hex').value = '#00ff00'; document.getElementById('input-color-hex').dispatchEvent(new Event('input'));
+  const live = { name: q('.uc-dbr-preview .un')?.textContent, color: q('.uc-dbr-preview .un')?.style.color };
+  const cb = q('[name="uc-badge-replace"]'); cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); await new Promise((r) => setTimeout(r, 300));
+  return { before, live, pvOn: pv(), checked: cb.checked }; })()`);
+check('volba účtu: pod barvou jména, nad Uložit; náhled = odznak UC první + ukázkový globální odznak (GlitchCon 2020), jméno účtu', br?.before && !br.before.hidden && br.before.inSettings === 'account' && br.before.afterColor && br.before.beforeSave && br.before.pv === 'UC,GlitchCon 2020' && br.before.name === 'ModUser', JSON.stringify(br?.before));
+check('náhled sleduje přezdívku a barvu při psaní', br?.live?.name === 'Modík' && /rgb\(0, 255, 0\)|#00ff00/i.test(br.live.color || ''), JSON.stringify(br?.live));
+check('zaškrtnutí → PUT /account/badge-prefs {replaceGlobal:true}, v náhledu odznak UC místo globálního', br?.checked === true && br.pvOn === 'UC' && badgePuts.length === 1 && badgePuts[0]?.replaceGlobal === true, JSON.stringify({ pvOn: br?.pvOn, badgePuts }));
 const dbp = await ev(`(async () => { const row = document.getElementById('row-donor-badge'); const items = [...row.querySelectorAll('.uc-dbp-item')];
   const pics = () => items.map((i) => i.querySelector('img').dataset.donorBadge).join(',');
   const before = { hidden: row.hidden, disp: getComputedStyle(row).display, n: items.length, on: row.querySelector('.uc-dbp-item.on input')?.value, imgs: items.every((i) => i.querySelector('img')?.src.startsWith('data:image/svg+xml')), pics: pics(),
-    opts: ['uc-donor-speed', 'uc-donor-strength', 'uc-donor-gapmin', 'uc-donor-gapmax'].map((n) => row.querySelector('[name="' + n + '"]')?.value ?? 'x').join('|') + '|' + row.querySelector('[name="uc-donor-replace"]').checked };
+    opts: ['uc-donor-speed', 'uc-donor-strength', 'uc-donor-gapmin', 'uc-donor-gapmax'].map((n) => row.querySelector('[name="' + n + '"]')?.value ?? 'x').join('|') + '|' + !!row.querySelector('[name="uc-donor-replace"]') };
   // Zpráva dárce na Twitchi s globálním odznakem (glitchcon2020) + rolí (moderator): sada odznaků podle „nahradit globální“.
   window.__uc._twitchBadges['moderator/1'] = 'https://x/mod.png'; window.__uc._twitchBadges['glitchcon2020/1'] = 'https://x/glitch.png';
   window.__uc._addMessage({ platform: 'twitch', id: 'e2e-donor', username: 'Darce', userId: 'u55', message: 'ahoj', color: '#00ff00', timestamp: Date.now(), donor: true, donorCzk: 1130, badgesRaw: 'moderator/1,glitchcon2020/1' });
+  window.__uc._addMessage({ platform: 'twitch', id: 'e2e-donor-r', username: 'DarceR', userId: 'u58', message: 'ahoj', color: '#00ff00', timestamp: Date.now(), donor: true, donorReplace: true, badgesRaw: 'moderator/1,glitchcon2020/1' });
+  const replaced = [...document.querySelectorAll('.msg[data-msg-id="e2e-donor-r"] .bdg img')].map((i) => i.dataset.donorBadge || i.src.split('/').pop()).join(',');
   const msgBadges = () => [...document.querySelectorAll('.msg[data-msg-id="e2e-donor"] .bdg img')].map((i) => i.dataset.donorBadge || i.src.split('/').pop()).join(',');
   const withGlobal = msgBadges(); const title = document.querySelector('.msg[data-msg-id="e2e-donor"] img[data-donor-badge]')?.dataset.tooltip;
   const inp = row.querySelector('input[value="money-bag"]'); inp.checked = true; inp.dispatchEvent(new Event('change', { bubbles: true }));
@@ -144,20 +165,18 @@ const dbp = await ev(`(async () => { const row = document.getElementById('row-do
   const afterVariant = msgBadges();
   const sp = row.querySelector('[name="uc-donor-speed"]'); sp.value = '1.5'; sp.dispatchEvent(new Event('change', { bubbles: true }));
   await new Promise((r) => setTimeout(r, 400));
-  const rp = row.querySelector('[name="uc-donor-replace"]'); rp.checked = true; rp.dispatchEvent(new Event('change', { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 400));
-  return { before, on: row.querySelector('.uc-dbp-item.on input')?.value, pics: pics(), withGlobal, title, afterVariant, replaced: msgBadges(), status: document.getElementById('donor-badge-status')?.textContent }; })()`);
-check('mod: výběr odznaku dárce vidět, 4 varianty s vloženým SVG náhledem, výchozí mince, volby tempo/intenzita/odstupy/nahradit', dbp?.before && !dbp.before.hidden && dbp.before.disp !== 'none' && dbp.before.n === 4 && dbp.before.on === 'donor-coin' && dbp.before.imgs && dbp.before.pics === 'qr-patron,donor-coin,money-bag,support-card' && dbp.before.opts === '3|1|2|6|false', JSON.stringify(dbp?.before));
-check('mod: změna odznaku → PUT celých prefs, náhledy ve výběru se nemění (každý svou variantu), odznak v chatu ano, „Uloženo pro celý kanál“', dbp && dbp.on === 'money-bag' && dbp.pics === 'qr-patron,donor-coin,money-bag,support-card' && dbp.afterVariant === 'money-bag,mod.png,glitch.png' && prefPuts.length === 3 && prefPuts[0]?.prefs?.donorBadge === 'money-bag' && prefPuts[0]?.prefs?.donorSpeed === 3 && prefPuts[0]?.prefs?.donorReplaceGlobal === false && prefPuts[1]?.prefs?.donorSpeed === 1.5 && prefPuts[0]?.channel === 'robdiesalot' && dbp.status === 'Uloženo pro celý kanál', JSON.stringify({ dbp, prefPuts }));
+  return { before, on: row.querySelector('.uc-dbp-item.on input')?.value, pics: pics(), withGlobal, title, afterVariant, replaced, status: document.getElementById('donor-badge-status')?.textContent }; })()`);
+check('mod: výběr odznaku kanálu, 4 varianty s vloženým SVG náhledem, výchozí mince, volby tempo/intenzita/odstupy (bez společného „nahradit“)', dbp?.before && !dbp.before.hidden && dbp.before.disp !== 'none' && dbp.before.n === 4 && dbp.before.on === 'donor-coin' && dbp.before.imgs && dbp.before.pics === 'qr-patron,donor-coin,money-bag,support-card' && dbp.before.opts === '3|1|2|6|false', JSON.stringify(dbp?.before));
+check('mod: změna odznaku → PUT celých prefs, náhledy ve výběru se nemění (každý svou variantu), odznak v chatu ano, „Uloženo pro celý kanál“', dbp && dbp.on === 'money-bag' && dbp.pics === 'qr-patron,donor-coin,money-bag,support-card' && dbp.afterVariant === 'money-bag,mod.png,glitch.png' && prefPuts.length === 2 && prefPuts[0]?.prefs?.donorBadge === 'money-bag' && prefPuts[0]?.prefs?.donorSpeed === 3 && !('donorReplaceGlobal' in prefPuts[0].prefs) && prefPuts[1]?.prefs?.donorSpeed === 1.5 && prefPuts[0]?.channel === 'robdiesalot' && dbp.status === 'Uloženo pro celý kanál', JSON.stringify({ dbp, prefPuts }));
 // Živá zpráva z vlastního IRC (bez `donor`) → SSE donor-mark doplní odznak; mark před zprávou se uplatní při vykreslení.
 await ev(`window.__uc._addMessage({ platform: 'twitch', id: 'e2e-live1', username: 'Zivy', userId: 'u56', message: 'ahoj', color: '#00ff00', timestamp: Date.now(), badgesRaw: 'glitchcon2020/1' })`);
 const dmBefore = await ev(`!!document.querySelector('.msg[data-msg-id="e2e-live1"] img[data-donor-badge]')`);
-mock.sse.push(['donor-mark', { platform: 'twitch', channel: 'robdiesalot', id: 'e2e-live1', czk: 199 }]);
+mock.sse.push(['donor-mark', { platform: 'twitch', channel: 'robdiesalot', id: 'e2e-live1', czk: 199, replace: true }]);
 mock.sse.push(['donor-mark', { platform: 'twitch', channel: 'robdiesalot', id: 'e2e-live2', czk: 50 }]);
-check('SSE donor-mark → odznak podporovatele u živé zprávy (částka v tooltipu), globální odznak podle volby pryč', dmBefore === false && await until(`document.querySelector('.msg[data-msg-id="e2e-live1"] img[data-donor-badge]')?.dataset.tooltip === 'Podporovatel · 199 Kč (za 30 dní)' && document.querySelectorAll('.msg[data-msg-id="e2e-live1"] .bdg img').length === 1`, 6000), await ev(`document.querySelector('.msg[data-msg-id="e2e-live1"] .bdg')?.outerHTML`));
+check('SSE donor-mark (replace) → odznak podporovatele u živé zprávy (částka v tooltipu), globální odznak pryč podle volby autora', dmBefore === false && await until(`document.querySelector('.msg[data-msg-id="e2e-live1"] img[data-donor-badge]')?.dataset.tooltip === 'Podporovatel · 199 Kč (za 30 dní)' && document.querySelectorAll('.msg[data-msg-id="e2e-live1"] .bdg img').length === 1`, 6000), await ev(`document.querySelector('.msg[data-msg-id="e2e-live1"] .bdg')?.outerHTML`));
 await ev(`window.__uc._addMessage({ platform: 'twitch', id: 'e2e-live2', username: 'Zivy2', userId: 'u57', message: 'ahoj', color: '#00ff00', timestamp: Date.now() })`);
 check('donor-mark před zprávou → odznak hned při vykreslení', await ev(`document.querySelector('.msg[data-msg-id="e2e-live2"] img[data-donor-badge]')?.dataset.tooltip`) === 'Podporovatel · 50 Kč (za 30 dní)');
-check('dárce: tooltip „Podporovatel · 1 130 Kč (za 30 dní)“; „nahradit globální odznak“ → u vykreslené zprávy zůstane jen role + odznak UC', dbp && dbp.withGlobal === 'donor-coin,mod.png,glitch.png' && /^Podporovatel · 1.130 Kč \(za 30 dní\)$/.test(dbp.title || '') && dbp.replaced === 'money-bag,mod.png' && prefPuts[2]?.prefs?.donorReplaceGlobal === true, JSON.stringify(dbp));
+check('dárce: tooltip „Podporovatel · 1 130 Kč (za 30 dní)“; autor s volbou (server donorReplace) má jen roli + odznak UC, ostatní dárci vlastní slot', dbp && dbp.withGlobal === 'donor-coin,mod.png,glitch.png' && /^Podporovatel · 1.130 Kč \(za 30 dní\)$/.test(dbp.title || '') && dbp.replaced === 'donor-coin,mod.png', JSON.stringify(dbp));
 check('A koš má title „Smazat zprávu" a je vidět', await ev(`(() => { const b = document.querySelector('.msg[data-msg-id="e2e-m1"] [data-act=delete]'); return b.title === 'Smazat zprávu' && getComputedStyle(b).display !== 'none'; })()`) === true);
 const rowVis = () => ev(`(() => { const r = document.getElementById('row-deleted-style'); return !!r && !r.hidden && getComputedStyle(r).display !== 'none'; })()`);
 check('A nastavení „Smazané zprávy" vidí mod, jen 3 volby', await until(`!document.getElementById('row-deleted-style').hidden`, 3000) && await rowVis() === true
