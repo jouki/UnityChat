@@ -163,7 +163,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    subscribeIntegration(reply, last);
+    subscribeIntegration(reply, last, req.log);
     req.log.info({ ip: req.ip, last, ...integrationStreamStats(), workspaces: workspacesSource() }, 'integration chat stream: connected');
     return reply;
   });

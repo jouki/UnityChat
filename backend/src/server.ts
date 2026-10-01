@@ -253,8 +253,8 @@ const ingest = createIngest({
     publishChat(m.channel, m.platform, live);
     // Odznak podporovatele u živé zprávy: addon ji má z vlastního IRC (bez `donor`) → SSE donor-mark (jako uc-mark).
     if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}), ...(live.donorReplace ? { replace: true } : {}) });
-    // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály).
-    publishIntegration(m);
+    // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály; počítadla v /health).
+    publishIntegration(m, app.log);
   },
   // Smazání na platformě (Twitch CLEARMSG, Kick, YouTube) — moderace §mazání. `d.channel`
   // je platformní (Kick slug / YT handle), publishDeleted potřebuje UC kanál (ucChannelFor).
