@@ -1,8 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickCategory, searchCategories } from './channelManage.js';
+import { pickCategory, searchCategories, subCount, SUBS_SCOPE } from './channelManage.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+test('channel: počet subů — Kick bez API → count null, bez volání; scope pro Twitch = channel:read:subscriptions', async () => {
+  let called = false;
+  const fetchImpl = (async () => { called = true; throw new Error('nemá se volat'); }) as unknown as typeof fetch;
+  assert.deepEqual(await subCount('kick', 'robdiesalot', fetchImpl), { count: null, points: null });
+  assert.equal(called, false);
+  assert.equal(SUBS_SCOPE.twitch, 'channel:read:subscriptions');
+});
 
 test('channel: výběr kategorie — přesný název před prvním výsledkem', () => {
   const list = [{ id: '1', name: 'Age of Empires II: Definitive Edition', imageUrl: null }, { id: '2', name: 'Age of Empires II', imageUrl: null }];

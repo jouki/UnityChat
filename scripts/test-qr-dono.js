@@ -28,6 +28,14 @@ const assert = require('node:assert/strict');
   assert.deepEqual(qd.validateDono({ ...ok, amount: '30.5' }, cfg, 'CZK').map((p) => p.field), ['amount'], 'Kč celé');
   assert.deepEqual(qd.validateDono({ ...ok, amount: '1.2' }, cfg, 'EUR').map((p) => p.msg), ['Minimum je 1.3 €.']);
   assert.deepEqual(qd.validateDono({ ...ok, nickname: ' ' }, cfg, 'CZK').map((p) => p.field), ['nickname']);
+  // Limit délky zprávy z configu Židolišty (maxMessageLength), bez něj 300.
+  assert.equal(qd.msgMax(cfg), 300);
+  assert.equal(qd.msgMax({ ...cfg, maxMessageLength: 120 }), 120);
+  assert.equal(qd.msgMax({ ...cfg, maxMessageLength: 'x' }), 300);
+  assert.deepEqual(qd.validateDono({ ...ok, message: 'a'.repeat(121) }, { ...cfg, maxMessageLength: 120 }, 'CZK').map((p) => p.msg), ['Zpráva má max. 120 znaků.']);
+  assert.deepEqual(qd.validateDono({ ...ok, message: 'a'.repeat(121) }, cfg, 'CZK'), []);
+  assert.equal(qd.donoErrorText({ error: 'message_too_long', maxLength: 120 }, 'CZK'), 'Zpráva má max. 120 znaků.');
+  assert.notEqual(qd.configSignature(cfg), qd.configSignature({ ...cfg, maxMessageLength: 120 }), 'změna limitu = změna configu');
   assert.deepEqual(qd.validateDono({ ...ok, email: 'nope' }, cfg, 'CZK').map((p) => p.field), ['email']);
   assert.deepEqual(qd.validateDono({ ...ok, email: '', needEmail: false }, cfg, 'CZK'), [], 'ověřený účet e-mail nepotřebuje');
   assert.deepEqual(qd.validateDono({ ...ok, voice: 'X' }, cfg, 'CZK').map((p) => p.field), ['voice']);

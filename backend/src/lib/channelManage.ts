@@ -22,8 +22,8 @@ export class ChannelError extends Error {
   constructor(public code: 'not_linked' | 'missing_scope' | 'token' | 'not_found' | 'platform' | 'unsupported', message: string, public status = 400) { super(message); }
 }
 
-/** Identita majitele kanálu (login = kanál) s obnovou tokenu; ChannelError not_linked / missing_scope. */
-export async function broadcasterIdentity(platform: CategoryPlatform, channelLogin: string): Promise<{ accountId: number; ident: DecryptedIdentity }> {
+/** Identita majitele kanálu (login = kanál) s obnovou tokenu; ChannelError not_linked / missing_scope (`needScope` = vyžadovaný scope, výchozí kategorie). */
+export async function broadcasterIdentity(platform: CategoryPlatform, channelLogin: string, needScope: string | null = CATEGORY_SCOPE[platform]): Promise<{ accountId: number; ident: DecryptedIdentity }> {
   const rows = await db.select({ accountId: webIdentities.accountId })
     .from(webIdentities)
     .where(and(eq(webIdentities.platform, platform), eq(webIdentities.login, channelLogin.toLowerCase()), isNull(webIdentities.signedOutAt)))
@@ -32,7 +32,7 @@ export async function broadcasterIdentity(platform: CategoryPlatform, channelLog
   const accountId = rows[0].accountId;
   let ident = await getDecryptedIdentity(accountId, platform);
   if (!ident) throw new ChannelError('not_linked', `${platform}: streamer není přihlášený v UnityChatu`, 403);
-  const need = CATEGORY_SCOPE[platform];
+  const need = needScope;
   if (need && !ident.scopes.includes(need)) throw new ChannelError('missing_scope', `${platform}: chybí oprávnění ${need} (Povolit správu kanálu)`, 403);
   if (needsRefresh(ident.expiresAt)) {
     if (!ident.refreshToken) throw new ChannelError('token', `${platform}: token vypršel, streamer se musí přihlásit znovu`, 401);
@@ -113,6 +113,27 @@ export async function setCategory(platform: CategoryPlatform, channelLogin: stri
   if (resp.status === 401) throw new ChannelError('token', 'Kick: token odmítnut, streamer se musí přihlásit znovu', 401);
   if (!resp.ok) throw new ChannelError('platform', `Kick PATCH channels ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
   return category;
+}
+
+/** Scope pro počet subů (Twitch Helix GET /subscriptions); Kick počet subů přes API nedává → null. */
+export const SUBS_SCOPE: Record<CategoryPlatform, string | null> = { twitch: 'channel:read:subscriptions', kick: null };
+
+/**
+ * Počet subů kanálu pro Židolištu (%subs_twitch%): Twitch Helix `GET /subscriptions?broadcaster_id=&first=1` tokenem
+ * streamera → `total` (+ `points`). Kick API počet subů nedává → `{ count: null }` (ne chyba). Chyby jako u kategorií.
+ */
+export async function subCount(platform: CategoryPlatform, channelLogin: string, fetchImpl: typeof fetch = fetch): Promise<{ count: number | null; points: number | null }> {
+  if (platform !== 'twitch') return { count: null, points: null };
+  const { ident } = await broadcasterIdentity(platform, channelLogin, SUBS_SCOPE.twitch);
+  const resp = await fetchImpl(`${TWITCH_HELIX}/subscriptions?broadcaster_id=${encodeURIComponent(ident.platformUserId)}&first=1`, {
+    headers: { Authorization: `Bearer ${ident.accessToken}`, 'Client-Id': config.TWITCH_CLIENT_ID }, signal: AbortSignal.timeout(10_000),
+  });
+  if (resp.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+  if (resp.status === 403) throw new ChannelError('missing_scope', 'Twitch: chybí oprávnění channel:read:subscriptions', 403);
+  if (!resp.ok) throw new ChannelError('platform', `Twitch GET subscriptions ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+  const j = (await resp.json()) as { total?: unknown; points?: unknown };
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return { count: num(j.total), points: num(j.points) };
 }
 
 /** Kategorie z textu (`!g Age of Empires II`): najít a nastavit. not_found, když hledání nic nevrátí. */

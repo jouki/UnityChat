@@ -16,7 +16,9 @@ export function prefillNickname(profile, identityName) {
 }
 
 export const CURRENCIES = { CZK: { code: 'CZK', flag: 'CZ', sym: 'Kč', step: 1 }, EUR: { code: 'EUR', flag: 'SK', sym: '€', step: 0.01 } };
+/** Výchozí limit délky zprávy; skutečný dává config Židolišty (`maxMessageLength`, nastavitelný z dashboardu / commandem). */
 export const MSG_MAX = 300;
+export const msgMax = (cfg) => { const n = Number(cfg?.maxMessageLength); return Number.isInteger(n) && n > 0 ? n : MSG_MAX; };
 const TESTMODE = 'testmode';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -31,7 +33,7 @@ export function currencyConfig(cfg, cur) {
 /** Otisk configu, který mění formulář (verze, minima, IBAN dostupnost, hlasy). */
 export function configSignature(c) {
   const cur = c?.currencies || {};
-  return JSON.stringify([c?.version || '', ['CZK', 'EUR'].map((k) => cur[k] ? cur[k].minAmount : null), (c?.voices || []).map((v) => v.id)]);
+  return JSON.stringify([c?.version || '', ['CZK', 'EUR'].map((k) => cur[k] ? cur[k].minAmount : null), (c?.voices || []).map((v) => v.id), msgMax(c)]);
 }
 
 /** Částka z pole: čárka i tečka, NaN = prázdná. */
@@ -61,7 +63,7 @@ export function validateDono({ amount, message, voice, nickname, email, needEmai
   if (!(a > 0)) problems.push({ field: 'amount', msg: 'Vyplň částku.' });
   else if (a < min) problems.push({ field: 'amount', msg: `Minimum je ${min} ${sym}.` });
   else if (cur === 'CZK' && a !== Math.round(a)) problems.push({ field: 'amount', msg: 'V Kč zadej celou částku.' });
-  if (String(message ?? '').length > MSG_MAX) problems.push({ field: 'message', msg: `Zpráva má max. ${MSG_MAX} znaků.` });
+  if (String(message ?? '').length > msgMax(cfg)) problems.push({ field: 'message', msg: `Zpráva má max. ${msgMax(cfg)} znaků.` });
   const voices = cfg?.voices || [];
   if (voices.length && !voices.some((v) => v.id === voice)) problems.push({ field: 'voice', msg: 'Vybraný TTS hlas už není v nabídce, vyber jiný.' });
   return problems;
@@ -80,6 +82,7 @@ export function donoErrorText(err, cur) {
     case 'mod_test_not_allowed': return 'Test bez tokenu se nepovedl. Zadej testovací token.';
     case 'platform_not_linked': return 'Na téhle platformě nejsi přihlášený.';
     case 'email_required': return 'Vyplň platný e-mail.';
+    case 'message_too_long': return `Zpráva má max. ${err.maxLength || MSG_MAX} znaků.`;
     case 'rate_limited': return 'Moc pokusů za sebou, zkus to za chvíli.';
     case 'zidolista_unavailable': return 'Server donatů je teď nedostupný, zkus to znovu.';
     default: return err?.error || err?.message || 'Něco se nepovedlo.';
@@ -290,6 +293,13 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   }
   // Přepínač měny: zvýraznění přejede z jedné měny na druhou (core/slide-indicator.js), ne skokem.
   let curSlide = null;
+  /** Limit délky zprávy z configu (maxMessageLength): maxlength pole + počítadlo. */
+  function renderMsgLimit() {
+    const max = msgMax(cfg);
+    f.message.maxLength = max;
+    $('.uc-qd-count').textContent = `${f.message.value.length} / ${max}`;
+  }
+
   function renderCurrency() {
     const c = CURRENCIES[cur];
     const group = panel.querySelector('.uc-qd-cur');
@@ -343,7 +353,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
       cfg = c; cfgSig = sig;
       // Opakované načtení po výpadku se povedlo → hláška o nedostupném serveru pryč (dřív visela, hlášeno 2026-09-28).
       if ($('.uc-qd-err').textContent === CFG_UNAVAILABLE) setError('');
-      renderVoices(); renderCurrency();
+      renderVoices(); renderCurrency(); renderMsgLimit();
       // Změna nastavení (dashboard / !mindono) během otevřeného formuláře: data zůstanou,
       // jen se přepočítá minimum a hlasy (web tu ukazuje overlay s reloadem, tady netřeba).
       if (changed) { L('config změněn'); setError(CFG_CHANGED); }
@@ -493,7 +503,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   }
   function back() {
     win.clearTimeout(pollTimer); stopRing(); publicId = null;
-    if (paidShown) { f.message.value = ''; $('.uc-qd-count').textContent = `0 / ${MSG_MAX}`; paidShown = false; }
+    if (paidShown) { f.message.value = ''; $('.uc-qd-count').textContent = `0 / ${msgMax(cfg)}`; paidShown = false; }
     const h0 = panel.offsetHeight;
     $('.uc-qd-res').hidden = true; form.hidden = false;
     lockCurrency(false);
@@ -588,7 +598,7 @@ export function createQrDono({ host, button, api, identity, onLogin, currency, l
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   f.amount.addEventListener('input', () => { f.amount.classList.remove('invalid'); updateCzk(); });
   for (const k of ['nickname', 'email']) f[k].addEventListener('input', () => f[k].classList.remove('invalid'));
-  f.message.addEventListener('input', () => { f.message.classList.remove('invalid'); $('.uc-qd-count').textContent = `${f.message.value.length} / ${MSG_MAX}`; });
+  f.message.addEventListener('input', () => { f.message.classList.remove('invalid'); $('.uc-qd-count').textContent = `${f.message.value.length} / ${msgMax(cfg)}`; });
   f.voice.addEventListener('change', () => { f.voice.classList.remove('invalid'); stopSample(); updateSampleBtn(); });
   f.ttoken.addEventListener('input', () => {
     win.clearTimeout(tokenTimer);
