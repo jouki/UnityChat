@@ -104,7 +104,8 @@ export const isSimilarSequence = (a: string[], b: string[]): boolean => sequence
 // ---------------------------------------------------------------------------
 
 type Log = { warn: (o: object, m: string) => void };
-type SharpFn = typeof import('sharp');
+// sharp 0.35: modul je ESM s default exportem (SharpConstructor), `typeof import('sharp')` je jen namespace.
+type SharpFn = (typeof import('sharp'))['default'];
 
 export interface PhashDeps {
   log?: Log;
