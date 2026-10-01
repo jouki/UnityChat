@@ -5,9 +5,29 @@
 // i nevinná slova typu „runegrove"): položka musí být CELÉ slovo, fráze s mezerou celá
 // fráze; bez ohledu na velikost písmen, diakritika přesně podle položky (seznam má varianty
 // s ní i bez ní). Nalezená písmena a číslice → *; interpunkce a délka textu zůstanou
-// (pozice Twitch emotů v IRC tagu dál sedí).
+// (pozice Twitch emotů v IRC tagu dál sedí). Mezera ve frázi = libovolný počet bílých znaků v textu
+// („do prdele“ chytí „jdi DO  prdele“) — stejná sémantika jako Židolišta (blacklistHit, 2026-10-01).
 
 const WORD = /[\p{L}\p{N}]/u;
+const SPACE = /\s/u;
+
+/**
+ * Shoda položky `term` (pole znaků, lowercase) na pozici `i` v `lower`; mezera v položce sedí na 1+ bílých znaků.
+ * @returns {number} délka shody v textu (0 = neshoda)
+ */
+export function matchTermAt(lower, i, term) {
+  let j = i;
+  for (let k = 0; k < term.length; k++) {
+    if (term[k] === ' ') {
+      if (j >= lower.length || !SPACE.test(lower[j])) return 0;
+      while (j < lower.length && SPACE.test(lower[j])) j++;
+    } else {
+      if (lower[j] !== term[k]) return 0;
+      j++;
+    }
+  }
+  return j - i;
+}
 
 /** Malá písmena znak po znaku se zachovanou délkou (znak, který by se lowercase rozpadl, zůstane). */
 function lowerKeepLength(chars) {
@@ -22,7 +42,8 @@ function lowerKeepLength(chars) {
 export function compileBlacklist(terms) {
   const set = new Set();
   for (const raw of Array.isArray(terms) ? terms : []) {
-    const t = String(raw || '').trim().toLowerCase();
+    // Vícenásobné mezery v položce = jedna (v textu pak sedí na libovolný počet bílých znaků).
+    const t = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (t) set.add(t);
   }
   const list = [...set].map((t) => Array.from(t));
@@ -41,13 +62,11 @@ export function censorText(text, bl) {
   const hide = new Array(n).fill(false);
   let hit = false;
   for (const term of bl.terms) {
-    const m = term.length;
-    if (m > n) continue;
-    for (let i = 0; i <= n - m; i++) {
+    if (term.length > n) continue;
+    for (let i = 0; i <= n - term.length; i++) {
       if (lower[i] !== term[0]) continue;
-      let k = 1;
-      while (k < m && lower[i + k] === term[k]) k++;
-      if (k < m) continue;
+      const m = matchTermAt(lower, i, term);
+      if (!m) continue;
       // Jen celé slovo: před a za nálezem nesmí pokračovat písmeno ani číslice.
       if ((i > 0 && WORD.test(chars[i - 1])) || (i + m < n && WORD.test(chars[i + m]))) continue;
       hit = true;
