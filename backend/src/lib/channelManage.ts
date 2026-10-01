@@ -115,6 +115,38 @@ export async function setCategory(platform: CategoryPlatform, channelLogin: stri
   return category;
 }
 
+/** Limit názvu streamu (Twitch 140 znaků; Kick stejný strop) — delší se ořízne, mezery na krajích pryč. */
+export const TITLE_MAX = 140;
+export const clampTitle = (t: string): string => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX).trim();
+
+/**
+ * Název streamu (náhrada SE `!settitle`): Twitch Helix `PATCH /channels { title }` (scope channel:manage:broadcast),
+ * Kick `PATCH /channels { stream_title }` (scope channel:write). Vrací nastavený (oříznutý) název. Chyby jako u kategorie.
+ */
+export async function setTitle(platform: CategoryPlatform, channelLogin: string, rawTitle: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const title = clampTitle(rawTitle);
+  if (!title) throw new ChannelError('platform', 'prázdný název', 400);
+  const { ident } = await broadcasterIdentity(platform, channelLogin);
+  if (platform === 'twitch') {
+    const resp = await fetchImpl(`${TWITCH_HELIX}/channels?broadcaster_id=${encodeURIComponent(ident.platformUserId)}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${ident.accessToken}`, 'Client-Id': config.TWITCH_CLIENT_ID, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }), signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+    if (!resp.ok) throw new ChannelError('platform', `Twitch PATCH channels (title) ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+    return title;
+  }
+  const resp = await fetchImpl(`${KICK_API}/channels`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${ident.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ stream_title: title }), signal: AbortSignal.timeout(10_000),
+  });
+  if (resp.status === 401) throw new ChannelError('token', 'Kick: token odmítnut, streamer se musí přihlásit znovu', 401);
+  if (!resp.ok) throw new ChannelError('platform', `Kick PATCH channels (title) ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+  return title;
+}
+
 /** Scope pro počet subů (Twitch Helix GET /subscriptions); Kick počet subů přes API nedává → null. */
 export const SUBS_SCOPE: Record<CategoryPlatform, string | null> = { twitch: 'channel:read:subscriptions', kick: null };
 
