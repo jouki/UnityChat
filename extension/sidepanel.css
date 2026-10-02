@@ -969,6 +969,25 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
 .msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
 .msg .pi.ki { background-image: url(icons/platform/kick.svg); }
+/* Broadcast jako jedna zpráva (core/broadcast-group.js): místo loga platformy řada menších log všech cílů.
+   Ztmavené = čeká na potvrzení, rozsvícené = kopie dorazila, vykřičník = neodesláno (tooltip s důvodem).
+   Vlastní zpráva je ztmavená, dokud nedorazí první kopie. */
+.msg.uc-bc > .pi { display: none; }
+.msg .pi-bc { display: inline-flex; gap: 2px; margin-right: 3px; vertical-align: middle; }
+.msg .pi-bc .uc-bc-slot { position: relative; display: inline-flex; }
+.msg .pi-bc .pi { width: 13px; height: 13px; margin: 0; transition: opacity .3s ease, filter .3s ease; }
+body.layout-medium .msg .pi-bc .pi { width: 14px; height: 14px; }
+body.layout-large .msg .pi-bc .pi { width: 16px; height: 16px; }
+.msg .pi-bc .uc-bc-wait .pi, .msg .pi-bc .uc-bc-fail .pi { opacity: .35; filter: grayscale(.7); }
+.msg .pi-bc .uc-bc-warn {
+  position: absolute; right: -3px; top: -3px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #e5484d; color: #fff;
+  font: 700 8px/9px system-ui, sans-serif; text-align: center;
+  pointer-events: none;
+}
+.msg.uc-bc-pending { opacity: .5; }
+.msg.uc-bc { transition: opacity .3s ease; }
 /* Kick K je plný čtverec bez vnitřního okraje → 2px padding, ať opticky sedí k ostatním */
 .msg .pi.ki, .badge.ki, #active-badge.ki { padding: 2px; box-sizing: border-box; background-origin: content-box; background-clip: content-box; }
 

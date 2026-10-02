@@ -152,6 +152,27 @@ export function attachUcReply(m: IngestMessage, reply: UcReply, log?: { info(o: 
 }
 
 /**
+ * Broadcast (2026-10-02, pokyn usera): kopie téže zprávy na víc platformách = jedna skupina; UnityChat je kreslí
+ * jako JEDNU zprávu s logy platforem. /chat/broadcast po odeslání na platformu nahlásí {odesílatel, text, skupina},
+ * ingest kopii označí `content_raw.bcast = { id, targets }` (historie, /chat/stream) + SSE `bcast-mark`.
+ */
+export interface BcastGroup { id: string; targets: string[] }
+export const bcastSends = new UcSendRegistry<BcastGroup>(Date.now, { recentMarked: true });
+
+export function attachBcast(m: IngestMessage, group: BcastGroup, log?: { info(o: object, msg: string): void; warn(o: object, msg: string): void }, opts: { late?: boolean } = {}): void {
+  const bcast = { id: group.id, targets: [...group.targets] };
+  m.contentRaw = { ...((m.contentRaw && typeof m.contentRaw === 'object' ? m.contentRaw : {}) as Record<string, unknown>), bcast };
+  broadcast('bcast-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, group: bcast.id, targets: bcast.targets });
+  log?.info({ platform: m.platform, id: m.platformMessageId, group: bcast.id, late: !!opts.late }, 'broadcast: kopie spárovaná se skupinou');
+  if (!opts.late) return;
+  const update = () => db.update(messages).set({ contentRaw: sql`coalesce(${messages.contentRaw}, '{}'::jsonb) || ${JSON.stringify({ bcast })}::jsonb` })
+    .where(and(eq(messages.platform, m.platform), eq(messages.platformMessageId, m.platformMessageId)))
+    .catch((err) => log?.warn({ err, id: m.platformMessageId }, 'broadcast: update DB selhal'));
+  void update();
+  setTimeout(() => void update(), 3000).unref?.();
+}
+
+/**
  * Označit zprávu jako odeslanou z UnityChatu: příznak na objektu (ingest ho ještě může mít
  * ve frontě na zápis), SSE `uc-mark` pro klienty (addon má zprávu z vlastního IRC, o příznaku
  * by se jinak nedozvěděl) a u zpětného nálezu i UPDATE v DB (hned + po 3 s — dávka ingestu

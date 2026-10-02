@@ -108,15 +108,22 @@ await ev(`document.getElementById('platform-menu').classList.add('hidden')`);
 // ---- B: odeslání ----
 mock.broadcast = 'kickfail';
 await type('ahoj všichni');
-await until(`document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]').length >= 3`, 4000);
+await until(`document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]').length >= 1`, 4000);
 // POST jde až po vykreslení optimistických zpráv (token, fetch) → počkat na zachycení, jinak test závodí.
 for (let i = 0; i < 40 && !posts.broadcast.length; i++) await sleep(100);
 const b = posts.broadcast[0];
 check('B jeden POST /chat/broadcast s texty pro všechny platformy', posts.broadcast.length === 1 && b.text === 'ahoj všichni' && b.channel && Object.keys(b.texts).sort().join() === 'kick,twitch,youtube', JSON.stringify(b));
 check('B nic přes /chat/send', posts.send.length === 0);
-const opt = await ev(`[...document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]')].map(e => ({ p: e.dataset.platform || [...e.querySelectorAll('.pi')].map(x => x.className).join(), failed: e.classList.contains('send-failed'), tx: e.querySelector('.tx')?.textContent }))`);
-check('B optimistická zpráva na každé platformě', opt.length === 3 && opt.every((m) => /ahoj všichni/.test(m.tx)), JSON.stringify(opt));
-check('B neodeslaná část (Kick) označená, ostatní ne', await until(`[...document.querySelectorAll('#chat .msg.send-failed')].length === 1`, 3000), JSON.stringify(await ev(`[...document.querySelectorAll('#chat .msg.send-failed')].map(e => e.outerHTML.slice(0, 160))`)));
+// Jedna zpráva s logy všech cílů (pokyn usera 2026-10-02): ztmavená, dokud nedorazí první kopie z chatu platformy.
+const opt = await ev(`[...document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]')].map(e => ({ slots: [...e.querySelectorAll('.pi-bc .uc-bc-slot')].map(x => x.dataset.platform + ':' + x.className.replace('uc-bc-slot uc-bc-', '')), pending: e.classList.contains('uc-bc-pending'), single: getComputedStyle(e.querySelector(':scope > .pi')).display, failed: e.classList.contains('send-failed'), tx: e.querySelector('.tx')?.textContent }))`);
+check('B jedna optimistická zpráva s logy všech platforem, ztmavená', opt.length === 1 && /ahoj všichni/.test(opt[0].tx) && /^twitch:wait,kick:(wait|fail),youtube:wait$/.test(opt[0].slots.join()) && opt[0].pending && opt[0].single === 'none', JSON.stringify(opt));
+const kf = await until(`(() => { const s = document.querySelector('#chat .msg[data-msg-id^="sent-"] .uc-bc-slot[data-platform="kick"]'); return !!s && s.classList.contains('uc-bc-fail') && !!s.querySelector('.uc-bc-warn'); })()`, 3000);
+const kfInfo = await ev(`(() => { const e = document.querySelector('#chat .msg[data-msg-id^="sent-"]'); return { failed: e.classList.contains('send-failed'), tip: e.querySelector('.uc-bc-slot[data-platform="kick"]')?.dataset.tooltip, tw: e.querySelector('.uc-bc-slot[data-platform="twitch"]')?.className }; })()`);
+check('B neodeslaný Kick: vykřičník u loga + tooltip s důvodem, zpráva ne celá neodeslaná', kf && !kfInfo.failed && /^Kick — neodesláno: kick: token expired/.test(kfInfo.tip) && /uc-bc-wait/.test(kfInfo.tw), JSON.stringify(kfInfo));
+await ev(`(() => { window.ucGif.add({ platform: 'youtube', id: 'b-echo-yt', username: 'modyt', userId: 'u-yt', message: 'ahoj všichni \u2800', timestamp: Date.now() }); return true; })()`);
+await sleep(300);
+const bAfter = await ev(`[...document.querySelectorAll('#chat .msg')].filter(x => /ahoj všichni/.test(x.querySelector('.tx')?.textContent || '')).map(x => ({ id: x.dataset.msgId, pending: x.classList.contains('uc-bc-pending'), slots: [...x.querySelectorAll('.uc-bc-slot')].map(s => s.dataset.platform + ':' + s.className.replace('uc-bc-slot uc-bc-', '')).join() }))`);
+check('B první kopie (YouTube) zprávu rozsvítí a zapne logo YouTube, druhá zpráva nevznikne', bAfter.length === 1 && bAfter[0].id === 'b-echo-yt' && !bAfter[0].pending && bAfter[0].slots === 'twitch:wait,kick:fail,youtube:on', JSON.stringify(bAfter));
 check('B pole prázdné (část prošla)', await ev(`document.getElementById('msg-input').value`) === '');
 mock.broadcast = 'ok';
 
@@ -189,12 +196,31 @@ await boot();
 await until(`document.body.classList.contains('uc-can-moderate')`);
 await until(`document.getElementById('active-badge').classList.contains('bc')`, 6000);
 await type('hmm, test');
-await until(`[...document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]')].filter(e => /hmm, test/.test(e.textContent)).length === 3`, 4000);
+await until(`[...document.querySelectorAll('#chat .msg[data-msg-id^="sent-"]')].filter(e => /hmm, test/.test(e.textContent)).length === 1`, 4000);
 await ev(`(() => { const t = Date.now(); for (const [platform, id, username] of [['twitch', 'echo-tw', 'Jouki728'], ['kick', 'echo-ki', 'Jouki728'], ['youtube', 'echo-yt', 'jouki728']]) window.ucGif.add({ platform, id, username, userId: 'u-' + id, message: 'hmm, test \u2800', timestamp: t, color: '#ff8c00' }); return true; })()`);
 await sleep(400);
-const hRows = await ev(`[...document.querySelectorAll('#chat .msg')].filter(e => /hmm, test/.test(e.querySelector('.tx')?.textContent || '')).map(e => ({ id: e.dataset.msgId, p: e.dataset.platform }))`);
-check('H stejný login: po echu přesně 3 zprávy (jedna na platformu), žádná optimistická nezbyla', Array.isArray(hRows) && hRows.length === 3 && hRows.map((r) => r.p).sort().join() === 'kick,twitch,youtube' && !hRows.some((r) => /^sent-/.test(r.id)), JSON.stringify(hRows));
-check('H echo dostalo id své platformy', Array.isArray(hRows) && ['twitch:echo-tw', 'kick:echo-ki', 'youtube:echo-yt'].every((k) => hRows.some((r) => `${r.p}:${r.id}` === k)), JSON.stringify(hRows));
+const hRows = await ev(`[...document.querySelectorAll('#chat .msg')].filter(e => /hmm, test/.test(e.querySelector('.tx')?.textContent || '')).map(e => ({ id: e.dataset.msgId, p: e.dataset.platform, pending: e.classList.contains('uc-bc-pending'), slots: [...e.querySelectorAll('.uc-bc-slot')].map(s => s.className.replace('uc-bc-slot uc-bc-', '')).join() }))`);
+check('H stejný login: echa ze všech platforem = pořád JEDNA zpráva, optimistická nezbyla', Array.isArray(hRows) && hRows.length === 1 && hRows[0].id === 'echo-tw' && hRows[0].p === 'twitch', JSON.stringify(hRows));
+check('H všechna loga rozsvícená, zpráva už není ztmavená', hRows?.[0]?.slots === 'on,on,on' && hRows[0].pending === false, JSON.stringify(hRows));
+
+// ---- I: cizí Broadcast — historie s `bcast` (jedna zpráva) a živé kopie z IRC + SSE bcast-mark (před i po zprávě) ----
+await ev(`(() => { const t = Date.now(); const bc = { id: 'g-hist', targets: ['twitch', 'kick', 'youtube'] };
+  window.ucGif.add({ platform: 'twitch', id: 'oh-tw', username: 'RobDiesALot', userId: 'r1', message: 'cizí broadcast', timestamp: t, bcast: bc, uc: true });
+  window.ucGif.add({ platform: 'kick', id: 'oh-ki', username: 'robdiesalot', userId: 'r2', message: 'cizí broadcast', timestamp: t + 1, bcast: bc, uc: true });
+  window.ucGif.add({ platform: 'twitch', id: 'ol-tw', username: 'RobDiesALot', userId: 'r1', message: 'živý broadcast', timestamp: t + 2 });
+  window.ucGif.bcastMark({ platform: 'twitch', id: 'ol-tw', group: 'g-live', targets: ['twitch', 'kick'] });
+  window.ucGif.bcastMark({ platform: 'kick', id: 'ol-ki', group: 'g-live', targets: ['twitch', 'kick'] });
+  window.ucGif.add({ platform: 'kick', id: 'ol-ki', username: 'robdiesalot', userId: 'r2', message: 'živý broadcast', timestamp: t + 3 });
+  window.ucGif.add({ platform: 'twitch', id: 'om-tw', username: 'RobDiesALot', userId: 'r1', message: 'třetí broadcast', timestamp: t + 4 });
+  window.ucGif.add({ platform: 'kick', id: 'om-ki', username: 'robdiesalot', userId: 'r2', message: 'třetí broadcast', timestamp: t + 5 });
+  window.ucGif.bcastMark({ platform: 'twitch', id: 'om-tw', group: 'g-m', targets: ['twitch', 'kick'] });
+  window.ucGif.bcastMark({ platform: 'kick', id: 'om-ki', group: 'g-m', targets: ['twitch', 'kick'] });
+  return true; })()`);
+await sleep(300);
+const iRows = await ev(`['cizí broadcast', 'živý broadcast', 'třetí broadcast'].map((t) => [...document.querySelectorAll('#chat .msg')].filter(e => (e.querySelector('.tx')?.textContent || '').includes(t)).map(e => e.dataset.msgId + '=' + [...e.querySelectorAll('.uc-bc-slot')].map(s => s.className.replace('uc-bc-slot uc-bc-', '')).join('/')))`);
+check('I historie s bcast: jedna zpráva, Twitch + Kick rozsvícené, YouTube čeká', JSON.stringify(iRows[0]) === JSON.stringify(['oh-tw=on/on/wait']), JSON.stringify(iRows));
+check('I živě z IRC + bcast-mark po zprávě i před ní: jedna zpráva', JSON.stringify(iRows[1]) === JSON.stringify(['ol-tw=on/on']), JSON.stringify(iRows));
+check('I kopie vykreslená před markem se vstřebá (zmizí)', JSON.stringify(iRows[2]) === JSON.stringify(['om-tw=on/on']), JSON.stringify(iRows));
 
 // ---- Filtry platforem přežijí obnovení panelu (pokyn usera 2026-09-30) ----
 await ev(`(() => { const b = document.querySelector('.fbtn[data-platform="youtube"]'); if (b.classList.contains('active')) b.click(); return true; })()`);
