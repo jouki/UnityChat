@@ -112,6 +112,26 @@ export default async function rawProfileRoutes(app: FastifyInstance) {
     return { ok: true, id, channel: ch.data };
   });
 
+  /**
+   * Obnovit OBS chaty kanálu na dálku (pokyn usera 2026-10-02: „automaticky refreshovat ad-hoc, když je potřeba“) —
+   * jen streamer / mod. `id` = jen jedna instance, bez něj všechny zdroje kanálu. SSE `raw-reload` { channel, id, at };
+   * raw stránka se obnoví (starší než její načtení ignoruje — replay po výpadku SSE nevyvolá smyčku).
+   */
+  const reloadLimiter = new RateLimiter(3, 0.1);
+  app.post<{ Body: unknown }>('/raw-profiles/reload', { preHandler: requireWebSession }, async (req, reply) => {
+    const b = (req.body && typeof req.body === 'object' ? req.body : {}) as { channel?: unknown; id?: unknown };
+    const ch = Channel.safeParse(String(b.channel || '').toLowerCase());
+    const id = b.id == null ? null : Id.safeParse(b.id);
+    if (!ch.success || (id && !id.success)) return reply.code(400).send({ ok: false, error: 'bad_request' });
+    const can = await canManageChannel(ch.data, req.webAccountId!, accessDeps);
+    if (!can.ok) return reply.code(can.status).send({ ok: false, error: can.error });
+    if (!reloadLimiter.allow(ch.data)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
+    const at = new Date().toISOString();
+    broadcast('raw-reload', { channel: ch.data, id: id?.success ? id.data : null, at });
+    req.log.info({ channel: ch.data, id: id?.success ? id.data : null, accountId: req.webAccountId }, 'raw: obnovení OBS chatů na dálku');
+    return { ok: true, at };
+  });
+
   /** Smazat instanci (OBS zdroj s její adresou pak ukazuje výchozí vzhled) — jen streamer / mod. */
   app.delete<{ Params: { id: string } }>('/raw-profiles/:id', { preHandler: requireWebSession }, async (req, reply) => {
     if (!writeLimiter.allow(req.ip)) return reply.code(429).send({ ok: false, error: 'rate_limited' });
