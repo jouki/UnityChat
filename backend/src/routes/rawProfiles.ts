@@ -42,6 +42,8 @@ export const RawSettings = z.object({
   reverse: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
   // GIFy v chatu: '0' = vůbec nezobrazovat; chybí = zobrazovat.
   gifs: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
+  // Announcementy UnityChatu: '0' = žádné (běžná odpověď commandu / bota se pak ukáže); chybí = zobrazovat.
+  annc: z.union([z.literal('0'), z.literal('1'), z.boolean()]).optional(),
   platforms: z.array(z.enum(['twitch', 'youtube', 'kick'])).max(3).optional(),
   // Název instance (víc OBS chatů pro různé scény) — jen pro konfigurátor, raw stránka ho nepoužívá.
   name: z.string().max(40).optional(),
