@@ -166,6 +166,8 @@ export function createIngest(opts: CreateOpts) {
         if (states.includes('connected')) return 'connected';
         return states.sort((a, b) => rank[b] - rank[a])[0];
       };
+      const youtubeMode = Object.fromEntries([...listeners.entries()].filter(([k, l]) => k.startsWith('youtube:') && l.status() === 'connected' && typeof (l as { chatMode?: unknown }).chatMode === 'function')
+        .map(([k, l]) => [k.slice(8), (l as unknown as { chatMode(): { mode: 'api' | 'page'; all: boolean } }).chatMode()]));
       return {
         twitch: st('twitch'),
         kick: st('kick'),
@@ -173,8 +175,8 @@ export function createIngest(opts: CreateOpts) {
         lastMessageAt: lastAt ? lastAt.toISOString() : null,
         inserted,
         dropped,
-        youtubeMode: Object.fromEntries([...listeners.entries()].filter(([k, l]) => k.startsWith('youtube:') && l.status() === 'connected' && typeof (l as { chatMode?: unknown }).chatMode === 'function')
-          .map(([k, l]) => [k.slice(8), (l as unknown as { chatMode(): { mode: 'api' | 'page'; all: boolean } }).chatMode()])),
+        // Jen když nějaký YouTube kanál běží (tvar /health bez YouTube beze změny).
+        ...(Object.keys(youtubeMode).length ? { youtubeMode } : {}),
       };
     },
   };
