@@ -139,6 +139,10 @@ class NicknameManager {
       this._eventSource.addEventListener('donor-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonorMark) this.onDonorMark(d); } catch {}
       });
+      // Kolo štěstí pro podporovatele: změna stavu (vyhlášení, připojení, losování, potvrzení, konec).
+      this._eventSource.addEventListener('giveaway', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onGiveaway) this.onGiveaway(d); } catch {}
+      });
       // Kopie Broadcastu z UnityChatu spárovaná serverem → jedna zpráva s logy (core/broadcast-group.js).
       this._eventSource.addEventListener('bcast-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBcastMark) this.onBcastMark(d); } catch {}
@@ -1182,7 +1186,7 @@ class UnityChat {
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
     // Soundboard (záložka SFX): znovu načíst stav (e2e přepíná odemčení odměny).
     try { window.ucSfx = { reload: () => this._loadSoundboard(), sb: () => this._sfx }; } catch {}
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), bcastMark: (d) => this._applyBcastMark(d), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), bcastMark: (d) => this._applyBcastMark(d), giveaway: (d) => this.nicknames.onGiveaway?.(d), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
 
     this._init();
   }
@@ -1432,6 +1436,7 @@ class UnityChat {
         inlineParent: wrap,
         input: document.getElementById('msg-input'),
         items: [
+          { button: document.getElementById('btn-giveaway'), minWidth: 330, available: () => !!this._canModerate },
           { button: btn, minWidth: 330, available: () => this._qrAvailable === true },
           // Nota jen s odemčenou odměnou soundboardu (core NOTE_MODES → třída uc-sb-na): sbalí se / objeví jako QR.
           { button: document.getElementById('btn-sfx'), collapse: () => document.getElementById('btn-sfx').classList.contains('uc-sb-na') },
@@ -1442,6 +1447,32 @@ class UnityChat {
     }
     this._ucLog('QrDono', 'zapnuto');
     this._refreshDonoAvailability();
+    this._initGiveaway();
+  }
+
+  /** Kolo štěstí pro podporovatele (core/giveaway.js): lišta nad polem, tlačítko moda v poli, kolo přes chat. */
+  _initGiveaway() {
+    const core = window.UC_CORE;
+    const bar = document.getElementById('gw-bar');
+    if (this._gw || !core?.createGiveaway || !bar) return;
+    const btn = document.getElementById('btn-giveaway');
+    if (btn) {
+      btn.innerHTML = core.GIVEAWAY_ICON;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this._gw?.toggleForm(); });
+    }
+    this._gw = core.createGiveaway({
+      doc: document, bar,
+      overlayHost: document.getElementById('chat-wrapper'),
+      api: { get: (p) => this._ucApi(p), post: (p, body) => this._ucApi(p, { method: 'POST', body }) },
+      channel: () => (this.config.channel || '').toLowerCase(),
+      isMod: () => !!this._canModerate,
+      loggedIn: () => this._linkedPlatforms().length > 0,
+      onLogin: () => this._openLoginModal(),
+      onDonate: () => { if (this._qrAvailable) this._qd?.open(); else this._sys('Donate pošli přes QR dono nebo na stránce streamera.'); },
+      onLayout: () => { if (this.autoScroll) this._scrollEnd?.(); },
+      log: (tag, t) => this._ucLog(tag, t),
+    });
+    this._gw.load();
   }
 
   /**
@@ -1628,6 +1659,7 @@ class UnityChat {
     this._bcGroups ??= window.UC_CORE.createBroadcastGroups({ log: (tag, t) => this._ucLog(tag, t) });
     // Kopie Broadcastu z vlastního IRC / Pusheru bez `bcast` → SSE bcast-mark (může přijít před zprávou i po ní).
     this.nicknames.onBcastMark = (d) => this._applyBcastMark(d);
+    this.nicknames.onGiveaway = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._gw?.apply(d.giveaway || null); };
     this.nicknames.onBotDup = (d) => {
       if (d?.channel && d.channel !== this.config.channel) return;
       const n = this._botDups.mark(this.chatEl, d?.id);
@@ -3213,6 +3245,7 @@ class UnityChat {
     this._loadSoundboard();
     this._loadBlacklist().catch(() => {});
     this._refreshDonoAvailability();
+    this._gw?.load();
     this._loadModState();   // mod na novém kanálu? (tlačítko smazat)
     // Recycle the boot-time loading overlay during channel switch — same
     // pattern fits: cache hydrating + new providers connecting + first
@@ -5342,6 +5375,9 @@ class UnityChat {
     const changed = can !== !!this._canModerate;
     this._canModerate = can;
     document.body.classList.toggle('uc-can-moderate', can);
+    // Kolo štěstí: tlačítko moda v poli + ovládání v liště.
+    this._qdDock?.update();
+    this._gw?.refresh();
     // Volba vzhledu smazaných zpráv jen pro moda (divák má vždy zašedlé „Zpráva smazána“).
     const delRow = document.getElementById('row-deleted-style');
     if (delRow) delRow.hidden = !can;
@@ -5875,6 +5911,7 @@ class UnityChat {
     this._renderComposer();
     this._loadSoundboard();
     this._qd?.refreshIdentity?.();
+    this._gw?.refresh();
     // E-mail v nastavení patří k účtu → bez přihlášení skrytý.
     document.body.classList.toggle('uc-signed-out', !linked.length);
     this._signedIn = linked.length > 0;
