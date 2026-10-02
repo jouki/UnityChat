@@ -141,7 +141,7 @@ export class LoginModal {
  *   Broadcast (mod / streamer): řádek se všemi logy nahoře, zpráva na všechny přihlášené platformy.
  *   Jen když broadcastTargets() vrátí aspoň dvě platformy; vybraný = žádná platforma není `selected`.
  * @param {{selected: boolean, onSelect: () => void}|null} [o.ucOnly]
- *   „Jen UnityChat“ (pokyn usera 2026-10-02): zpráva jen přes server UnityChatu (POST /chat/uc-only), na platformu
+ *   „UnityChat“ (pokyn usera 2026-10-02): zpráva jen přes server UnityChatu (POST /chat/uc-only), na platformu
  *   nejde; vidí ji všichni v UnityChatu i v OBS. Jen přihlášenému (identita = vybraná platforma).
  */
 export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onUnlink, onLogout, onClose, broadcast = null, ucOnly = null, platforms = DEFAULT_PLATFORMS, names = DEFAULT_NAMES }) {
@@ -155,7 +155,7 @@ export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onU
   const uo = ucOnly && platforms.some((p) => me?.platforms?.[p]) ? ucOnly : null;
   const uoRow = uo
     ? `<button type="button" class="pm-row pm-uconly${uo.selected ? ' selected' : ''}" data-action="uconly" title="Zpráva jen do UnityChatu — na platformu nejde, uvidí ji všichni v UnityChatu i na streamu">`
-      + '<span class="badge uco pm-badge">UC</span><span class="pm-name">Jen UnityChat</span></button>'
+      + '<span class="badge uco pm-badge">UC</span><span class="pm-name">UnityChat</span></button>'
     : '';
   const rows = platforms.map((p) => {
     const id = me?.platforms?.[p] || null;
@@ -168,7 +168,8 @@ export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onU
       + `<span class="badge ${cls} pm-badge">${cls.toUpperCase()}</span><span class="pm-name">${esc(names[p] || p)}</span>${state}</button>`;
   }).join('');
   const foot = me ? '<button type="button" class="pm-row pm-logout" data-action="logout"><span class="pm-name">Odhlásit se</span></button>' : '';
-  menuEl.innerHTML = `<div class="pm-title">Psát jako</div>${bcRow}${uoRow}${rows}${foot}`;
+  // UnityChat (zpráva jen přes náš server) až pod platformami (pokyn usera 2026-10-02).
+  menuEl.innerHTML = `<div class="pm-title">Psát jako</div>${bcRow}${rows}${uoRow}${foot}`;
   for (const x of menuEl.querySelectorAll('.pm-unlink')) {
     x.addEventListener('click', async (e) => {
       e.stopPropagation();
