@@ -24,6 +24,7 @@ import donateRoutes from './routes/donate.js';
 import accountRoutes from './routes/account.js';
 import chatLogRoutes from './routes/chatLog.js';
 import integrationChannelRoutes from './routes/integrationChannel.js';
+import integrationUnlockRoutes from './routes/integrationUnlock.js';
 import reactionRoutes from './routes/reactions.js';
 import moderationRoutes from './routes/moderation.js';
 import integrationModerationRoutes from './routes/integrationModeration.js';
@@ -377,6 +378,8 @@ await app.register(donateRoutes);
 await app.register(accountRoutes);
 await app.register(chatLogRoutes);
 await app.register(integrationChannelRoutes);
+// Záložní stažení přes Web Unlocker pro Židolištu (návrh zvuku z webu, který blokuje IP serveru) — stejný strop jako GIFy.
+await app.register(integrationUnlockRoutes, { unlocker: gifUnlocker });
 
 if (config.NODE_ENV === 'development') {
   await app.register(devDownloadRoutes);
