@@ -52,6 +52,11 @@ test('sendKick: 403 z Cloudflare (HTML) → chyba s cf-ray, limity a textem str�
   await assert.rejects(sendKick({ accessToken: 'tok', broadcasterUserId: '1', text: 'hi' }, j), (e: SendError) => /^kick: HTTP 403 Forbidden \[x-ratelimit-remaining=0\] body: \{"message":"Forbidden"\}$/.test(e.message));
 });
 
+test('sendKick: NO_LINKS_ERROR → srozumitelná chyba (odkaz smí jen moderátor)', async () => {
+  const f = (async () => new Response(JSON.stringify({ data: 'NO_LINKS_ERROR' }), { status: 400 })) as unknown as typeof fetch;
+  await assert.rejects(sendKick({ accessToken: 'tok', broadcasterUserId: '1', text: 'https://x.cz' }, f), (e: SendError) => e.status === 400 && /jen moderátor kanálu \(NO_LINKS_ERROR\)/.test(e.message));
+});
+
 test('youtube: liveChatId z videos.list, insert payload', async () => {
   const v = mockFetch(200, { items: [{ liveStreamingDetails: { activeLiveChatId: 'LC1' } }] });
   assert.equal(await youtubeLiveChatId({ accessToken: 't', videoId: 'abc' }, v.f), 'LC1');

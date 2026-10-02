@@ -81,6 +81,8 @@ export async function sendKick(
   let data: Record<string, unknown> = {};
   try { data = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* HTML / prázdné */ }
   if (resp.status === 401) throw new SendError('kick: unauthorized', 401, true);
+  // Kick nepustí odkaz od účtu, který v kanálu není moderátor (zjištěno 2026-10-02, JoukiBOT a !logi).
+  if (data.data === 'NO_LINKS_ERROR') throw new SendError('kick: odkazy smí posílat jen moderátor kanálu (NO_LINKS_ERROR)', resp.status || 400);
   if (!resp.ok) throw new SendError(`kick: HTTP ${resp.status} ${(data.message as string) || ''}`.trim() + kickErrorDiag(resp, rawBody), resp.status);
   const d = data.data as { message_id?: string; is_sent?: boolean } | undefined;
   if (d && d.is_sent === false) throw new SendError('kick: not sent', 422);
