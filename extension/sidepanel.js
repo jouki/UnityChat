@@ -139,6 +139,10 @@ class NicknameManager {
       this._eventSource.addEventListener('donor-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonorMark) this.onDonorMark(d); } catch {}
       });
+      // Zpráva jen přes UnityChat (platforma ji nepřijala / nezobrazila) — backend lib/ucOnly.ts.
+      this._eventSource.addEventListener('uc-only', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUcOnly) this.onUcOnly(d); } catch {}
+      });
       // Kolo štěstí pro podporovatele: změna stavu (vyhlášení, připojení, losování, potvrzení, konec).
       this._eventSource.addEventListener('giveaway', (e) => {
         try { const d = JSON.parse(e.data); if (this.onGiveaway) this.onGiveaway(d); } catch {}
@@ -1659,6 +1663,7 @@ class UnityChat {
     this._bcGroups ??= window.UC_CORE.createBroadcastGroups({ log: (tag, t) => this._ucLog(tag, t) });
     // Kopie Broadcastu z vlastního IRC / Pusheru bez `bcast` → SSE bcast-mark (může přijít před zprávou i po ní).
     this.nicknames.onBcastMark = (d) => this._applyBcastMark(d);
+    this.nicknames.onUcOnly = (d) => { if (d?.message && d.channel === (this.config.channel || '').toLowerCase()) this._addMessage(d.message); };
     this.nicknames.onGiveaway = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._gw?.apply(d.giveaway || null); };
     this.nicknames.onBotDup = (d) => {
       if (d?.channel && d.channel !== this.config.channel) return;
@@ -4377,6 +4382,8 @@ class UnityChat {
       // Kick odpověď odmítl (odpověď na starou zprávu) a server poslal „@login text" → optimistická
       // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
       if (j.fallback === 'mention') this._dropOptimistic(optId);
+      // YouTube: id zprávy z insertu — kdyby ji chat zadržel, záloha přes UnityChat ho pošle serveru (spárování, až ji pustí).
+      if (platform === 'youtube' && j.id) { this._ytSendIds ??= new Map(); this._ytSendIds.set(optId, j.id); }
       // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora) → bez echa neodesláno;
       // GIF zprávu řídí štítek (core watchYoutubeSend). Pořád optimistická = stále ve store pod optId (i zaparkovaná).
       if (platform === 'youtube') {
@@ -9057,6 +9064,8 @@ class UnityChat {
     const preserveScroll = !this.autoScroll && !isHistory;
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
     let appendedAtEnd = false;
+    // Zpráva jen přes UnityChat → logo UnityChatu místo loga platformy.
+    if (msg.ucOnly) window.UC_CORE.applyUcOnlyLook(el, msg.platform);
     // První kopie Broadcastu → skupina (logo platformy nahradí řada log všech cílů).
     if (bcInfo) this._bcGroups.create(bcInfo.id, el, bcInfo.targets, { sent: [msg.platform], msgId: msg.id });
 
@@ -9364,6 +9373,30 @@ class UnityChat {
     try {
       chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'SendFail', args: [optId, reason] }).catch(() => {});
     } catch {}
+    void this._ucOnlyFallback(optId, reason);
+  }
+
+  /**
+   * Záloha (pokyn usera 2026-10-02): neodeslaná vlastní zpráva → AUTOMATICKY jen přes UnityChat (POST /chat/uc-only,
+   * backend lib/ucOnly.ts). Uvidí ji všichni v UnityChatu i v OBS s logem UnityChatu. Commandy / GIFy / bez přihlášení ne.
+   */
+  async _ucOnlyFallback(optId, reason) {
+    const m = this.store.get(optId);
+    if (!m || this._legacySend() || !window.UC_CORE.ucOnlyEligible(m.message)) return;
+    this._ucOnlyTried ??= new Set();
+    if (this._ucOnlyTried.has(optId)) return;
+    this._ucOnlyTried.add(optId);
+    const text = window.UC_CORE.ucOnlyText(m.message);
+    try {
+      const j = await this._ucApi('/chat/uc-only', { method: 'POST', body: { platform: m.platform, text, channel: (this.config.channel || '').toLowerCase(), reason: String(reason || '').slice(0, 200), platformId: this._ytSendIds?.get(optId) || null } });
+      this._dropOptimistic(optId);
+      this._addMessage(j.message);
+      // Text se při chybě vrátil do pole — zpráva už odešla, nechat ho tam by mátlo.
+      if (this.msgInput && window.UC_CORE.ucOnlyText(this.msgInput.value) === text) { this.msgInput.value = ''; this._autoResizeInput?.(); }
+      this._ucLog('UcOnly', `${m.platform} ${optId} → ${j.id} (${String(reason || '').slice(0, 60)})`);
+    } catch (e) {
+      this._ucLog('UcOnly', `${m.platform} ${optId} FAIL ${e.status || ''} ${e.error || e.message || e}`);
+    }
   }
 
   _upgradeOptimistic(optId, realMsg) {

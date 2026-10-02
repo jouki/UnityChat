@@ -969,6 +969,11 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
 .msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
 .msg .pi.ki { background-image: url(icons/platform/kick.svg); }
+/* Zpráva jen přes UnityChat (core/uc-only.js): platforma ji nepřijala / nezobrazila → logo UnityChatu. */
+/* Specifičtější než .msg .pi.uc.tw (zlaté logo platformy) — jinak by logo UnityChatu prohrálo. */
+.msg.uc-only-msg > .pi.tw, .msg.uc-only-msg > .pi.yt, .msg.uc-only-msg > .pi.ki,
+.msg.uc-only-msg > .pi.uc.tw, .msg.uc-only-msg > .pi.uc.yt, .msg.uc-only-msg > .pi.uc.ki { background-image: url(icons/icon48.png); padding: 0; filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
+
 /* Broadcast jako jedna zpráva (core/broadcast-group.js): místo loga platformy řada menších log všech cílů.
    Ztmavené = čeká na potvrzení, rozsvícené = kopie dorazila, vykřičník = neodesláno (tooltip s důvodem).
    Vlastní zpráva je ztmavená, dokud nedorazí první kopie. */

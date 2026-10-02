@@ -1,0 +1,103 @@
+// E2E (headless Chrome + CDP): záloha „jen přes UnityChat“ (core/uc-only.js, backend /chat/uc-only) v addonu —
+// neodeslaná zpráva se automaticky pošle přes server a ukáže s logem UnityChatu; commandy ne; SSE zpráva jiného.
+// Spuštění: node scripts/e2e-uc-only.mjs
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const EXT = path.resolve(here, '../extension').replace(/\\/g, '/');
+const CHROME = process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
+
+const port = await freePort();
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'uc-e2e-uco-'));
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
+  '--enable-unsafe-extension-debugging', '--window-size=500,900', 'about:blank'], { stdio: 'ignore' });
+
+let pass = 0, fail = 0;
+const check = (name, ok, detail = '') => { if (ok) pass++; else fail++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
+const finish = (code) => { try { chrome.kill(); } catch {} setTimeout(() => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch {} process.exit(code); }, 500); };
+
+let ver = null;
+for (let i = 0; i < 40 && !ver; i++) { await sleep(250); ver = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json()).catch(() => null); }
+if (!ver) { console.log('Chrome se nespustil'); finish(2); }
+
+let seq = 0; const pend = new Map();
+const s = await new Promise((res) => { const w = new WebSocket(ver.webSocketDebuggerUrl); w.onopen = () => res(w); w.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pend.has(d.id)) { pend.get(d.id)(d); pend.delete(d.id); } else w.onevent?.(d); }; });
+const call = (method, params = {}, sessionId) => new Promise((res) => { const i = ++seq; pend.set(i, res); s.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) })); });
+
+const lr = await call('Extensions.loadUnpacked', { path: EXT });
+const extId = lr.result?.id;
+if (!extId) { console.log('loadUnpacked FAIL', JSON.stringify(lr)); finish(2); }
+const { result: { targetId } } = await call('Target.createTarget', { url: 'about:blank' });
+const { result: { sessionId } } = await call('Target.attachToTarget', { targetId, flatten: true });
+
+// ---- mock backendu ----
+const now = Date.now();
+const H1 = [{ platform: 'twitch', id: 'tw-1', username: 'TwTester', userId: 'u1', message: 'ahoj', color: '#1e90ff', timestamp: now - 30000, historical: true }];
+const mock = { sendFail: true };
+const posts = { send: [], uco: [] };
+const fulfill = (rid, sid, code, type, body) => call('Fetch.fulfillRequest', { requestId: rid, responseCode: code, responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(body).toString('base64') }, sid);
+s.onevent = async (d) => {
+  if (d.method !== 'Fetch.requestPaused') return;
+  const q = d.params.request; const rid = d.params.requestId; const sid = d.sessionId;
+  const json = (o, code = 200) => fulfill(rid, sid, code, 'application/json', JSON.stringify(o));
+  const u = q.url;
+  const body = q.postData ? JSON.parse(q.postData) : null;
+  if (u.includes('/nicknames/stream')) return fulfill(rid, sid, 200, 'text/event-stream', 'retry: 60000\n\n');
+  if (u.includes('/account/stream-ticket')) return json({ ok: true, ticket: 'tk', expiresInMs: 60000 });
+  if (u.includes('/account/stream')) return;
+  if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' } }, warnings: [] });
+  if (u.includes('/moderation/me')) return json({ ok: true, mod: false, platforms: [], missingScopes: {} });
+  if (u.includes('/chat/uc-only')) {
+    posts.uco.push(body);
+    return json({ ok: true, id: 'uco-1', message: { platform: body.platform, id: 'uco-1', username: 'ModUser', userId: 'u7', message: body.text, timestamp: Date.now(), uc: true, ucOnly: true, color: '#ff8c00', badgesRaw: '', historical: false } });
+  }
+  if (u.includes('/chat/send')) { posts.send.push(body); return mock.sendFail ? json({ ok: false, error: 'twitch: message dropped (msg_rejected)' }, 422) : json({ ok: true, id: 's-1' }); }
+  if (u.includes('/chat/history')) return json({ ok: true, messages: u.includes('before=') ? [] : H1, nextBefore: null });
+  if (u.includes('/moderation/')) return json({ ok: true, requests: [], messages: {} });
+  return call('Fetch.continueRequest', { requestId: rid }, sid);
+};
+await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/', '/nicknames/stream', '/account/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Runtime.enable', {}, sessionId);
+const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
+const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
+const type = (t) => ev(`(() => { const i = document.getElementById('msg-input'); i.value = ${JSON.stringify(t)}; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return true; })()`);
+const ROW = (txt) => `(() => { const e = [...document.querySelectorAll('#chat .msg')].filter(x => (x.querySelector('.tx')?.textContent || '').includes(${JSON.stringify(txt)})); return e.map(x => ({ id: x.dataset.msgId, uco: x.classList.contains('uc-only-msg'), failed: x.classList.contains('send-failed'), tip: x.querySelector(':scope > .pi')?.dataset.tooltip || '', bg: getComputedStyle(x.querySelector(':scope > .pi')).backgroundImage })); })()`;
+
+await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+await sleep(1500);
+await ev(`chrome.storage.local.set({ uc_session: 'tok', uc_send_platform: 'twitch', uc_send_broadcast: false })`);
+await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
+await until(`!!document.querySelector('.msg[data-msg-id="tw-1"]')`, 10000);
+await until(`!document.getElementById('msg-input').disabled`, 6000);
+
+// A: odeslání na Twitch selže → zpráva automaticky jen přes UnityChat
+await type('ahoj z unitychatu');
+check('A záloha: POST /chat/uc-only s textem a platformou', await until(`true`, 100) && await (async () => { for (let i = 0; i < 40 && !posts.uco.length; i++) await sleep(100); return posts.uco.length === 1 && posts.uco[0].text === 'ahoj z unitychatu' && posts.uco[0].platform === 'twitch' && posts.uco[0].channel === 'robdiesalot' && /msg_rejected/.test(posts.uco[0].reason); })(), JSON.stringify(posts.uco));
+await until(`${ROW('ahoj z unitychatu')}.some(r => r.uco)`, 3000);
+const a = await ev(ROW('ahoj z unitychatu'));
+check('A jedna zpráva s logem UnityChatu, ne NEODESLÁNO', a.length === 1 && a[0].id === 'uco-1' && a[0].uco && !a[0].failed && /icon48\.png/.test(a[0].bg) && /^Jen v UnityChatu — Twitch/.test(a[0].tip), JSON.stringify(a));
+check('A text se do pole nevrátil', await ev(`document.getElementById('msg-input').value`) === '');
+
+// B: command a GIF odkaz se zálohou neposílají
+await type('!logi');
+await sleep(800);
+check('B command: bez zálohy (zůstane neodesláno)', posts.uco.length === 1 && (await ev(ROW('!logi'))).some((r) => r.failed), JSON.stringify(await ev(ROW('!logi'))));
+
+// C: SSE uc-only od jiného uživatele → vykreslí se s logem UnityChatu; duplicitní SSE vlastní zprávy nic nepřidá
+await ev(`window.ucGif.add({ platform: 'youtube', id: 'uco-9', username: 'Divak', userId: 'y9', message: 'zadržená youtubem', timestamp: Date.now(), uc: true, ucOnly: true })`);
+await ev(`window.ucGif.add({ platform: 'twitch', id: 'uco-1', username: 'ModUser', userId: 'u7', message: 'ahoj z unitychatu', timestamp: Date.now(), uc: true, ucOnly: true })`);
+await sleep(300);
+const c = await ev(ROW('zadržená youtubem'));
+check('C cizí zpráva jen přes UnityChat: logo UC + tooltip YouTube', c.length === 1 && c[0].uco && /^Jen v UnityChatu — YouTube/.test(c[0].tip), JSON.stringify(c));
+check('C vlastní zpráva ze SSE se nezdvojí', (await ev(ROW('ahoj z unitychatu'))).length === 1);
+
+console.log(`\n${pass} PASS, ${fail} FAIL`);
+finish(fail ? 1 : 0);

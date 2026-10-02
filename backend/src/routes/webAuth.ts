@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { BROADCASTER_SCOPES, CATEGORY_SCOPE, uniqScopes } from '../lib/broadcasterScopes.js';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { messages, streamers } from '../db/schema.js';
@@ -26,7 +26,12 @@ import { ucSends, markUc, ucReplies, attachUcReply, gifReviews, bcastSends, atta
 import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
 import { getReplaceGlobalPref, setReplaceGlobalPref, refreshAccount as refreshBadgePrefs } from '../lib/badgePrefs.js';
 import { syncEmailLink } from '../lib/emailLink.js';
-import { platformChannel } from './chat.js';
+import { platformChannel, toClientMessage } from './chat.js';
+import { UCO_PREFIX, ucOnlyContentRaw, ucOnlyHeld, youtubeChatIdFromInsert } from '../lib/ucOnly.js';
+import { activeBan } from '../lib/userModeration.js';
+import { gifCandidate } from '../lib/gifMedia.js';
+import { publishChat } from '../sse/chatBus.js';
+import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
 import type { Ingest } from '../ingest/index.js';
 
@@ -271,6 +276,59 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       const hint = platform === 'twitch' ? await twitchFirstMessageHint(accountId, channel, err.message, req.log).catch(() => null) : null;
       return { ok: false, error: hint || err.message, ...(hint ? { code: 'twitch_first_message' } : {}) };
     }
+  });
+
+  // ---- Zpráva jen přes UnityChat (lib/ucOnly.ts, pokyn usera 2026-10-02) ----
+  // Klient ji pošle AUTOMATICKY, když se zpráva na platformu nepošle nebo ji YouTube přijme a nezobrazí. Uloží se
+  // jako zpráva platformy s id `uco-…` (historie, moderace „Jen v UC skrýt“), rozešle se /chat/stream + SSE `uc-only`
+  // (addon / web / OBS), klient místo loga platformy kreslí logo UnityChatu. Commandy a GIFy ne (bot je nevidí /
+  // GIFy mají vlastní schvalování); kdo má na platformě aktivní timeout / ban (naše evidence), nic.
+  const UcOnlyBody = z.object({
+    platform: z.enum(['twitch', 'youtube', 'kick']),
+    text: z.string().min(1).max(500),
+    channel: z.string().max(40).optional(),
+    reason: z.string().max(200).optional(),
+    platformId: z.string().max(200).optional().nullable(),
+  }).strict();
+  app.post<{ Body: z.infer<typeof UcOnlyBody> }>('/chat/uc-only', { preHandler: requireWebSession }, async (req, reply) => {
+    const body = UcOnlyBody.safeParse(req.body);
+    if (!body.success) { reply.code(400); return { ok: false, error: 'body' }; }
+    const accountId = req.webAccountId!;
+    if (!sendLimiter.allow(String(accountId))) { reply.code(429); return { ok: false, error: 'slow down' }; }
+    const { platform } = body.data;
+    const channel = (body.data.channel || DEFAULT_CHANNEL).toLowerCase();
+    const text = body.data.text.replaceAll('\u2800', '').replace(/\s+/g, ' ').trim();
+    if (!text) { reply.code(400); return { ok: false, error: 'empty' }; }
+    if (text.startsWith('!') || text.startsWith('/')) { reply.code(400); return { ok: false, error: 'command' }; }
+    if (gifCandidate(text)) { reply.code(400); return { ok: false, error: 'gif' }; }
+    try {
+      if ((await pendingWarnings(accountId)).length) { reply.code(403); return { ok: false, error: 'warning_pending' }; }
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'uc-only: kontrola varování selhala'); }
+    const ident = (await listIdentities(accountId)).find((i) => i.platform === platform);
+    if (!ident) { reply.code(403); return { ok: false, error: 'platform_not_linked' }; }
+    // Timeout / ban na platformě (naše evidence z moderace) — UnityChat ho neobchází.
+    try {
+      if (await activeBan(channel, platform, ident.platformUserId)) { reply.code(403); return { ok: false, error: 'banned' }; }
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'uc-only: kontrola banu selhala'); }
+    const pch = await platformChannel(platform, channel);
+    // Barva a odznaky z poslední zprávy autora na téhle platformě (jako optimistická zpráva v klientu).
+    const [last] = await db.select({ raw: messages.contentRaw, username: messages.platformUsername }).from(messages)
+      .where(and(eq(messages.platform, platform), eq(messages.channel, pch), eq(messages.platformUserId, ident.platformUserId)))
+      .orderBy(desc(messages.sentAt)).limit(1);
+    const heldId = platform === 'youtube' ? youtubeChatIdFromInsert(body.data.platformId) : null;
+    const id = `${UCO_PREFIX}${randomUUID()}`;
+    const username = last?.username || ident.displayName || ident.login;
+    const [row] = await db.insert(messages).values({
+      platform, platformMessageId: id, platformUserId: ident.platformUserId, platformUsername: username,
+      content: text, contentRaw: ucOnlyContentRaw(platform, text, (last?.raw as Record<string, unknown>) || null, { reason: body.data.reason || '', heldId }),
+      channel: pch, isUnitychatUser: true, sentAt: new Date(),
+    }).returning();
+    if (heldId) ucOnlyHeld.remember(heldId, id);
+    const live = toClientMessage(row, false);
+    publishChat(pch, platform, live);
+    broadcast('uc-only', { channel, message: live });
+    req.log.info({ accountId, platform, channel, id, heldId, len: text.length, reason: (body.data.reason || '').slice(0, 80) }, 'uc-only: zpráva jen přes UnityChat');
+    return { ok: true, id, message: live };
   });
 
   // ---- Broadcast (mod / streamer): zpráva na všechny přihlášené platformy ----
