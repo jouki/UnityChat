@@ -155,7 +155,7 @@ export class GiveawayService {
       let dc = await this.d.donorCheck(accountId, channel, false);
       // Donate poslaný po vyhlášení: cache dárců je z pětiminutové obnovy → jednou obnovit a zkusit znovu.
       if (!dc.ok) dc = await this.d.donorCheck(accountId, channel, true);
-      if (!dc.ok) throw new GiveawayError('not_donor', 403);
+      if (!dc.ok) { this.d.log?.info({ channel, id: row.id, accountId, name: dc.name }, 'giveaway: připojení odmítnuto (není podporovatel)'); throw new GiveawayError('not_donor', 403); }
       await this.d.repo.addEntry(row.id, { accountId, name: dc.name, platform: dc.platform, joinedAt: new Date(this.now()) });
       this.d.log?.info({ channel, id: row.id, accountId, name: dc.name }, 'giveaway: připojení');
       return (await this.emit(channel))!;
