@@ -96,7 +96,7 @@ await ev(`chrome.storage.local.set({ uc_session: 'tok', uc_send_platform: 'twitc
 await boot();
 await until(`document.body.classList.contains('uc-can-moderate')`);
 let rows = await openMenu();
-check('A menu: Broadcast první, pak platformy', JSON.stringify(rows.slice(0, 4)) === JSON.stringify(['broadcast', 'twitch*', 'kick', 'youtube']), JSON.stringify(rows));
+check('A menu: Broadcast první, pak Jen UnityChat a platformy', JSON.stringify(rows.slice(0, 5)) === JSON.stringify(['broadcast', 'uconly', 'twitch*', 'kick', 'youtube']), JSON.stringify(rows));
 check('A řádek Broadcast: tři loga + text', await ev(`(() => { const r = document.querySelector('#platform-menu .pm-broadcast'); return r.querySelectorAll('.pm-bc-logos .pm-badge').length === 3 && r.querySelector('.pm-name').textContent === 'Broadcast'; })()`) === true);
 await ev(`document.querySelector('#platform-menu .pm-broadcast').click()`);
 let st = await state();

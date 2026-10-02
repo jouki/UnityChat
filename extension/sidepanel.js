@@ -1794,6 +1794,7 @@ class UnityChat {
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
     // Broadcast (mod / streamer) si pamatuje zvlášť — platí, jen dokud je role a aspoň dvě přihlášené platformy.
     try { this._broadcast = (await chrome.storage.local.get('uc_send_broadcast')).uc_send_broadcast === true; } catch {}
+    try { this._ucOnlyMode = (await chrome.storage.local.get('uc_send_uconly')).uc_send_uconly === true; } catch {}
     if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
     this._refreshAccount();
     this._bootMark('_init done');
@@ -4038,6 +4039,12 @@ class UnityChat {
       await this._sendBroadcast(text);
       return;
     }
+    // „Jen UnityChat“: běžný text přes náš server (logo UnityChatu). Commandy, GIF odkazy a odpověď jdou dál na
+    // vybranou platformu (bot / schvalování GIFů / vlákno platformy jinak nefungují).
+    if (!external && this._isUcOnlyMode() && !this._reply && window.UC_CORE.ucOnlyEligible(text)) {
+      await this._sendUcOnly(text);
+      return;
+    }
     // GIF odkaz během cooldownu odměny: neodeslat, pole zčervená, bublina „Můžeš až za:" (text zůstává v poli).
     // Výběr z knihovny (opts.gif) taky — cooldown ze serveru (i tiché schválení modem) ho musí zastavit (test2 bod 4.1).
     if ((!external || opts.gif) && !this._gifCd().checkSend(text)) return;
@@ -4315,9 +4322,46 @@ class UnityChat {
     return !!this._broadcast && this._broadcastTargets().length >= 2;
   }
 
+  /** „Jen UnityChat“ (menu Psát jako): běžný text jen přes server UnityChatu (POST /chat/uc-only), ne na platformu. */
+  _isUcOnlyMode() {
+    return !!this._ucOnlyMode && !this._legacySend() && this._linkedPlatforms().length > 0;
+  }
+
+  _selectUcOnly() {
+    this._replyPrevPlatform = null;
+    this._replyPrevBroadcast = false;
+    if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+    this._ucOnlyMode = true;
+    try { chrome.storage.local.set({ uc_send_uconly: true }); } catch {}
+    this._renderComposer();
+    this.msgInput.focus();
+  }
+
+  /** Zpráva jen do UnityChatu (volba „Jen UnityChat“): rovnou přes server, vrátí se hotová zpráva s logem UC. */
+  async _sendUcOnly(text) {
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
+    this._msgHistoryIdx = -1;
+    this._msgHistoryDraft = '';
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    const platform = this.activePlatform;
+    try {
+      const j = await this._ucApi('/chat/uc-only', { method: 'POST', body: { platform, text: this._resolveNicknameMentions(text, platform), channel: (this.config.channel || '').toLowerCase(), reason: 'jen UnityChat (volba)' } });
+      this._addMessage(j.message);
+      this._ucLog('UcOnly', `volba → ${j.id}`);
+    } catch (e) {
+      const reason = e.status === 429 ? 'moc zpráv za sebou, zpomal' : e.error === 'banned' ? 'máš na platformě timeout / ban' : e.error === 'warning_pending' ? 'nepotvrzené varování od moderátora' : (e.error || e.message || 'neodesláno');
+      this._sys(`Zprávu do UnityChatu se nepodařilo poslat: ${reason}`);
+      if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+      this._ucLog('UcOnly', `volba FAIL ${e.status || ''} ${e.error || e.message || e}`);
+    }
+  }
+
   _selectBroadcast() {
     this._replyPrevPlatform = null;
     this._replyPrevBroadcast = false;
+    if (this._ucOnlyMode) { this._ucOnlyMode = false; try { chrome.storage.local.set({ uc_send_uconly: false }); } catch {} }
     this._broadcast = true;
     try { chrome.storage.local.set({ uc_send_broadcast: true }); } catch {}
     this._renderComposer();
@@ -6128,6 +6172,7 @@ class UnityChat {
       this._replyPrevPlatform = null;
       this._replyPrevBroadcast = false;
       if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+      if (this._ucOnlyMode) { this._ucOnlyMode = false; try { chrome.storage.local.set({ uc_send_uconly: false }); } catch {} }
     }
     this._sendPlatform = platform;
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
@@ -6156,13 +6201,18 @@ class UnityChat {
     this.msgInput.disabled = !canWrite || warned;
     this.sendBtn.disabled = !canWrite || warned;
     const bc = canWrite && this._isBroadcast();
+    const uco = canWrite && !bc && this._isUcOnlyMode();
     this.msgInput.placeholder = warned ? 'Máš nepotvrzené varování od moderátora — potvrď ho, pak můžeš psát.'
       : bc ? 'Zpráva na všechny platformy...'
+      : uco ? 'Zpráva jen do UnityChatu...'
       : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
     if (btn) btn.title = bc ? `Broadcast: píšeš na ${this._broadcastTargets().map((p) => NAMES[p]).join(', ')}`
+      : uco ? `Jen UnityChat: zprávu uvidí všichni v UnityChatu i na streamu, na ${NAMES[platform] || 'platformu'} nejde (commandy ano)`
       : id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
     // Badge u pole: v Broadcastu všechna tři loga (composer.css #active-badge.bc), jinak logo platformy.
     this.platformBadge?.classList.toggle('bc', bc);
+    // „Jen UnityChat“: logo UnityChatu místo loga platformy (sidepanel.css #active-badge.uco).
+    this.platformBadge?.classList.toggle('uco', uco);
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
     this._qdDock?.update();
@@ -6176,6 +6226,7 @@ class UnityChat {
       me: this._account,
       current: this.activePlatform,
       broadcast: { targets: this._broadcastTargets(), selected: this._isBroadcast(), onSelect: () => this._selectBroadcast() },
+      ucOnly: this._legacySend() ? null : { selected: !this._isBroadcast() && this._isUcOnlyMode(), onSelect: () => this._selectUcOnly() },
       onSelect: (p) => this._selectSendPlatform(p),
       onLogin: (p) => this._loginPlatform(p),
       onUnlink: (p) => this._unlinkPlatform(p),

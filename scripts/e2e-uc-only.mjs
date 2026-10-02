@@ -99,5 +99,22 @@ const c = await ev(ROW('zadržená youtubem'));
 check('C cizí zpráva jen přes UnityChat: logo UC + tooltip YouTube', c.length === 1 && c[0].uco && /^Jen v UnityChatu — YouTube/.test(c[0].tip), JSON.stringify(c));
 check('C vlastní zpráva ze SSE se nezdvojí', (await ev(ROW('ahoj z unitychatu'))).length === 1);
 
+// D: volba „Jen UnityChat“ v menu Psát jako → text rovnou přes /chat/uc-only, command dál na platformu
+mock.sendFail = false;
+const menuRows = await ev(`(() => { document.getElementById('platform-btn').click(); return [...document.querySelectorAll('#platform-menu .pm-row')].map(r => r.dataset.action || r.dataset.platform); })()`);
+check('D menu: volba Jen UnityChat', menuRows.includes('uconly'), JSON.stringify(menuRows));
+await ev(`document.querySelector('#platform-menu .pm-row[data-action="uconly"]').click()`);
+const st = await ev(`({ uco: document.getElementById('active-badge').classList.contains('uco'), ph: document.getElementById('msg-input').placeholder })`);
+check('D badge s logem UC a placeholder', st.uco && st.ph === 'Zpráva jen do UnityChatu...', JSON.stringify(st));
+const sendsBefore = posts.send.length;
+await type('jen pro unitychat');
+for (let i = 0; i < 30 && posts.uco.length < 2; i++) await sleep(100);
+check('D text → /chat/uc-only (volba), ne /chat/send', posts.uco.length === 2 && posts.uco[1].text === 'jen pro unitychat' && /volba/.test(posts.uco[1].reason) && posts.send.length === sendsBefore, JSON.stringify(posts.uco[1]));
+await type('!test');
+for (let i = 0; i < 30 && posts.send.length === sendsBefore; i++) await sleep(100);
+check('D command v režimu Jen UnityChat jde na platformu', posts.send.at(-1)?.text === '!test' && posts.uco.length === 2, JSON.stringify(posts.send.at(-1)));
+await ev(`(() => { document.getElementById('platform-btn').click(); document.querySelector('#platform-menu .pm-row[data-platform="twitch"]').click(); return true; })()`);
+check('D výběr platformy volbu zruší', await ev(`!document.getElementById('active-badge').classList.contains('uco') && document.getElementById('msg-input').placeholder === 'Zpráva do Twitch...'`) === true);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

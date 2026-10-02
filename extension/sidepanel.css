@@ -330,7 +330,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   line-height: 14px;
 }
 
-.badge.tw, .badge.yt, .badge.ki {
+.badge.tw, .badge.yt, .badge.ki, .badge.uco {
   display: inline-block;
   width: 18px;
   height: 18px;
@@ -344,6 +344,8 @@ body.layout-large #settings details summary { font-size: 15px; }
 .badge.tw { background-image: url(icons/platform/twitch.svg); }
 .badge.yt { background-image: url(icons/platform/youtube.svg); }
 .badge.ki { background-image: url(icons/platform/kick.svg); }
+/* „Jen UnityChat“ (menu Psát jako, badge u pole): logo UnityChatu */
+.badge.uco { background-image: url(icons/icon48.png); }
 
 .actions {
   flex-direction: row;
@@ -2715,7 +2717,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   flex-shrink: 0;
   letter-spacing: 0.3px;
 }
-#active-badge.tw, #active-badge.yt, #active-badge.ki {
+#active-badge.tw, #active-badge.yt, #active-badge.ki, #active-badge.uco {
   width: 22px;
   height: 22px;
   padding: 0;
@@ -2730,6 +2732,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 #active-badge.tw { background-image: url(icons/platform/twitch-gold.svg); }
 #active-badge.yt { background-image: url(icons/platform/youtube-gold.svg); }
 #active-badge.ki { background-image: url(icons/platform/kick-gold.svg); }
+#active-badge.uco { background-image: url(icons/icon48.png); filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
 
 #msg-input {
   flex: 1;

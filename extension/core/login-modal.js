@@ -140,8 +140,11 @@ export class LoginModal {
  * @param {{targets: string[], selected: boolean, onSelect: () => void}|null} [o.broadcast]
  *   Broadcast (mod / streamer): řádek se všemi logy nahoře, zpráva na všechny přihlášené platformy.
  *   Jen když broadcastTargets() vrátí aspoň dvě platformy; vybraný = žádná platforma není `selected`.
+ * @param {{selected: boolean, onSelect: () => void}|null} [o.ucOnly]
+ *   „Jen UnityChat“ (pokyn usera 2026-10-02): zpráva jen přes server UnityChatu (POST /chat/uc-only), na platformu
+ *   nejde; vidí ji všichni v UnityChatu i v OBS. Jen přihlášenému (identita = vybraná platforma).
  */
-export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onUnlink, onLogout, onClose, broadcast = null, platforms = DEFAULT_PLATFORMS, names = DEFAULT_NAMES }) {
+export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onUnlink, onLogout, onClose, broadcast = null, ucOnly = null, platforms = DEFAULT_PLATFORMS, names = DEFAULT_NAMES }) {
   const CLS = { twitch: 'tw', kick: 'ki', youtube: 'yt' };
   const bc = broadcast?.targets?.length >= 2 ? broadcast : null;
   const bcRow = bc
@@ -149,10 +152,15 @@ export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onU
       + `<span class="pm-bc-logos">${platforms.map((p) => `<span class="badge ${CLS[p] || p} pm-badge">${(CLS[p] || p).toUpperCase()}</span>`).join('')}</span>`
       + '<span class="pm-name">Broadcast</span></button>'
     : '';
+  const uo = ucOnly && platforms.some((p) => me?.platforms?.[p]) ? ucOnly : null;
+  const uoRow = uo
+    ? `<button type="button" class="pm-row pm-uconly${uo.selected ? ' selected' : ''}" data-action="uconly" title="Zpráva jen do UnityChatu — na platformu nejde, uvidí ji všichni v UnityChatu i na streamu">`
+      + '<span class="badge uco pm-badge">UC</span><span class="pm-name">Jen UnityChat</span></button>'
+    : '';
   const rows = platforms.map((p) => {
     const id = me?.platforms?.[p] || null;
     const cls = CLS[p] || p;
-    const sel = p === current && !bc?.selected ? ' selected' : '';
+    const sel = p === current && !bc?.selected && !uo?.selected ? ' selected' : '';
     const state = id
       ? `<span class="pm-state pm-linked">${esc(id.displayName || id.login)}</span><span class="pm-unlink" role="button" tabindex="0" data-unlink="${p}" title="Odpojit ${esc(names[p] || p)}">&times;</span>`
       : '<span class="pm-state pm-login">Přihlásit</span>';
@@ -160,7 +168,7 @@ export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onU
       + `<span class="badge ${cls} pm-badge">${cls.toUpperCase()}</span><span class="pm-name">${esc(names[p] || p)}</span>${state}</button>`;
   }).join('');
   const foot = me ? '<button type="button" class="pm-row pm-logout" data-action="logout"><span class="pm-name">Odhlásit se</span></button>' : '';
-  menuEl.innerHTML = `<div class="pm-title">Psát jako</div>${bcRow}${rows}${foot}`;
+  menuEl.innerHTML = `<div class="pm-title">Psát jako</div>${bcRow}${uoRow}${rows}${foot}`;
   for (const x of menuEl.querySelectorAll('.pm-unlink')) {
     x.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -174,6 +182,7 @@ export function renderPlatformMenu(menuEl, { me, current, onSelect, onLogin, onU
       onClose?.();
       if (btn.dataset.action === 'logout') { onLogout(); return; }
       if (btn.dataset.action === 'broadcast') { bc.onSelect(); return; }
+      if (btn.dataset.action === 'uconly') { uo.onSelect(); return; }
       const p = btn.dataset.platform;
       if (btn.dataset.linked === '1') onSelect(p); else onLogin(p);
     });
