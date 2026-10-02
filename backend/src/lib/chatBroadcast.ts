@@ -29,7 +29,7 @@ const ORDER: Platform[] = ['twitch', 'kick', 'youtube'];
  * prošla, jinak 502), 400 `command` / `gif` / `targets` / text, 403 `warning_pending` / `not_mod`.
  */
 export async function runBroadcast(
-  p: { accountId: number; channel: string; text: string; texts?: Partial<Record<Platform, string>> | null },
+  p: { accountId: number; channel: string; text: string; texts?: Partial<Record<Platform, string>> | null; group?: { id: string; targets: string[] } },
   deps: BroadcastDeps,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   // `texts` = podoba pro jednotlivé platformy (klient překládá @přezdívku na login dané platformy);
@@ -67,6 +67,8 @@ export async function runBroadcast(
   const targets = ORDER.filter((pl) => linked.has(pl));
   if (targets.length < 2) return { status: 400, body: { ok: false, error: 'targets' } };
 
+  // Skupina broadcastu (UnityChat kreslí kopie jako jednu zprávu): cíle známe až teď, před odesláním.
+  if (p.group) p.group.targets = [...targets];
   const settled = await Promise.allSettled(targets.map((pl) => deps.send(pl, prepared[pl]!)));
   const results: Record<string, BroadcastResult> = {};
   targets.forEach((pl, i) => {
@@ -80,5 +82,5 @@ export async function runBroadcast(
   });
   const okCount = Object.values(results).filter((r) => r.ok).length;
   deps.log?.info({ accountId: p.accountId, channel: p.channel, by: `${mods[0].platform}:${mods[0].login}`, targets, ok: okCount, len: prepared.twitch?.length ?? 0 }, 'chat broadcast');
-  return { status: okCount ? 200 : 502, body: { ok: okCount > 0, results } };
+  return { status: okCount ? 200 : 502, body: { ok: okCount > 0, results, ...(p.group ? { group: p.group.id } : {}) } };
 }

@@ -34,7 +34,8 @@ const IntentBody = z.object({
   platform: Platform,
   currency: z.enum(['EUR', 'CZK']).default('EUR'),
   amount: z.number().positive().max(10000),
-  message: z.string().trim().max(300).default(''),
+  // Limit délky dává config Židolišty (`maxMessageLength`, výchozí 300); upstream vrátí 400 message_too_long { maxLength }.
+  message: z.string().trim().max(5000).default(''),
   ttsVoice: z.string().trim().max(64).default(''),
   ttsLanguage: z.string().trim().max(8).default('cs'),
   testToken: z.string().trim().max(200).optional(),

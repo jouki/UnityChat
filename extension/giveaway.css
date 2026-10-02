@@ -1,0 +1,92 @@
+/* Kolo štěstí pro podporovatele (core/giveaway.js) — lišta nad polem pro psaní, formulář moda, kolo přes chat.
+   Sdílené addonem i webem (OBS ne). */
+#gw-bar { padding: 0 8px; }
+#gw-bar.hidden { display: none; }
+.uc-gw {
+  margin: 6px 0 2px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 138, 0, .45);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(255, 138, 0, .14), rgba(145, 70, 255, .10)), #18181b;
+  box-shadow: 0 0 12px rgba(255, 138, 0, .15);
+  font-size: 12.5px;
+  color: #efeff1;
+}
+.uc-gw--enter { animation: uc-gw-in .22s ease-out; }
+.uc-gw--pulse { animation: uc-gw-pulse .6s ease-out; }
+@keyframes uc-gw-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes uc-gw-pulse { 0% { box-shadow: 0 0 0 0 rgba(255, 138, 0, .7); } 100% { box-shadow: 0 0 0 10px rgba(255, 138, 0, 0); } }
+.uc-gw-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.uc-gw-ico { color: #ff8a00; display: inline-flex; }
+.uc-gw-title { font-weight: 700; color: #ffb347; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+.uc-gw-prize { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.uc-gw-info { color: #adadb8; flex: 1 1 auto; min-width: 0; }
+.uc-gw-info b { color: #efeff1; }
+.uc-gw-left { font-variant-numeric: tabular-nums; color: #ffb347; }
+.uc-gw-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.uc-gw-btn {
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: 7px; padding: 4px 10px;
+  background: rgba(255, 255, 255, .06); color: #efeff1; font: inherit; font-weight: 600; cursor: pointer;
+}
+.uc-gw-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
+.uc-gw-btn.primary { background: linear-gradient(135deg, #ffb347, #ff8a00); color: #1a1100; border-color: transparent; }
+.uc-gw-btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.uc-gw-btn.mod { border-color: rgba(83, 252, 24, .45); }
+.uc-gw-btn.ghost { background: transparent; color: #adadb8; }
+.uc-gw-btn:disabled { opacity: .55; cursor: default; }
+.uc-gw-ok { color: #53fc18; font-weight: 600; }
+.uc-gw-note { color: #adadb8; }
+.uc-gw-flash { margin-top: 6px; color: #ff6b6b; font-size: 12px; }
+.uc-gw-x { margin-left: auto; background: none; border: 0; color: #adadb8; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; align-self: flex-start; }
+.uc-gw-x:hover { color: #efeff1; }
+/* Počet přihlášených = přepínač seznamu jmen */
+.uc-gw-count { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted rgba(255, 255, 255, .35); text-underline-offset: 3px; }
+.uc-gw-count:hover { color: #efeff1; }
+.uc-gw-caret { display: inline-block; transition: transform .15s ease; font-size: 10px; }
+.uc-gw-count.open .uc-gw-caret { transform: rotate(180deg); }
+.uc-gw-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 120px; overflow-y: auto; }
+.uc-gw-list[hidden] { display: none; }
+.uc-gw-acts[hidden] { display: none; }
+.uc-gw-name { padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, .08); font-size: 11.5px; }
+.uc-gw-more { padding: 1px 7px; color: #adadb8; font-size: 11.5px; }
+.uc-gw-fields { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.uc-gw-fields input[name="prize"] {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, .18); background: #0e0e10; color: #efeff1; font: inherit;
+}
+.uc-gw-min { color: #adadb8; display: flex; align-items: center; gap: 6px; }
+.uc-gw-min input { width: 56px; padding: 3px 6px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, .18); background: #0e0e10; color: #efeff1; font: inherit; }
+.uc-gw-err { margin-top: 6px; color: #ff6b6b; }
+
+/* Tlačítko moda v poli pro psaní (tool dock) */
+#btn-giveaway { color: #ffb347; }
+#btn-giveaway svg { width: 16px; height: 16px; }
+
+/* Kolo přes chat */
+.uc-gw-overlay {
+  position: absolute; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .62); backdrop-filter: blur(2px);
+  animation: uc-gw-fade .2s ease-out; cursor: pointer;
+}
+.uc-gw-overlay--out { opacity: 0; transition: opacity .25s ease; }
+@keyframes uc-gw-fade { from { opacity: 0; } to { opacity: 1; } }
+.uc-gw-stage { position: relative; width: min(82%, 320px); aspect-ratio: 1; }
+.uc-gw-wheel-svg { width: 100%; height: 100%; filter: drop-shadow(0 0 18px rgba(255, 138, 0, .35)); }
+.uc-gw-wheel-svg text { fill: #111; font-weight: 700; font-family: system-ui, sans-serif; }
+.uc-gw-pointer {
+  position: absolute; left: 50%; top: -6px; z-index: 1; transform: translateX(-50%);
+  width: 0; height: 0; border-left: 11px solid transparent; border-right: 11px solid transparent;
+  border-top: 20px solid #ffd23f; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .6));
+}
+.uc-gw-result {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 10px 16px; border-radius: 12px; background: rgba(24, 24, 27, .95); border: 1px solid #ff8a00;
+  box-shadow: 0 0 24px rgba(255, 138, 0, .5); animation: uc-gw-in .25s ease-out; white-space: nowrap;
+}
+.uc-gw-result span { color: #adadb8; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.uc-gw-result b { color: #ffb347; font-size: 18px; }
+@media (prefers-reduced-motion: reduce) {
+  .uc-gw--enter, .uc-gw--pulse, .uc-gw-overlay, .uc-gw-result { animation: none; }
+}

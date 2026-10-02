@@ -99,5 +99,20 @@ const assert = require('node:assert/strict');
   assert.deepEqual(hideRecentBotReplies({ querySelectorAll: () => [old] }, ['streamelements'], now), ['streamelements'], 'jen stará zpráva → čekat na novou');
   ok('hideBotReplies + hideInBrowserSource');
 
+  // bot-dup: značka schová vykreslenou zprávu i takovou, která dorazí později (has před vykreslením)
+  const { createBotDupMarks } = await import('../extension/core/announcement.js');
+  const dm = createBotDupMarks(2);
+  const mk = (id) => ({ dataset: { msgId: id }, cls: new Set(), classList: { add(c) { this._s.add(c); } } });
+  const e1 = mk('k1'); e1.classList._s = e1.cls; const e2 = mk('t1'); e2.classList._s = e2.cls;
+  assert.equal(dm.mark({ querySelectorAll: () => [e1, e2] }, 'k1'), 1);
+  assert.equal(e1.cls.has('uc-annc-hidden'), true);
+  assert.equal(e2.cls.has('uc-annc-hidden'), false);
+  assert.equal(dm.mark(null, 'y1'), 0, 'zpráva ještě nevykreslená');
+  assert.equal(dm.has('y1'), true);
+  dm.mark(null, 'z1');
+  assert.equal(dm.has('k1'), false, 'strop');
+  assert.equal(dm.mark(null, ''), 0);
+  ok('bot-dup marks');
+
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

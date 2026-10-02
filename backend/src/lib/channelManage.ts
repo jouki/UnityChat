@@ -22,8 +22,8 @@ export class ChannelError extends Error {
   constructor(public code: 'not_linked' | 'missing_scope' | 'token' | 'not_found' | 'platform' | 'unsupported', message: string, public status = 400) { super(message); }
 }
 
-/** Identita majitele kanálu (login = kanál) s obnovou tokenu; ChannelError not_linked / missing_scope. */
-export async function broadcasterIdentity(platform: CategoryPlatform, channelLogin: string): Promise<{ accountId: number; ident: DecryptedIdentity }> {
+/** Identita majitele kanálu (login = kanál) s obnovou tokenu; ChannelError not_linked / missing_scope (`needScope` = vyžadovaný scope, výchozí kategorie). */
+export async function broadcasterIdentity(platform: CategoryPlatform, channelLogin: string, needScope: string | null = CATEGORY_SCOPE[platform]): Promise<{ accountId: number; ident: DecryptedIdentity }> {
   const rows = await db.select({ accountId: webIdentities.accountId })
     .from(webIdentities)
     .where(and(eq(webIdentities.platform, platform), eq(webIdentities.login, channelLogin.toLowerCase()), isNull(webIdentities.signedOutAt)))
@@ -32,7 +32,7 @@ export async function broadcasterIdentity(platform: CategoryPlatform, channelLog
   const accountId = rows[0].accountId;
   let ident = await getDecryptedIdentity(accountId, platform);
   if (!ident) throw new ChannelError('not_linked', `${platform}: streamer není přihlášený v UnityChatu`, 403);
-  const need = CATEGORY_SCOPE[platform];
+  const need = needScope;
   if (need && !ident.scopes.includes(need)) throw new ChannelError('missing_scope', `${platform}: chybí oprávnění ${need} (Povolit správu kanálu)`, 403);
   if (needsRefresh(ident.expiresAt)) {
     if (!ident.refreshToken) throw new ChannelError('token', `${platform}: token vypršel, streamer se musí přihlásit znovu`, 401);
@@ -113,6 +113,59 @@ export async function setCategory(platform: CategoryPlatform, channelLogin: stri
   if (resp.status === 401) throw new ChannelError('token', 'Kick: token odmítnut, streamer se musí přihlásit znovu', 401);
   if (!resp.ok) throw new ChannelError('platform', `Kick PATCH channels ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
   return category;
+}
+
+/** Limit názvu streamu (Twitch 140 znaků; Kick stejný strop) — delší se ořízne, mezery na krajích pryč. */
+export const TITLE_MAX = 140;
+export const clampTitle = (t: string): string => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX).trim();
+
+/**
+ * Název streamu (náhrada SE `!settitle`): Twitch Helix `PATCH /channels { title }` (scope channel:manage:broadcast),
+ * Kick `PATCH /channels { stream_title }` (scope channel:write). Vrací nastavený (oříznutý) název. Chyby jako u kategorie.
+ */
+export async function setTitle(platform: CategoryPlatform, channelLogin: string, rawTitle: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const title = clampTitle(rawTitle);
+  if (!title) throw new ChannelError('platform', 'prázdný název', 400);
+  const { ident } = await broadcasterIdentity(platform, channelLogin);
+  if (platform === 'twitch') {
+    const resp = await fetchImpl(`${TWITCH_HELIX}/channels?broadcaster_id=${encodeURIComponent(ident.platformUserId)}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${ident.accessToken}`, 'Client-Id': config.TWITCH_CLIENT_ID, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }), signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+    if (!resp.ok) throw new ChannelError('platform', `Twitch PATCH channels (title) ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+    return title;
+  }
+  const resp = await fetchImpl(`${KICK_API}/channels`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${ident.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ stream_title: title }), signal: AbortSignal.timeout(10_000),
+  });
+  if (resp.status === 401) throw new ChannelError('token', 'Kick: token odmítnut, streamer se musí přihlásit znovu', 401);
+  if (!resp.ok) throw new ChannelError('platform', `Kick PATCH channels (title) ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+  return title;
+}
+
+/** Scope pro počet subů (Twitch Helix GET /subscriptions); Kick počet subů přes API nedává → null. */
+export const SUBS_SCOPE: Record<CategoryPlatform, string | null> = { twitch: 'channel:read:subscriptions', kick: null };
+
+/**
+ * Počet subů kanálu pro Židolištu (%subs_twitch%): Twitch Helix `GET /subscriptions?broadcaster_id=&first=1` tokenem
+ * streamera → `total` (+ `points`). Kick API počet subů nedává → `{ count: null }` (ne chyba). Chyby jako u kategorií.
+ */
+export async function subCount(platform: CategoryPlatform, channelLogin: string, fetchImpl: typeof fetch = fetch): Promise<{ count: number | null; points: number | null }> {
+  if (platform !== 'twitch') return { count: null, points: null };
+  const { ident } = await broadcasterIdentity(platform, channelLogin, SUBS_SCOPE.twitch);
+  const resp = await fetchImpl(`${TWITCH_HELIX}/subscriptions?broadcaster_id=${encodeURIComponent(ident.platformUserId)}&first=1`, {
+    headers: { Authorization: `Bearer ${ident.accessToken}`, 'Client-Id': config.TWITCH_CLIENT_ID }, signal: AbortSignal.timeout(10_000),
+  });
+  if (resp.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+  if (resp.status === 403) throw new ChannelError('missing_scope', 'Twitch: chybí oprávnění channel:read:subscriptions', 403);
+  if (!resp.ok) throw new ChannelError('platform', `Twitch GET subscriptions ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+  const j = (await resp.json()) as { total?: unknown; points?: unknown };
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return { count: num(j.total), points: num(j.points) };
 }
 
 /** Kategorie z textu (`!g Age of Empires II`): najít a nastavit. not_found, když hledání nic nevrátí. */

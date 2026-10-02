@@ -62,6 +62,10 @@ export interface ClientMessage {
   gif?: GifMediaView;
   /** Odpověď potlačená kvůli UnityChat announcementu (lib/anncHides.ts) — klient nevykreslí. */
   anncHidden?: boolean;
+  /** Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts) — klient nevykreslí. */
+  dupHidden?: boolean;
+  /** Kopie broadcastu z UnityChatu — skupina `id`, cílové platformy `targets` (jedna zpráva v UI). */
+  bcast?: { id: string; targets: string[] };
   /** Announcement jako položka historie (announcementMessage). */
   ucAnnouncement?: unknown;
   /** Autor donatoval v posledních 30 dnech (lib/donors.ts) → odznak dárce; `donorCzk` = součet za okno v Kč (tooltip);
@@ -177,6 +181,11 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
   const out = toClientContent(row, historical);
   // Odpověď na command potlačená kvůli announcementu (lib/anncHides.ts): klient ji nevykreslí (jako živě).
   if ((row.contentRaw as Record<string, unknown> | null)?.anncHidden) out.anncHidden = true;
+  // Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts): v UnityChatu jen první.
+  if ((row.contentRaw as Record<string, unknown> | null)?.botDupOf) out.dupHidden = true;
+  // Kopie broadcastu z UnityChatu (lib/ucSends.ts attachBcast): klient kreslí skupinu jako jednu zprávu s logy.
+  const bc = (row.contentRaw as Record<string, unknown> | null)?.bcast as { id?: unknown; targets?: unknown } | undefined;
+  if (bc && typeof bc.id === 'string' && Array.isArray(bc.targets)) out.bcast = { id: bc.id, targets: bc.targets.map(String) };
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
   if (gif) {

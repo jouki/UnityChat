@@ -604,6 +604,32 @@ export const accountBadgePrefs = pgTable('account_badge_prefs', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Kolo štěstí pro podporovatele (lib/giveaway.ts, SQL 2026-10-02-giveaways.sql — ručně).
+export const giveaways = pgTable('giveaways', {
+  id: bigserial('id', { mode: 'number' }).primaryKey(),
+  channel: text('channel').notNull(),
+  prize: text('prize').notNull(),
+  confirmMinutes: integer('confirm_minutes').notNull().default(15),
+  status: text('status').notNull(),
+  winnerAccountId: bigint('winner_account_id', { mode: 'number' }).references(() => webAccounts.id, { onDelete: 'set null' }),
+  winnerName: text('winner_name'),
+  winnerPlatform: text('winner_platform'),
+  deadline: timestamp('deadline', { withTimezone: true }),
+  drawSeq: integer('draw_seq').notNull().default(0),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export const giveawayEntries = pgTable('giveaway_entries', {
+  giveawayId: bigint('giveaway_id', { mode: 'number' }).notNull().references(() => giveaways.id, { onDelete: 'cascade' }),
+  accountId: bigint('account_id', { mode: 'number' }).notNull().references(() => webAccounts.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  platform: text('platform').notNull(),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+  excluded: boolean('excluded').notNull().default(false),
+  won: boolean('won').notNull().default(false),
+});
+
 // Soundboard (spec 2026-09-24-soundboard-se-tiers-design.md): oblíbené zvuky a počty
 // přehrání per účet. Zvuky samotné žijí v Židolišti, sound_id = její stabilní id.
 // Ručně SQL (backend/sql/2026-09-24-soundboard.sql).

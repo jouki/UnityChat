@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 
 (async () => {
   const { compileBlacklist, censorText } = await import('../extension/core/censor.js');
-  const bl = compileBlacklist(['kokot', 'Debil', 'heil hitler', 'negr', '  ', 'blbeček', 'kokot']);
+  const bl = compileBlacklist(['kokot', 'Debil', 'heil hitler', 'negr', '  ', 'blbeček', 'kokot', 'do  prdele']);
   const t = (s) => censorText(s, bl);
-  assert.equal(bl.size, 5, 'prázdné a duplicitní položky pryč');
+  assert.equal(bl.size, 6, 'prázdné a duplicitní položky pryč');
   assert.equal(t('ty kokot!'), 'ty *****!', 'celé slovo, interpunkce zůstane');
   assert.equal(t('KOKOT'), '*****', 'velikost písmen');
   assert.equal(t('KOKOTE'), 'KOKOTE', 'jiný tvar (není v seznamu) projde');
@@ -16,6 +16,14 @@ const assert = require('node:assert/strict');
   assert.equal(t('blbecek'), 'blbecek', 'diakritika přesně podle položky');
   assert.equal(t('Heil hitler!'), '**** ******!', 'fráze');
   assert.equal(t('heil hitlerovi'), 'heil hitlerovi', 'fráze jen celá');
+  // Sémantika Židolišty (2026-10-01): mezera ve frázi = 1+ bílých znaků; podřetězec („negramotný“) nikdy.
+  assert.equal(t('jdi DO  prdele'), 'jdi **  ******', 'fráze přes dvě mezery');
+  assert.equal(t('do	prdele'), '**	******', 'tabulátor místo mezery');
+  assert.equal(t('doprdele'), 'doprdele', 'bez mezery není fráze');
+  assert.equal(t('negramotný'), 'negramotný', 'negr jen celé slovo');
+  assert.equal(t('ty NEGR!'), 'ty ****!');
+  assert.equal(t('negr,jo'), '****,jo');
+  assert.equal(t('xnegrx'), 'xnegrx');
   const s = 'ahoj všem';
   assert.equal(t(s), s, 'beze změny = tentýž řetězec');
   assert.equal(censorText('kokot', compileBlacklist([])), 'kokot', 'prázdný seznam');

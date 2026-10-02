@@ -210,12 +210,26 @@ export function publishIntegrationEvent(ev: IntegrationEvent): number {
   return id;
 }
 
+// Počítadla od startu procesu (diagnostika „bot neodpověděl“, 2026-10-01: z logů nešlo zjistit, jestli Kick
+// zpráva do streamu odešla) — v /health.integrationStream: published per platforma, unmapped per platform:kanál.
+const STARTED_AT = Date.now();
+const published: Record<string, number> = {};
+const unmapped: Record<string, number> = {};
+let unmappedLogAt = 0;
+
 /** Z ingest onLive: publikovat, když je kanál namapovaný na workspace. */
-export function publishIntegration(m: IngestMessage): ChatEvent | null {
+export function publishIntegration(m: IngestMessage, log?: { warn: (o: object, msg: string) => void }): ChatEvent | null {
   const ws = workspaceForChannelSync(m.platform, m.channel);
-  if (!ws) return null;
+  if (!ws) {
+    const k = `${m.platform}:${m.channel}`;
+    unmapped[k] = (unmapped[k] ?? 0) + 1;
+    // Nenamapovaný kanál = zpráva do Židolišty nejde; logovat jen 1× za 10 min (registr nenačtený po startu / cizí kanál).
+    if (log && Date.now() - unmappedLogAt > 10 * 60_000) { unmappedLogAt = Date.now(); log.warn({ platform: m.platform, channel: m.channel, unmapped }, 'integration stream: kanál bez workspace, zpráva se neposílá'); }
+    return null;
+  }
   const ev = toChatEvent(m, ws.slug);
   publishIntegrationEvent(ev);
+  published[m.platform] = (published[m.platform] ?? 0) + 1;
   return ev;
 }
 
@@ -268,14 +282,20 @@ export async function publishUserModIntegration(
   return ev;
 }
 
-export function subscribeIntegration(reply: FastifyReply, lastEventId: number | null): () => void {
+export function subscribeIntegration(reply: FastifyReply, lastEventId: number | null, log?: { info: (o: object, msg: string) => void }): () => void {
   clients.add(reply);
   write(reply, `: hello cursor=${counter}\n\n`);
+  let replayed = 0;
   if (lastEventId !== null && Number.isFinite(lastEventId)) {
-    for (const e of ring) if (e.id > lastEventId) write(reply, e.frame);
+    for (const e of ring) if (e.id > lastEventId) { write(reply, e.frame); replayed++; }
   }
+  const connectedAt = Date.now();
+  let gone = false;
   const unsubscribe = () => {
+    if (gone) return;
+    gone = true;
     clients.delete(reply);
+    log?.info({ clients: clients.size, replayed, seconds: Math.round((Date.now() - connectedAt) / 1000) }, 'integration chat stream: disconnected');
     if (!clients.size && pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   };
   const raw = reply.raw as unknown as NodeJS.EventEmitter;
@@ -295,8 +315,8 @@ export function subscribeIntegration(reply: FastifyReply, lastEventId: number | 
   return unsubscribe;
 }
 
-export function integrationStreamStats(): { clients: number; cursor: number; buffered: number } {
-  return { clients: clients.size, cursor: counter, buffered: ring.length };
+export function integrationStreamStats(): { clients: number; cursor: number; buffered: number; startedAt: string; published: Record<string, number>; unmapped: Record<string, number> } {
+  return { clients: clients.size, cursor: counter, buffered: ring.length, startedAt: new Date(STARTED_AT).toISOString(), published: { ...published }, unmapped: { ...unmapped } };
 }
 
 export function disconnectAllIntegrationStreams(): void {

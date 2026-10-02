@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { BROADCASTER_SCOPES, CATEGORY_SCOPE, uniqScopes } from '../lib/broadcasterScopes.js';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -21,7 +22,7 @@ import { pendingWarnings } from '../lib/accountWarnings.js';
 import { runBroadcast } from '../lib/chatBroadcast.js';
 import { isTwitchRejected, looksLikeFirstMessage, TWITCH_FIRST_MESSAGE_TEXT } from '../lib/twitchFirstMessage.js';
 import { accountModIdentities } from '../lib/chatRole.js';
-import { ucSends, markUc, ucReplies, attachUcReply, gifReviews } from '../lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, gifReviews, bcastSends, attachBcast } from '../lib/ucSends.js';
 import { getClientFetchPref, type ClientFetchPref } from '../lib/gifPrefs.js';
 import { getReplaceGlobalPref, setReplaceGlobalPref, refreshAccount as refreshBadgePrefs } from '../lib/badgePrefs.js';
 import { syncEmailLink } from '../lib/emailLink.js';
@@ -280,13 +281,17 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const accountId = req.webAccountId!;
     if (!broadcastLimiter.allow(String(accountId)) || !sendLimiter.allow(String(accountId))) { reply.code(429); return { ok: false, error: 'slow down' }; }
     const channel = (body.data.channel || DEFAULT_CHANNEL).toLowerCase();
-    const out = await runBroadcast({ accountId, channel, text: body.data.text, texts: body.data.texts }, {
+    const group = { id: randomUUID(), targets: [] as string[] };
+    const out = await runBroadcast({ accountId, channel, text: body.data.text, texts: body.data.texts, group }, {
       pendingWarnings,
       modIdentities: (id, ch) => accountModIdentities(id, ch),
       listIdentities,
       send: async (platform, text) => {
         try {
           const res = await sendAsAccount({ accountId, platform, channel, text, ingest: opts.ingest, log: req.log });
+          // Kopie broadcastu → skupina (jedna zpráva v UnityChatu); echo mohlo přijít dřív (zpětné označení).
+          const bh = bcastSends.report({ platform, channel: await platformChannel(platform, channel), userId: res.platformUserId, text: res.sentText ?? text, data: group });
+          if (bh) attachBcast(bh, group, req.log, { late: true });
           // Command (bez markeru) i Broadcastem: ingest ho podle hlášení označí jako UnityChat (zlaté logo) —
           // stejně jako /chat/send (chybělo, hlášení usera 2026-09-30: „!multichat“ přes Broadcast bez loga).
           if (text.startsWith('!')) {

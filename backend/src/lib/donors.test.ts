@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseDonors, parseDonorAmounts, refreshDonors, isDonor, donorAmount, _resetDonorsForTest } from './donors.js';
+import { parseDonors, parseDonorAmounts, refreshDonors, isDonor, donorAmount, donorNameKey, _resetDonorsForTest } from './donors.js';
 import { _setWorkspacesForTest } from './zidolista.js';
 import { _setReplaceForTest, authorReplacesGlobal } from './badgePrefs.js';
 import { donorFields } from '../routes/chat.js';
@@ -16,7 +16,7 @@ test('parseDonors: jen známé platformy s id', () => {
 test('refreshDonors + isDonor: cache per workspace, 404 = prázdno bez chyby, výpadek nechá poslední stav', async () => {
   _resetDonorsForTest();
   _setWorkspacesForTest([{ slug: 'rob', channels: { twitch: 'robdiesalot', kick: 'robdiesalot', youtube: null }, bot: { mode: 'shared', displayName: 'JoukiBOT' } }]);
-  let status = 200; let body: unknown = { ok: true, donors: [{ platform: 'twitch', userId: '30645675', amountCzk: 1130 }, { platform: null, userId: null, nickname: 'SpajaX', amountCzk: 199 }] };
+  let status = 200; let body: unknown = { ok: true, donors: [{ platform: 'twitch', userId: '30645675', amountCzk: 1130 }, { platform: null, userId: null, nickname: 'SpajaX', amountCzk: 199 }, { platform: null, userId: null, nickname: 'W1nter Ian', amountCzk: 476 }] };
   const fetch = (async () => ({ ok: status < 400, status, type: 'basic', json: async () => body })) as unknown as typeof globalThis.fetch;
   const deps = { fetch, apiKey: 'k', base: 'https://z.test', signingKey: 'ab'.repeat(32), log: { warn: () => {} } };
   assert.equal(await refreshDonors('rob', deps), true);
@@ -28,7 +28,13 @@ test('refreshDonors + isDonor: cache per workspace, 404 = prázdno bez chyby, v�
   assert.equal(isDonor('twitch', 'robdiesalot', '550788633', 'spajax'), true);
   assert.equal(isDonor('kick', 'robdiesalot', 'k9', 'Spaja_X'), true);
   assert.equal(donorAmount('twitch', 'robdiesalot', '550788633', 'SpajaX'), 199);
+  assert.equal(isDonor('twitch', 'robdiesalot', 'u9', 'Winter_Ian'), true, 'W1nter Ian ↔ Winter_Ian');
+  assert.equal(donorAmount('twitch', 'robdiesalot', 'u9', 'Winter_Ian'), 476);
   assert.equal(isDonor('twitch', 'robdiesalot', '777', 'nekdojiny'), false);
+  // Leetspeak v přezdívce donatu (živě 2026-10-01: „W1nter Ian“ v HoF vs. „Winter_Ian“ na YouTube).
+  assert.equal(donorNameKey('W1nter Ian'), 'winterian');
+  assert.equal(donorNameKey('Winter_Ian'), 'winterian');
+  assert.equal(donorNameKey('T0nner'), 'tonner');
   // Volba účtu „místo globálního odznaku Twitche“ (lib/badgePrefs.ts) → donorReplace jen u Twitche a jen dárci.
   _setReplaceForTest([['twitch', '30645675', 42], ['twitch', '777', 43]]);
   assert.equal(authorReplacesGlobal('twitch', '30645675'), true);

@@ -67,6 +67,27 @@ export function hideRecentBotReplies(chatEl, logins, now = Date.now()) {
   return waiting;
 }
 
+/**
+ * Stejná odpověď bota z další platformy (broadcast commandu, backend lib/botReplyDedup.ts): v UnityChatu jen první.
+ * Historie / /chat/stream nesou `dupHidden`, živé zprávy z vlastního IRC / Pusheru dostanou SSE `bot-dup`
+ * (může dorazit před zprávou i po ní) → `mark(id)` + schovat vykreslenou, `has(id)` před vykreslením.
+ */
+export function createBotDupMarks(cap = 500) {
+  const ids = new Set();
+  return {
+    mark(chatEl, id) {
+      const key = String(id || '');
+      if (!key) return 0;
+      ids.add(key);
+      if (ids.size > cap) ids.delete(ids.values().next().value);
+      let n = 0;
+      for (const el of chatEl?.querySelectorAll('.msg[data-msg-id]') || []) if (el.dataset.msgId === key) { el.classList.add('uc-annc-hidden'); n++; }
+      return n;
+    },
+    has(id) { return id != null && ids.has(String(id)); },
+  };
+}
+
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
 
 /**

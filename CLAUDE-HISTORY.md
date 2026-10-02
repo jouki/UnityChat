@@ -140,6 +140,10 @@
 ---
 
 ## Changelog dokumentace
+### 2026-10-02 (OBS annc, broadcast, kolo štěstí)
+- CLAUDE.md: OBS volba `annc`, v3.42.5 (odpověď bota na broadcast jen jednou), v3.42.6 (broadcast jako jedna zpráva, Kick NO_LINKS_ERROR), v3.42.7 (kolo štěstí).
+- Spec `docs/superpowers/specs/2026-10-02-kolo-stesti-design.md`.
+- Memory: `project_giveaway.md` (nový) + řádek v MEMORY.md.
 ### 2026-09-30 večer (odznak podporovatele)
 - CLAUDE.md: milestone v3.41.113–127 (tooltip s datem, pauza GIFu, smazání druhým klikem, nastavení jako záložky Účet | Rozhraní, odznak dárce → podporovatele: volby tempo / intenzita / odstupy / nahrazení globálního odznaku Twitche, částka v tooltipu, odznak v hlavičce Profilu, vložené SVG místo souborů).
 - Memory: `feedback_web_port_rule.md` — před pushem do UnityChat-web i `cd web && npm test` (Web CI padalo od v3.41.114, mail každých 15 min ze sync akce).

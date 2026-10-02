@@ -9,6 +9,15 @@ import { config } from '../config.js';
 import { zidolistaFetch, zidolistaBase, getWorkspaces, workspaceForChannelSync, type Platform } from './zidolista.js';
 import { simplifyName } from './reservedNicknames.js';
 
+/**
+ * Klíč pro párování přezdívky donatu na jméno v chatu: simplifyName + leetspeak (1→i, 0→o, 3→e, 4→a, 5→s, 7→t),
+ * ať „W1nter Ian“ sedí na „Winter_Ian“ (pokyn usera 2026-10-01: odznak bez ohledu na zdroj donatu). Vědomě volnější:
+ * kdo si dá jméno podle dárce, odznak dostane taky.
+ */
+export function donorNameKey(s: string | null | undefined): string {
+  return simplifyName(s).replace(/[01345 7]/g, (c) => ({ '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't' } as Record<string, string>)[c] ?? c);
+}
+
 export const DONORS_DAYS = 30;
 export const DONORS_REFRESH_MS = 5 * 60_000;
 const PLATFORMS = new Set(['twitch', 'kick', 'youtube']);
@@ -17,7 +26,7 @@ type Log = { info?: (o: object, m: string) => void; warn: (o: object, m: string)
 type DonorCache = { at: number; keys: Set<string>; amounts: Map<string, number>; ok: boolean };
 const cache = new Map<string, DonorCache>();   // slug → dárci (platform:userId | nick:<zjednodušené jméno>), částky za okno (Kč)
 const key = (platform: string, userId: string) => `${platform}:${userId}`;
-const nickKey = (name: string) => `nick:${simplifyName(name)}`;
+const nickKey = (name: string) => `nick:${donorNameKey(name)}`;
 
 /** Odpověď Židolišty → množina klíčů (čistá funkce; neznámé platformy / prázdná id se zahodí). */
 export function parseDonors(raw: unknown): Set<string> {
@@ -37,7 +46,7 @@ export function parseDonorAmounts(raw: unknown): Map<string, number> {
     const r = d as Record<string, unknown>;
     const p = String(r?.platform ?? '').toLowerCase();
     const id = String(r?.userId ?? '').trim();
-    const nick = simplifyName(typeof r?.nickname === 'string' ? r.nickname : '');
+    const nick = donorNameKey(typeof r?.nickname === 'string' ? r.nickname : '');
     const n = Number(r?.amountCzk);
     const czk = Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
     if (PLATFORMS.has(p) && id) put(key(p, id), czk);
@@ -50,7 +59,7 @@ export function parseDonorAmounts(raw: unknown): Map<string, number> {
 function lookupKeys(platform: string, userId: string | null | undefined, username?: string | null): string[] {
   const out: string[] = [];
   if (userId) out.push(key(platform, String(userId)));
-  const nick = simplifyName(username);
+  const nick = donorNameKey(username);
   if (nick) out.push(nickKey(nick));
   return out;
 }

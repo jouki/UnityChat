@@ -96,3 +96,12 @@ test('částečné selhání: výsledek po platformách, 200 dokud aspoň jedna 
   assert.equal(all.status, 502);
   assert.equal(all.body.ok, false);
 });
+
+test('skupina broadcastu: cíle se doplní před odesláním (send je už vidí), odpověď nese id skupiny', async () => {
+  const group = { id: 'g1', targets: [] as string[] };
+  const seen: string[][] = [];
+  const out = await runBroadcast({ accountId: 1, channel: 'robdiesalot', text: 'ahoj', group }, deps({ linked: ['twitch', 'youtube'], send: async (p) => { seen.push([...group.targets]); return { id: `${p}-1` }; } }));
+  assert.equal(out.body.group, 'g1');
+  assert.deepEqual(group.targets, ['twitch', 'youtube']);
+  assert.deepEqual(seen, [['twitch', 'youtube'], ['twitch', 'youtube']]);
+});

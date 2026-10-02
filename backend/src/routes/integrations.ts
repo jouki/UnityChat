@@ -163,7 +163,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    subscribeIntegration(reply, last);
+    subscribeIntegration(reply, last, req.log);
     req.log.info({ ip: req.ip, last, ...integrationStreamStats(), workspaces: workspacesSource() }, 'integration chat stream: connected');
     return reply;
   });
@@ -188,7 +188,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
       return reply.code(202).send(out);
     } catch (e) {
       const err = e instanceof BotSendError ? e : new BotSendError((e as Error).message, 502, 'send_failed');
-      req.log.warn({ workspace: slug, platform, status: err.status, code: err.code, err: err.message }, 'bot send failed');
+      req.log.warn({ workspace: slug, platform, status: err.status, code: err.code, err: err.message, idempotencyKey, replyTo: replyTo || null, len: text.length }, 'bot send failed');
       // `detail` = surový důvod platformy (Twitch drop_reason code/message, HTTP tělo), ať Židolišta nemusí chodit do logu.
       return reply.code(err.status).send({ ok: false, error: err.code, message: err.message, detail: err.message });
     }
