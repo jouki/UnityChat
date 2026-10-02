@@ -316,6 +316,15 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       .where(and(eq(messages.platform, platform), eq(messages.channel, pch), eq(messages.platformUserId, ident.platformUserId)))
       .orderBy(desc(messages.sentAt)).limit(1);
     const heldId = platform === 'youtube' ? youtubeChatIdFromInsert(body.data.platformId) : null;
+    // Zpráva z YouTube už dorazila (klient ji jen nespároval — 2026-10-02 W1nter: YouTube sloučil dvojitou mezeru,
+    // web porovnával přesně) → žádná druhá kopie, vrátit tu skutečnou (klient optimistickou nahradí).
+    if (heldId) {
+      const [arrived] = await db.select().from(messages).where(and(eq(messages.platform, 'youtube'), eq(messages.platformMessageId, heldId))).limit(1);
+      if (arrived) {
+        req.log.info({ accountId, platform, heldId }, 'uc-only: zpráva z YouTube už dorazila, záloha se nevytváří');
+        return { ok: true, id: heldId, existed: true, message: toClientMessage(arrived, false) };
+      }
+    }
     const id = `${UCO_PREFIX}${randomUUID()}`;
     const username = last?.username || ident.displayName || ident.login;
     const [row] = await db.insert(messages).values({
