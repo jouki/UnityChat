@@ -4258,8 +4258,9 @@ class UnityChat {
     }
     this._lastSentText = texts[targets[0]];
     this._ucLog('Send', `broadcast → ${targets.join(',')} "${text.slice(0, 60)}"`);
-    const failAll = (reason) => {
-      this._markSendFailed(optId, reason);
+    // `fallback` false = chyba oprávnění / přihlášení / limitu → bez zálohy přes UnityChat (jen odmítnutí platformou).
+    const failAll = (reason, fallback = true) => {
+      this._markSendFailed(optId, reason, { fallback });
       for (const [k, id] of [...this._optimisticKeys]) if (id === optId) this._optimisticKeys.delete(k);
       if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
     };
@@ -4277,18 +4278,18 @@ class UnityChat {
       });
       const j = await r.json().catch(() => ({}));
       this._ucLog('Send', `broadcast → ${r.status} ${j.results ? Object.entries(j.results).map(([p, x]) => `${p}=${x.ok ? 'ok' : x.status + ' ' + x.error}`).join(' ') : (j.error || '')}`);
-      if (r.status === 401) { failAll('přihlášení vypršelo'); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
-      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora'); this._loadWarnings(); return; }
+      if (r.status === 401) { failAll('přihlášení vypršelo', false); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
+      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora', false); this._loadWarnings(); return; }
       if (r.status === 403 && j.error === 'not_mod') {
         // Server roli nepotvrdil (menu mělo starý stav) → Broadcast pryč, znovu načíst roli.
-        failAll('Broadcast smí jen mod nebo streamer');
+        failAll('Broadcast smí jen mod nebo streamer', false);
         this._sys('Broadcast smí posílat jen mod nebo streamer kanálu.');
         this._loadModState();
         return;
       }
       if (!j.results) {
         const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : j.error === 'gif' ? 'GIF pošli na jednu platformu' : (j.error || `HTTP ${r.status}`);
-        failAll(reason);
+        failAll(reason, false);
         this._sys(`Chyba: ${reason}`);
         return;
       }
@@ -4381,8 +4382,9 @@ class UnityChat {
     }
     const replyTo = hasNativeReply && reply?.messageId ? reply.messageId : null;
     this._ucLog('Send', `účet ${platform} "${text.slice(0, 60)}"${replyTo ? ' reply→' + replyTo : ''}`);
-    const fail = (reason) => {
-      this._markSendFailed(optId, reason);
+    // `fallback` false = chyba přihlášení / varování / limitu → bez zálohy přes UnityChat (jen odmítnutí platformou).
+    const fail = (reason, fallback = true) => {
+      this._markSendFailed(optId, reason, { fallback });
       // Text vrátit do pole, ať o něj člověk nepřijde.
       if (!external && !this.msgInput.value) { this.msgInput.value = raw; this._autoResizeInput?.(); }
     };
@@ -4403,7 +4405,7 @@ class UnityChat {
       const j = await r.json().catch(() => ({}));
       this._ucLog('Send', `→ ${r.status} ${j.ok ? `id=${j.id || '-'}` : (j.error || '')}${j.fallback ? ' fallback=' + j.fallback : ''}`);
       if (r.status === 401) {
-        fail('přihlášení vypršelo');
+        fail('přihlášení vypršelo', false);
         this._sys('Přihlášení vypršelo, přihlas se znovu.');
         await chrome.storage.local.remove('uc_session');
         this._account = null;
@@ -4411,13 +4413,13 @@ class UnityChat {
         return;
       }
       if (r.status === 403 && j.error === 'warning_pending') {
-        fail('nepotvrzené varování od moderátora');
+        fail('nepotvrzené varování od moderátora', false);
         this._loadWarnings();
         return;
       }
       if (!r.ok || j.ok === false) {
         const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : (j.error || `HTTP ${r.status}`);
-        fail(reason);
+        fail(reason, r.status !== 429);
         this._sys(`Chyba: ${reason}`);
         return;
       }
@@ -6207,7 +6209,7 @@ class UnityChat {
       : uco ? 'Zpráva jen do UnityChatu...'
       : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
     if (btn) btn.title = bc ? `Broadcast: píšeš na ${this._broadcastTargets().map((p) => NAMES[p]).join(', ')}`
-      : uco ? `Jen UnityChat: zprávu uvidí všichni v UnityChatu i na streamu, na ${NAMES[platform] || 'platformu'} nejde (commandy ano)`
+      : uco ? `UnityChat: zprávu uvidí všichni v UnityChatu i na streamu, na ${NAMES[platform] || 'platformu'} nejde (commandy ano)`
       : id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
     // Badge u pole: v Broadcastu všechna tři loga (composer.css #active-badge.bc), jinak logo platformy.
     this.platformBadge?.classList.toggle('bc', bc);
@@ -9392,7 +9394,7 @@ class UnityChat {
     }
   }
 
-  _markSendFailed(optId, reason) {
+  _markSendFailed(optId, reason, { fallback = true } = {}) {
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el) {
       el.classList.add('send-failed');
@@ -9424,7 +9426,7 @@ class UnityChat {
     try {
       chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'SendFail', args: [optId, reason] }).catch(() => {});
     } catch {}
-    void this._ucOnlyFallback(optId, reason);
+    if (fallback) void this._ucOnlyFallback(optId, reason);
   }
 
   /**
