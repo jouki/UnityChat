@@ -139,6 +139,10 @@ class NicknameManager {
       this._eventSource.addEventListener('donor-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonorMark) this.onDonorMark(d); } catch {}
       });
+      // Stejná odpověď bota z další platformy (broadcast commandu) → v UnityChatu jen jednou.
+      this._eventSource.addEventListener('bot-dup', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onBotDup) this.onBotDup(d); } catch {}
+      });
       // Změna nastavení donatů v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
       this._eventSource.addEventListener('donate-config-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonateConfigChange) this.onDonateConfigChange(d); } catch {}
@@ -1616,6 +1620,12 @@ class UnityChat {
     };
     this.nicknames.onUcMark = (d) => this._applyUcMark(d);
     this.nicknames.onDonorMark = (d) => this._applyDonorMark(d);
+    this._botDups = window.UC_CORE.createBotDupMarks();
+    this.nicknames.onBotDup = (d) => {
+      if (d?.channel && d.channel !== this.config.channel) return;
+      const n = this._botDups.mark(this.chatEl, d?.id);
+      this._ucLog('Annc', `bot-dup ${d?.platform}:${d?.id} → ${n} el skryto`);
+    };
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
     this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
     this.nicknames.onUserModerated = (d) => this._onUserModerated(d);
@@ -8347,6 +8357,8 @@ class UnityChat {
   _addMessage(msg) {
     // Odpověď na command potlačená serverem kvůli announcementu (lib/anncHides.ts) — nevykreslit ani z historie.
     if (msg?.anncHidden) { this._ucLog('Annc', `skryta odpověď (server) ${msg.platform}:${msg.id}`); return; }
+    // Stejná odpověď bota z další platformy (broadcast commandu): ze serveru `dupHidden`, živě SSE bot-dup.
+    if (msg?.dupHidden || this._botDups?.has(msg?.id)) { this._ucLog('Annc', `duplicitní odpověď bota ${msg.platform}:${msg.id}`); return; }
     msg = window.UC_CORE.withTwitchDefaultColor(msg);
     // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
     // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.

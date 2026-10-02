@@ -45,8 +45,9 @@ import { startMailKeepalive } from './lib/mailKeepalive.js';
 import { publishDeleted } from './lib/messageDeletes.js';
 import { ucChannelFor } from './lib/ucChannel.js';
 import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePermits, loadActivePermits } from './lib/linkFilter.js';
-import { isBotAccount, isSharedBotId } from './lib/botIdentities.js';
+import { isBotAccount, isBotAuthor, isSharedBotId } from './lib/botIdentities.js';
 import { anncHides } from './lib/anncHides.js';
+import { botReplyDedup } from './lib/botReplyDedup.js';
 import { startDonorsRefresh } from './lib/donors.js';
 import { loadBadgePrefs } from './lib/badgePrefs.js';
 import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
@@ -243,15 +244,24 @@ const ingest = createIngest({
     else if (!m.isUnitychatUser && isSharedBotId(m.platform, m.platformUserId)) markUc(m, app.log);
     // Odpověď na command, místo které uživatel UnityChatu vidí announcement → anncHidden (lib/anncHides.ts);
     // v historii i /chat/stream jde bez vykreslení. UC kanál z registru (platformní kanál Kicku / YouTube).
-    const ucCh = workspaceForChannelSync(m.platform as WsPlatform, m.channel)?.channels.twitch || m.channel;
+    const wsInfo = workspaceForChannelSync(m.platform as WsPlatform, m.channel);
+    const ucCh = wsInfo?.channels.twitch || m.channel;
     const hid = anncHides.match(m, ucCh);
     if (hid) { m.contentRaw = { ...(m.contentRaw || {}), anncHidden: hid }; app.log.info({ platform: m.platform, id: m.platformMessageId, annc: hid }, 'announcement: odpověď potlačena'); }
+    // Odpověď bota na broadcast commandu přišla i z další platformy → v UnityChatu jen jednou (lib/botReplyDedup.ts).
+    let dupOf: string | null = null;
+    if (wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId)) {
+      dupOf = botReplyDedup.check(m, ucCh);
+      if (dupOf) { m.contentRaw = { ...(m.contentRaw || {}), botDupOf: dupOf }; app.log.info({ platform: m.platform, id: m.platformMessageId, dupOf }, 'bot: odpověď z další platformy v UC skryta'); }
+    }
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
     const rep = ucReplies.take(m);
     if (rep?.data) attachUcReply(m, rep.data, app.log);
     const live = toClientMessage(toRow(m), false);
     publishChat(m.channel, m.platform, live);
     // Odznak podporovatele u živé zprávy: addon ji má z vlastního IRC (bez `donor`) → SSE donor-mark (jako uc-mark).
+    // Duplikát odpovědi bota: addon / web mají Twitch a Kick z vlastního spojení → SSE (zpráva se schová i dodatečně).
+    if (dupOf) broadcast('bot-dup', { platform: m.platform, channel: ucCh, id: m.platformMessageId });
     if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}), ...(live.donorReplace ? { replace: true } : {}) });
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály; počítadla v /health).
     publishIntegration(m, app.log);

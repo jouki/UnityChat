@@ -62,6 +62,8 @@ export interface ClientMessage {
   gif?: GifMediaView;
   /** Odpověď potlačená kvůli UnityChat announcementu (lib/anncHides.ts) — klient nevykreslí. */
   anncHidden?: boolean;
+  /** Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts) — klient nevykreslí. */
+  dupHidden?: boolean;
   /** Announcement jako položka historie (announcementMessage). */
   ucAnnouncement?: unknown;
   /** Autor donatoval v posledních 30 dnech (lib/donors.ts) → odznak dárce; `donorCzk` = součet za okno v Kč (tooltip);
@@ -177,6 +179,8 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
   const out = toClientContent(row, historical);
   // Odpověď na command potlačená kvůli announcementu (lib/anncHides.ts): klient ji nevykreslí (jako živě).
   if ((row.contentRaw as Record<string, unknown> | null)?.anncHidden) out.anncHidden = true;
+  // Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts): v UnityChatu jen první.
+  if ((row.contentRaw as Record<string, unknown> | null)?.botDupOf) out.dupHidden = true;
   // Schválený GIF — jen u nesmazané/neskryté zprávy (smazání modem GIF všem skryje).
   const gif = gifFromRaw(row.contentRaw);
   if (gif) {
