@@ -971,6 +971,12 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
 .msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
 .msg .pi.ki { background-image: url(icons/platform/kick.svg); }
+/* Hlasitost zvuků v nastavení (pod „Přehrávat zvuky“) — addon i web. */
+.uc-volume-row { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 24px; font-size: 12px; color: #adadb8; text-transform: none; letter-spacing: normal; font-weight: 400; }
+.uc-volume-row input[type="range"] { flex: 1; min-width: 0; accent-color: #ff8a00; }
+.uc-volume-row.disabled { opacity: .45; }
+.uc-volume-val { width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+
 /* Zpráva jen přes UnityChat (core/uc-only.js): platforma ji nepřijala / nezobrazila → logo UnityChatu. */
 /* Specifičtější než .msg .pi.uc.tw (zlaté logo platformy) — jinak by logo UnityChatu prohrálo. */
 .msg.uc-only-msg > .pi.tw, .msg.uc-only-msg > .pi.yt, .msg.uc-only-msg > .pi.ki,

@@ -135,6 +135,12 @@
         <input type="checkbox" id="chk-sound" checked>
         Přehrávat zvuky
       </label>
+      <!-- Hlasitost zvuků v chatu (reakce, easter egg) — soundboard má vlastní posuvník v panelu. -->
+      <label class="uc-volume-row" for="rng-volume">
+        <span class="uc-volume-label">Hlasitost</span>
+        <input type="range" id="rng-volume" min="0" max="100" step="5" value="100">
+        <span id="rng-volume-val" class="uc-volume-val">100 %</span>
+      </label>
     </div>
     <div class="setting-row">
       <label class="platform-check" for="chk-reaction-scrollback">

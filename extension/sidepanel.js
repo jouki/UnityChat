@@ -1977,13 +1977,34 @@ class UnityChat {
     }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
     const sndBox = $('chk-sound');
+    const volRng = $('rng-volume');
+    const volVal = $('rng-volume-val');
+    // Hlasitost 0–100 % (config.soundVolume, výchozí 100) — běžící reakce i easter egg ji přeberou hned.
+    const paintVolume = () => {
+      const v = this._soundVolume();
+      if (volRng) volRng.value = String(Math.round(v * 100));
+      if (volVal) volVal.textContent = `${Math.round(v * 100)} %`;
+      volRng?.closest('.uc-volume-row')?.classList.toggle('disabled', this.config.sound === false);
+      if (volRng) volRng.disabled = this.config.sound === false;
+    };
     if (sndBox) {
       sndBox.checked = this.config.sound !== false;
       sndBox.addEventListener('change', () => {
         this.config.sound = sndBox.checked;
         this._saveConfig();
         this._reaction?.setMuted?.(!sndBox.checked);
+        paintVolume();
       });
+    }
+    if (volRng) {
+      paintVolume();
+      volRng.addEventListener('input', () => {
+        this.config.soundVolume = Math.min(100, Math.max(0, Number(volRng.value) || 0));
+        paintVolume();
+        this._reaction?.setVolume?.(this._soundVolume());
+        if (this._bulgarianAudio) this._bulgarianAudio.volume = this._soundVolume();
+      });
+      volRng.addEventListener('change', () => { this._saveConfig(); this._ucLog('Settings', `hlasitost ${this.config.soundVolume} %`); });
     }
     // Auto-resize textarea + auto @username suggest
     // GIF odkaz v poli + běžící cooldown odměny → bublina nad polem (core/gif-cooldown.js).
@@ -5890,6 +5911,7 @@ class UnityChat {
         hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
         offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
         muted: this.config.sound === false,
+        volume: this._soundVolume(),
         onEnd: () => {
           this._activeReaction = null; this._updatePoopButtons();
           // Nastavení „Po animaci se vrátit na konec chatu" (výchozí zapnuto).
@@ -6186,6 +6208,12 @@ class UnityChat {
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
     if (!this._legacySend()) this._setActivePlatform(platform);
     if (!quiet && this._identity(platform)) this.msgInput.focus();
+  }
+
+  /** Hlasitost zvuků v chatu 0–1 (nastavení „Hlasitost“, config.soundVolume 0–100, výchozí 100 %). */
+  _soundVolume() {
+    const n = Number(this.config?.soundVolume);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 1;
   }
 
   /** Pole pro psaní podle přihlášení: bez účtu na vybrané platformě výzva místo pole. */
@@ -8955,6 +8983,7 @@ class UnityChat {
           });
         }
         const a = this._bulgarianAudio;
+        a.volume = this._soundVolume();
         if (!a.paused) {
           a.pause(); a.currentTime = 0;
           el.classList.remove('playing');
