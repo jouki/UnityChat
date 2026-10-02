@@ -823,6 +823,12 @@ class YouTubeProvider {
       this._processActions(actions);
       const added = this._seen.size - beforeSeen;
       this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
+      // Po zahození tokenu jela výchozí stránka = „Nejlepší zprávy“ (YouTube z ní vynechává zprávy) až do reconnectu
+      // (2026-10-02, stejná chyba v ingestu backendu) → vzít z ní čerstvý token a příští tick zase všechny zprávy.
+      if (!this._allCont) {
+        const tok = this._pickAllChatToken(lcr);
+        if (tok) { this._allCont = tok; this._log(`pollPage#${tick} chatMode=all obnoven`); }
+      }
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
