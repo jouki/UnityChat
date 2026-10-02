@@ -148,5 +148,24 @@ const dn = await ev(`(() => { window.__uc._addMessage({ platform: 'twitch', id: 
   const img = document.querySelector('.msg[data-msg-id="e2e-donor"] .bdg img[data-donor-badge]'); return { has: !!img, v: img?.dataset.donorBadge, src: img?.getAttribute('src') || '', alt: img?.alt }; })()`);
 check('zpráva dárce má odznak dárce (vložené SVG, tooltip „Podporovatel“)', dn && dn.has && dn.src.startsWith('data:image/svg+xml') && dn.alt === 'Podporovatel', JSON.stringify(dn));
 
+// Zvuk při zmínce (2026-10-02): i při fokusu, hlasitost z posuvníku, ne vlastní / historická, nejvýš 1× za 1,5 s, Přehrávat zvuky vypne.
+await ev(`(() => { window.__aud = []; window.__plays = []; window.Audio = class { constructor(u) { window.__aud.push(u); this.volume = 1; } play() { window.__plays.push(this.volume); return Promise.resolve(); } }; const u = window.__uc; u.config.mentionSound = true; u.config.soundVolume = 50; u.config.sound = true; u._mentionSound = null; return true; })()`);
+await ev(`window.__focus = true`);
+await ev(live('e2e-s1'));
+await ev(live('e2e-s-own', { username: 'NotifyMe' }));
+await ev(live('e2e-s-hist', { historical: true }));
+await ev(live('e2e-s2'));
+const snd = await ev(`({ aud: window.__aud, plays: window.__plays })`);
+check('zvuk při zmínce: i při fokusu, hlasitost 50 %, soubor mention_notification.mp3, sloučeno do 1,5 s', snd.plays.length === 1 && snd.plays[0] === 0.5 && snd.aud.length === 1 && snd.aud[0].endsWith('audio/mention_notification.mp3'), JSON.stringify(snd));
+await sleep(1600);
+await ev(`window.__uc.config.sound = false`);
+await ev(live('e2e-s3'));
+check('vypnuté Přehrávat zvuky → zvuk zmínky taky ne', (await ev(`window.__plays.length`)) === 1);
+await ev(`(() => { window.__uc.config.sound = true; window.__uc.config.mentionSound = false; return true; })()`);
+await ev(live('e2e-s4'));
+check('volba vypnutá → bez zvuku', (await ev(`window.__plays.length`)) === 1);
+check('checkbox Zvuk při zmínce v nastavení', await ev(`!!document.getElementById('chk-mention-sound')`) === true);
+await ev(`window.__focus = false`);
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

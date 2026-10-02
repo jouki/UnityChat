@@ -1975,6 +1975,17 @@ class UnityChat {
         if (!notifyBox.checked) this._mentionNotifier?.reset();
       });
     }
+    // Zvuk při zmínce (opt-in, audio/mention_notification.mp3).
+    const mSndBox = $('chk-mention-sound');
+    if (mSndBox) {
+      mSndBox.checked = this.config.mentionSound === true;
+      mSndBox.addEventListener('change', () => {
+        this.config.mentionSound = mSndBox.checked;
+        this._saveConfig();
+        // Ukázka hned po zapnutí (a uživatel slyší hlasitost).
+        if (mSndBox.checked && this.config.sound !== false) window.UC_CORE.createMentionSound({ url: chrome.runtime.getURL('audio/mention_notification.mp3'), volume: () => this._soundVolume() }).play();
+      });
+    }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
     const sndBox = $('chk-sound');
     const volRng = $('rng-volume');
@@ -9630,6 +9641,14 @@ class UnityChat {
   _maybeNotifyMention(msg, kind, isHistory) {
     if (!kind) return;
     const core = window.UC_CORE;
+    // Zvuk při zmínce (volba, 2026-10-02): i když se na chat díváš; hlasitost z posuvníku, „Přehrávat zvuky“ ho vypne.
+    if (core.shouldPlayMentionSound({
+      enabled: this.config.mentionSound === true, soundOn: this.config.sound !== false, kind,
+      historical: isHistory || !!msg.historical || !!msg.scraped, own: this._isOwnMsg(msg), moderated: this._isModerated(msg) || !!msg._cleared,
+    })) {
+      this._mentionSound ??= core.createMentionSound({ url: chrome.runtime.getURL('audio/mention_notification.mp3'), volume: () => this._soundVolume() });
+      if (this._mentionSound.play()) this._ucLog('Notify', `zvuk ${kind} ${msg.platform}:${msg.id}`);
+    }
     const verdict = core.shouldNotify({
       enabled: this.config.mentionNotify === true && !!chrome.notifications?.create,
       kind,
