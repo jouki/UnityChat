@@ -49,6 +49,7 @@ import { RateLimiter, toModeratedContent, toRestoredMessage, type ClientRow, typ
 import { dbHistoryDeps } from '../lib/userHistory.js';
 import { userHistoryRoutes, optionalWebSession } from './userHistory.js';
 import channelPrefsRoutes from './channelPrefs.js';
+import giveawayRoutes from './giveaway.js';
 import { userSearchRoutes } from './userSearch.js';
 import { dbUserSearchDeps } from '../lib/userSearch.js';
 import { accountIdentities, accountOf } from '../lib/moderationTargets.js';
@@ -591,6 +592,9 @@ export default async function moderationRoutes(app: FastifyInstance, opts: { ing
 
   // ---- nastavení kanálu společné pro všechny (odznak dárce) — routes/channelPrefs.ts, stejná brána moda ----
   await channelPrefsRoutes(app, { requireSession: requireWebSession, modGate: (req, reply, ch) => modGate(req, reply, ch) });
+
+  // ---- kolo štěstí pro podporovatele — routes/giveaway.ts, stejná brána moda ----
+  await giveawayRoutes(app, { requireSession: requireWebSession, modGate: (req, reply, ch) => modGate(req, reply, ch), ingest: opts.ingest });
 
   // ---- přejmenování: mod nastaví/smaže divákovi přezdívku (bez 10s limitu /nicknames) ----
   app.put('/moderation/nickname', { preHandler: requireWebSession }, async (req, reply) => {
