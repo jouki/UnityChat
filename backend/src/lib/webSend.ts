@@ -53,6 +53,17 @@ export async function sendTwitch(
 }
 
 // ---- Kick: public API POST /public/v1/chat (scope chat:write) ---------------
+/** Diagnostika chyby Kicku do textu chyby (log + `detail` pro Židolištu): hlavičky Cloudflare / limitů + začátek těla bez tagů. */
+export function kickErrorDiag(resp: { headers: { get(name: string): string | null } }, rawBody: string): string {
+  const h: string[] = [];
+  for (const name of ['cf-ray', 'cf-mitigated', 'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'server']) {
+    const v = resp.headers.get(name);
+    if (v) h.push(`${name}=${v.slice(0, 80)}`);
+  }
+  const body = rawBody.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return (h.length ? ` [${h.join(' ')}]` : '') + (body ? ` body: ${body}` : '');
+}
+
 export async function sendKick(
   p: { accessToken: string; broadcasterUserId: string; text: string; replyTo?: string | null },
   fetchImpl: FetchLike = fetch,
@@ -65,9 +76,12 @@ export async function sendKick(
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   });
-  const data = await readJson(resp);
+  // Tělo jako text: 403 od Cloudflare je HTML, ne JSON (diagnostika občasného 403 JoukiBOTa, 2026-10-02).
+  const rawBody = await resp.text().catch(() => '');
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* HTML / prázdné */ }
   if (resp.status === 401) throw new SendError('kick: unauthorized', 401, true);
-  if (!resp.ok) throw new SendError(`kick: HTTP ${resp.status} ${(data.message as string) || ''}`.trim(), resp.status);
+  if (!resp.ok) throw new SendError(`kick: HTTP ${resp.status} ${(data.message as string) || ''}`.trim() + kickErrorDiag(resp, rawBody), resp.status);
   const d = data.data as { message_id?: string; is_sent?: boolean } | undefined;
   if (d && d.is_sent === false) throw new SendError('kick: not sent', 422);
   return { id: d?.message_id || null };

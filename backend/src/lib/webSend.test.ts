@@ -43,6 +43,15 @@ test('sendKick: public API payload, broadcaster id jako číslo', async () => {
   assert.deepEqual(JSON.parse(calls[0].init.body as string), { broadcaster_user_id: 92265443, content: 'hi', type: 'user' });
 });
 
+test('sendKick: 403 z Cloudflare (HTML) → chyba s cf-ray, limity a textem stránky bez tagů', async () => {
+  const html = '<html><head><style>x{}</style></head><body><h1>Sorry, you have been blocked</h1><script>var a=1</script></body></html>';
+  const f = (async () => new Response(html, { status: 403, headers: { 'cf-ray': '8abc-PRG', 'cf-mitigated': 'challenge', 'content-type': 'text/html' } })) as unknown as typeof fetch;
+  await assert.rejects(sendKick({ accessToken: 'tok', broadcasterUserId: '1', text: 'hi' }, f), (e: SendError) => e.status === 403
+    && /cf-ray=8abc-PRG/.test(e.message) && /cf-mitigated=challenge/.test(e.message) && /body: Sorry, you have been blocked$/.test(e.message) && !/tok/.test(e.message));
+  const j = (async () => new Response(JSON.stringify({ message: 'Forbidden' }), { status: 403, headers: { 'x-ratelimit-remaining': '0' } })) as unknown as typeof fetch;
+  await assert.rejects(sendKick({ accessToken: 'tok', broadcasterUserId: '1', text: 'hi' }, j), (e: SendError) => /^kick: HTTP 403 Forbidden \[x-ratelimit-remaining=0\] body: \{"message":"Forbidden"\}$/.test(e.message));
+});
+
 test('youtube: liveChatId z videos.list, insert payload', async () => {
   const v = mockFetch(200, { items: [{ liveStreamingDetails: { activeLiveChatId: 'LC1' } }] });
   assert.equal(await youtubeLiveChatId({ accessToken: 't', videoId: 'abc' }, v.f), 'LC1');
