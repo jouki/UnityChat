@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickCategory, searchCategories, subCount, SUBS_SCOPE, clampTitle, TITLE_MAX } from './channelManage.js';
+import { pickCategory, searchCategories, subCount, SUBS_SCOPE, clampTitle, TITLE_MAX, followage, parseKickFollowage, ChannelError } from './channelManage.js';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -44,4 +44,16 @@ test('channel: hledání kategorií — Twitch (app token + search) a Kick (app 
   assert.deepEqual(ki, [{ id: '15', name: 'Just Chatting', imageUrl: 'https://k/t.jpg' }]);
   assert.deepEqual(await searchCategories('twitch', '   ', fetchImpl), []);
   assert.ok(calls.some((c) => c.includes('query=just')));
+});
+
+test('channel: followage Kick — veřejná karta uživatele (following_since), nesleduje, neznámý, bez loginu', async () => {
+  assert.deepEqual(parseKickFollowage({ following_since: '2026-01-29T09:34:58.000000Z' }), { following: true, followedAt: '2026-01-29T09:34:58.000Z' });
+  assert.deepEqual(parseKickFollowage({ following_since: null }), { following: false, followedAt: null });
+  const urls: string[] = [];
+  const ok = (async (u: string) => { urls.push(u); return new Response(JSON.stringify({ following_since: '2026-01-29T09:34:58.000000Z' }), { status: 200 }); }) as unknown as typeof fetch;
+  assert.deepEqual(await followage('kick', 'robdiesalot', { login: '@Jouki728' }, ok), { following: true, followedAt: '2026-01-29T09:34:58.000Z' });
+  assert.equal(urls[0], 'https://kick.com/api/v2/channels/robdiesalot/users/jouki728');
+  const nf = (async () => new Response('{}', { status: 404 })) as unknown as typeof fetch;
+  await assert.rejects(followage('kick', 'robdiesalot', { login: 'nikdo' }, nf), (e: ChannelError) => e.code === 'not_found');
+  await assert.rejects(followage('kick', 'robdiesalot', { userId: '123' }, ok), (e: ChannelError) => e.code === 'bad_user');
 });
