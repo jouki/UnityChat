@@ -58,17 +58,19 @@ export function wheelSvg(names) {
 }
 
 /**
- * HTML lišty podle stavu kola a role. `me` = { joined, isWinner, eligible } | null, `opts` = { isMod, loggedIn,
- * now, notDonor (poslední pokus o připojení odmítnut), canDonate, busy }.
+ * Části lišty podle stavu kola a role: `{ info, list, acts }` (HTML). `me` = { joined, isWinner, eligible } | null,
+ * `opts` = { isMod, loggedIn, now, notDonor (poslední pokus o připojení odmítnut), canDonate, busy, listOpen }.
+ * Host překresluje `info` / `list` zvlášť a tlačítka (`acts`) jen při změně — SSE při každém připojení by jinak
+ * vyměnilo tlačítko pod kurzorem a klik mezi stiskem a puštěním myši by se ztratil (hlášení 2026-10-02, Strainer).
  */
-export function giveawayBarHtml(g, me, { isMod = false, loggedIn = false, now = Date.now(), notDonor = false, canDonate = false, busy = false } = {}) {
+export function giveawayParts(g, me, { isMod = false, loggedIn = false, now = Date.now(), notDonor = false, canDonate = false, busy = false, listOpen = false } = {}) {
   const btn = (act, label, cls = '') => `<button type="button" class="uc-gw-btn ${cls}" data-act="${act}"${busy ? ' disabled' : ''}>${label}</button>`;
-  const head = `<span class="uc-gw-ico">${GIVEAWAY_ICON}</span><span class="uc-gw-title">Kolo štěstí</span><span class="uc-gw-prize">${esc(g.prize)}</span>`;
+  const count = (txt) => `<button type="button" class="uc-gw-count${listOpen ? ' open' : ''}" data-act="list" title="Seznam přihlášených">${txt} <span class="uc-gw-caret" aria-hidden="true">▾</span></button>`;
   let info = '';
   let acts = '';
   const winners = (g.winners || []).map((w) => esc(w.name)).join(', ');
   if (g.status === 'open') {
-    info = entrantsText(g.count);
+    info = count(entrantsText(g.count));
     if (me?.joined) acts += '<span class="uc-gw-ok">Připojeno ✓</span>';
     else if (!loggedIn) acts += btn('login', 'Přihlásit se');
     // Po donatu se jde připojit znovu (server si seznam dárců obnoví).
@@ -81,18 +83,31 @@ export function giveawayBarHtml(g, me, { isMod = false, loggedIn = false, now = 
     else info = `Vylosováno: <b>${esc(g.winner?.name)}</b> · čeká na potvrzení <span class="uc-gw-left">${left}</span>`;
     if (isMod) acts += btn('end', 'Ukončit', 'mod ghost');
   } else if (g.status === 'confirmed') {
-    info = `Výherce: <b>${esc(g.winner?.name)}</b> 🎉`;
+    info = `Výherce: <b>${esc(g.winner?.name)}</b> 🎉 · ${count(`${g.count} ve hře`)}`;
     if (isMod) acts += btn('draw', 'Losovat dalšího', 'mod') + btn('end', 'Ukončit', 'mod ghost');
   } else if (g.status === 'expired') {
-    info = `Lhůta na potvrzení vypršela · ${entrantsText(g.count)} ve hře`;
+    info = `Lhůta na potvrzení vypršela · ${count(`${g.count} ve hře`)}`;
     if (isMod) acts += btn('draw', 'Losovat znovu', 'mod') + btn('end', 'Ukončit', 'mod ghost');
   } else if (g.status === 'ended') {
     info = winners ? `Kolo skončilo · ${czPlural((g.winners || []).length, 'výherce', 'výherci', 'výherci')}: <b>${winners}</b>` : 'Kolo skončilo';
   } else {
     info = 'Kolo zrušeno';
   }
-  return `<div class="uc-gw uc-gw--${esc(g.status)}" data-gw-id="${g.id}"><div class="uc-gw-row">${head}<span class="uc-gw-info">${info}</span></div>`
-    + (acts ? `<div class="uc-gw-acts">${acts}</div>` : '') + '</div>';
+  const names = g.names || [];
+  const list = listOpen && ['open', 'pending', 'confirmed', 'expired'].includes(g.status)
+    ? (names.length ? names.map((n) => `<span class="uc-gw-name">${esc(n)}</span>`).join('') + (g.count > names.length ? `<span class="uc-gw-more">+${g.count - names.length}</span>` : '') : '<span class="uc-gw-note">Zatím nikdo</span>')
+    : '';
+  return { info, list, acts };
+}
+
+/** Celá lišta (HTML). Zavřít (×) jde vždy — lišta se znovu ukáže při další změně stavu kola. */
+export function giveawayBarHtml(g, me, opts = {}) {
+  const { info, list, acts } = giveawayParts(g, me, opts);
+  const head = `<span class="uc-gw-ico">${GIVEAWAY_ICON}</span><span class="uc-gw-title">Kolo štěstí</span><span class="uc-gw-prize">${esc(g.prize)}</span>`;
+  return `<div class="uc-gw uc-gw--${esc(g.status)}" data-gw-id="${g.id}" data-status="${esc(g.status)}"><div class="uc-gw-row">${head}<span class="uc-gw-info">${info}</span>`
+    + '<button type="button" class="uc-gw-x" data-act="close" aria-label="Zavřít" title="Zavřít">×</button></div>'
+    + `<div class="uc-gw-list"${list ? '' : ' hidden'}>${list}</div>`
+    + `<div class="uc-gw-acts"${acts ? '' : ' hidden'}>${acts}</div></div>`;
 }
 
 /** Formulář vyhlášení (mod). */
@@ -144,6 +159,8 @@ export function createGiveaway({ doc, bar, overlayHost, api, channel, isMod, log
   let busy = false;
   let formOpen = false;
   let formErr = '';
+  let listOpen = false;   // rozbalený seznam přihlášených
+  let dismissed = null;   // `${id}:${status}` zavřené lišty
   let tick = null;
   let skew = 0;           // serverNow − Date.now()
   let lastSeq = null;     // drawSeq posledního známého stavu (animace jen při změně)
@@ -152,17 +169,42 @@ export function createGiveaway({ doc, bar, overlayHost, api, channel, isMod, log
   const L = (t) => log('Giveaway', t);
 
   function render() {
-    const show = formOpen || (state && (['open', 'pending', 'confirmed', 'expired'].includes(state.status) || now() - state.updatedAt < BAR_ENDED_MS));
+    // Zavřená lišta (×) zůstane zavřená, dokud se stav kola nezmění (nové kolo, losování, potvrzení…).
+    const closed = state && dismissed === `${state.id}:${state.status}`;
+    const show = formOpen || (state && !closed && (['open', 'pending', 'confirmed', 'expired'].includes(state.status) || now() - state.updatedAt < BAR_ENDED_MS));
     if (!show) { bar.replaceChildren(); bar.classList.add('hidden'); stopTick(); onLayout?.(); return; }
     const wasHidden = bar.classList.contains('hidden');
     // Během točení lišta drží stav před losováním (výherce prozradí až kolo).
     const view = spinning?.prev ?? state;
-    bar.innerHTML = formOpen && (!state || !['open', 'pending', 'confirmed', 'expired'].includes(state.status))
-      ? giveawayFormHtml({ busy, error: formErr })
-      : giveawayBarHtml(view, me, { isMod: isMod(), loggedIn: loggedIn(), now: now(), notDonor, canDonate: !!onDonate, busy });
+    const opts = { isMod: isMod(), loggedIn: loggedIn(), now: now(), notDonor, canDonate: !!onDonate, busy, listOpen };
+    const root = bar.firstElementChild;
+    if (formOpen && (!state || !['open', 'pending', 'confirmed', 'expired'].includes(state.status))) {
+      // Formulář jen při změně (rozepsaný text zůstává).
+      const sig = `${busy}|${formErr}`;
+      if (!root?.classList.contains('uc-gw-form') || root.dataset.sig !== sig) {
+        const keep = root?.classList.contains('uc-gw-form') ? { prize: root.prize.value, minutes: root.minutes.value } : null;
+        bar.innerHTML = giveawayFormHtml({ busy, error: formErr });
+        const f = bar.firstElementChild;
+        f.dataset.sig = sig;
+        if (keep) { f.prize.value = keep.prize; f.minutes.value = keep.minutes; }
+      }
+    } else if (root && root.dataset.gwId === String(view.id) && root.dataset.status === view.status) {
+      // Stejné kolo i stav: přepsat jen text a seznam, tlačítka jen když se změnila (klik během SSE se neztratí).
+      const p = giveawayParts(view, me, opts);
+      root.querySelector('.uc-gw-info').innerHTML = p.info;
+      const list = root.querySelector('.uc-gw-list');
+      list.innerHTML = p.list; list.hidden = !p.list;
+      const acts = root.querySelector('.uc-gw-acts');
+      if (acts.dataset.sig !== p.acts) { acts.innerHTML = p.acts; acts.dataset.sig = p.acts; }
+      acts.hidden = !p.acts;
+    } else {
+      bar.innerHTML = giveawayBarHtml(view, me, opts);
+      const acts = bar.querySelector('.uc-gw-acts');
+      if (acts) acts.dataset.sig = giveawayParts(view, me, opts).acts;
+    }
     bar.classList.remove('hidden');
     if (wasHidden && !reduced(win)) bar.firstElementChild?.classList.add('uc-gw--enter');
-    if (formOpen) bar.querySelector('input[name="prize"]')?.focus();
+    if (formOpen && !bar.contains(doc.activeElement)) bar.querySelector('input[name="prize"]')?.focus();
     if (view?.status === 'pending') startTick(); else stopTick();
     onLayout?.();
   }
@@ -234,8 +276,11 @@ export function createGiveaway({ doc, bar, overlayHost, api, channel, isMod, log
     if (name === 'login') { onLogin?.(); return; }
     if (name === 'donate') { onDonate?.(); return; }
     if (name === 'form-close') { formOpen = false; formErr = ''; render(); return; }
+    if (name === 'close') { dismissed = state ? `${state.id}:${state.status}` : null; listOpen = false; render(); L('lišta zavřena'); return; }
+    if (name === 'list') { listOpen = !listOpen; render(); return; }
     const path = { join: '/giveaway/join', confirm: '/giveaway/confirm', draw: '/moderation/giveaway/draw', end: '/moderation/giveaway/end' }[name];
-    if (!path || busy) return;
+    if (!path || busy) { L(`klik ${name} ignorován${busy ? ' (probíhá jiná akce)' : ''}`); return; }
+    L(`klik ${name}`);
     busy = true; render();
     try {
       const r = await api.post(path, { channel: ch });
@@ -299,7 +344,7 @@ export function createGiveaway({ doc, bar, overlayHost, api, channel, isMod, log
     },
     /** Tlačítko moda v poli: formulář vyhlášení (když nic neběží), jinak lištu jen ukázat. */
     toggleForm() {
-      if (state && ['open', 'pending', 'confirmed', 'expired'].includes(state.status)) { render(); bar.querySelector('.uc-gw')?.classList.add('uc-gw--pulse'); return; }
+      if (state && ['open', 'pending', 'confirmed', 'expired'].includes(state.status)) { dismissed = null; render(); bar.querySelector('.uc-gw')?.classList.add('uc-gw--pulse'); return; }
       formOpen = !formOpen; formErr = '';
       render();
     },

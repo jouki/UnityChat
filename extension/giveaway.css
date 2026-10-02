@@ -37,7 +37,18 @@
 .uc-gw-ok { color: #53fc18; font-weight: 600; }
 .uc-gw-note { color: #adadb8; }
 .uc-gw-flash { margin-top: 6px; color: #ff6b6b; font-size: 12px; }
-.uc-gw-x { margin-left: auto; background: none; border: 0; color: #adadb8; font-size: 18px; line-height: 1; cursor: pointer; }
+.uc-gw-x { margin-left: auto; background: none; border: 0; color: #adadb8; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; align-self: flex-start; }
+.uc-gw-x:hover { color: #efeff1; }
+/* Počet přihlášených = přepínač seznamu jmen */
+.uc-gw-count { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted rgba(255, 255, 255, .35); text-underline-offset: 3px; }
+.uc-gw-count:hover { color: #efeff1; }
+.uc-gw-caret { display: inline-block; transition: transform .15s ease; font-size: 10px; }
+.uc-gw-count.open .uc-gw-caret { transform: rotate(180deg); }
+.uc-gw-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 120px; overflow-y: auto; }
+.uc-gw-list[hidden] { display: none; }
+.uc-gw-acts[hidden] { display: none; }
+.uc-gw-name { padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, .08); font-size: 11.5px; }
+.uc-gw-more { padding: 1px 7px; color: #adadb8; font-size: 11.5px; }
 .uc-gw-fields { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .uc-gw-fields input[name="prize"] {
   width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 7px;

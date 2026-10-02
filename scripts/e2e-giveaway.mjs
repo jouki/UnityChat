@@ -92,7 +92,7 @@ const boot = async () => {
   await call('Page.navigate', { url: `chrome-extension://${extId}/sidepanel.html` }, sessionId);
   await until(`!!document.querySelector('.msg[data-msg-id="tw-1"]')`, 10000);
 };
-const BAR = `(() => { const b = document.getElementById('gw-bar'); return { hidden: b.classList.contains('hidden'), text: b.textContent.replace(/\\s+/g, ' ').trim(), acts: [...b.querySelectorAll('[data-act]')].map(x => x.dataset.act) }; })()`;
+const BAR = `(() => { const b = document.getElementById('gw-bar'); return { hidden: b.classList.contains('hidden'), text: b.textContent.replace(/\\s+/g, ' ').trim(), acts: [...b.querySelectorAll('[data-act]')].map(x => x.dataset.act).filter(a => a !== 'list' && a !== 'close') }; })()`;
 // SHOT_DIR=<složka> → snímky lišty a kola (vizuální kontrola).
 const shot = async (name) => { if (!process.env.SHOT_DIR) return; const r = await call('Page.captureScreenshot', { format: 'png' }, sessionId); fs.writeFileSync(path.join(process.env.SHOT_DIR, `${name}.png`), Buffer.from(r.result.data, 'base64')); };
 const click = (act) => ev(`(() => { const b = document.querySelector('#gw-bar [data-act="${act}"]'); if (!b) return false; b.click(); return true; })()`);
@@ -130,6 +130,22 @@ check('B po donatu Zkusit znovu → Připojeno ✓, 1 přihlášený', /Připoje
 mock.gw = base({ ...mock.gw, count: 4, names: ['ModUser', 'Anna', 'Petr', 'Zdeněk'] });
 await ev(`window.ucGif.giveaway({ channel: 'robdiesalot', giveaway: ${JSON.stringify(mock.gw)} })`);
 check('B SSE giveaway: počet se přepíše živě (4 přihlášení)', await until(`/4 přihlášení/.test(document.getElementById('gw-bar').textContent)`, 2000));
+// Klik během SSE (hlášení 2026-10-02: Strainer „se přihlásil“, ale join na server nedorazil): tlačítka se při změně
+// počtu nepřekreslují → prvek pod kurzorem zůstane stejný a klik projde.
+const sameBtn = await ev(`(() => { const b = document.querySelector('#gw-bar [data-act="draw"]'); window.__gwBtn = b; return !!b; })()`);
+await ev(`window.ucGif.giveaway({ channel: 'robdiesalot', giveaway: ${JSON.stringify(base({ ...mock.gw, count: 5, names: ['ModUser', 'Anna', 'Petr', 'Zdeněk', 'Eva'] }))} })`);
+await until(`/5 přihlášených/.test(document.getElementById('gw-bar').textContent)`, 2000);
+check('B SSE změna počtu nepřekreslí tlačítka (klik se neztratí)', sameBtn && await ev(`window.__gwBtn.isConnected && window.__gwBtn === document.querySelector('#gw-bar [data-act="draw"]')`) === true);
+mock.gw = base({ ...mock.gw, count: 4, names: ['ModUser', 'Anna', 'Petr', 'Zdeněk'] });
+await ev(`window.ucGif.giveaway({ channel: 'robdiesalot', giveaway: ${JSON.stringify(mock.gw)} })`);
+await until(`/4 přihlášení/.test(document.getElementById('gw-bar').textContent)`, 2000);
+// Seznam přihlášených: klik na počet rozbalí jména, další klik sbalí.
+await click('list');
+const names = await ev(`[...document.querySelectorAll('#gw-bar .uc-gw-list .uc-gw-name')].map(e => e.textContent)`);
+check('B klik na počet → seznam přihlášených', JSON.stringify(names) === JSON.stringify(['ModUser', 'Anna', 'Petr', 'Zdeněk']), JSON.stringify(names));
+await shot('b-list');
+await click('list');
+check('B druhý klik seznam sbalí', await ev(`document.querySelector('#gw-bar .uc-gw-list').hidden`) === true);
 await ev(`window.ucGif.giveaway({ channel: 'jinykanal', giveaway: ${JSON.stringify(base({ prize: 'cizí', count: 9 }))} })`);
 await sleep(200);
 check('B SSE jiného kanálu se ignoruje', !/cizí/.test((await ev(BAR)).text));
@@ -153,7 +169,14 @@ check('C překryv zmizí', await until(`!document.querySelector('.uc-gw-overlay'
 await click('confirm');
 await until(`/Výherce:/.test(document.getElementById('gw-bar').textContent)`, 3000);
 bar = await ev(BAR);
-check('D potvrzeno: Výherce ModUser + Losovat dalšího / Ukončit', /Výherce: ModUser 🎉/.test(bar.text) && bar.acts.join() === 'draw,end', JSON.stringify(bar));
+check('D potvrzeno: Výherce ModUser + Losovat dalšího / Ukončit', /Výherce: ModUser 🎉/.test(bar.text) && bar.acts.filter((x) => x !== 'list' && x !== 'close').join() === 'draw,end', JSON.stringify(bar));
+// Zavřít (×): lišta zmizí, při další změně stavu (konec kola) se ukáže znovu.
+await click('close');
+check('D × lištu zavře', await until(`document.getElementById('gw-bar').classList.contains('hidden')`, 2000));
+await ev(`window.ucGif.giveaway({ channel: 'robdiesalot', giveaway: ${JSON.stringify(base({ status: 'ended', winners: [{ name: 'ModUser', platform: 'twitch' }] }))} })`);
+check('D nový stav (konec kola) lištu zase ukáže', await until(`/Kolo skončilo/.test(document.getElementById('gw-bar').textContent) && !document.getElementById('gw-bar').classList.contains('hidden')`, 2000));
+await click('close');
+check('D ukončené kolo jde zavřít', await until(`document.getElementById('gw-bar').classList.contains('hidden')`, 2000));
 
 // ---- E: divák (bez role) ----
 mock.mod = false;
