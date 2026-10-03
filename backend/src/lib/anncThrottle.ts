@@ -44,7 +44,9 @@ export class AnncThrottle {
     const last = this.lastShown.get(key);
     const since = last === undefined ? null : cur - last;
     const uc = this.isUcAuthor(trigger?.platform, trigger?.user);
-    const show = uc || since === null || since >= ANNC_MIN_GAP_MESSAGES;
+    // Časovač commandu v Židolištce (triggeredBy.user „timer“) spouští streamer záměrně → vždy.
+    const timer = String(trigger?.user || '').toLowerCase() === 'timer';
+    const show = uc || timer || since === null || since >= ANNC_MIN_GAP_MESSAGES;
     if (show) this.lastShown.set(key, cur);
     return { show, since, uc };
   }

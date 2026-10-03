@@ -29,4 +29,6 @@ test('anncThrottle: bez UnityChatu jen po 10 zprávách od posledního zobrazen�
   assert.equal(t.isUcAuthor('youtube', 'winter_ian'), false, 'po 2 min už ne');
   // Bez triggeredBy = nelze ověřit UC → jen podle počtu zpráv.
   assert.equal(t.decide('robdiesalot', 'Chci Hrát', null).show, false);
+  // Časovač commandu (Židolišta triggeredBy.user „timer“) → vždy.
+  assert.equal(t.decide('robdiesalot', 'Chci Hrát', { user: 'timer', platform: 'twitch' }).show, true);
 });
