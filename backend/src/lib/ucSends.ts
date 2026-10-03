@@ -13,6 +13,8 @@ import { anncThrottle } from './anncThrottle.js';
 
 export const SEND_TTL_MS = 20_000;
 export const RECENT_TTL_MS = 60_000;
+/** Zpráva, která přišla dřív než hlášení, se spáruje jen do této doby před hlášením. */
+export const LATE_MATCH_MS = 15_000;
 const RECENT_MAX = 300;
 
 /** Odesílatel: login (addon ho zná) nebo ID uživatele na platformě (web přes /chat/send). */
@@ -43,7 +45,15 @@ export class UcSendRegistry<T = undefined> {
     const text = normText(s.text);
     const rec = (this.recent.get(k) || []).filter((r) => t - r.at < RECENT_TTL_MS);
     this.recent.set(k, rec);
-    const i = rec.findIndex((r) => sameSender(r, who) && r.text === text);
+    // Zpětně jen nejnovější shoda z posledních LATE_MATCH_MS: hlášení přichází hned po odeslání. Dřív to bral
+    // nejstarší shodu z celé minuty → broadcast „!jc“ (2026-10-03 Strainer8) se spároval s jeho 49 s starým
+    // „!jc“ napsaným přímo na Twitchi a skutečná kopie zůstala bez skupiny.
+    let i = -1;
+    for (let j = rec.length - 1; j >= 0; j--) {
+      const r = rec[j];
+      if (t - r.at > LATE_MATCH_MS) break;
+      if (sameSender(r, who) && r.text === text) { i = j; break; }
+    }
     if (i >= 0) { const [hit] = rec.splice(i, 1); return hit.msg; }
     const list = (this.pending.get(k) || []).filter((p) => p.until > t);
     list.push({ ...who, text, until: t + SEND_TTL_MS, data: s.data });

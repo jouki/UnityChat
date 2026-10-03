@@ -68,3 +68,15 @@ test('gifReviews: hlášení před zprávou (/chat/send) → requested; po zprá
   r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'tonner', text: 'b https://giphy.com/gifs/x-2' });
   assert.equal(r.lateRequested({ platform: 'twitch', platformMessageId: 'id4' }), false);
 });
+
+test('ucSends: pozdní hlášení vezme nejnovější shodu a jen z posledních 15 s (ne starý stejný command)', () => {
+  let t = 1000; const r = new UcSendRegistry(() => t);
+  assert.equal(r.match(msg({ platformMessageId: 'old', content: '!jc' })), false);   // napsáno přímo na Twitchi
+  t += 49_000;
+  assert.equal(r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'tonner', text: '!jc' }), null, 'stará (49 s) se nespáruje');
+  assert.equal(r.match(msg({ platformMessageId: 'new', content: '!jc' })), true, 'skutečná kopie spárovaná');
+  r.match(msg({ platformMessageId: 'a', content: '!x' }));
+  t += 2000;
+  r.match(msg({ platformMessageId: 'b', content: '!x' }));
+  assert.equal(r.report({ platform: 'twitch', channel: 'robdiesalot', username: 'tonner', text: '!x' })?.platformMessageId, 'b', 'nejnovější');
+});
