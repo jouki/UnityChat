@@ -26,6 +26,13 @@ export function nicknameEntries(map, platform, isKnown = null) {
 }
 
 /**
+ * Regex @zmínky ve vykresleném textu: skupina 1 = znak před „@“ (nebo začátek), skupina 2 = jméno. Jméno smí
+ * mít uvnitř „-“ a „.“ (handle YouTube `@vaok-cze3464`, 2026-10-03 se zvýraznilo jen „@vaok“), ne na konci
+ * (tečka / pomlčka za jménem patří větě). Nová instance (flag g) pro každé použití.
+ */
+export const mentionRegex = () => /(^|[^A-Za-z0-9_])@([A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,28}[A-Za-z0-9_]))/g;
+
+/**
  * V textu nahradit „@Přezdívka" za „@login". Zmínka začíná na začátku textu nebo za znakem,
  * který není písmeno/číslice/_/@; přezdívka se porovná bez ohledu na velikost písmen a musí
  * končit hranicí slova (konec textu, mezera, interpunkce).

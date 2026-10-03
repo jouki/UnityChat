@@ -4428,6 +4428,12 @@ class UnityChat {
       // Text vrátit do pole, ať o něj člověk nepřijde.
       if (!external && !this.msgInput.value) { this.msgInput.value = raw; this._autoResizeInput?.(); }
     };
+    // YouTube zprávy diváků s odkazem (i GIF) přijme a nezveřejní → rovnou přes UnityChat (core ucOnlyDirect,
+    // server je prožene filtrem odkazů a schvalováním GIFů). Mod / streamer a commandy dál na YouTube.
+    if (!replyTo && !gifReview && window.UC_CORE.ucOnlyDirect(platform, raw ?? text, { isMod: (this._modPlatforms || []).includes(platform) })) {
+      await this._sendDirectUcOnly(optId, platform, text, raw ?? text, fail);
+      return;
+    }
     try {
       const token = await this._ucSessionToken();
       const r = await fetch(`${UC_API}/chat/send`, {
@@ -4485,6 +4491,29 @@ class UnityChat {
     } catch (e) {
       fail(e.message || 'neodesláno');
       this._sys(`Nelze odeslat: ${e.message || e}`);
+    }
+  }
+
+  /** Zpráva rovnou přes UnityChat místo platformy (core ucOnlyDirect): optimistická se upgraduje na `uco-…`. */
+  async _sendDirectUcOnly(optId, platform, text, raw, fail) {
+    try {
+      const j = await this._ucApi('/chat/uc-only', { method: 'POST', body: { platform, text, channel: (this.config.channel || '').toLowerCase(), reason: 'YouTube nezveřejňuje odkazy diváků' } });
+      const core = window.UC_CORE;
+      // GIF: id zprávy = klíč průběhu (gif-progress requestKey). Server ji schoval (gif_request) a poslal bez obsahu →
+      // optimistická si nechá svůj text (gifEchoPatch), dostane id, čas a smazání.
+      if (core.hasGifLink(raw)) this._gifOut().alias(optId, platform, j.id);
+      for (const [k, id] of this._optimisticKeys) if (id === optId) { this._optimisticKeys.delete(k); break; }
+      const patch = core.gifEchoPatch(j.message);
+      this.store.upgrade(optId, patch);
+      this._upgradeOptimistic(optId, patch);
+      core.applyUcOnlyLook(this.chatEl.querySelector(`[data-msg-id="${CSS.escape(j.id)}"]`), platform);
+      if (j.message?.deleted) this._applyDeleted(platform, j.id, { reason: j.message.deletedReason || null });
+      this._ucLog('UcOnly', `přímo ${platform} ${optId} → ${j.id}${j.message?.deleted ? ` (${j.message.deletedReason || 'smazáno'})` : ''}`);
+    } catch (e) {
+      const reason = e.status === 429 ? 'moc zpráv za sebou, zpomal' : e.error === 'banned' ? 'máš na platformě timeout / ban' : e.error === 'warning_pending' ? 'nepotvrzené varování od moderátora' : (e.error || e.message || 'neodesláno');
+      this._ucLog('UcOnly', `přímo ${platform} ${optId} FAIL ${e.status || ''} ${e.error || e.message || e}`);
+      fail(reason, false);
+      this._sys(`Chyba: ${reason}`);
     }
   }
 
@@ -5467,6 +5496,8 @@ class UnityChat {
     if (seq !== this._modSeq) return;   // mezitím novější dotaz (přepnutí kanálu, přihlášení)
     const changed = can !== !!this._canModerate;
     this._canModerate = can;
+    // Platformy, kde je účet mod (ověřeno serverem) — divák na YouTube posílá odkazy rovnou přes UnityChat.
+    this._modPlatforms = platforms;
     document.body.classList.toggle('uc-can-moderate', can);
     // Kolo štěstí: tlačítko moda v poli + ovládání v liště.
     this._qdDock?.update();
@@ -8148,8 +8179,8 @@ class UnityChat {
   _processMentions(el, platform) {
     if (!el) return;
     // Pattern: start-of-string OR a non-identifier character, then @name.
-    // Username rules mirror Twitch/Kick/YT: 2–25 chars of [A-Za-z0-9_].
-    const mentionRe = /(^|[^A-Za-z0-9_])@([A-Za-z0-9_]{2,25})/g;
+    // Jméno podle core mentionRegex (i „-“ a „.“ uvnitř — handle YouTube).
+    const mentionRe = window.UC_CORE.mentionRegex();
 
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     const nodes = [];

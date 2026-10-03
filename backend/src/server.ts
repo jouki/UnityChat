@@ -375,7 +375,7 @@ await app.register(chatRoutes);
 await app.register(commandRoutes);
 await app.register(announcementRoutes);
 await app.register(blacklistRoutes);
-await app.register(webAuthRoutes, { ingest });
+await app.register(webAuthRoutes, { ingest, linkFilter });
 await app.register(integrationRoutes, { ingest });
 await app.register(rawProfileRoutes);
 await app.register(reactionRoutes);

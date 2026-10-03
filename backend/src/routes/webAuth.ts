@@ -29,7 +29,9 @@ import { syncEmailLink } from '../lib/emailLink.js';
 import { platformChannel, toClientMessage } from './chat.js';
 import { UCO_PREFIX, ucOnlyContentRaw, ucOnlyHeld, youtubeChatIdFromInsert } from '../lib/ucOnly.js';
 import { activeBan } from '../lib/userModeration.js';
-import { gifCandidate } from '../lib/gifMedia.js';
+import type { IngestMessage } from '../ingest/types.js';
+import { toRow } from '../ingest/normalize.js';
+import type { LinkVerdict } from '../lib/linkFilter.js';
 import { publishChat } from '../sse/chatBus.js';
 import { broadcast } from '../sse/bus.js';
 import { RateLimiter } from './chat.js';
@@ -111,7 +113,7 @@ async function twitchFirstMessageHint(accountId: number, channel: string, err: s
   return first ? TWITCH_FIRST_MESSAGE_TEXT : null;
 }
 
-export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest?: Ingest }) {
+export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest?: Ingest; linkFilter?: { check(m: IngestMessage): LinkVerdict | null } }) {
   const sendLimiter = new RateLimiter(5, 1);   // per účet: 5 najednou, doplňuje 1/s
   const broadcastLimiter = new RateLimiter(2, 0.25); // per účet: Broadcast = zpráva na 2–3 platformy, max 1 za 4 s
   const startLimiter = new RateLimiter(10, 0.2); // per IP: 10 startů, doplňuje 1 za 5 s
@@ -281,8 +283,10 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
   // ---- Zpráva jen přes UnityChat (lib/ucOnly.ts, pokyn usera 2026-10-02) ----
   // Klient ji pošle AUTOMATICKY, když se zpráva na platformu nepošle nebo ji YouTube přijme a nezobrazí. Uloží se
   // jako zpráva platformy s id `uco-…` (historie, moderace „Jen v UC skrýt“), rozešle se /chat/stream + SSE `uc-only`
-  // (addon / web / OBS), klient místo loga platformy kreslí logo UnityChatu. Commandy a GIFy ne (bot je nevidí /
-  // GIFy mají vlastní schvalování); kdo má na platformě aktivní timeout / ban (naše evidence), nic.
+  // (addon / web / OBS), klient místo loga platformy kreslí logo UnityChatu. Commandy ne (bot je nevidí); kdo má na
+  // platformě aktivní timeout / ban (naše evidence), nic. Odkazy a GIFy (2026-10-03: YouTube zprávy diváků s odkazem
+  // přijme a nezveřejní → klient je na YouTube posílá rovnou sem) projdou stejným filtrem odkazů a schvalováním GIFů
+  // jako zpráva z ingestu (opts.linkFilter: smazání podle filtru, GIF žádost u moda).
   const UcOnlyBody = z.object({
     platform: z.enum(['twitch', 'youtube', 'kick']),
     text: z.string().min(1).max(500),
@@ -300,7 +304,6 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     const text = body.data.text.replaceAll('\u2800', '').replace(/\s+/g, ' ').trim();
     if (!text) { reply.code(400); return { ok: false, error: 'empty' }; }
     if (text.startsWith('!') || text.startsWith('/')) { reply.code(400); return { ok: false, error: 'command' }; }
-    if (gifCandidate(text)) { reply.code(400); return { ok: false, error: 'gif' }; }
     try {
       if ((await pendingWarnings(accountId)).length) { reply.code(403); return { ok: false, error: 'warning_pending' }; }
     } catch (e) { req.log.warn({ err: (e as Error).message }, 'uc-only: kontrola varování selhala'); }
@@ -327,16 +330,19 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
     }
     const id = `${UCO_PREFIX}${randomUUID()}`;
     const username = last?.username || ident.displayName || ident.login;
-    const [row] = await db.insert(messages).values({
-      platform, platformMessageId: id, platformUserId: ident.platformUserId, platformUsername: username,
-      content: text, contentRaw: ucOnlyContentRaw(platform, text, (last?.raw as Record<string, unknown>) || null, { reason: body.data.reason || '', heldId }),
-      channel: pch, isUnitychatUser: true, sentAt: new Date(),
-    }).returning();
+    const m: IngestMessage = {
+      platform, platformMessageId: id, platformUserId: ident.platformUserId, username, channel: pch, content: text,
+      contentRaw: ucOnlyContentRaw(platform, text, (last?.raw as Record<string, unknown>) || null, { reason: body.data.reason || '', heldId }),
+      sentAt: new Date(), isUnitychatUser: true, isReply: false, replyToMessageId: null,
+    };
+    // Filtr odkazů + GIF žádost (nastaví m.deleted, akce na pozadí) PŘED zápisem — jako ingest onLive.
+    const verdict = opts.linkFilter?.check(m) ?? null;
+    const [row] = await db.insert(messages).values(toRow(m)).returning();
     if (heldId) ucOnlyHeld.remember(heldId, id);
     const live = toClientMessage(row, false);
     publishChat(pch, platform, live);
     broadcast('uc-only', { channel, message: live });
-    req.log.info({ accountId, platform, channel, id, heldId, len: text.length, reason: (body.data.reason || '').slice(0, 80) }, 'uc-only: zpráva jen přes UnityChat');
+    req.log.info({ accountId, platform, channel, id, heldId, len: text.length, reason: (body.data.reason || '').slice(0, 80), filter: verdict ? (verdict.gif ? 'gif' : 'link') : null }, 'uc-only: zpráva jen přes UnityChat');
     return { ok: true, id, message: live };
   });
 

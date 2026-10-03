@@ -3,6 +3,7 @@
 // přes náš server: uvidí ji všichni v UnityChatu (addon, web, OBS) s logem UnityChatu místo loga platformy.
 // Commandy (`!`, `/`) a GIF odkazy ne — bot je přes UnityChat nevidí, GIFy mají vlastní schvalování.
 import { hasGifLink } from './gif-links.js';
+import { findLinks } from './links.js';
 
 const NAMES = { twitch: 'Twitch', youtube: 'YouTube', kick: 'Kick' };
 const MARKER = '⠀';
@@ -14,6 +15,17 @@ export const ucOnlyText = (text) => String(text || '').replaceAll(MARKER, '').re
 export function ucOnlyEligible(text) {
   const t = ucOnlyText(text);
   return !!t && !t.startsWith('!') && !t.startsWith('/') && !hasGifLink(t);
+}
+
+/**
+ * Poslat rovnou přes UnityChat, ne na platformu? YouTube zprávy diváků s odkazem (i GIF) přijme a nezveřejní
+ * (2026-10-03 Winter_Ian: insert vrátil id, v chatu nic) → divák je na YouTube posílá rovnou sem; server je prožene
+ * filtrem odkazů a schvalováním GIFů jako zprávu z platformy. Mod / streamer (ověřený serverem) a commandy dál na YouTube.
+ */
+export function ucOnlyDirect(platform, text, { isMod = false } = {}) {
+  if (platform !== 'youtube' || isMod) return false;
+  const t = ucOnlyText(text);
+  return !!t && !t.startsWith('!') && !t.startsWith('/') && findLinks(t).length > 0;
 }
 
 /** Tooltip loga u zprávy jen přes UnityChat. */

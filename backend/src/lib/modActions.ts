@@ -11,6 +11,7 @@ import { refreshTokens } from './platformTokens.js';
 import { twitchUserId, kickUserId } from './botSend.js';
 import { youtubeLiveChatId } from './webSend.js';
 import { isGifMessageId } from './gifIds.js';
+import { UCO_PREFIX } from './ucOnly.js';
 
 export type ModResult = 'ok' | 'bot' | `error:${string}`;
 
@@ -221,6 +222,8 @@ export async function deletePlatformMessage(
 ): Promise<ModResult> {
   // Schválený GIF (část 4) je syntetická zpráva jen v UnityChatu — na platformě není co mazat.
   if (isGifMessageId(p.messageId)) return 'ok';
+  // Zpráva jen přes UnityChat (`uco-…`, lib/ucOnly.ts) na platformě není.
+  if (p.messageId.startsWith(UCO_PREFIX)) return 'ok';
   const { result } = await withModActor(p, deps, 'mod delete', async (ctx) => {
     let url: string;
     if (p.platform === 'twitch') {

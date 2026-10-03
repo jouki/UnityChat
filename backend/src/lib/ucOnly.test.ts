@@ -26,3 +26,8 @@ test('ucOnly: zadržená zpráva se spáruje jednou, po 24 h ne', () => {
   now = HELD_TTL_MS + 1;
   assert.equal(r.take('Chw2'), null);
 });
+
+test('ucOnlyContentRaw: YouTube nese odznaky z poslední zprávy (role pro filtr odkazů a GIFy)', () => {
+  assert.deepEqual(ucOnlyContentRaw('youtube', 'x', { badges: ['Moderátor'] }, { reason: '', heldId: null }).badges, ['Moderátor']);
+  assert.equal('badges' in ucOnlyContentRaw('youtube', 'x', null, { reason: '', heldId: null }), false);
+});

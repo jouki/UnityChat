@@ -53,10 +53,16 @@ s.onevent = async (d) => {
   if (u.includes('/account/stream-ticket')) return json({ ok: true, ticket: 'tk', expiresInMs: 60000 });
   if (u.includes('/account/stream')) return;
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
-  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' } }, warnings: [] });
+  if (u.includes('/auth/me')) return json({ ok: true, accountId: 7, platforms: { twitch: { login: 'moduser', displayName: 'ModUser' }, youtube: { login: '@moduser', displayName: 'ModUser' } }, warnings: [] });
   if (u.includes('/moderation/me')) return json({ ok: true, mod: false, platforms: [], missingScopes: {} });
   if (u.includes('/chat/uc-only')) {
     posts.uco.push(body);
+    if (posts.uco.length > 2) {
+      // E: přímé odeslání z YouTube — GIF server schová (gif_request) a pošle bez obsahu.
+      const id = `uco-${posts.uco.length}`;
+      const gif = /\.gif\b/.test(body.text);
+      return json({ ok: true, id, message: { platform: body.platform, id, username: 'ModUser', userId: 'y7', message: gif ? '' : body.text, timestamp: Date.now(), uc: true, ucOnly: true, historical: false, ...(gif ? { deleted: true, deletedReason: 'gif_request' } : {}) } });
+    }
     return json({ ok: true, id: 'uco-1', message: { platform: body.platform, id: 'uco-1', username: 'ModUser', userId: 'u7', message: body.text, timestamp: Date.now(), uc: true, ucOnly: true, color: '#ff8c00', badgesRaw: '', historical: false } });
   }
   if (u.includes('/chat/send')) { posts.send.push(body); return mock.sendFail ? json({ ok: false, error: 'twitch: message dropped (msg_rejected)' }, 422) : json({ ok: true, id: 's-1' }); }
@@ -115,6 +121,25 @@ for (let i = 0; i < 30 && posts.send.length === sendsBefore; i++) await sleep(10
 check('D command v režimu Jen UnityChat jde na platformu', posts.send.at(-1)?.text === '!test' && posts.uco.length === 2, JSON.stringify(posts.send.at(-1)));
 await ev(`(() => { document.getElementById('platform-btn').click(); document.querySelector('#platform-menu .pm-row[data-platform="twitch"]').click(); return true; })()`);
 check('D výběr platformy volbu zruší', await ev(`!document.getElementById('active-badge').classList.contains('uco') && document.getElementById('msg-input').placeholder === 'Zpráva do Twitch...'`) === true);
+
+// E: YouTube — divák (ne mod) s odkazem → rovnou přes UnityChat (YouTube odkazy diváků nezveřejní); bez odkazu na YouTube
+await ev(`(() => { document.getElementById('platform-btn').click(); document.querySelector('#platform-menu .pm-row[data-platform="youtube"]').click(); return true; })()`);
+const sendsE = posts.send.length;
+await type('koukni https://example.com/clanek');
+for (let i = 0; i < 30 && posts.uco.length < 3; i++) await sleep(100);
+check('E odkaz z YouTube → /chat/uc-only, ne /chat/send', posts.uco.length === 3 && posts.uco[2].platform === 'youtube' && posts.uco[2].text === 'koukni https://example.com/clanek' && posts.send.length === sendsE, JSON.stringify(posts.uco[2]));
+await until(`${ROW('koukni https://example.com/clanek')}.some(r => r.uco)`, 3000);
+const e1 = await ev(ROW('koukni https://example.com/clanek'));
+check('E jedna zpráva s logem UnityChatu (optimistická upgradovaná)', e1.length === 1 && e1[0].id === 'uco-3' && e1[0].uco && !e1[0].failed, JSON.stringify(e1));
+await type('https://media.tenor.com/abc/x.gif');
+for (let i = 0; i < 30 && posts.uco.length < 4; i++) await sleep(100);
+check('E GIF z YouTube → /chat/uc-only', posts.uco.length === 4 && posts.send.length === sendsE, JSON.stringify(posts.uco[3]));
+await sleep(400);
+const e2 = await ev(`[...document.querySelectorAll('#chat .msg')].filter(x => x.dataset.msgId === 'uco-4').map(x => ({ cls: x.className, tx: x.querySelector('.tx')?.textContent || '' }))`);
+check('E GIF: jedna vlastní zpráva pod id uco-4 (bez neodesláno)', e2.length === 1 && !/send-failed/.test(e2[0].cls), JSON.stringify(e2));
+await type('ahoj youtube');
+for (let i = 0; i < 30 && posts.send.length === sendsE; i++) await sleep(100);
+check('E bez odkazu → na YouTube (/chat/send)', posts.send.at(-1)?.platform === 'youtube' && posts.send.at(-1)?.text?.startsWith('ahoj youtube') && posts.uco.length === 4, JSON.stringify(posts.send.at(-1)));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

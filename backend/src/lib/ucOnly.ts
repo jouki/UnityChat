@@ -21,7 +21,8 @@ export function ucOnlyContentRaw(platform: Platform, text: string, last: Record<
   const ucOnly = { reason: meta.reason.slice(0, 200), ...(meta.heldId ? { heldId: meta.heldId } : {}) };
   if (platform === 'twitch') return { color: last?.color ?? null, badges: typeof last?.badges === 'string' ? last.badges : '', login: last?.login, displayName: last?.displayName, ucOnly };
   if (platform === 'kick') return { color: last?.color ?? null, badges: Array.isArray(last?.badges) ? last.badges : [], content: text, ucOnly };
-  return { runs: [{ text }], ucOnly };
+  // Odznaky YouTube (tooltipy) z poslední zprávy: role pro filtr odkazů a GIFy (lib/linkFilter.ts rolesFromBadges).
+  return { runs: [{ text }], ...(Array.isArray(last?.badges) ? { badges: last.badges } : {}), ucOnly };
 }
 
 /** Zadržené zprávy YouTube, za které už šla zpráva jen přes UnityChat: id zprávy v chatu → id `uco-…`. */
