@@ -470,3 +470,11 @@ test('GIF od moda / broadcastera: přístup ze Židolišty jako divák (role v d
   const b = harness(undefined, { gif: busy.hook });
   assert.equal(b.f.check(msg({ content: GIF_TEXT, contentRaw: { badges: 'moderator/1' } })), null);
 });
+
+test('filtr: role účtu z jiné platformy (accountRole, /chat/uc-only) = výjimka moda / streamera', () => {
+  const { f, calls } = harness();
+  assert.equal(f.check(msg({ platform: 'youtube', contentRaw: { runs: [] }, accountRole: 'moderator' })), null);
+  assert.equal(f.check(msg({ platform: 'youtube', contentRaw: { runs: [] }, accountRole: 'broadcaster' })), null);
+  assert.notEqual(f.check(msg({ platform: 'youtube', contentRaw: { runs: [] } })), null, 'bez role účtu divák → smazáno');
+  assert.equal(calls.published.length <= 1, true);
+});

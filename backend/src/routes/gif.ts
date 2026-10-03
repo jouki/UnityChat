@@ -318,7 +318,19 @@ export async function gifStateFor(accountId: number, q: { channel: string; platf
   const ident = (q.platform ? ids.find((i) => i.platform === q.platform) : null) ?? (q.platform ? null : ids[0]);
   if (!ident) return none;
   const pc = ident.platform === 'twitch' ? q.channel : await deps.platformChannel(q.channel, ident.platform);
-  const role = pc ? await deps.role(ident.platform, ident.login, pc) : 'viewer';
+  let role = pc ? await deps.role(ident.platform, ident.login, pc) : 'viewer';
+  // Mod / streamer kanálu na jiné propojené platformě je modem i pro GIFy (odměna UnityChatu / Židolišty, ne oprávnění
+  // platformy): 2026-10-03 Jouki — mod na Twitchi, na YouTube bez odznaku → „Odměna není aktivována“.
+  if (role !== 'moderator' && role !== 'broadcaster') {
+    for (const o of ids) {
+      if (o === ident) continue;
+      const opc = o.platform === 'twitch' ? q.channel : await deps.platformChannel(q.channel, o.platform);
+      if (!opc) continue;
+      const r = await deps.role(o.platform, o.login, opc);
+      if (r === 'broadcaster') { role = r; break; }
+      if (r === 'moderator') role = r;
+    }
+  }
   const a = await deps.access({ workspace: slug, platform: ident.platform, userId: ident.platformUserId, login: ident.login.toLowerCase(), role });
   const extra = { mode: a?.mode ?? 'all', cooldownGlobalSec: a?.cooldownGlobalSec ?? 0 } as const;
   // Mod / broadcaster bez výjimky: odemčení, cooldown i pásek ze Židolišty stejně jako divák (spec 2026-09-27-gif-review-upravy

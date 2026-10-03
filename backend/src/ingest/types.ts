@@ -16,6 +16,11 @@ export interface IngestMessage {
    * Smazaná už při příjmu (filtr odkazů, lib/linkFilter.ts): toRow uloží deleted_* rovnou
    * s řádkem, /chat/stream ji dostane bez obsahu. Obsah zůstává v DB (obnovení permitem).
    */
+  /**
+   * Role účtu UnityChatu v kanálu z jiné propojené platformy (zpráva jen přes UnityChat, /chat/uc-only): mod na Twitchi
+   * je modem i pro filtr odkazů a GIFy u zprávy z YouTube, kde odznak nemá. Ingest ji nikdy nenastavuje.
+   */
+  accountRole?: 'moderator' | 'broadcaster';
   deleted?: { by: string; reason: 'link_filter' | 'gif_request' | 'gif_rejected' | 'gif_not_allowed' | 'gif_denied' };
 }
 

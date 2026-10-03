@@ -708,3 +708,15 @@ test('PUT /account/gif-prefs: platná hodnota → 200 a zaznamenáno; neplatná 
   assert.deepEqual(r.json(), { ok: false, error: 'clientFetch' });
   await app.close();
 });
+
+test('gifStateFor: mod na jiné propojené platformě je modem i pro GIFy (2026-10-03: Twitch mod, YouTube bez odznaku)', async () => {
+  const log: unknown[] = [];
+  // Píše na Kick, kde má roli sub; na Twitchi je mod → Židolišta dostane moderator.
+  await gifStateFor(7, { channel: 'robdiesalot', platform: 'kick' }, stateDeps({ role: async (p) => (p === 'twitch' ? 'moderator' : 'sub') }, log));
+  assert.equal((log[0] as { role: string; platform: string }).role, 'moderator');
+  assert.equal((log[0] as { platform: string }).platform, 'kick', 'identita zůstává ta, kam píše');
+  // Nikde mod → vlastní role.
+  const log2: unknown[] = [];
+  await gifStateFor(7, { channel: 'robdiesalot', platform: 'kick' }, stateDeps({}, log2));
+  assert.equal((log2[0] as { role: string }).role, 'sub');
+});

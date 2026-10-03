@@ -407,6 +407,9 @@ export function createLinkFilter(deps: LinkFilterDeps) {
         if (!ws || !ucChannel) return null;
         const raw = (m.contentRaw || {}) as Record<string, unknown>;
         const roles = rolesFromBadges(m.platform, raw.badges, m.username, m.channel);
+        // Role účtu z jiné platformy (jen /chat/uc-only, IngestMessage.accountRole).
+        if (m.accountRole === 'broadcaster') roles.isBroadcaster = true;
+        else if (m.accountRole === 'moderator') roles.isMod = true;
         const settings = deps.settingsFor(ws.slug);
         const bot = isKnownBot({ platform: m.platform, login: m.username, userId: m.platformUserId || null, ws, extraBots: settings.extraBots, isBotAccount: deps.isBotAccount });
 

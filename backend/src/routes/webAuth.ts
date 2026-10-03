@@ -335,6 +335,12 @@ export default async function webAuthRoutes(app: FastifyInstance, opts: { ingest
       contentRaw: ucOnlyContentRaw(platform, text, (last?.raw as Record<string, unknown>) || null, { reason: body.data.reason || '', heldId }),
       sentAt: new Date(), isUnitychatUser: true, isReply: false, replyToMessageId: null,
     };
+    // Mod / streamer kanálu na kterékoli propojené platformě = mod i pro filtr odkazů a GIFy (YouTube odznak nemá).
+    try {
+      const mods = await accountModIdentities(accountId, channel);
+      if (mods.some((x) => x.role === 'broadcaster')) m.accountRole = 'broadcaster';
+      else if (mods.length) m.accountRole = 'moderator';
+    } catch (e) { req.log.warn({ err: (e as Error).message }, 'uc-only: role účtu nezjištěna'); }
     // Filtr odkazů + GIF žádost (nastaví m.deleted, akce na pozadí) PŘED zápisem — jako ingest onLive.
     const verdict = opts.linkFilter?.check(m) ?? null;
     const [row] = await db.insert(messages).values(toRow(m)).returning();
