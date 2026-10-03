@@ -50,6 +50,7 @@ s.onevent = async (d) => {
   const u = q.url;
   const body = q.postData ? JSON.parse(q.postData) : null;
   if (u.includes('/nicknames/stream')) return fulfill(rid, sid, 200, 'text/event-stream', 'retry: 60000\n\n');
+  if (u.includes('/nicknames')) return json({ ok: true, nicknames: [{ platform: 'youtube', username: 'winter_ian', nickname: 'W1nter I.', color: null }] });
   if (u.includes('/account/stream-ticket')) return json({ ok: true, ticket: 'tk', expiresInMs: 60000 });
   if (u.includes('/account/stream')) return;
   if (u.includes('/account/warnings')) return json({ ok: true, warnings: [] });
@@ -70,7 +71,7 @@ s.onevent = async (d) => {
   if (u.includes('/moderation/')) return json({ ok: true, requests: [], messages: {} });
   return call('Fetch.continueRequest', { requestId: rid }, sid);
 };
-await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/', '/nicknames/stream', '/account/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
+await call('Fetch.enable', { patterns: ['/auth/me', '/moderation/', '/chat/', '/nicknames', '/account/'].map((p) => ({ urlPattern: `*api.jouki.cz${p}*` })) }, sessionId);
 await call('Runtime.enable', {}, sessionId);
 const ev = async (expr) => { const r = await call('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sessionId); if (r.result?.exceptionDetails) return { __err: JSON.stringify(r.result.exceptionDetails).slice(0, 300) }; return r.result?.result?.value; };
 const until = async (expr, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await ev(expr) === true) return true; await sleep(150); } return false; };
@@ -140,6 +141,17 @@ check('E GIF: jedna vlastní zpráva pod id uco-4 (bez neodesláno)', e2.length 
 await type('ahoj youtube');
 for (let i = 0; i < 30 && posts.send.length === sendsE; i++) await sleep(100);
 check('E bez odkazu → na YouTube (/chat/send)', posts.send.at(-1)?.platform === 'youtube' && posts.send.at(-1)?.text?.startsWith('ahoj youtube') && posts.uco.length === 4, JSON.stringify(posts.send.at(-1)));
+
+// F: víceslovná přezdívka v @zmínce odejde jako login → echo z YouTube se spáruje s optimistickou (2026-10-03 dvakrát).
+const sendsF = posts.send.length;
+await type('@W1nter I. ahoj tam');
+for (let i = 0; i < 30 && posts.send.length === sendsF; i++) await sleep(100);
+const sentF = posts.send.at(-1)?.text || '';
+check('F na YouTube odešel login místo přezdívky', /^@winter_ian ahoj tam/i.test(sentF), sentF);
+await ev(`(() => { const o = [...document.querySelectorAll('#chat .msg')].find(x => (x.querySelector('.tx')?.textContent || '').includes('ahoj tam')); const m = window.ucGif.msg(o.dataset.msgId); window.ucGif.add({ platform: 'youtube', id: 'yt-echo-f', username: m.username, userId: 'y7', message: '@Winter_Ian ahoj tam \\u2800', timestamp: Date.now(), uc: true }); return true; })()`);
+await sleep(400);
+const f = await ev(`[...document.querySelectorAll('#chat .msg')].filter(x => (x.querySelector('.tx')?.textContent || '').includes('ahoj tam')).map(x => x.dataset.msgId)`);
+check('F echo spárované: jedna zpráva s id echa', f.length === 1 && f[0] === 'yt-echo-f', JSON.stringify(f));
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

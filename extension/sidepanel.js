@@ -4170,6 +4170,7 @@ class UnityChat {
       platform,
       username,
       message: displayText,
+      _wireText: wireText,
       color: base.color,
       badgesRaw: base.badgesRaw,
       timestamp: Date.now(),
@@ -8728,7 +8729,9 @@ class UnityChat {
     }
 
     // Párování optimistická ↔ echo z platformy (echo má jiné id, stejný text).
-    const contentKey = this._contentKey(msg.platform, msg.username, msg.message);
+    // Optimistická zpráva páruje podle textu, který opravdu odešel (@přezdívka → @login, _wireText): 2026-10-03
+    // „@W1nter I. …“ odešlo jako „@Winter_Ian …“, klíč z přezdívky se s echem nesešel → zpráva 2× do zálohy.
+    const contentKey = this._contentKey(msg.platform, msg.username, msg._optimistic && msg._wireText != null ? msg._wireText : msg.message);
     if (msg._optimistic) {
       if (contentKey) this._optimisticKeys.set(contentKey, msg.id);
     } else if (contentKey && this._optimisticKeys.has(contentKey)) {
