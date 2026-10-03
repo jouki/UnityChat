@@ -13,7 +13,7 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
-import { ucSends, markUc, ucReplies, attachUcReply, gifReviews, bcastSends, attachBcast } from './lib/ucSends.js';
+import { ucSends, markUc, ucReplies, attachUcReply, gifReviews, bcastSends, attachBcast, markBcastById } from './lib/ucSends.js';
 import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
 import integrationRoutes from './routes/integrations.js';
@@ -49,6 +49,8 @@ import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePerm
 import { isBotAccount, isBotAuthor, isSharedBotId } from './lib/botIdentities.js';
 import { anncHides } from './lib/anncHides.js';
 import { botReplyDedup } from './lib/botReplyDedup.js';
+/** První odpovědi bota schované announcementem — jejich kopie z dalších platforem se schovají taky (ne skupina). */
+const anncHiddenBotFirst = new Set<string>();
 import { ucOnlyHeld } from './lib/ucOnly.js';
 import { startDonorsRefresh } from './lib/donors.js';
 import { loadBadgePrefs } from './lib/badgePrefs.js';
@@ -250,11 +252,26 @@ const ingest = createIngest({
     const ucCh = wsInfo?.channels.twitch || m.channel;
     const hid = anncHides.match(m, ucCh);
     if (hid) { m.contentRaw = { ...(m.contentRaw || {}), anncHidden: hid }; app.log.info({ platform: m.platform, id: m.platformMessageId, annc: hid }, 'announcement: odpověď potlačena'); }
-    // Odpověď bota na broadcast commandu přišla i z další platformy → v UnityChatu jen jednou (lib/botReplyDedup.ts).
+    // Odpověď bota na broadcast commandu z víc platforem (lib/botReplyDedup.ts) → v UnityChatu JEDNA zpráva s logy
+    // platforem jako broadcast (pokyn usera 2026-10-03): první odpověď + kopie = skupina `bot-<id první>`. Když první
+    // odpověď schoval announcement, kopie se schová taky (dupHidden), jinak by se odpověď objevila místo announcementu.
     let dupOf: string | null = null;
     if (wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId)) {
-      dupOf = botReplyDedup.check(m, ucCh);
-      if (dupOf) { m.contentRaw = { ...(m.contentRaw || {}), botDupOf: dupOf }; app.log.info({ platform: m.platform, id: m.platformMessageId, dupOf }, 'bot: odpověď z další platformy v UC skryta'); }
+      const firstId = botReplyDedup.check(m, ucCh);
+      if (!firstId && hid) anncHiddenBotFirst.add(m.platformMessageId);
+      if (anncHiddenBotFirst.size > 300) anncHiddenBotFirst.delete(anncHiddenBotFirst.values().next().value!);
+      if (firstId && anncHiddenBotFirst.has(firstId)) {
+        dupOf = firstId;
+        m.contentRaw = { ...(m.contentRaw || {}), botDupOf: firstId };
+        app.log.info({ platform: m.platform, id: m.platformMessageId, dupOf: firstId }, 'bot: kopie odpovědi schované announcementem → v UC skryta');
+      } else if (firstId) {
+        const g = botReplyDedup.group(firstId);
+        const group = { id: `bot-${firstId}`, targets: g?.platforms ?? [m.platform] };
+        m.contentRaw = { ...(m.contentRaw || {}), bcast: { id: group.id, targets: group.targets } };
+        if (g) markBcastById(g.platform, m.channel, firstId, group, app.log);
+        broadcast('bcast-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, group: group.id, targets: group.targets });
+        app.log.info({ platform: m.platform, id: m.platformMessageId, group: group.id, targets: group.targets }, 'bot: odpověď z další platformy → jedna zpráva s logy');
+      }
     }
     // YouTube pustil dřív zadrženou zprávu, za kterou už UnityChat ukázal vlastní (lib/ucOnly.ts) → v UC podruhé ne.
     const ucoOf = !dupOf && m.platform === 'youtube' ? ucOnlyHeld.take(m.platformMessageId) : null;

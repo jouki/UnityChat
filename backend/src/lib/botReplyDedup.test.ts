@@ -15,3 +15,13 @@ test('botReplyDedup: stejná odpověď bota z další platformy do 15 s = duplik
   assert.equal(d.check(msg('kick', 'k3', 'Koukáš na stream? https://jouki.cz/aoe/', 25_000), 'robdiesalot'), null, 'mimo okno');
   assert.equal(d.check(msg('kick', 'k4', 'Koukáš na stream? https://jouki.cz/aoe/', 1000), 'jinykanal'), null, 'jiný kanál');
 });
+
+test('botReplyDedup: skupina odpovědí — platforma první + všechny platformy, kde bot odpověděl (jedna zpráva s logy)', () => {
+  const d = new BotReplyDedup(() => T0);
+  d.check(msg('twitch', 't1', 'Kategorie: WoW'), 'robdiesalot');
+  assert.equal(d.group('t1'), null, 'bez kopie zatím žádná skupina');
+  assert.equal(d.check(msg('kick', 'k1', 'Kategorie: WoW', 800), 'robdiesalot'), 't1');
+  assert.deepEqual(d.group('t1'), { platform: 'twitch', platforms: ['twitch', 'kick'] });
+  d.check(msg('youtube', 'y1', 'Kategorie: WoW', 2000), 'robdiesalot');
+  assert.deepEqual(d.group('t1'), { platform: 'twitch', platforms: ['twitch', 'kick', 'youtube'] });
+});

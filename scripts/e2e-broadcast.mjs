@@ -222,6 +222,21 @@ check('I historie s bcast: jedna zpráva, Twitch + Kick rozsvícené, YouTube č
 check('I živě z IRC + bcast-mark po zprávě i před ní: jedna zpráva', JSON.stringify(iRows[1]) === JSON.stringify(['ol-tw=on/on']), JSON.stringify(iRows));
 check('I kopie vykreslená před markem se vstřebá (zmizí)', JSON.stringify(iRows[2]) === JSON.stringify(['om-tw=on/on']), JSON.stringify(iRows));
 
+// ---- J: odpověď bota na broadcast commandu z víc platforem = JEDNA zpráva s logy (2026-10-03). Server: první odpověď
+// dostane bcast-mark se skupinou bot-<id>, kopie z další platformy přijde s bcast a cíle se postupně rozšiřují. ----
+await ev(`(() => { const t = Date.now();
+  window.ucGif.add({ platform: 'twitch', id: 'bot-tw', username: 'JoukiBOT', userId: 'b1', message: 'Kategorie: World of Warcraft', timestamp: t });
+  window.ucGif.bcastMark({ platform: 'twitch', id: 'bot-tw', group: 'bot-bot-tw', targets: ['twitch', 'kick'] });
+  window.ucGif.bcastMark({ platform: 'kick', id: 'bot-ki', group: 'bot-bot-tw', targets: ['twitch', 'kick'] });
+  window.ucGif.add({ platform: 'kick', id: 'bot-ki', username: 'JoukiBOT', userId: 'b2', message: 'Kategorie: World of Warcraft', timestamp: t + 800, bcast: { id: 'bot-bot-tw', targets: ['twitch', 'kick'] } });
+  window.ucGif.bcastMark({ platform: 'twitch', id: 'bot-tw', group: 'bot-bot-tw', targets: ['twitch', 'kick', 'youtube'] });
+  window.ucGif.bcastMark({ platform: 'youtube', id: 'bot-yt', group: 'bot-bot-tw', targets: ['twitch', 'kick', 'youtube'] });
+  window.ucGif.add({ platform: 'youtube', id: 'bot-yt', username: 'JoukiBOT', userId: 'b3', message: 'Kategorie: World of Warcraft', timestamp: t + 2000, bcast: { id: 'bot-bot-tw', targets: ['twitch', 'kick', 'youtube'] } });
+  return true; })()`);
+await sleep(300);
+const jRows = await ev(`[...document.querySelectorAll('#chat .msg')].filter(e => (e.querySelector('.tx')?.textContent || '').includes('World of Warcraft')).map(e => e.dataset.msgId + '=' + [...e.querySelectorAll('.uc-bc-slot')].map(s => s.dataset.platform + ':' + s.className.replace('uc-bc-slot uc-bc-', '')).join('/'))`);
+check('J odpověď bota z Twitche, Kicku a YouTube = jedna zpráva, všechna tři loga rozsvícená', JSON.stringify(jRows) === JSON.stringify(['bot-tw=twitch:on/kick:on/youtube:on']), JSON.stringify(jRows));
+
 // ---- Filtry platforem přežijí obnovení panelu (pokyn usera 2026-09-30) ----
 await ev(`(() => { const b = document.querySelector('.fbtn[data-platform="youtube"]'); if (b.classList.contains('active')) b.click(); return true; })()`);
 const fSaved = await ev(`chrome.storage.local.get('uc_filters').then((r) => r.uc_filters)`);

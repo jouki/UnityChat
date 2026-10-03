@@ -93,9 +93,19 @@ export function createBroadcastGroups({ log } = {}) {
     },
     /** Všechny cíle selhaly? (host pak zprávu označí jako neodeslanou celou) */
     allFailed(key) { const e = groups.get(key); return !!e && e.targets.every((p) => e.failed.has(p)); },
-    /** Zpráva `id` patří do skupiny, která už má vykreslený prvek → nekreslit, jen rozsvítit logo. */
-    absorb(key, platform, id) {
+    /** Cíle skupiny doplnit (odpověď bota z další platformy — cíle se dozvídáme postupně). */
+    extend(key, targets) {
       const e = groups.get(key);
+      if (!e || !Array.isArray(targets)) return;
+      const add = targets.filter((p) => BC_PLATFORMS.includes(p) && !e.targets.includes(p));
+      if (!add.length) return;
+      e.targets = BC_PLATFORMS.filter((p) => e.targets.includes(p) || add.includes(p));
+      paintBroadcast(e);
+    },
+    /** Zpráva `id` patří do skupiny, která už má vykreslený prvek → nekreslit, jen rozsvítit logo (`targets` doplní cíle). */
+    absorb(key, platform, id, targets = null) {
+      const e = groups.get(key);
+      if (e && targets) api.extend(key, targets);
       // Prvek může být zaparkovaný mimo DOM (okno 300 uzlů) — pořád je to vykreslená zpráva skupiny.
       if (!e || !e.el) return false;
       if (id != null && String(id) === String(e.primaryId)) return false;
@@ -105,7 +115,12 @@ export function createBroadcastGroups({ log } = {}) {
     },
     isAbsorbed: (id) => id != null && absorbed.has(String(id)),
     /** SSE bcast-mark: zapamatovat (zpráva může přijít až po marku). */
-    noteMark({ id, group, targets }) { if (id && group) { marks.set(String(id), { id: group, targets: Array.isArray(targets) ? targets : [] }); cap(marks); } },
+    noteMark({ id, group, targets }) {
+      if (!id || !group) return;
+      marks.set(String(id), { id: group, targets: Array.isArray(targets) ? targets : [] });
+      cap(marks);
+      api.extend(group, targets);
+    },
     markFor: (id) => (id != null ? marks.get(String(id)) : undefined),
   };
   return api;

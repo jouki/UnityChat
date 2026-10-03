@@ -173,6 +173,20 @@ export function attachBcast(m: IngestMessage, group: BcastGroup, log?: { info(o:
 }
 
 /**
+ * Skupina pro zprávu, kterou už ingest odeslal (známe jen platformu + id) — první odpověď bota na broadcast commandu
+ * (2026-10-03: odpovědi z víc platforem jako JEDNA zpráva s logy, ne schovaná kopie). SSE bcast-mark + UPDATE v DB.
+ */
+export function markBcastById(platform: string, channel: string, id: string, group: BcastGroup, log?: { info(o: object, msg: string): void; warn(o: object, msg: string): void }): void {
+  const bcast = { id: group.id, targets: [...group.targets] };
+  broadcast('bcast-mark', { platform, channel, id, group: bcast.id, targets: bcast.targets });
+  const update = () => db.update(messages).set({ contentRaw: sql`coalesce(${messages.contentRaw}, '{}'::jsonb) || ${JSON.stringify({ bcast })}::jsonb` })
+    .where(and(eq(messages.platform, platform), eq(messages.platformMessageId, id)))
+    .catch((err) => log?.warn({ err, id }, 'broadcast: update DB (první odpověď) selhal'));
+  void update();
+  setTimeout(() => void update(), 3000).unref?.();
+}
+
+/**
  * Označit zprávu jako odeslanou z UnityChatu: příznak na objektu (ingest ho ještě může mít
  * ve frontě na zápis), SSE `uc-mark` pro klienty (addon má zprávu z vlastního IRC, o příznaku
  * by se jinak nedozvěděl) a u zpětného nálezu i UPDATE v DB (hned + po 3 s — dávka ingestu

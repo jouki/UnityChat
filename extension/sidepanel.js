@@ -8723,7 +8723,7 @@ class UnityChat {
       if (this._bcGroups.isAbsorbed(msg.id)) return;
       const bc = msg.bcast || this._bcGroups.markFor(msg.id);
       if (bc?.id) {
-        if (this._bcGroups.absorb(bc.id, msg.platform, msg.id)) return;
+        if (this._bcGroups.absorb(bc.id, msg.platform, msg.id, bc.targets)) return;
         bcInfo = bc;
       }
     }
