@@ -88,6 +88,31 @@ export function createBotDupMarks(cap = 500) {
   };
 }
 
+/**
+ * Rozdělená odpověď bota (backend lib/botParts.ts, SSE `bot-segment` {platform, id, fullText}): díl 1 se v UnityChatu
+ * kreslí s celým textem (další díly skryje `bot-dup`). Addon / web mají Twitch a Kick z vlastního spojení (text dílu),
+ * proto host: `note()` při SSE (vrátí patch pro už vykreslenou zprávu), `patch(msg)` u každé příchozí zprávy.
+ */
+export function createBotSegments(cap = 300) {
+  const full = new Map();
+  const fields = (msg, text) => ({ ...msg, message: text, ytRuns: msg?.platform === 'youtube' ? [{ text }] : msg?.ytRuns, kickContent: msg?.platform === 'kick' ? text : msg?.kickContent, twitchEmotes: null, twitchEmotesOffset: 0, segments: undefined });
+  return {
+    note(id, fullText) {
+      const key = String(id || '');
+      if (!key || typeof fullText !== 'string' || !fullText) return false;
+      full.set(key, fullText);
+      if (full.size > cap) full.delete(full.keys().next().value);
+      return true;
+    },
+    /** Zpráva s celým textem, pokud je to díl 1 dělené odpovědi; jinak tatáž zpráva. */
+    patch(msg) {
+      const text = msg?.id != null ? full.get(String(msg.id)) : null;
+      return text ? fields(msg, text) : msg;
+    },
+    has(id) { return id != null && full.has(String(id)); },
+  };
+}
+
 const isHttps = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u);
 
 /**

@@ -23,6 +23,7 @@ import { storeIdentityForOwner, type IdentityInfo, type TokenSet } from '../lib/
 import { SHARED, upsertBotIdentity, deleteBotIdentity, botStatus, upsertChannelGrant, deleteChannelGrant } from '../lib/botIdentities.js';
 import { workspaceBySlug, workspacesSource, type Platform } from '../lib/zidolista.js';
 import { sendAsBot, BotSendError } from '../lib/botSend.js';
+import { botParts, ingestIdFor, applyBotPartLate } from '../lib/botParts.js';
 import { subscribeIntegration, integrationStreamStats } from '../sse/integrationStream.js';
 import type { Ingest } from '../ingest/index.js';
 
@@ -34,6 +35,13 @@ const SendBody = z.object({
   text: z.string().min(1).max(480),
   replyTo: z.string().max(200).optional().nullable(),
   idempotencyKey: z.string().min(8).max(100),
+  // Díl rozdělené odpovědi (lib/botParts.ts, kontrakt 2026-10-03): v UnityChatu jedna zpráva s celým textem.
+  part: z.object({
+    group: z.string().min(1).max(120),
+    index: z.number().int().min(1).max(50),
+    total: z.number().int().min(1).max(50),
+    fullText: z.string().min(1).max(5000),
+  }).refine((p) => p.index <= p.total).optional(),
 });
 const LinkTokenBody = z.object({
   workspace: Slug,
@@ -173,7 +181,7 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
     if (!auth(req, reply)) return reply;
     const body = SendBody.safeParse(req.body);
     if (!body.success) return reply.code(400).send({ ok: false, error: 'body', issues: body.error.issues.map((i) => i.path.join('.')) });
-    const { workspace, platform, text, replyTo, idempotencyKey } = body.data;
+    const { workspace, platform, text, replyTo, idempotencyKey, part } = body.data;
     const slug = workspace.toLowerCase();
     sweepSent();
     const key = `${slug}:${idempotencyKey}`;
@@ -184,7 +192,12 @@ export default async function integrationRoutes(app: FastifyInstance, opts: { in
       const r = await sendAsBot({ workspace: slug, platform, text, replyTo: replyTo || null }, { ingest: opts.ingest, log: req.log });
       const out = { ok: true, id: r.id, channel: r.channel, login: r.login, identity: r.identity, badge: r.badge };
       sent.set(key, { status: 202, body: out, at: Date.now() });
-      req.log.info({ workspace: slug, platform, channel: r.channel, login: r.login, identity: r.identity, badge: r.badge, id: r.id, len: r.text.length }, 'bot send');
+      req.log.info({ workspace: slug, platform, channel: r.channel, login: r.login, identity: r.identity, badge: r.badge, id: r.id, len: r.text.length, ...(part ? { part: `${part.index}/${part.total}` } : {}) }, 'bot send');
+      // Díl odpovědi → spárovat se zprávou z ingestu; echo už mohlo dorazit (zpětně).
+      if (part && r.id) {
+        const arrived = botParts.note(platform, ingestIdFor(platform, r.id), part);
+        if (arrived) applyBotPartLate(arrived, part, (await workspaceBySlug(slug))?.channels.twitch || arrived.channel, req.log);
+      }
       return reply.code(202).send(out);
     } catch (e) {
       const err = e instanceof BotSendError ? e : new BotSendError((e as Error).message, 502, 'send_failed');

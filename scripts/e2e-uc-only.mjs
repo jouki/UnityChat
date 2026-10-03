@@ -153,5 +153,19 @@ await sleep(400);
 const f = await ev(`[...document.querySelectorAll('#chat .msg')].filter(x => (x.querySelector('.tx')?.textContent || '').includes('ahoj tam')).map(x => x.dataset.msgId)`);
 check('F echo spárované: jedna zpráva s id echa', f.length === 1 && f[0] === 'yt-echo-f', JSON.stringify(f));
 
+// G: odpověď bota rozdělená na díly (backend lib/botParts.ts) — díl 1 s celým textem, díl 2 skrytý; oba pořadí SSE.
+const TXTG = (id) => `(() => { const e = document.querySelector('#chat .msg[data-msg-id="${id}"]'); return e && !e.classList.contains('uc-annc-hidden') ? (e.querySelector('.tx')?.textContent || '') : null; })()`;
+await ev(`window.ucGif.add({ platform: 'twitch', id: 'bp-1', username: 'JoukiBOT', userId: 'b1', message: 'První část dlouhé odpovědi', timestamp: Date.now() })`);
+await ev(`window.ucGif.botSegment({ platform: 'twitch', channel: 'robdiesalot', id: 'bp-1', fullText: 'První část dlouhé odpovědi a tady je druhá část' })`);
+await ev(`window.ucGif.botDup({ platform: 'twitch', channel: 'robdiesalot', id: 'bp-2' })`);
+await ev(`window.ucGif.add({ platform: 'twitch', id: 'bp-2', username: 'JoukiBOT', userId: 'b1', message: 'a tady je druhá část', timestamp: Date.now() })`);
+await sleep(300);
+check('G díl 1 (SSE po zprávě) má celý text', (await ev(TXTG('bp-1'))) === 'První část dlouhé odpovědi a tady je druhá část', String(await ev(TXTG('bp-1'))));
+check('G díl 2 se nevykreslí', (await ev(TXTG('bp-2'))) === null, String(await ev(TXTG('bp-2'))));
+await ev(`window.ucGif.botSegment({ platform: 'kick', channel: 'robdiesalot', id: 'bp-k1', fullText: 'Kick celá odpověď' })`);
+await ev(`window.ucGif.add({ platform: 'kick', id: 'bp-k1', username: 'JoukiBOT', userId: 'b2', message: 'Kick celá', kickContent: 'Kick celá', timestamp: Date.now() })`);
+await sleep(300);
+check('G SSE před zprávou (Kick): celý text hned', (await ev(TXTG('bp-k1'))) === 'Kick celá odpověď', String(await ev(TXTG('bp-k1'))));
+
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 finish(fail ? 1 : 0);

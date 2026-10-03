@@ -114,5 +114,23 @@ const assert = require('node:assert/strict');
   assert.equal(dm.mark(null, ''), 0);
   ok('bot-dup marks');
 
+  // bot-segment: díl 1 dělené odpovědi bota dostane celý text (i když SSE přijde před zprávou)
+  const { createBotSegments } = await import('../extension/core/announcement.js');
+  const bs = createBotSegments(2);
+  assert.equal(bs.note('y1', 'celá odpověď bota'), true);
+  const py = bs.patch({ platform: 'youtube', id: 'y1', message: 'celá', ytRuns: [{ text: 'celá' }] });
+  assert.equal(py.message, 'celá odpověď bota');
+  assert.deepEqual(py.ytRuns, [{ text: 'celá odpověď bota' }]);
+  const pk = (bs.note('k1', 'kick celé'), bs.patch({ platform: 'kick', id: 'k1', message: 'kick', kickContent: 'kick' }));
+  assert.equal(pk.kickContent, 'kick celé');
+  const pt = (bs.note('t1', 'twitch celé'), bs.patch({ platform: 'twitch', id: 't1', message: 'twitch', twitchEmotes: '1:0-1' }));
+  assert.equal(pt.message, 'twitch celé');
+  assert.equal(pt.twitchEmotes, null, 'pozice emotů dílu neplatí pro celý text');
+  assert.equal(bs.has('y1'), false, 'strop');
+  const otherSeg = { platform: 'twitch', id: 'x', message: 'jiná' };
+  assert.equal(bs.patch(otherSeg), otherSeg);
+  assert.equal(bs.note('', 'x'), false);
+  ok('bot-segment');
+
   console.log(`\n${n}/${n} PASS`);
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

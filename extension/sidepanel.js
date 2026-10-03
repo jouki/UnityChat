@@ -155,6 +155,10 @@ class NicknameManager {
       this._eventSource.addEventListener('bot-dup', (e) => {
         try { const d = JSON.parse(e.data); if (this.onBotDup) this.onBotDup(d); } catch {}
       });
+      // Odpověď bota rozdělená na díly (backend lib/botParts.ts) → díl 1 s celým textem.
+      this._eventSource.addEventListener('bot-segment', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onBotSegment) this.onBotSegment(d); } catch {}
+      });
       // Změna nastavení donatů v Židolištce (webhook → backend) → QR dono si načte minimum a hlasy hned.
       this._eventSource.addEventListener('donate-config-change', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonateConfigChange) this.onDonateConfigChange(d); } catch {}
@@ -1198,7 +1202,7 @@ class UnityChat {
     try { window.ucSfx = { reload: () => this._loadSoundboard(), sb: () => this._sfx }; } catch {}
     // Ladění / e2e: reset chatu (jako přepnutí streamera) a znovu načtená historie.
     try { window.ucHistory = { reset: () => this._resetChat(), load: (o) => this._loadHistory(o) }; } catch {}
-    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), bcastMark: (d) => this._applyBcastMark(d), giveaway: (d) => this.nicknames.onGiveaway?.(d), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
+    try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), bcastMark: (d) => this._applyBcastMark(d), giveaway: (d) => this.nicknames.onGiveaway?.(d), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))), botSegment: (d) => this.nicknames.onBotSegment?.(d), botDup: (d) => this.nicknames.onBotDup?.(d) }; } catch {}
 
     this._init();
   }
@@ -1677,6 +1681,22 @@ class UnityChat {
       if (d?.channel && d.channel !== this.config.channel) return;
       const n = this._botDups.mark(this.chatEl, d?.id);
       this._ucLog('Annc', `bot-dup ${d?.platform}:${d?.id} → ${n} el skryto`);
+    };
+    // Díl 1 dělené odpovědi bota: celý text (může přijít před zprávou z vlastního IRC / Pusheru i po ní).
+    this._botSegs = window.UC_CORE.createBotSegments();
+    this.nicknames.onBotSegment = (d) => {
+      if (d?.channel && d.channel !== this.config.channel) return;
+      if (!this._botSegs.note(d?.id, d?.fullText)) return;
+      let n = 0;
+      const cur = this.store.get(String(d.id));
+      if (cur) {
+        Object.assign(cur, this._botSegs.patch(cur));
+        for (const el of this._msgEls(String(d.id), d.platform)) {
+          const tx = el.querySelector('.tx');
+          if (tx) { tx.innerHTML = this._renderMsgBody(cur); this._processMentions(tx, cur.platform); n++; }
+        }
+      }
+      this._ucLog('Annc', `bot-segment ${d.platform}:${d.id} → ${n} el (${String(d.fullText).length} znaků)`);
     };
     this.nicknames.onUcReply = (d) => this._applyUcReply(d);
     this.nicknames.onModeration = (type, d) => this._onModerationEvent(type, d);
@@ -8581,6 +8601,8 @@ class UnityChat {
     // Stejná odpověď bota z další platformy (broadcast commandu): ze serveru `dupHidden`, živě SSE bot-dup.
     if (msg?.dupHidden || this._botDups?.has(msg?.id)) { this._ucLog('Annc', `duplicitní odpověď bota ${msg.platform}:${msg.id}`); return; }
     msg = window.UC_CORE.withTwitchDefaultColor(msg);
+    // Díl 1 dělené odpovědi bota z vlastního spojení (SSE bot-segment přišlo dřív) → celý text.
+    if (this._botSegs?.has(msg?.id)) msg = this._botSegs.patch(msg);
     // Odpověď napříč platformami (core/uc-reply.js): ze serveru (historie) nebo z SSE `uc-reply`,
     // které přišlo dřív než zpráva. ↩ s citací, úvodní „@jméno" v UnityChatu skryté.
     if (msg && !msg.replyTo && msg.id && this._ucReplies?.has(String(msg.id))) msg = { ...msg, replyTo: this._ucReplies.get(String(msg.id)) };

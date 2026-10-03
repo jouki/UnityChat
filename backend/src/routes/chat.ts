@@ -180,11 +180,13 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
   // GIF odebraný z knihovny / trvale zahozený: bez obsahu (text nad GIFem patří k GIFu), klient „Zpráva smazána“, OBS skryje.
   const gifId = goneGifs?.size || goneGifs?.unavailable?.size ? gifMediaIdFromRaw(row.contentRaw) : null;
   if (gifId && goneGifs!.has(gifId)) return { ...meta, deleted: true, deletedReason: GIF_REMOVED_REASON };
-  const out = toClientContent(row, historical);
+  const out = toClientContent(withSegmentFull(row), historical);
   // Odpověď na command potlačená kvůli announcementu (lib/anncHides.ts): klient ji nevykreslí (jako živě).
   if ((row.contentRaw as Record<string, unknown> | null)?.anncHidden) out.anncHidden = true;
   // Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts): v UnityChatu jen první.
   if ((row.contentRaw as Record<string, unknown> | null)?.botDupOf) out.dupHidden = true;
+  // Další díl rozdělené odpovědi bota (lib/botParts.ts): celý text nese díl 1, tenhle se nekreslí.
+  if ((row.contentRaw as Record<string, unknown> | null)?.segmentOf) out.dupHidden = true;
   // Zpráva jen přes UnityChat (lib/ucOnly.ts): platforma ji nepřijala / nezobrazila → klient místo loga platformy logo UnityChatu.
   if ((row.contentRaw as Record<string, unknown> | null)?.ucOnly) out.ucOnly = true;
   // Kopie broadcastu z UnityChatu (lib/ucSends.ts attachBcast): klient kreslí skupinu jako jednu zprávu s logy.
@@ -211,6 +213,17 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
 /** Announcement jako položka historie: klient ho pozná podle `ucAnnouncement` a vykreslí announcement, ne zprávu. */
 export function announcementMessage(id: string, at: Date, payload: AnnouncementPayload): ClientMessage {
   return { platform: 'unitychat', id: `annc-${id}`, username: 'UnityChat', userId: '', message: '', timestamp: at.getTime(), historical: true, ucAnnouncement: payload } as ClientMessage;
+}
+
+/**
+ * Díl 1 rozdělené odpovědi bota (content_raw.segmentFull, lib/botParts.ts) → řádek s celým textem: klient kreslí
+ * celou odpověď (YouTube `runs`, Kick `content`, Twitch bez pozic emotů dílu). Jinak řádek beze změny.
+ */
+export function withSegmentFull<T extends ClientRow>(row: T): T {
+  const raw = (row.contentRaw || {}) as Record<string, unknown>;
+  const full = raw.segmentFull;
+  if (typeof full !== 'string' || !full) return row;
+  return { ...row, content: full, contentRaw: { ...raw, runs: [{ text: full }], content: full, emotes: '', emotesOffset: 0 } };
 }
 
 export function toClientContent(row: ClientRow, historical = true): ClientMessage {

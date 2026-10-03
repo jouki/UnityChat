@@ -13,6 +13,7 @@ import storeRoutes from './routes/store.js';
 import chatRoutes from './routes/chat.js';
 import commandRoutes from './routes/commands.js';
 import announcementRoutes from './routes/announcements.js';
+import { botParts, applyBotPart } from './lib/botParts.js';
 import { ucSends, markUc, ucReplies, attachUcReply, gifReviews, bcastSends, attachBcast, markBcastById } from './lib/ucSends.js';
 import blacklistRoutes from './routes/blacklist.js';
 import webAuthRoutes from './routes/webAuth.js';
@@ -252,15 +253,25 @@ const ingest = createIngest({
     const wsInfo = workspaceForChannelSync(m.platform as WsPlatform, m.channel);
     const ucCh = wsInfo?.channels.twitch || m.channel;
     // Announcement bez spamu (lib/anncThrottle.ts): počet zpráv kanálu + kdo psal přes UnityChat.
-    anncThrottle.onMessage(ucCh, { platform: m.platform, username: m.username, isUnitychatUser: m.isUnitychatUser, isBot: !!wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId) });
-    const hid = anncHides.match(m, ucCh);
+    const fromBot = !!wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId);
+    anncThrottle.onMessage(ucCh, { platform: m.platform, username: m.username, isUnitychatUser: m.isUnitychatUser, isBot: fromBot });
+    // Odpověď bota rozdělená na díly (lib/botParts.ts): díl 1 nese celý text, další díly jsou jeho součást (skryté).
+    // Dedup broadcastu i skrytí kvůli announcementu porovnávají celý text (fullText), ne text dílu.
+    const part = fromBot ? botParts.take(m) : null;
+    const segOf = part ? applyBotPart(m, part) : null;
+    const fullText = part && part.index === 1 && part.total > 1 ? part.fullText : null;
+    const cmp = part ? { ...m, content: part.fullText } : m;
+    const hid = part && part.index > 1 ? null : anncHides.match(cmp, ucCh);
     if (hid) { m.contentRaw = { ...(m.contentRaw || {}), anncHidden: hid }; app.log.info({ platform: m.platform, id: m.platformMessageId, annc: hid }, 'announcement: odpověď potlačena'); }
     // Odpověď bota na broadcast commandu z víc platforem (lib/botReplyDedup.ts) → v UnityChatu JEDNA zpráva s logy
     // platforem jako broadcast (pokyn usera 2026-10-03): první odpověď + kopie = skupina `bot-<id první>`. Když první
     // odpověď schoval announcement, kopie se schová taky (dupHidden), jinak by se odpověď objevila místo announcementu.
     let dupOf: string | null = null;
-    if (wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId)) {
-      const firstId = botReplyDedup.check(m, ucCh);
+    if (segOf) {
+      dupOf = segOf;
+      app.log.info({ platform: m.platform, id: m.platformMessageId, segmentOf: segOf, index: part!.index, total: part!.total }, 'bot: díl odpovědi → součást dílu 1');
+    } else if (fromBot && !(part && part.index > 1)) {
+      const firstId = botReplyDedup.check(cmp, ucCh);
       if (!firstId && hid) anncHiddenBotFirst.add(m.platformMessageId);
       if (anncHiddenBotFirst.size > 300) anncHiddenBotFirst.delete(anncHiddenBotFirst.values().next().value!);
       if (firstId && anncHiddenBotFirst.has(firstId)) {
@@ -290,6 +301,8 @@ const ingest = createIngest({
     // Odznak podporovatele u živé zprávy: addon ji má z vlastního IRC (bez `donor`) → SSE donor-mark (jako uc-mark).
     // Duplikát odpovědi bota: addon / web mají Twitch a Kick z vlastního spojení → SSE (zpráva se schová i dodatečně).
     if (dupOf) broadcast('bot-dup', { platform: m.platform, channel: ucCh, id: m.platformMessageId });
+    // Díl 1 dělené odpovědi bota: addon / web mají Twitch a Kick z vlastního spojení (text dílu) → celý text přes SSE.
+    if (fullText) broadcast('bot-segment', { platform: m.platform, channel: ucCh, id: m.platformMessageId, fullText });
     if (live.donor) broadcast('donor-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId, ...(live.donorCzk ? { czk: live.donorCzk } : {}), ...(live.donorReplace ? { replace: true } : {}) });
     // Chat bot Židolišty: stejná zpráva i do integračního streamu (jen namapované kanály; počítadla v /health).
     publishIntegration(m, app.log);
