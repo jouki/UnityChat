@@ -1196,6 +1196,8 @@ class UnityChat {
     // `add` = zpráva jako z vlastního spojení (echo z /chat/stream bez obsahu — e2e párování GIFu přes id).
     // Soundboard (záložka SFX): znovu načíst stav (e2e přepíná odemčení odměny).
     try { window.ucSfx = { reload: () => this._loadSoundboard(), sb: () => this._sfx }; } catch {}
+    // Ladění / e2e: reset chatu (jako přepnutí streamera) a znovu načtená historie.
+    try { window.ucHistory = { reset: () => this._resetChat(), load: (o) => this._loadHistory(o) }; } catch {}
     try { window.ucGif = { cd: () => this._gifCd(), gifs: () => this._gifs(), out: () => this._gifOut(), panel: () => this._gifPanel, picker: () => this._emotePicker, add: (m) => this._addMessage(m), bcastMark: (d) => this._applyBcastMark(d), giveaway: (d) => this.nicknames.onGiveaway?.(d), msg: (id) => this.store.get(String(id)), textSuppressed: (id) => this._textSuppressed(this.store.get(String(id))), applyDeleted: (p, id, o) => this._applyDeleted(p, id, o), renderBody: (id) => this._renderMsgBody(this.store.get(String(id))) }; } catch {}
 
     this._init();
@@ -5840,13 +5842,19 @@ class UnityChat {
    * po obnovení nezmizí, pokyn usera 2026-09-30). Z historie se nic neskrývá (potlačené odpovědi označil server
    * `anncHidden`) a vkládá se podle času jako zpráva.
    */
+  _hasAnncEl(id) {
+    const sel = `[data-annc-id="${CSS.escape(String(id))}"]`;
+    if (this.chatEl.querySelector(sel)) return true;
+    return [this._parkedTop, this._parkedBottom].some((park) => park.some((n) => n.matches?.(sel)));
+  }
+
   _addAnnouncement(payload, { historical = false } = {}) {
     const core = window.UC_CORE;
     const a = core.normalizeAnnouncement(payload);
     if (!a) { this._ucLog('Annc', 'neplatný payload'); return false; }
-    if (!this._anncSeen) this._anncSeen = new Set();
-    if (this._anncSeen.has(a.id)) return false;
-    this._anncSeen.add(a.id);
+    // Dedup podle uzlu v chatu (DOM + parky), ne podle paměti: po resetu chatu (přepnutí streamera, vyčištění)
+    // se announcement z historie musí vykreslit znovu (2026-10-03 „zpětně se neukazují“).
+    if (this._hasAnncEl(a.id)) { if (historical) this._ucLog('Annc', `historie: ${a.id} už vykreslený`); return false; }
     if (!this._pendingReplies) this._pendingReplies = [];
     if (!historical && a.chatReply?.hideInUnityChat) {
       const now = Date.now();
@@ -9262,7 +9270,7 @@ class UnityChat {
       }
       if (!reconcile) this.store.oldestCursor = data.nextBefore || null;
       this._historyFetches++;
-      this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} added=${added} next=${data.nextBefore || '-'}`);
+      this._ucLog('History', `${reconcile ? 'reconcile ' : ''}before=${before || '-'} got=${list.length} annc=${list.filter((m) => m.ucAnnouncement).length} added=${added} next=${data.nextBefore || '-'}`);
       if (!before && !reconcile) { this.autoScroll = true; this._scrollEnd(); this._clearUnread(); }
     } catch (err) {
       this._sys(`Historie nedostupná (${err.name === 'AbortError' ? 'timeout' : err.message})`);
