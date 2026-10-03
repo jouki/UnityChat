@@ -52,6 +52,7 @@ import { botReplyDedup } from './lib/botReplyDedup.js';
 /** První odpovědi bota schované announcementem — jejich kopie z dalších platforem se schovají taky (ne skupina). */
 const anncHiddenBotFirst = new Set<string>();
 import { ucOnlyHeld } from './lib/ucOnly.js';
+import { anncThrottle } from './lib/anncThrottle.js';
 import { startDonorsRefresh } from './lib/donors.js';
 import { loadBadgePrefs } from './lib/badgePrefs.js';
 import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
@@ -250,6 +251,8 @@ const ingest = createIngest({
     // v historii i /chat/stream jde bez vykreslení. UC kanál z registru (platformní kanál Kicku / YouTube).
     const wsInfo = workspaceForChannelSync(m.platform as WsPlatform, m.channel);
     const ucCh = wsInfo?.channels.twitch || m.channel;
+    // Announcement bez spamu (lib/anncThrottle.ts): počet zpráv kanálu + kdo psal přes UnityChat.
+    anncThrottle.onMessage(ucCh, { platform: m.platform, username: m.username, isUnitychatUser: m.isUnitychatUser, isBot: !!wsInfo && isBotAuthor(m.platform, m.username, wsInfo.slug, m.platformUserId) });
     const hid = anncHides.match(m, ucCh);
     if (hid) { m.contentRaw = { ...(m.contentRaw || {}), anncHidden: hid }; app.log.info({ platform: m.platform, id: m.platformMessageId, annc: hid }, 'announcement: odpověď potlačena'); }
     // Odpověď bota na broadcast commandu z víc platforem (lib/botReplyDedup.ts) → v UnityChatu JEDNA zpráva s logy

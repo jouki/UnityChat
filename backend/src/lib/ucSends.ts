@@ -9,6 +9,7 @@ import { UC_MARKER } from '../ingest/normalize.js';
 import { db } from '../db/index.js';
 import { messages } from '../db/schema.js';
 import { broadcast } from '../sse/bus.js';
+import { anncThrottle } from './anncThrottle.js';
 
 export const SEND_TTL_MS = 20_000;
 export const RECENT_TTL_MS = 60_000;
@@ -194,6 +195,8 @@ export function markBcastById(platform: string, channel: string, id: string, gro
  */
 export function markUc(m: IngestMessage, log?: { info(o: object, msg: string): void; warn(o: object, msg: string): void }, opts: { late?: boolean } = {}): void {
   m.isUnitychatUser = true;
+  // Dodatečně označený command z UnityChatu → announcement jeho autorovi vždy (lib/anncThrottle.ts).
+  anncThrottle.noteUc(m.platform, m.username);
   broadcast('uc-mark', { platform: m.platform, channel: m.channel, id: m.platformMessageId });
   log?.info({ platform: m.platform, channel: m.channel, id: m.platformMessageId, late: !!opts.late }, 'uc-send: zpráva označena jako UnityChat');
   if (!opts.late) return;

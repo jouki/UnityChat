@@ -1,3 +1,4 @@
+import { anncThrottle } from '../lib/anncThrottle.js';
 import type { FastifyInstance } from 'fastify';
 import { broadcast } from '../sse/bus.js';
 import { botLogins } from './commands.js';
@@ -114,7 +115,16 @@ export default async function announcementRoutes(app: FastifyInstance) {
     for (const w of await getWorkspaces({ log: app.log })) if (w.channels.twitch) workspaces.set(w.channels.twitch, w.slug);
     const v = validateAnnouncement(req.body, workspaces);
     if (!v.ok) return reply.code(v.error === 'unknown_workspace' ? 404 : 400).send({ ok: false, error: v.error });
+    const suppressed: string[] = [];
     for (const value of v.values) {
+      // Bez spamu (pokyn usera 2026-10-03): spouštěč bez UnityChatu + méně než 10 zpráv od posledního zobrazení téhož
+      // commandu → announcement se nezobrazí ani neschová odpověď bota (ta se ukáže normálně).
+      const d = anncThrottle.decide(value.channel, value.command || value.id, value.triggeredBy ?? null);
+      if (!d.show) {
+        suppressed.push(value.channel);
+        app.log.info({ id: value.id, channel: value.channel, command: value.command, since: d.since, by: value.triggeredBy?.user }, 'announcement: potlačen (bez UnityChatu, méně než 10 zpráv od posledního)');
+        continue;
+      }
       broadcast('announcement', value);
       const hide = anncHides.remember(value);
       try {
@@ -125,6 +135,6 @@ export default async function announcementRoutes(app: FastifyInstance) {
       } catch (e) { app.log.warn({ err: (e as Error).message, id: value.id }, 'announcement: uložení selhalo (v historii nebude)'); }
     }
     app.log.info({ id: v.values[0].id, channels: v.values.map((x) => x.channel), command: v.values[0].command, media: !!v.values[0].media, hideReply: !!v.values[0].chatReply?.hideInUnityChat, hideBots: v.values[0].hideBotReplies, hideObs: v.values[0].hideInBrowserSource }, 'announcement: broadcast');
-    return reply.code(202).send({ ok: true, channels: v.values.map((x) => x.channel) });
+    return reply.code(202).send({ ok: true, channels: v.values.map((x) => x.channel), ...(suppressed.length ? { suppressed } : {}) });
   });
 }
