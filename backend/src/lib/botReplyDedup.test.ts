@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BotReplyDedup } from './botReplyDedup.js';
+import { BotReplyDedup, sameReply } from './botReplyDedup.js';
 
 const T0 = Date.parse('2026-10-02T11:44:00Z');
 const msg = (platform: string, id: string, content: string, dt = 0) => ({ platform, platformMessageId: id, content, sentAt: new Date(T0 + dt) });
@@ -24,4 +24,17 @@ test('botReplyDedup: skupina odpovědí — platforma první + všechny platform
   assert.deepEqual(d.group('t1'), { platform: 'twitch', platforms: ['twitch', 'kick'] });
   d.check(msg('youtube', 'y1', 'Kategorie: WoW', 2000), 'robdiesalot');
   assert.deepEqual(d.group('t1'), { platform: 'twitch', platforms: ['twitch', 'kick', 'youtube'] });
+});
+
+test('botReplyDedup: kopie zkrácená platformou (YouTube 200 znaků + „…“) patří ke stejné odpovědi (2026-10-03 !podpora)', () => {
+  const d = new BotReplyDedup(() => T0);
+  const full = 'Jestli chceš podpořit nebožtíka, můžeš poslat DONO jako přímou QR platbu s výběrem vlastního TTS hlasu přes ikonku dole v UnityChatu (https://robdiesalot.com/chat/) nebo přímo na https://robdiesalot.com/#support. Z téhle formy podpory mám téměř 100 % a umožňuje mi zůstat full-time tvůrcem. Díky!';
+  const yt = 'Jestli chceš podpořit nebožtíka, můžeš poslat DONO jako přímou QR platbu s výběrem vlastního TTS hlasu přes ikonku dole v UnityChatu (https://robdiesalot.com/chat/) nebo přímo na https://robdiesalot....';
+  d.check(msg('twitch', 't1', full), 'robdiesalot');
+  assert.equal(d.check(msg('kick', 'k1', full, 500), 'robdiesalot'), 't1');
+  assert.equal(d.check(msg('youtube', 'y1', yt, 1500), 'robdiesalot'), 't1', 'zkrácená YouTube kopie');
+  assert.deepEqual(d.group('t1')?.platforms, ['twitch', 'kick', 'youtube']);
+  // krátký text s výpustkou se s ničím nepáruje (min. 30 znaků před „…“)
+  assert.equal(d.check(msg('kick', 'k2', 'Ahoj...', 600), 'robdiesalot'), null);
+  assert.equal(sameReply('abc', 'abd'), false);
 });

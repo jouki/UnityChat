@@ -7,10 +7,21 @@ import { normText } from './ucSends.js';
 
 export const DUP_WINDOW_MS = 15_000;
 
-interface Seen { platform: string; id: string; atMs: number }
+interface Seen { platform: string; id: string; atMs: number; text: string }
+
+/** Zkrácený text (YouTube max 200 znaků → „…“ / „...“ na konci): bez výpustky, jinak null. */
+const truncatedPrefix = (t: string): string | null => { const m = /^(.*?)\s*(?:…|\.{3,})$/.exec(t); return m && m[1].length >= 30 ? m[1] : null; };
+
+/** Stejná odpověď: shodný text, nebo jedna zkrácená platformou (2026-10-03 !podpora: YouTube kopie končila „…“). */
+export function sameReply(a: string, b: string): boolean {
+  if (a === b) return true;
+  const pa = truncatedPrefix(a);
+  const pb = truncatedPrefix(b);
+  return (!!pa && b.startsWith(pa)) || (!!pb && a.startsWith(pb));
+}
 
 export class BotReplyDedup {
-  private seen = new Map<string, Seen[]>();   // `${ucChannel}\n${text}` → zprávy (po platformách)
+  private seen = new Map<string, Seen[]>();   // UC kanál → poslední odpovědi bota (platforma, text)
   /** id první odpovědi → platformy skupiny (první + kopie), pro jednu zprávu s logy v UnityChatu. */
   private groups = new Map<string, { platform: string; platforms: string[] }>();
   constructor(private now: () => number = Date.now) {}
@@ -20,10 +31,10 @@ export class BotReplyDedup {
     const text = normText(m.content).toLowerCase();
     if (!text) return null;
     this.prune();
-    const key = `${ucChannel.toLowerCase()}\n${text}`;
+    const key = ucChannel.toLowerCase();
     const at = m.sentAt.getTime();
     const list = this.seen.get(key) || [];
-    const first = list.find((s) => s.platform !== m.platform && Math.abs(at - s.atMs) <= DUP_WINDOW_MS);
+    const first = list.find((s) => s.platform !== m.platform && Math.abs(at - s.atMs) <= DUP_WINDOW_MS && sameReply(s.text, text));
     if (first) {
       const g = this.groups.get(first.id) ?? { platform: first.platform, platforms: [first.platform] };
       if (!g.platforms.includes(m.platform)) g.platforms.push(m.platform);
@@ -32,7 +43,7 @@ export class BotReplyDedup {
       return first.id;
     }
     // Stejná platforma = nová odpověď (bot smí napsat totéž znovu), tu si pamatovat jako novou první.
-    this.seen.set(key, [...list.filter((s) => s.platform !== m.platform), { platform: m.platform, id: m.platformMessageId, atMs: at }].slice(-6));
+    this.seen.set(key, [...list.filter((s) => !(s.platform === m.platform && sameReply(s.text, text))), { platform: m.platform, id: m.platformMessageId, atMs: at, text }].slice(-30));
     return null;
   }
 
