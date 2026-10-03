@@ -6,12 +6,14 @@
 //   POST /integrations/:slug/channel/title { platform, title (1–140) }  → { ok, title } (náhrada SE !settitle; chyby jako u kategorie)
 //   GET  /integrations/:slug/channel/subs?platform=twitch|kick          { ok, count:number|null, points?:number|null }
 //        (%subs_twitch% v Židolištce, dotaz 1× / 10 min; Kick → count:null; chyby jako u kategorií)
+//   GET  /integrations/:slug/channel/followage?platform=twitch|kick&userId=&login=
+//        { ok, following:boolean, followedAt:ISO|null }  (!followage; Twitch userId nebo login, Kick login; chyby jako u kategorií + bad_user / not_found)
 // Auth: inboundAuthorized (X-Api-Key + podpis). Kanál JEN ze slugu (registr Židolišty).
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { inboundAuthorized } from '../lib/inboundAuth.js';
 import { workspaceBySlug } from '../lib/zidolista.js';
-import { ChannelError, channelStatus, searchCategories, setCategory, setCategoryByQuery, setTitle, subCount, TITLE_MAX, type CategoryPlatform } from '../lib/channelManage.js';
+import { ChannelError, channelStatus, followage, searchCategories, setCategory, setCategoryByQuery, setTitle, subCount, TITLE_MAX, type CategoryPlatform } from '../lib/channelManage.js';
 
 const PlatformQ = z.enum(['twitch', 'kick']);
 const SetBody = z.object({
@@ -62,6 +64,28 @@ export default async function integrationChannelRoutes(app: FastifyInstance) {
         return reply.code(err.status).send({ ok: false, error: err.code, message: err.message });
       }
       req.log.warn({ slug: ws.slug, platform: b.data.platform, err: String((err as Error)?.message ?? err) }, '[channel] název — chyba');
+      return reply.code(502).send({ ok: false, error: 'platform' });
+    }
+  });
+
+  app.get<{ Params: { slug: string }; Querystring: { platform?: string; userId?: string; login?: string } }>('/integrations/:slug/channel/followage', async (req, reply) => {
+    if (!inboundAuthorized(req, reply)) return reply;
+    const p = PlatformQ.safeParse(req.query.platform);
+    if (!p.success) return reply.code(400).send({ ok: false, error: 'platform' });
+    const ws = await workspaceBySlug(req.params.slug);
+    if (!ws) return reply.code(404).send({ ok: false, error: 'workspace_not_found' });
+    const channelLogin = ws.channels[p.data];
+    if (!channelLogin) return reply.code(404).send({ ok: false, error: 'no_channel' });
+    reply.header('Cache-Control', 'no-store');
+    try {
+      const r = await followage(p.data, channelLogin, { userId: req.query.userId, login: req.query.login });
+      return { ok: true, following: r.following, followedAt: r.followedAt };
+    } catch (err) {
+      if (err instanceof ChannelError) {
+        req.log.warn({ slug: ws.slug, platform: p.data, code: err.code, msg: err.message }, '[channel] followage nedostupný');
+        return reply.code(err.status).send({ ok: false, error: err.code, message: err.message });
+      }
+      req.log.warn({ slug: ws.slug, platform: p.data, err: String((err as Error)?.message ?? err) }, '[channel] followage — chyba');
       return reply.code(502).send({ ok: false, error: 'platform' });
     }
   });

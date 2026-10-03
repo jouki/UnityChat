@@ -49,6 +49,7 @@ import { createLinkFilter, linkFilterSync, refreshLinkFilter, permits, storePerm
 import { isBotAccount, isBotAuthor, isSharedBotId } from './lib/botIdentities.js';
 import { anncHides } from './lib/anncHides.js';
 import { botReplyDedup } from './lib/botReplyDedup.js';
+import { ucOnlyHeld } from './lib/ucOnly.js';
 import { startDonorsRefresh } from './lib/donors.js';
 import { loadBadgePrefs } from './lib/badgePrefs.js';
 import { workspaceForChannelSync, type Platform as WsPlatform } from './lib/zidolista.js';
@@ -255,6 +256,9 @@ const ingest = createIngest({
       dupOf = botReplyDedup.check(m, ucCh);
       if (dupOf) { m.contentRaw = { ...(m.contentRaw || {}), botDupOf: dupOf }; app.log.info({ platform: m.platform, id: m.platformMessageId, dupOf }, 'bot: odpověď z další platformy v UC skryta'); }
     }
+    // YouTube pustil dřív zadrženou zprávu, za kterou už UnityChat ukázal vlastní (lib/ucOnly.ts) → v UC podruhé ne.
+    const ucoOf = !dupOf && m.platform === 'youtube' ? ucOnlyHeld.take(m.platformMessageId) : null;
+    if (ucoOf) { dupOf = ucoOf; m.contentRaw = { ...(m.contentRaw || {}), botDupOf: ucoOf }; app.log.info({ id: m.platformMessageId, uco: ucoOf }, 'uc-only: zadržená zpráva YouTube dorazila, v UC už je'); }
     // Odpověď napříč platformami nahlášená klientem (content_raw.ucReply → replyTo v /chat/stream).
     const rep = ucReplies.take(m);
     if (rep?.data) attachUcReply(m, rep.data, app.log);

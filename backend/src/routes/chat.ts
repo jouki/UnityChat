@@ -64,6 +64,8 @@ export interface ClientMessage {
   anncHidden?: boolean;
   /** Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts) — klient nevykreslí. */
   dupHidden?: boolean;
+  /** Zpráva jen přes UnityChat (`uco-…`, lib/ucOnly.ts) — na platformě není. */
+  ucOnly?: boolean;
   /** Kopie broadcastu z UnityChatu — skupina `id`, cílové platformy `targets` (jedna zpráva v UI). */
   bcast?: { id: string; targets: string[] };
   /** Announcement jako položka historie (announcementMessage). */
@@ -183,6 +185,8 @@ export function toClientMessage(row: ClientRow, historical = true, goneGifs?: Gi
   if ((row.contentRaw as Record<string, unknown> | null)?.anncHidden) out.anncHidden = true;
   // Stejná odpověď bota z další platformy (broadcast commandu, lib/botReplyDedup.ts): v UnityChatu jen první.
   if ((row.contentRaw as Record<string, unknown> | null)?.botDupOf) out.dupHidden = true;
+  // Zpráva jen přes UnityChat (lib/ucOnly.ts): platforma ji nepřijala / nezobrazila → klient místo loga platformy logo UnityChatu.
+  if ((row.contentRaw as Record<string, unknown> | null)?.ucOnly) out.ucOnly = true;
   // Kopie broadcastu z UnityChatu (lib/ucSends.ts attachBcast): klient kreslí skupinu jako jednu zprávu s logy.
   const bc = (row.contentRaw as Record<string, unknown> | null)?.bcast as { id?: unknown; targets?: unknown } | undefined;
   if (bc && typeof bc.id === 'string' && Array.isArray(bc.targets)) out.bcast = { id: bc.id, targets: bc.targets.map(String) };

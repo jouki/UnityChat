@@ -139,6 +139,10 @@ class NicknameManager {
       this._eventSource.addEventListener('donor-mark', (e) => {
         try { const d = JSON.parse(e.data); if (this.onDonorMark) this.onDonorMark(d); } catch {}
       });
+      // Zpráva jen přes UnityChat (platforma ji nepřijala / nezobrazila) — backend lib/ucOnly.ts.
+      this._eventSource.addEventListener('uc-only', (e) => {
+        try { const d = JSON.parse(e.data); if (this.onUcOnly) this.onUcOnly(d); } catch {}
+      });
       // Kolo štěstí pro podporovatele: změna stavu (vyhlášení, připojení, losování, potvrzení, konec).
       this._eventSource.addEventListener('giveaway', (e) => {
         try { const d = JSON.parse(e.data); if (this.onGiveaway) this.onGiveaway(d); } catch {}
@@ -819,6 +823,12 @@ class YouTubeProvider {
       this._processActions(actions);
       const added = this._seen.size - beforeSeen;
       this._log(`pollPage#${tick} actions=${actions.length} newSeen=${added} chatMode=${this._allCont ? 'all' : 'top'} ms=${Date.now()-t0}`);
+      // Po zahození tokenu jela výchozí stránka = „Nejlepší zprávy“ (YouTube z ní vynechává zprávy) až do reconnectu
+      // (2026-10-02, stejná chyba v ingestu backendu) → vzít z ní čerstvý token a příští tick zase všechny zprávy.
+      if (!this._allCont) {
+        const tok = this._pickAllChatToken(lcr);
+        if (tok) { this._allCont = tok; this._log(`pollPage#${tick} chatMode=all obnoven`); }
+      }
 
       if (this.polling) {
         this._pt = setTimeout(() => this._poll(), 3000);
@@ -1659,6 +1669,7 @@ class UnityChat {
     this._bcGroups ??= window.UC_CORE.createBroadcastGroups({ log: (tag, t) => this._ucLog(tag, t) });
     // Kopie Broadcastu z vlastního IRC / Pusheru bez `bcast` → SSE bcast-mark (může přijít před zprávou i po ní).
     this.nicknames.onBcastMark = (d) => this._applyBcastMark(d);
+    this.nicknames.onUcOnly = (d) => { if (d?.message && d.channel === (this.config.channel || '').toLowerCase()) this._addMessage(d.message); };
     this.nicknames.onGiveaway = (d) => { if (d?.channel === (this.config.channel || '').toLowerCase()) this._gw?.apply(d.giveaway || null); };
     this.nicknames.onBotDup = (d) => {
       if (d?.channel && d.channel !== this.config.channel) return;
@@ -1789,6 +1800,7 @@ class UnityChat {
     if (!this._sendPlatform) this._sendPlatform = 'twitch';
     // Broadcast (mod / streamer) si pamatuje zvlášť — platí, jen dokud je role a aspoň dvě přihlášené platformy.
     try { this._broadcast = (await chrome.storage.local.get('uc_send_broadcast')).uc_send_broadcast === true; } catch {}
+    try { this._ucOnlyMode = (await chrome.storage.local.get('uc_send_uconly')).uc_send_uconly === true; } catch {}
     if (!this._legacySend()) this._setActivePlatform(this._sendPlatform);
     this._refreshAccount();
     this._bootMark('_init done');
@@ -1963,15 +1975,47 @@ class UnityChat {
         if (!notifyBox.checked) this._mentionNotifier?.reset();
       });
     }
+    // Zvuk při zmínce (opt-in, audio/mention_notification.mp3).
+    const mSndBox = $('chk-mention-sound');
+    if (mSndBox) {
+      mSndBox.checked = this.config.mentionSound === true;
+      mSndBox.addEventListener('change', () => {
+        this.config.mentionSound = mSndBox.checked;
+        this._saveConfig();
+        // Ukázka hned po zapnutí (a uživatel slyší hlasitost).
+        if (mSndBox.checked && this.config.sound !== false) window.UC_CORE.createMentionSound({ url: chrome.runtime.getURL('audio/mention_notification.mp3'), volume: () => this._soundVolume() }).play();
+      });
+    }
     // Zvuky (reakce se zvukem) — běžící reakce se ztlumí/odtlumí hned
     const sndBox = $('chk-sound');
+    const volRng = $('rng-volume');
+    const volVal = $('rng-volume-val');
+    // Hlasitost 0–100 % (config.soundVolume, výchozí 100) — běžící reakce i easter egg ji přeberou hned.
+    const paintVolume = () => {
+      const v = this._soundVolume();
+      if (volRng) volRng.value = String(Math.round(v * 100));
+      if (volVal) volVal.textContent = `${Math.round(v * 100)} %`;
+      volRng?.closest('.uc-volume-row')?.classList.toggle('disabled', this.config.sound === false);
+      if (volRng) volRng.disabled = this.config.sound === false;
+    };
     if (sndBox) {
       sndBox.checked = this.config.sound !== false;
       sndBox.addEventListener('change', () => {
         this.config.sound = sndBox.checked;
         this._saveConfig();
         this._reaction?.setMuted?.(!sndBox.checked);
+        paintVolume();
       });
+    }
+    if (volRng) {
+      paintVolume();
+      volRng.addEventListener('input', () => {
+        this.config.soundVolume = Math.min(100, Math.max(0, Number(volRng.value) || 0));
+        paintVolume();
+        this._reaction?.setVolume?.(this._soundVolume());
+        if (this._bulgarianAudio) this._bulgarianAudio.volume = this._soundVolume();
+      });
+      volRng.addEventListener('change', () => { this._saveConfig(); this._ucLog('Settings', `hlasitost ${this.config.soundVolume} %`); });
     }
     // Auto-resize textarea + auto @username suggest
     // GIF odkaz v poli + běžící cooldown odměny → bublina nad polem (core/gif-cooldown.js).
@@ -4033,6 +4077,12 @@ class UnityChat {
       await this._sendBroadcast(text);
       return;
     }
+    // „Jen UnityChat“: běžný text přes náš server (logo UnityChatu). Commandy, GIF odkazy a odpověď jdou dál na
+    // vybranou platformu (bot / schvalování GIFů / vlákno platformy jinak nefungují).
+    if (!external && this._isUcOnlyMode() && !this._reply && window.UC_CORE.ucOnlyEligible(text)) {
+      await this._sendUcOnly(text);
+      return;
+    }
     // GIF odkaz během cooldownu odměny: neodeslat, pole zčervená, bublina „Můžeš až za:" (text zůstává v poli).
     // Výběr z knihovny (opts.gif) taky — cooldown ze serveru (i tiché schválení modem) ho musí zastavit (test2 bod 4.1).
     if ((!external || opts.gif) && !this._gifCd().checkSend(text)) return;
@@ -4246,8 +4296,9 @@ class UnityChat {
     }
     this._lastSentText = texts[targets[0]];
     this._ucLog('Send', `broadcast → ${targets.join(',')} "${text.slice(0, 60)}"`);
-    const failAll = (reason) => {
-      this._markSendFailed(optId, reason);
+    // `fallback` false = chyba oprávnění / přihlášení / limitu → bez zálohy přes UnityChat (jen odmítnutí platformou).
+    const failAll = (reason, fallback = true) => {
+      this._markSendFailed(optId, reason, { fallback });
       for (const [k, id] of [...this._optimisticKeys]) if (id === optId) this._optimisticKeys.delete(k);
       if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
     };
@@ -4265,18 +4316,18 @@ class UnityChat {
       });
       const j = await r.json().catch(() => ({}));
       this._ucLog('Send', `broadcast → ${r.status} ${j.results ? Object.entries(j.results).map(([p, x]) => `${p}=${x.ok ? 'ok' : x.status + ' ' + x.error}`).join(' ') : (j.error || '')}`);
-      if (r.status === 401) { failAll('přihlášení vypršelo'); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
-      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora'); this._loadWarnings(); return; }
+      if (r.status === 401) { failAll('přihlášení vypršelo', false); this._sys('Přihlášení vypršelo, přihlas se znovu.'); return; }
+      if (r.status === 403 && j.error === 'warning_pending') { failAll('nepotvrzené varování od moderátora', false); this._loadWarnings(); return; }
       if (r.status === 403 && j.error === 'not_mod') {
         // Server roli nepotvrdil (menu mělo starý stav) → Broadcast pryč, znovu načíst roli.
-        failAll('Broadcast smí jen mod nebo streamer');
+        failAll('Broadcast smí jen mod nebo streamer', false);
         this._sys('Broadcast smí posílat jen mod nebo streamer kanálu.');
         this._loadModState();
         return;
       }
       if (!j.results) {
         const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : j.error === 'gif' ? 'GIF pošli na jednu platformu' : (j.error || `HTTP ${r.status}`);
-        failAll(reason);
+        failAll(reason, false);
         this._sys(`Chyba: ${reason}`);
         return;
       }
@@ -4310,9 +4361,46 @@ class UnityChat {
     return !!this._broadcast && this._broadcastTargets().length >= 2;
   }
 
+  /** „Jen UnityChat“ (menu Psát jako): běžný text jen přes server UnityChatu (POST /chat/uc-only), ne na platformu. */
+  _isUcOnlyMode() {
+    return !!this._ucOnlyMode && !this._legacySend() && this._linkedPlatforms().length > 0;
+  }
+
+  _selectUcOnly() {
+    this._replyPrevPlatform = null;
+    this._replyPrevBroadcast = false;
+    if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+    this._ucOnlyMode = true;
+    try { chrome.storage.local.set({ uc_send_uconly: true }); } catch {}
+    this._renderComposer();
+    this.msgInput.focus();
+  }
+
+  /** Zpráva jen do UnityChatu (volba „Jen UnityChat“): rovnou přes server, vrátí se hotová zpráva s logem UC. */
+  async _sendUcOnly(text) {
+    this._msgHistory.push(text);
+    if (this._msgHistory.length > 50) this._msgHistory.shift();
+    this._msgHistoryIdx = -1;
+    this._msgHistoryDraft = '';
+    this.msgInput.value = '';
+    this.msgInput.style.height = 'auto';
+    const platform = this.activePlatform;
+    try {
+      const j = await this._ucApi('/chat/uc-only', { method: 'POST', body: { platform, text: this._resolveNicknameMentions(text, platform), channel: (this.config.channel || '').toLowerCase(), reason: 'jen UnityChat (volba)' } });
+      this._addMessage(j.message);
+      this._ucLog('UcOnly', `volba → ${j.id}`);
+    } catch (e) {
+      const reason = e.status === 429 ? 'moc zpráv za sebou, zpomal' : e.error === 'banned' ? 'máš na platformě timeout / ban' : e.error === 'warning_pending' ? 'nepotvrzené varování od moderátora' : (e.error || e.message || 'neodesláno');
+      this._sys(`Zprávu do UnityChatu se nepodařilo poslat: ${reason}`);
+      if (!this.msgInput.value) { this.msgInput.value = text; this._autoResizeInput?.(); }
+      this._ucLog('UcOnly', `volba FAIL ${e.status || ''} ${e.error || e.message || e}`);
+    }
+  }
+
   _selectBroadcast() {
     this._replyPrevPlatform = null;
     this._replyPrevBroadcast = false;
+    if (this._ucOnlyMode) { this._ucOnlyMode = false; try { chrome.storage.local.set({ uc_send_uconly: false }); } catch {} }
     this._broadcast = true;
     try { chrome.storage.local.set({ uc_send_broadcast: true }); } catch {}
     this._renderComposer();
@@ -4332,8 +4420,9 @@ class UnityChat {
     }
     const replyTo = hasNativeReply && reply?.messageId ? reply.messageId : null;
     this._ucLog('Send', `účet ${platform} "${text.slice(0, 60)}"${replyTo ? ' reply→' + replyTo : ''}`);
-    const fail = (reason) => {
-      this._markSendFailed(optId, reason);
+    // `fallback` false = chyba přihlášení / varování / limitu → bez zálohy přes UnityChat (jen odmítnutí platformou).
+    const fail = (reason, fallback = true) => {
+      this._markSendFailed(optId, reason, { fallback });
       // Text vrátit do pole, ať o něj člověk nepřijde.
       if (!external && !this.msgInput.value) { this.msgInput.value = raw; this._autoResizeInput?.(); }
     };
@@ -4354,7 +4443,7 @@ class UnityChat {
       const j = await r.json().catch(() => ({}));
       this._ucLog('Send', `→ ${r.status} ${j.ok ? `id=${j.id || '-'}` : (j.error || '')}${j.fallback ? ' fallback=' + j.fallback : ''}`);
       if (r.status === 401) {
-        fail('přihlášení vypršelo');
+        fail('přihlášení vypršelo', false);
         this._sys('Přihlášení vypršelo, přihlas se znovu.');
         await chrome.storage.local.remove('uc_session');
         this._account = null;
@@ -4362,13 +4451,13 @@ class UnityChat {
         return;
       }
       if (r.status === 403 && j.error === 'warning_pending') {
-        fail('nepotvrzené varování od moderátora');
+        fail('nepotvrzené varování od moderátora', false);
         this._loadWarnings();
         return;
       }
       if (!r.ok || j.ok === false) {
         const reason = r.status === 429 ? 'moc zpráv za sebou, zpomal' : (j.error || `HTTP ${r.status}`);
-        fail(reason);
+        fail(reason, r.status !== 429);
         this._sys(`Chyba: ${reason}`);
         return;
       }
@@ -4377,6 +4466,8 @@ class UnityChat {
       // Kick odpověď odmítl (odpověď na starou zprávu) a server poslal „@login text" → optimistická
       // „odpověď" by se s echem nespárovala a zůstala viset; skutečná přijde z chatu.
       if (j.fallback === 'mention') this._dropOptimistic(optId);
+      // YouTube: id zprávy z insertu — kdyby ji chat zadržel, záloha přes UnityChat ho pošle serveru (spárování, až ji pustí).
+      if (platform === 'youtube' && j.id) { this._ytSendIds ??= new Map(); this._ytSendIds.set(optId, j.id); }
       // YouTube API vrátí 200 i pro zprávu, kterou chat tiše zahodí (odkaz od nemoderátora) → bez echa neodesláno;
       // GIF zprávu řídí štítek (core watchYoutubeSend). Pořád optimistická = stále ve store pod optId (i zaparkovaná).
       if (platform === 'youtube') {
@@ -5831,6 +5922,7 @@ class UnityChat {
         hostEl: this.chatEl.parentElement, chatEl: this.chatEl, targetEl: target, videoUrl: POOP_VIDEO_URL,
         offsetMs: core.reactionOffsetMs(ev), reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
         muted: this.config.sound === false,
+        volume: this._soundVolume(),
         onEnd: () => {
           this._activeReaction = null; this._updatePoopButtons();
           // Nastavení „Po animaci se vrátit na konec chatu" (výchozí zapnuto).
@@ -6121,11 +6213,18 @@ class UnityChat {
       this._replyPrevPlatform = null;
       this._replyPrevBroadcast = false;
       if (this._broadcast) { this._broadcast = false; try { chrome.storage.local.set({ uc_send_broadcast: false }); } catch {} }
+      if (this._ucOnlyMode) { this._ucOnlyMode = false; try { chrome.storage.local.set({ uc_send_uconly: false }); } catch {} }
     }
     this._sendPlatform = platform;
     try { chrome.storage.local.set({ uc_send_platform: platform }); } catch {}
     if (!this._legacySend()) this._setActivePlatform(platform);
     if (!quiet && this._identity(platform)) this.msgInput.focus();
+  }
+
+  /** Hlasitost zvuků v chatu 0–1 (nastavení „Hlasitost“, config.soundVolume 0–100, výchozí 100 %). */
+  _soundVolume() {
+    const n = Number(this.config?.soundVolume);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 1;
   }
 
   /** Pole pro psaní podle přihlášení: bez účtu na vybrané platformě výzva místo pole. */
@@ -6149,13 +6248,18 @@ class UnityChat {
     this.msgInput.disabled = !canWrite || warned;
     this.sendBtn.disabled = !canWrite || warned;
     const bc = canWrite && this._isBroadcast();
+    const uco = canWrite && !bc && this._isUcOnlyMode();
     this.msgInput.placeholder = warned ? 'Máš nepotvrzené varování od moderátora — potvrď ho, pak můžeš psát.'
       : bc ? 'Zpráva na všechny platformy...'
+      : uco ? 'Zpráva jen do UnityChatu...'
       : platform ? `Zpráva do ${NAMES[platform] || platform}...` : 'Otevři stream pro odesílání...';
     if (btn) btn.title = bc ? `Broadcast: píšeš na ${this._broadcastTargets().map((p) => NAMES[p]).join(', ')}`
+      : uco ? `UnityChat: zprávu uvidí všichni v UnityChatu i na streamu, na ${NAMES[platform] || 'platformu'} nejde (commandy ano)`
       : id ? `Píšeš na ${NAMES[platform]} jako ${id.displayName || id.login}` : 'Vyber platformu / přihlas se';
     // Badge u pole: v Broadcastu všechna tři loga (composer.css #active-badge.bc), jinak logo platformy.
     this.platformBadge?.classList.toggle('bc', bc);
+    // „Jen UnityChat“: logo UnityChatu místo loga platformy (sidepanel.css #active-badge.uco).
+    this.platformBadge?.classList.toggle('uco', uco);
     // Body a bity z Twitche jen s přihlášeným Twitch účtem (v záložním režimu jako dřív).
     document.body.classList.toggle('uc-no-twitch-login', !legacy && !this._identity('twitch'));
     this._qdDock?.update();
@@ -6169,6 +6273,7 @@ class UnityChat {
       me: this._account,
       current: this.activePlatform,
       broadcast: { targets: this._broadcastTargets(), selected: this._isBroadcast(), onSelect: () => this._selectBroadcast() },
+      ucOnly: this._legacySend() ? null : { selected: !this._isBroadcast() && this._isUcOnlyMode(), onSelect: () => this._selectUcOnly() },
       onSelect: (p) => this._selectSendPlatform(p),
       onLogin: (p) => this._loginPlatform(p),
       onUnlink: (p) => this._unlinkPlatform(p),
@@ -8889,6 +8994,7 @@ class UnityChat {
           });
         }
         const a = this._bulgarianAudio;
+        a.volume = this._soundVolume();
         if (!a.paused) {
           a.pause(); a.currentTime = 0;
           el.classList.remove('playing');
@@ -9057,6 +9163,8 @@ class UnityChat {
     const preserveScroll = !this.autoScroll && !isHistory;
     const prevScrollTop = preserveScroll ? this.chatEl.scrollTop : 0;
     let appendedAtEnd = false;
+    // Zpráva jen přes UnityChat → logo UnityChatu místo loga platformy.
+    if (msg.ucOnly) window.UC_CORE.applyUcOnlyLook(el, msg.platform);
     // První kopie Broadcastu → skupina (logo platformy nahradí řada log všech cílů).
     if (bcInfo) this._bcGroups.create(bcInfo.id, el, bcInfo.targets, { sent: [msg.platform], msgId: msg.id });
 
@@ -9332,7 +9440,7 @@ class UnityChat {
     }
   }
 
-  _markSendFailed(optId, reason) {
+  _markSendFailed(optId, reason, { fallback = true } = {}) {
     const el = this.chatEl.querySelector(`[data-msg-id="${CSS.escape(optId)}"]`);
     if (el) {
       el.classList.add('send-failed');
@@ -9364,6 +9472,30 @@ class UnityChat {
     try {
       chrome.runtime.sendMessage({ type: 'UC_LOG', tag: 'SendFail', args: [optId, reason] }).catch(() => {});
     } catch {}
+    if (fallback) void this._ucOnlyFallback(optId, reason);
+  }
+
+  /**
+   * Záloha (pokyn usera 2026-10-02): neodeslaná vlastní zpráva → AUTOMATICKY jen přes UnityChat (POST /chat/uc-only,
+   * backend lib/ucOnly.ts). Uvidí ji všichni v UnityChatu i v OBS s logem UnityChatu. Commandy / GIFy / bez přihlášení ne.
+   */
+  async _ucOnlyFallback(optId, reason) {
+    const m = this.store.get(optId);
+    if (!m || this._legacySend() || !window.UC_CORE.ucOnlyEligible(m.message)) return;
+    this._ucOnlyTried ??= new Set();
+    if (this._ucOnlyTried.has(optId)) return;
+    this._ucOnlyTried.add(optId);
+    const text = window.UC_CORE.ucOnlyText(m.message);
+    try {
+      const j = await this._ucApi('/chat/uc-only', { method: 'POST', body: { platform: m.platform, text, channel: (this.config.channel || '').toLowerCase(), reason: String(reason || '').slice(0, 200), platformId: this._ytSendIds?.get(optId) || null } });
+      this._dropOptimistic(optId);
+      this._addMessage(j.message);
+      // Text se při chybě vrátil do pole — zpráva už odešla, nechat ho tam by mátlo.
+      if (this.msgInput && window.UC_CORE.ucOnlyText(this.msgInput.value) === text) { this.msgInput.value = ''; this._autoResizeInput?.(); }
+      this._ucLog('UcOnly', `${m.platform} ${optId} → ${j.id} (${String(reason || '').slice(0, 60)})`);
+    } catch (e) {
+      this._ucLog('UcOnly', `${m.platform} ${optId} FAIL ${e.status || ''} ${e.error || e.message || e}`);
+    }
   }
 
   _upgradeOptimistic(optId, realMsg) {
@@ -9509,6 +9641,14 @@ class UnityChat {
   _maybeNotifyMention(msg, kind, isHistory) {
     if (!kind) return;
     const core = window.UC_CORE;
+    // Zvuk při zmínce (volba, 2026-10-02): i když se na chat díváš; hlasitost z posuvníku, „Přehrávat zvuky“ ho vypne.
+    if (core.shouldPlayMentionSound({
+      enabled: this.config.mentionSound === true, soundOn: this.config.sound !== false, kind,
+      historical: isHistory || !!msg.historical || !!msg.scraped, own: this._isOwnMsg(msg), moderated: this._isModerated(msg) || !!msg._cleared,
+    })) {
+      this._mentionSound ??= core.createMentionSound({ url: chrome.runtime.getURL('audio/mention_notification.mp3'), volume: () => this._soundVolume() });
+      if (this._mentionSound.play()) this._ucLog('Notify', `zvuk ${kind} ${msg.platform}:${msg.id}`);
+    }
     const verdict = core.shouldNotify({
       enabled: this.config.mentionNotify === true && !!chrome.notifications?.create,
       kind,

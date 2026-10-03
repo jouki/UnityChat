@@ -85,7 +85,12 @@ export function reactionBusy(ev, now = Date.now()) {
  * seznam, targetEl = element cílové zprávy (nebo null → video u spodního okraje).
  * Vrací { stop, endsAt }. Volající před tím zprávu odscrolluje do záběru.
  */
-export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs = 0, reducedMotion = false, muted = false, onEnd }) {
+/** Základní hlasitost videa reakce (mix), násobí se hlasitostí z nastavení. */
+export const REACTION_BASE_VOLUME = 0.85;
+/** Hlasitost z nastavení (0–1); nesmysl → 1. */
+export const clampVolume = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1; };
+
+export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs = 0, reducedMotion = false, muted = false, volume = 1, onEnd }) {
   const doc = hostEl.ownerDocument;
   const timers = [];
   const later = (fn, ms) => { const t = setTimeout(fn, Math.max(0, ms)); timers.push(t); return t; };
@@ -100,7 +105,8 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
   // Video má zvuk. Prohlížeč autoplay se zvukem povolí jen tam, kde s ním uživatel
   // interagoval (v OBS je povolený vždy) — jinak se přehraje potichu, viz play() níž.
   // `muted` = uživatel má zvuky vypnuté (nastavení addonu / webu / OBS profilu).
-  video.muted = !!muted; video.volume = 0.85;
+  // `volume` 0–1 = hlasitost z nastavení (posuvník „Hlasitost“, 2026-10-02); 0,85 = základní mix videa.
+  video.muted = !!muted; video.volume = REACTION_BASE_VOLUME * clampVolume(volume);
   video.playsInline = true; video.preload = 'auto';
   video.setAttribute('aria-hidden', 'true');
   video.src = videoUrl;
@@ -187,6 +193,7 @@ export function playPoopReaction({ hostEl, chatEl, targetEl, videoUrl, offsetMs 
     endsAt: start + POOP_TOTAL_MS,
     /** Přepnutí zvuků v nastavení během běžící reakce. */
     setMuted(m) { video.muted = !!m; },
+    setVolume(v) { video.volume = REACTION_BASE_VOLUME * clampVolume(v); },
     stop() { finished = true; for (const t of timers) clearTimeout(t); overlay.remove(); chatEl?.removeEventListener('scroll', onScroll); ro?.disconnect(); brownEnd(); },
   };
 }

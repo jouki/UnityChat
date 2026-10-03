@@ -19,7 +19,7 @@ export type CategoryPlatform = 'twitch' | 'kick';
 export interface Category { id: string; name: string; imageUrl: string | null }
 
 export class ChannelError extends Error {
-  constructor(public code: 'not_linked' | 'missing_scope' | 'token' | 'not_found' | 'platform' | 'unsupported', message: string, public status = 400) { super(message); }
+  constructor(public code: 'not_linked' | 'missing_scope' | 'token' | 'not_found' | 'platform' | 'unsupported' | 'bad_user', message: string, public status = 400) { super(message); }
 }
 
 /** Identita majitele kanálu (login = kanál) s obnovou tokenu; ChannelError not_linked / missing_scope (`needScope` = vyžadovaný scope, výchozí kategorie). */
@@ -166,6 +166,55 @@ export async function subCount(platform: CategoryPlatform, channelLogin: string,
   const j = (await resp.json()) as { total?: unknown; points?: unknown };
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   return { count: num(j.total), points: num(j.points) };
+}
+
+/** Scope pro followage (Twitch Helix GET /channels/followers s user_id) — v souhlasu streamera (BROADCASTER_SCOPES). */
+export const FOLLOWERS_SCOPE = 'moderator:read:followers';
+
+export interface Followage { following: boolean; followedAt: string | null }
+
+/** Kick karta uživatele v kanálu (kick.com/api/v2/channels/:slug/users/:user, veřejná) → following_since. */
+export function parseKickFollowage(j: unknown): Followage {
+  const v = (j && typeof j === 'object' ? (j as { following_since?: unknown }).following_since : null) as unknown;
+  const at = typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null;
+  return { following: !!at, followedAt: at };
+}
+
+/**
+ * Jak dlouho uživatel sleduje kanál (starý `!followage` — pokyn usera 2026-10-02, command v Židolištce):
+ * Twitch Helix `GET /channels/followers?broadcaster_id=&user_id=` tokenem streamera (scope moderator:read:followers;
+ * bez `userId` se id dohledá podle loginu), Kick veřejná karta uživatele v kanálu (`following_since`, potřebuje login).
+ * Nesleduje → `{ following:false, followedAt:null }`. Chyby jako u kategorií (not_linked / missing_scope / token / platform),
+ * neznámý uživatel → not_found.
+ */
+export async function followage(platform: CategoryPlatform, channelLogin: string, user: { userId?: string | null; login?: string | null }, fetchImpl: typeof fetch = fetch): Promise<Followage> {
+  const login = String(user.login || '').replace(/^@/, '').trim().toLowerCase();
+  if (platform === 'kick') {
+    if (!/^[a-z0-9_-]{1,40}$/.test(login)) throw new ChannelError('bad_user', 'kick: chybí login uživatele', 400);
+    const resp = await fetchImpl(`https://kick.com/api/v2/channels/${encodeURIComponent(channelLogin)}/users/${encodeURIComponent(login)}`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 UnityChat' }, signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.status === 404) throw new ChannelError('not_found', `kick: uživatel ${login} nenalezen`, 404);
+    if (!resp.ok) throw new ChannelError('platform', `Kick GET channel user ${resp.status}`, 502);
+    return parseKickFollowage(await resp.json());
+  }
+  const { ident } = await broadcasterIdentity('twitch', channelLogin, FOLLOWERS_SCOPE);
+  const headers = { Authorization: `Bearer ${ident.accessToken}`, 'Client-Id': config.TWITCH_CLIENT_ID };
+  let userId = String(user.userId || '').trim();
+  if (!/^\d{1,20}$/.test(userId)) {
+    if (!/^[a-z0-9_]{1,25}$/.test(login)) throw new ChannelError('bad_user', 'twitch: chybí userId nebo login', 400);
+    const u = await fetchImpl(`${TWITCH_HELIX}/users?login=${encodeURIComponent(login)}`, { headers, signal: AbortSignal.timeout(10_000) });
+    if (u.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+    if (!u.ok) throw new ChannelError('platform', `Twitch GET users ${u.status}`, 502);
+    userId = String(((await u.json()) as { data?: Array<{ id?: string }> }).data?.[0]?.id || '');
+    if (!userId) throw new ChannelError('not_found', `twitch: uživatel ${login} nenalezen`, 404);
+  }
+  const resp = await fetchImpl(`${TWITCH_HELIX}/channels/followers?broadcaster_id=${encodeURIComponent(ident.platformUserId)}&user_id=${encodeURIComponent(userId)}`, { headers, signal: AbortSignal.timeout(10_000) });
+  if (resp.status === 401) throw new ChannelError('token', 'Twitch: token odmítnut, streamer se musí přihlásit znovu', 401);
+  if (resp.status === 403) throw new ChannelError('missing_scope', `Twitch: chybí oprávnění ${FOLLOWERS_SCOPE}`, 403);
+  if (!resp.ok) throw new ChannelError('platform', `Twitch GET channels/followers ${resp.status}: ${(await resp.text()).slice(0, 200)}`, 502);
+  const at = ((await resp.json()) as { data?: Array<{ followed_at?: string }> }).data?.[0]?.followed_at;
+  return at && !Number.isNaN(Date.parse(at)) ? { following: true, followedAt: new Date(at).toISOString() } : { following: false, followedAt: null };
 }
 
 /** Kategorie z textu (`!g Age of Empires II`): najít a nastavit. not_found, když hledání nic nevrátí. */

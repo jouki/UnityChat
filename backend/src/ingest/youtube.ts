@@ -248,27 +248,50 @@ export class YouTubeListener implements IngestListener {
         return;
       }
       const timed = pickTimedContinuation(l);
-      if (timed) this.cont = timed.continuation; else this.usePageRefresh = true;
+      if (timed) this.cont = timed.continuation; else this.toPageMode('API bez timed continuation');
       const actions = l.actions || [];
-      if (actions.length) this.apiFails = 0; else if (++this.apiFails >= 5) this.usePageRefresh = true;
+      if (actions.length) this.apiFails = 0; else if (++this.apiFails >= 5) this.toPageMode('API 5× bez akcí');
       this.processActions(actions);
       this.schedule(() => this.poll(), timed?.timeoutMs || 5000, g);
     } catch (err) {
       this.log.warn({ err, handle: this.handle }, 'youtube ingest: API poll selhal');
-      if (++this.apiFails >= 3) this.usePageRefresh = true;
+      if (++this.apiFails >= 3) this.toPageMode('API poll 3× selhal');
       this.schedule(() => this.poll(), 5000, g);
     }
   }
 
+  /** Přepnutí z API pollu na načítání stránky (log jednou — režim „všechny zprávy“ drží `allCont`). */
+  private toPageMode(reason: string) {
+    if (this.usePageRefresh) return;
+    this.usePageRefresh = true;
+    this.log.info({ handle: this.handle, reason, all: !!this.allCont }, 'youtube ingest: přepínám na načítání stránky');
+  }
+
+  /** Režim pro /health (diagnostika chybějících zpráv): api / page a jestli se čte režim „všechny zprávy“. */
+  chatMode(): { mode: 'api' | 'page'; all: boolean } { return { mode: this.usePageRefresh ? 'page' : 'api', all: !!this.allCont }; }
+
   private async pollPage() {
     const g = this.gen;
     try {
-      const l = lcr(extractJson(await this.chatPage(this.allCont), 'ytInitialData'));
+      const cont = this.allCont;
+      const l = lcr(extractJson(await this.chatPage(cont), 'ytInitialData'));
       if (!l) {
-        this.allCont = null;
-        if (++this.apiFails >= 3) { this.schedule(() => this.connect(), 5000, g); return; }
+        // Token režimu „Chat“ (všechny zprávy) NEZAHAZOVAT: dřív `allCont = null` → další polly načítaly výchozí
+        // stránku = „Nejlepší zprávy“ a YouTube z ní tiše vynechával zprávy (2026-10-02: 40 min bez zpráv Winter_Iana,
+        // Milcek24, didx1; doplnil je až restart). Po 3 nezdarech celé nové připojení (vybere token znovu).
+        if (++this.apiFails >= 3) { this.log.warn({ handle: this.handle, all: !!cont }, 'youtube ingest: stránka chatu 3× bez dat → přepojuji'); this.schedule(() => this.connect(), 5000, g); return; }
         this.schedule(() => this.pollPage(), 8000, g);
         return;
+      }
+      // Výchozí stránka (bez tokenu) je „Nejlepší zprávy“ → přepnout na všechny zprávy a načíst znovu.
+      if (!cont) {
+        const tok = pickAllChatToken(l);
+        if (tok) {
+          this.allCont = tok;
+          this.log.info({ handle: this.handle }, 'youtube ingest: page poll zpět na režim „všechny zprávy“');
+          this.schedule(() => this.pollPage(), this.minPollMs, g);
+          return;
+        }
       }
       this.apiFails = 0;
       this.processActions(l.actions || []);

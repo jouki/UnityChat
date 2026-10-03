@@ -330,7 +330,7 @@ body.layout-large #settings details summary { font-size: 15px; }
   line-height: 14px;
 }
 
-.badge.tw, .badge.yt, .badge.ki {
+.badge.tw, .badge.yt, .badge.ki, .badge.uco {
   display: inline-block;
   width: 18px;
   height: 18px;
@@ -344,6 +344,8 @@ body.layout-large #settings details summary { font-size: 15px; }
 .badge.tw { background-image: url(icons/platform/twitch.svg); }
 .badge.yt { background-image: url(icons/platform/youtube.svg); }
 .badge.ki { background-image: url(icons/platform/kick.svg); }
+/* „Jen UnityChat“ (menu Psát jako, badge u pole): logo UnityChatu */
+.badge.uco { background-image: url(icons/icon48.png); }
 
 .actions {
   flex-direction: row;
@@ -969,6 +971,17 @@ body.uc-can-moderate .uc-mod-only { display: flex !important; }
 .msg .pi.tw { background-image: url(icons/platform/twitch.svg); }
 .msg .pi.yt { background-image: url(icons/platform/youtube.svg); }
 .msg .pi.ki { background-image: url(icons/platform/kick.svg); }
+/* Hlasitost zvuků v nastavení (pod „Přehrávat zvuky“) — addon i web. */
+.uc-volume-row { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 24px; font-size: 12px; color: #adadb8; text-transform: none; letter-spacing: normal; font-weight: 400; }
+.uc-volume-row input[type="range"] { flex: 1; min-width: 0; accent-color: #ff8a00; }
+.uc-volume-row.disabled { opacity: .45; }
+.uc-volume-val { width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Zpráva jen přes UnityChat (core/uc-only.js): platforma ji nepřijala / nezobrazila → logo UnityChatu. */
+/* Specifičtější než .msg .pi.uc.tw (zlaté logo platformy) — jinak by logo UnityChatu prohrálo. */
+.msg.uc-only-msg > .pi.tw, .msg.uc-only-msg > .pi.yt, .msg.uc-only-msg > .pi.ki,
+.msg.uc-only-msg > .pi.uc.tw, .msg.uc-only-msg > .pi.uc.yt, .msg.uc-only-msg > .pi.uc.ki { background-image: url(icons/icon48.png); padding: 0; filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
+
 /* Broadcast jako jedna zpráva (core/broadcast-group.js): místo loga platformy řada menších log všech cílů.
    Ztmavené = čeká na potvrzení, rozsvícené = kopie dorazila, vykřičník = neodesláno (tooltip s důvodem).
    Vlastní zpráva je ztmavená, dokud nedorazí první kopie. */
@@ -2710,7 +2723,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
   flex-shrink: 0;
   letter-spacing: 0.3px;
 }
-#active-badge.tw, #active-badge.yt, #active-badge.ki {
+#active-badge.tw, #active-badge.yt, #active-badge.ki, #active-badge.uco {
   width: 22px;
   height: 22px;
   padding: 0;
@@ -2725,6 +2738,7 @@ body.layout-small .msg.uc-annc .ua-frame { gap: 10px; padding: 10px 12px; }
 #active-badge.tw { background-image: url(icons/platform/twitch-gold.svg); }
 #active-badge.yt { background-image: url(icons/platform/youtube-gold.svg); }
 #active-badge.ki { background-image: url(icons/platform/kick-gold.svg); }
+#active-badge.uco { background-image: url(icons/icon48.png); filter: drop-shadow(0 0 3px rgba(255, 140, 0, 0.65)); }
 
 #msg-input {
   flex: 1;

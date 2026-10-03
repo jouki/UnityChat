@@ -55,6 +55,37 @@ export function shouldNotify({ enabled, kind, historical, own, moderated, watchi
   return { ok: true, reason: kind };
 }
 
+/**
+ * Zvuk při zmínce (volba „Zvuk při zmínce“, 2026-10-02): na rozdíl od oznámení i když se na chat díváš.
+ * Ne z historie, ne vlastní, ne smazané; vypnuté „Přehrávat zvuky“ ho ztlumí taky.
+ */
+export function shouldPlayMentionSound({ enabled, soundOn = true, kind, historical, own, moderated }) {
+  if (!enabled || !soundOn) return false;
+  return !!kind && !historical && !own && !moderated;
+}
+
+/**
+ * Přehrávač zvuku zmínky: jeden Audio prvek, hlasitost z nastavení (0–1, funkce), nejvýš jednou za `minGapMs`
+ * (víc zmínek naráz = jeden zvuk). `AudioCtor` injektovaný (testy). Vrací { play() → true / false }.
+ */
+export function createMentionSound({ url, volume = () => 1, minGapMs = 1500, now = () => Date.now(), AudioCtor = globalThis.Audio } = {}) {
+  let audio = null;
+  let last = -Infinity;
+  return {
+    play() {
+      const t = now();
+      if (t - last < minGapMs || typeof AudioCtor !== 'function') return false;
+      last = t;
+      audio ??= new AudioCtor(url);
+      const v = Number(volume());
+      audio.volume = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+      try { audio.currentTime = 0; } catch { /* ignore */ }
+      audio.play?.()?.catch?.(() => {});
+      return true;
+    },
+  };
+}
+
 /** Čistý text zprávy pro oznámení: bez UC markeru, Kick emote tagů a zdvojených mezer, zkrácený. */
 export function notificationText(text, max = 140) {
   const clean = String(text || '')

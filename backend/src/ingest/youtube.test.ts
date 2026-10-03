@@ -146,3 +146,37 @@ test('YouTubeListener: offline → live, nový stream → přepojení, konec str
   l.stop();
   assert.deepEqual([...new Set(chatFor)], ['VIDEO1AAAAA', 'VIDEO2BBBBB']);
 });
+
+test('YouTubeListener page mode: jedno nepovedené načtení stránky NEPŘEPNE na „Nejlepší zprávy“ (2026-10-02)', async () => {
+  // Bez API klíče → režim page. Stránka s tokenem (všechny zprávy) jednou vrátí nesmysl; další polly musí jít dál
+  // s tokenem (continuation=), ne na výchozí v=… (Nejlepší zprávy). Výchozí stránku chce jen connect.
+  const urls: string[] = [];
+  let allCalls = 0;
+  const page = (all: boolean, actions: unknown[] = []) => `<script>var ytInitialData = ${JSON.stringify({ contents: { liveChatRenderer: {
+    header: { liveChatHeaderRenderer: { viewSelector: { sortFilterSubMenuRenderer: { subMenuItems: [{ selected: !all }, { selected: all, continuation: { reloadContinuationData: { continuation: 'ALLTOK' } } }] } } } },
+    actions,
+  } } })};</script>`;
+  const fetchImpl = (async (url: string) => {
+    urls.push(url);
+    if (url.endsWith('/robdiesalot/live')) return new Response('"isLive":true "videoId":"ABCDEFGHIJK"', { status: 200 });
+    if (url.startsWith('https://www.youtube.com/live_chat?v=')) return new Response(page(false), { status: 200 });
+    if (url.startsWith('https://www.youtube.com/live_chat?continuation=ALLTOK')) {
+      allCalls++;
+      if (allCalls === 2) return new Response('<html>nic</html>', { status: 200 });   // jedno nepovedené načtení
+      return new Response(page(true), { status: 200 });
+    }
+    return new Response('', { status: 404 });
+  }) as unknown as typeof fetch;
+  const l = new YouTubeListener('robdiesalot', () => {}, { fetchImpl, log: { info() {}, warn() {}, error() {} }, minPollMs: 5, liveCheckMs: 60_000, onlineCheckMs: 60_000 });
+  l.start();
+  await new Promise((r) => setTimeout(r, 100));   // connect: výchozí stránka → token všech zpráv
+  // Polly stránky přímo (časovače v page režimu jsou sekundy): 2. načtení selže, další musí jít zase s tokenem.
+  const poll = () => (l as unknown as { pollPage(): Promise<void> }).pollPage();
+  for (let i = 0; i < 3; i++) await poll();
+  const mode = l.chatMode();
+  l.stop();
+  const topAfterConnect = urls.filter((u) => u.startsWith('https://www.youtube.com/live_chat?v=')).length;
+  assert.equal(topAfterConnect, 1, 'výchozí (Nejlepší zprávy) jen při připojení');
+  assert.ok(allCalls >= 3, `poll pokračuje s tokenem všech zpráv (${allCalls}×)`);
+  assert.deepEqual(mode, { mode: 'page', all: true });
+});
